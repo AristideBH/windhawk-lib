@@ -1,212 +1,109 @@
 # windows-11-start-menu-button — Windhawk mod plan
 
 ## Context
-Windhawk mod for Win11 taskbar Start button. Goals: swap stock icon for custom image, or recolor stock icon while keeping native animation; style button box (padding/margin/bg/corner-radius) per interaction state (default/hover/pressed). Target: Windows 11 25H2 only, all taskbar instances (multi-monitor).
+Windhawk mod for Win11 taskbar Start button. Goals: swap stock icon for custom image, or recolor stock icon while keeping native animation, with a per-tile depth gradient and a one-shot highlight sweep on press. Target: Windows 11 25H2 only, all taskbar instances (multi-monitor).
+
+**Per-state (default/hover/pressed) background/padding/margin/corner-radius box styling has been REMOVED as out of scope** (2026-07-22) — this mod is now icon-only (custom icon swap, or recolor + depth gradient + press sweep). See "Settings schema (current)" below for what remains.
 
 ## File
 `windows-11-start-menu-button.wh.cpp` — single-file Windhawk mod, metadata header comment block (standard Windhawk format), placed in this folder.
 
 ## Reference mods (ramensoftware/windhawk-mods)
-- `taskbar-start-button-corner-fix.wh.cpp` — locates Start button via UI Automation, `AutomationId = "StartButton"`, `FindFirst(TreeScope_Descendants, ...)` on taskbar XAML tree.
-- `taskbar-fluent-media-player.wh.cpp` — XAML injection/manipulation pattern: `RunFromWindowThread()` (via `SetWindowsHookExW(WH_CALLWNDPROC)`) to execute on explorer's UI thread, locate Grid/Border elements, apply `FrameworkElement.Margin`, nested settings struct (`Wh_GetIntSetting`/`Wh_GetStringSetting` with dotted keys), dynamic settings reload without restart.
+- `taskbar-start-button-corner-fix.wh.cpp` — locates Start button via UI Automation, `AutomationId = "StartButton"`.
+- `taskbar-fluent-media-player.wh.cpp` — `RunFromWindowThread()` pattern, nested settings struct, dynamic settings reload.
+- `taskbar-start-button-position.wh.cpp` — same hook point (`ExperienceToggleButton::UpdateButtonPadding`) used here, verified pattern for reaching `ExperienceToggleButtonRootPanel`.
+
+## Settings schema (current, reorganized 2026-07-22)
+Nested groups (Windhawk supports arbitrary-depth nesting; settings keys are dot-joined per level, e.g. `recolor.gradient.lightenPercent`). No enclosing top-level `icon` group anymore — `mode` is top-level, `customIcon`/`recolor` are top-level groups:
+
+- `mode`: default / customIcon / recolor (**default: `default`** — mod is a no-op out of the box)
+- `customIcon` (group)
+  - `path`: string, PNG/ICO file path
+- `recolor` (group)
+  - `color`: hex string, resting/base color
+  - `recolor.gradient` (sub-group)
+    - `enabled`: bool, master toggle for gradient shading + elevated (hover/press/menu-open) brighten (off = flat single-tone fill, no brighten) — **moved here from a separate top-level toggle**
+    - `lightenPercent` / `darkenPercent` (default 18/18)
+  - `recolor.shimmer` (sub-group)
+    - `enabled`: bool, master toggle for the click-sweep specifically. **Decoupled from `recolor.gradient.enabled` (2026-07-22)** — shimmer can be on with gradient shading off (flat color + sweep) and vice versa. `CreateRecolorBrush` now routes through the gradient-brush code path whenever *either* is on (`params.sweepProgress >= 0.0f` is the shimmer-active signal, already forced to `-1` upstream when `recolor.shimmer.enabled` is false); `CreateDepthGradientBrush` itself branches internally on `g_settings.recolorGradient` to decide flat vs. shaded stop colors, independent of the sweep band logic.
+    - `color`: hex string, explicit sweep tint; empty = auto-derive (see next)
+    - `autoLightenPercent` (default 30) — only used when `color` is empty: blend-toward-white amount, i.e. equivalent to compositing translucent white over `recolor.color` at this opacity (e.g. `#4Cffffff`). **Always lightens, no adaptive push-away-from-lightness logic** (that was tried and rejected — see "How we got here").
+    - `durationMs` (default 250)
+    - `bandWidthPercent` (default 500) — usable range roughly 100 (thin line) to 1000 (broad glow); no native min/max slider support in Windhawk's settings schema, so this is enforced only via description text, not validation
+  - `recolor.elevate` (sub-group)
+    - `lightenBoostPercent` / `darkenReliefPercent` (default 100/100) — extra brighten while hover/press/menu-open
+    - `transitionMs` (default 180) — ramp time for the elevated-brighten transition
+
+No `default`/`hover`/`pressed` box-style groups anymore (removed 2026-07-22).
+
+## Icon recolor architecture (current, as of 2026-07-22)
+
+The Start icon is a Lottie-based `Microsoft.UI.Xaml.Controls.AnimatedVisualPlayer` (WinUI2/MUX), not a `Windows.UI.Xaml.IconElement`. Recolor works by directly overwriting `CompositionSpriteShape.FillBrush`/`StrokeBrush` on every leaf shape in its Composition tree, every frame (`StartPersistentIconColorMaintenance`, a `CompositionTarget.Rendering` subscription per button, for the button's whole lifetime) — a one-shot set gets fought/reset by Explorer's own hover/press Lottie animation playback, confirmed live.
+
+### Confirmed facts about this specific asset (from a full live tree dump — see "How we got here")
+- Only **one of four** `ShapeVisual` copies under `GetElementChildVisual` is actually active; the other three have their root container's raw `.Scale()` reading `(0,0)` (a collapsed/inactive Lottie animation-state layer, not a bug — harmless to touch, just invisible).
+- The active group has **4 leaf tile shapes**, distinguished by `TransformMatrix`:
+  - identity `[1,0,0,1]` → visually **top-left**
+  - 180° rotation `[-1,0,0,-1]` → visually **bottom-right** (confirmed live: darken only ever showed up on this exact tile)
+  - two 90°/-90° rotations `[0,-1,1,0]` and `[0,1,-1,0]` → the **anti-diagonal pair** (top-right/bottom-left)
+- `shape.Scale()` is **unreliable** — reads `(0,0)` on plain container shapes whose `TransformMatrix` is genuine identity. Don't use it; `TransformMatrix`'s own 2×2 linear part is the trustworthy source.
+- Per-tile translations cluster within ~1 unit of the icon's center — the real tile position/size lives in path geometry data that Composition's API doesn't expose a bounds query for. **Absolute pixel positioning of tiles is not computable from this API surface.**
+
+### Current gradient approach: per-tile Relative gradient, rotation-corrected direction, role-based stop colors
+Given the above, a single Absolute-mode gradient spanning the whole icon (the original design intent, see "Rejected approach" below) isn't achievable with reliable data. Current implementation instead:
+
+1. Accumulate only a **2×2 rotation/reflection matrix** (`Mat2`, in `windows-11-start-menu-button.wh.cpp`) down the Composition tree — composed from each shape's `TransformMatrix` 2×2 part (visuals contribute their XY `.Scale()` diagonal only; no visual-level rotation is in evidence in this asset). No translation/position is tracked at all — not needed.
+2. At each leaf, use `MappingMode::Relative` (0..1 of that shape's own render box) instead of `Absolute`.
+3. Compute the gradient's local direction by applying the **inverse** of the shape's accumulated rotation matrix to the global diagonal `(1,1)` (`Mat2Invert` + `Mat2Apply`), so after the shape's own transform renders it, the gradient visually points top-left→bottom-right regardless of that tile's own rotation.
+4. Classify each tile's **role** from its rotation matrix trace (`m11+m22`): `>+1` → top-left, `<-1` → bottom-right, else → anti-diagonal pair. Each role gets different stop colors (per explicit user spec, 2026-07-22):
+   - top-left: 100% lighten → resting color
+   - anti-diagonal pair: 25% lighten → 25% darken
+   - bottom-right: resting color → 100% darken
+
+This is an approximation of "one continuous diagonal gradient across the whole icon" using only rotation data (reliable) and no position/size data (unavailable) — not literally continuous, but consistently oriented and shaded per-tile.
+
+### Rejected approach: Absolute-mode position math (2026-07-22, several rounds)
+Originally tried accumulating `Float2` offset+scale (translation + per-axis scale) down the tree and using `MappingMode::Absolute` with `StartPoint`/`EndPoint` in the icon's overall pixel space. Failed for two fundamental, not-tunable-away reasons (see "Confirmed facts" above): (a) two tiles use a genuine 90°/-90° rotation, which cannot be decomposed into independent X/Y scale factors no matter how the sign/magnitude extraction is tuned; (b) real tile position/size data isn't queryable from Composition's API. Do not retry this without first finding a way to query actual geometry bounds (unclear if possible at all via `CompositionPathGeometry`).
+
+### Press-sweep trigger: `Checked`/`Unchecked`, NOT `PointerPressed` (confirmed live, 2026-07-22)
+`PointerPressed` **never fires** on the Start button's `FrameworkElement` for a real click — confirmed via unambiguous per-event DebugView logging: a real click logs `PointerEntered` → `Checked`/`Unchecked` → `PointerCaptureLost`, with zero `PointerPressed` anywhere in between. The click must be handled by Explorer before it reaches this element's routed pointer events. The sweep is armed from `Controls::Primitives::ToggleButton::Checked`/`Unchecked` instead (every click, whether it opens or closes the Start menu, counts as a "press" for sweep purposes). The `PointerPressed` handler and its arming code are still present in `SetupButtonTracking` as a harmless no-op fallback in case a future Windows build routes it through normally — don't be misled by its presence into thinking it's the active trigger.
+
+Sweep is also **staggered per-tile** (not simultaneous across all 4 tiles): each tile's role (top-left / anti-diagonal pair / bottom-right, same classification as the gradient stop colors) gets its own overlapping window within the overall `sweepProgress` 0..1 range (`roleWindowStart`/`roleWindowEnd` in `CreateDepthGradientBrush`), so the 4 independent per-tile sweeps read as one diagonal wave rather than a synchronized flash.
+
+### Crash containment
+The entire per-frame body in `StartPersistentIconColorMaintenance` is wrapped in try/catch (`winrt::hresult_error` + catch-all), logging and skipping the frame instead of letting an exception escape the native `CompositionTarget.Rendering` callback (which could otherwise crash Explorer). As of the last test round, this had caught nothing — Explorer restarts observed during testing were NOT correlated with any caught exception, and are believed to be Windhawk's inherent reload cost for mods that symbol-hook a DLL loaded at Explorer startup (`Taskbar.View.dll`), not a bug in this mod. Not fully confirmed either way; if a future session sees a `caught hresult_error`/`caught unknown exception` log line, that changes the diagnosis.
+
+### Menu-open detection (spec state D)
+`button.try_as<Controls::Primitives::ToggleButton>()` — **confirmed working live** (menuOpen correctly flips in DebugView logs on Start-menu open/close). Subscribes `Checked`/`Unchecked` to set `TrackedButton::menuOpen`, which factors into the "elevated" (brighten) state alongside hover/press.
+
+## How we got here (debugging journey, most recent first)
+1. **Full shape-tree dump** (`DumpShapeTreeOnce`, now REMOVED from code after serving its purpose — see git history / conversation if needed again) walked every visual/shape from both `GetElementVisual` and `GetElementChildVisual`, logging raw `Offset`/`Scale`/`TransformMatrix` and folded totals. This is what revealed the collapsed-visual-copies and 90°-rotation facts above. If gradient math needs revisiting, recreating a dump like this first is strongly recommended over guessing from a single-sample debug log again — several earlier rounds of blind patching (signed-scale extraction, zero-vs-identity TransformMatrix assumption) failed because they were based on only one leaf's data per frame, picked arbitrarily by traversal order.
+2. Before the full dump, `g_gradientDebugSample` (also now removed) logged only the first-touched leaf's data each frame — insufficient, led to two rounds of incorrect fixes (assuming unset `TransformMatrix` reads as zero-matrix; assuming scale sign-extraction alone would fix mirrored tiles). Both assumptions were partially right but incomplete versus the full-tree ground truth.
+3. Original design intent (see old conversation) was a single Absolute-mode gradient literally spanning the whole 2×2 icon, chosen deliberately over "identical gradient per tile" during an early design interview — abandoned once the rotation/position data limitations above were confirmed live. Current per-tile-relative-with-role-based-colors approach is the practical compromise.
 
 ## Modes (mutually exclusive, user setting)
-1. **Custom icon** — user-supplied PNG/ICO file path, replaces stock icon bitmap directly.
-2. **Recolor** — render-time tint of stock icon (Direct2D/WIC color transform applied at draw time, not a one-shot bitmap capture) — preserves native icon animation/theme-driven redraws.
+1. **Custom icon** — user-supplied PNG/ICO file path, replaces stock icon bitmap directly. Overlay `Image` element inserted into the panel's `Children` collection (panel is `Taskbar.TaskListButtonPanel`, a generic `Panel`, not `Grid`).
+2. **Recolor** — see "Icon recolor architecture" above.
 
-## Per-state styling
-States: `Default`, `Hover`, `Pressed`. Each state configurable:
-- Background color
-- Optional icon override (falls back to mode's base icon if unset)
-- Padding, margin
-- Corner radius (bg shape, Fluent-style rounding, default ~4px)
-
-Native hover/press animation (scale/fade) is left untouched — no custom animation added, only static per-state values swapped in as the state transitions.
-
-## Hook / implementation approach
-1. On mod init and on new taskbar window creation (multi-monitor), use UI Automation to find `AutomationId = "StartButton"` element in each taskbar's XAML tree.
-2. Hook into taskbar window's UI thread (`RunFromWindowThread` pattern) to safely mutate XAML tree / WinRT objects.
-3. Apply bg/padding/margin/corner-radius via `FrameworkElement`/`Border` property sets on the located button element (and/or a wrapping Border injected around it, following the fluent-media-player Border/StackPanel injection pattern).
-4. Icon handling:
-   - Custom icon mode: load user PNG/ICO via WIC, replace the icon `ImageSource`/bitmap used by the button's icon element.
-   - Recolor mode: hook the icon's render/draw path, apply Direct2D/WIC color matrix tint using configured color, re-apply on each redraw so animation frames stay tinted.
-5. State tracking: hook or listen to the button's visual state transitions (pointer enter/leave, pressed) to swap in the per-state bg/icon/padding/margin/corner-radius values.
-6. Settings: nested JSON schema, e.g.:
-   ```
-   mode: default | customIcon | recolor
-   customIcon.path
-   recolor.color
-   states.default.{bgColor, iconPath, padding, margin, cornerRadius}
-   states.hover.{...}
-   states.pressed.{...}
-   ```
-   Loaded via `Wh_GetIntSetting` / `Wh_GetStringSetting`, reloadable on settings change without explorer restart (per fluent-media-player pattern).
+## Hook / implementation approach (unchanged from original)
+1. Symbol hook on `winrt::Taskbar::implementation::ExperienceToggleButton::UpdateButtonPadding` in `Taskbar.View.dll`, filtered to `AutomationId == "StartButton"`, reaching child `ExperienceToggleButtonRootPanel`.
+2. `SetupButtonTracking` per button instance (guarded against re-setup via `FindTrackedButton`), registers pointer event handlers (feed `TrackedButton::lastState`, used only by the icon animation now — no box styling) and the `ToggleButton` Checked/Unchecked handlers (menu-open).
+3. `StartPersistentIconColorMaintenance` runs one `CompositionTarget.Rendering` subscription per button for its whole lifetime.
 
 ## Out of scope
-- Custom animations beyond native hover/press (explicitly excluded).
+- Custom animations beyond native hover/press scale/fade (deliberately not reimplemented — risks fighting native `VisualStateManager` animation, same bug class as the brush-override fight this mod already works around for color).
+- **Per-state (default/hover/pressed) background/padding/margin/corner-radius styling** — removed 2026-07-22, was in original scope but cut as out of scope for this mod.
 - Windows versions other than 25H2.
 - SVG icon support (PNG/ICO only).
 
-## Found it: gradient brush, not solid — .Color() mutation silently no-ops on it
-User reported the resting squares are a blue *gradient*, still unaffected,
-while shimmer (a separate solid-brush highlight overlay shape, it turns out)
-worked fine. Root cause: `try_as<CompositionColorBrush>()` fails silently on
-a `CompositionLinearGradientBrush`/`CompositionRadialGradientBrush`, so our
-`.Color()`-mutation approach was quietly skipping the actual flag-square
-shapes the whole time - it only ever touched the (solid-brushed) highlight
-overlay, which is what we mistook for a working shimmer.
-
-Fixed by no longer mutating brush color at all: instead **replace** the
-shape's `FillBrush`/`StrokeBrush` (or the visual's `Brush`) outright with a
-freshly created solid `CompositionColorBrush` via `Compositor.
-CreateColorBrush`, which works regardless of the original brush's type.
-Original brush objects (including gradients) are captured by shape/visual
-identity before first replacement, so Default mode restores the exact
-original look. Not yet visually confirmed by the user.
-
-## Resting color still not applying — instrumenting further
-User reports shimmer works during hover/press animation but resting color
-never shows on the four squares (stays original flag colors at rest).
-Added throttled (1/sec) logging of animating state, chosen color string,
-parse success, and brushes-touched count in
-`StartPersistentIconColorMaintenance` to determine whether the resting-color
-codepath is even executing, and whether `RecolorAnimatedVisualPlayer` finds
-brushes to touch at rest (vs. only while animating, which would suggest
-Explorer swaps to a different, non-`CompositionColorBrush` rendering
-strategy - e.g. a cached bitmap - when idle).
-
-## Pivoted to a deliberate two-color "shimmer" design
-User observed live: the direct brush override only visibly took effect
-*while the icon's native hover/press animation was actively playing*,
-reverting once it settled at rest — and liked the effect enough to make it a
-feature rather than a bug to eliminate. Root mechanism: Explorer's Lottie
-animation playback fights/resets the shape brushes at rest; fighting that
-harder (e.g. persistent per-frame override forever) was the fallback plan,
-but embracing it is simpler and better UX.
-
-Redesigned recolor mode around two settings: `recolorColor` (steady resting
-color) and `recolorShimmerColor` (shown only while `player.IsPlaying()` is
-true, i.e. mid hover/press transition). `StartPersistentIconColorMaintenance`
-runs one `CompositionTarget.Rendering` subscription per Start-button instance
-for its entire lifetime (stopped only on mod unload, restoring original flag
-colors then), picking resting vs. shimmer color every frame based on
-`IsPlaying()`. This also sidesteps needing to understand *why* brushes get
-reset — continuous reassertion driven by real-time animation state is
-correct regardless of the exact internal mechanism.
-
-## Real cause found: it's the multi-color flag logo, not a themeable single-tone icon
-Frame-by-frame brush readback (once shapes existed) showed genuine distinct
-RGB values (e.g. 102,226,248 and 11,155,254 — cyan/blue flag-pane colors),
-completely unrelated to the red we were writing via `SetColorProperty`, even
-after 120 frames of reassertion. Conclusion: the Start button icon is
-Windows' classic four-color flag logo rendered as a static multi-shape
-Lottie asset, not a themeable single-tone icon, and `SetColorProperty
-("Foreground", ...)` has no effect on it — that property name evidently
-belongs to a different `AnimatedVisuals.*` class sharing the same DLL.
-
-Rewrote recolor to directly overwrite every `CompositionSpriteShape`'s
-`FillBrush`/`StrokeBrush` `CompositionColorBrush.Color` in the Lottie shape
-tree (confirmed real via the 28-brush readback), for both
-`GetElementVisual` and `GetElementChildVisual` (AnimatedVisualPlayer hosts
-its Lottie content as an "element child visual", a separate composition hook
-from the element's own XAML visual). Original per-brush colors are captured
-by COM identity (`winrt::get_abi`) before first override, so switching back
-to "System default" mode restores the real flag colors instead of guessing a
-fallback. Still reasserts every frame for ~2s since shapes can appear late
-or get recreated across re-layouts. Custom-icon mode (hide + overlay Image)
-is unaffected by any of this — it operates purely at the FrameworkElement
-Visibility/overlay level, verified working in the logs (panel/icon lookup
-all succeed).
-
-**Not yet visually confirmed** — this is the next thing to test.
-
-## Recolor still not visually landing — readback proved unreliable, switched to brute-force reassert
-Found the real shape tree (`ShapeVisual.Shapes()` -> `CompositionSpriteShape.
-FillBrush()`, 28 brushes on the Start icon — confirms this is the right
-node), but every brush read back as transparent black (A=0) both before and
-after `SetColorProperty`. Concluded `CompositionColorBrush.Color()` read from
-the UI thread does not reliably reflect a value driven by an active
-expression animation on the render thread — it's not a valid "did it work"
-signal, only usable as an existence probe. The retry loop was also stopping
-at the very first frame shapes existed and unsubscribing immediately, which
-could still be before Explorer finishes wiring the theme-property expression
-bindings. Changed strategy: reassert `SetColorProperty(Foreground, color)` on
-every `CompositionTarget.Rendering` tick for ~120 frames (~2s) instead of
-stopping at first detection — cheap, and guarantees our write is the last one
-regardless of exactly when Explorer's own theme setup runs.
-
-**Still unconfirmed visually as of this note** — next log from the user is
-the actual test of this change.
-
-## Recolor race condition found and fixed
-Confirmed via live extraction of `Taskbar.View.dll` strings (UTF-16 scan) that
-`"Foreground"` is the real theme-color property name — the source object's
-runtime class is `AnimatedVisuals.StartDark` (LottieGen C++/WinRT output),
-and both `"Foreground"` and the composition-expression fragment
-`"theme.Foreground.X/Y/Z/W"` are literal strings in the DLL, matching
-Microsoft's public LottieGen convention exactly.
-
-`SetColorProperty` was being called correctly but too early: at
-`UpdateButtonPadding` time the animated visual's composition tree is still
-empty (0 `CompositionColorBrush`es, `player.IsPlaying=0`) — Explorer creates
-the actual Lottie visual asynchronously afterward and re-seeds the theme
-color from its own default, winning the race against our earlier call. Fixed
-by retrying on `CompositionTarget.Rendering` until the composition tree is
-populated (bounded to ~180 frames / ~3s), then reasserting `SetColorProperty`
-once more.
-
-## Root cause found (live-debugged on 25H2)
-Logs revealed the actual tree: `ExperienceToggleButtonRootPanel` is class
-`Taskbar.TaskListButtonPanel` (a generic `Panel`, not `Grid`), with children
-`Border "BackgroundElement"` (confirms the corner-radius/bg target guess) and
-`Microsoft.UI.Xaml.Controls.AnimatedVisualPlayer "Icon"` — a **Lottie-based**
-icon, not a `FontIcon`/`PathIcon`. That's why the original `IconElement`-only
-recolor path (`.Foreground()`) silently did nothing: `AnimatedVisualPlayer`
-isn't an `IconElement`.
-
-Fixed by looking up Microsoft's own LottieGen-generated shell icon sources
-(`microsoft/microsoft-ui-xaml` on GitHub): recoloring these goes through
-`IAnimatedVisualSource2::SetColorProperty(L"Foreground", color)` on
-`player.Source()` — confirmed real API (`AnimatedIcon.idl`) and confirmed
-`"Foreground"` is the property name Microsoft's own generated sources use for
-single-tone theme color. Also fixed the custom-icon overlay path, which
-previously required `panel.try_as<Grid>()` and silently no-op'd since the
-panel is `Taskbar.TaskListButtonPanel`, not `Grid` — now inserts via the
-generic `Panel.Children()` collection instead.
-
-## Debugging
-Mod loads and hooks the correct symbol cleanly (confirmed live on 25H2,
-Taskbar.View.dll 2605.22000.400.0 — resolved from PDB cache, hook applied,
-no crash). Recolor not visibly taking effect; added `Wh_Log` tracing at each
-decision point (hook entry, class/AutomationId match, panel lookup w/
-child dump fallback, icon element lookup w/ child dump fallback, color
-parse + Foreground-apply confirmation) to find where the chain breaks —
-most likely candidates: `ExperienceToggleButtonRootPanel` child name/icon
-element class name not matching this build's actual tree, or hook simply
-not firing yet (needs a layout-triggering event, e.g. taskbar resize/DPI
-change/Explorer restart).
-
-## Status
-Implemented: `windows-11-start-menu-button.wh.cpp` written, using symbol hook
-`winrt::Taskbar::implementation::ExperienceToggleButton::UpdateButtonPadding`
-in `Taskbar.View.dll`, filtered to `AutomationId == "StartButton"`, reaching
-child `ExperienceToggleButtonRootPanel` — pattern verified against the public
-`taskbar-start-button-position.wh.cpp` mod. Per-state styling driven by
-Pointer{Entered,Exited,Pressed,Released,CaptureLost} handlers on the button
-element rather than native VisualStateManager hooks (unverified for 25H2).
-Custom icon mode overlays a WinRT `Image` (loaded via `BitmapImage.UriSource`
-file:// URI); recolor mode sets `IconElement.Foreground` directly, so no
-symbol offsets were hallucinated for the actual icon draw path.
-
-**Unverified against a live 25H2 build** (no build access in this session):
-mangled symbol string, exact `ExperienceToggleButtonRootPanel` structure, and
-whether the corner-radius `Border` descendant exists in the current build's
-control template. `HookSymbols` failing is a non-fatal, logged no-op per
-Windhawk's own symbol-hook contract — worst case the mod loads inert.
+## Dev workflow note
+Explorer needs a real restart to reload this mod (symbol-hooked DLL loaded at Explorer startup) regardless of whether the change is a settings tweak or a source edit — this is believed to be inherent to Windhawk's reload mechanism for this hook type, not fixable from mod code. To minimize how often a full reload is needed: the `recolor.gradient.*`/`recolor.elevate.*`/`recolor.shimmer.*` tuning constants are deliberately exposed as live-editable settings (not compile-time constants) specifically so visual tuning doesn't require a recompile+reload cycle — only logic changes do.
 
 ## Verification
 - Load mod in Windhawk on a Win11 25H2 test machine, target `explorer.exe`.
-- Test each mode: custom icon swap, recolor tint, verify native hover/press animation still plays.
-- Test per-state bg/padding/margin/corner-radius changes visually apply on hover/press.
+- Test custom icon swap and recolor tint modes.
+- **Confirmed live (2026-07-22)**: role-based per-tile gradient colors, and the `Checked`/`Unchecked`-triggered press sweep, both visually working per user report ("ok now everything seems to be working visually").
+- **Confirmed live (2026-07-22)**: staggered per-tile sweep wave (vs. all 4 tiles flashing in sync) and the re-exposed `recolor.shimmer.color` setting, both added this session — awaiting next test round to confirm visually (not yet explicitly reported back by the user as of this writing).
+- **Not yet visually confirmed**: the settings reorg (flattened top-level `mode`/`customIcon`/`recolor` groups, `recolor.gradient.enabled` toggle moved under gradient, `recolor.shimmer.autoLightenPercent` white-overlay-blend behavior replacing the old adaptive-lightness-push logic, `recolor.shimmer.bandWidthPercent` default raised to 500) — code just written this session, awaiting live test.
 - Test multi-monitor: confirm styling applies to Start button on every taskbar instance.
-- Test settings reload: change settings in Windhawk UI, confirm mod updates live without explorer restart.
+- Test settings reload: change settings in Windhawk UI, confirm mod updates live without needing to fully reason about whether the observed Explorer restart is normal (see "Dev workflow note").
