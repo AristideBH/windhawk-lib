@@ -16,6 +16,8 @@
 /*
 # Windows 11 Start Button Customizer
 
+![video](https://i.imgur.com/Q8aFc4p.gif)
+
 Customize the Windows 11 taskbar Start button's icon, without losing its
 native hover/press animation:
 
@@ -233,6 +235,12 @@ struct TrackedButton {
     winrt::event_token pointerCaptureLostToken;
     winrt::event_token checkedToken;
     winrt::event_token uncheckedToken;
+    // Held so Wh_ModBeforeUninit can revoke the CompositionTarget.Rendering
+    // subscription synchronously and unconditionally on unload - see
+    // StartPersistentIconColorMaintenance / StopIconColorMaintenance for
+    // why relying on the render callback to notice g_unloading and
+    // self-revoke on its own next invocation isn't safe.
+    std::shared_ptr<winrt::event_token> renderingToken;
 };
 
 std::vector<TrackedButton> g_trackedButtons;
@@ -847,6 +855,50 @@ std::optional<winrt::Windows::UI::Color> ParseHexColor(std::wstring hex) {
 // animation is fighting us right now" - it can't express hover-brighten
 // vs. a one-shot press sweep vs. a sustained menu-open hold, which are
 // genuinely different states, not different phases of the same animation.
+// Stops a button's persistent recolor loop and restores its Composition
+// tree's original brushes - called explicitly and synchronously from
+// Wh_ModBeforeUninit for every tracked button, not left to chance. Relying
+// on the render callback itself to notice g_unloading and self-revoke on
+// its own next invocation is NOT safe: CompositionTarget.Rendering stops
+// firing once nothing needs to redraw (confirmed live - the icon sitting
+// idle at rest is exactly the state that preceded a real Explorer crash,
+// event ID 1000, exception 0x20474343 in KERNELBASE.dll, a Control Flow
+// Guard fail-fast). If no further frame fires before Windhawk unloads this
+// mod's DLL, the still-registered callback's code lives in now-unmapped
+// memory - the next time the compositor invokes it, indirect-calling into
+// freed memory is exactly what CFG fail-fasts on. Revoking synchronously
+// here, before Wh_ModUninit/DLL unload can happen, closes that window
+// entirely rather than hoping another frame ticks in time.
+void StopIconColorMaintenance(TrackedButton& tracked) {
+    if (!tracked.renderingToken) {
+        return;
+    }
+
+    if (auto panel = tracked.panelRef.get()) {
+        if (auto iconElement = FindIconElement(panel)) {
+            if (auto player =
+                    iconElement.try_as<
+                        winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer>()) {
+                // RestoreIconMode only handles the IconElement's own
+                // Visibility/Foreground - it doesn't touch the
+                // AnimatedVisualPlayer's Composition shape-tree brushes,
+                // which is what this loop has been overriding every frame.
+                // One last restore call here, matching what the removed
+                // per-frame g_unloading branch used to attempt on a "next
+                // frame" that wasn't guaranteed to come.
+                RecolorAnimatedVisualPlayer(player, std::nullopt);
+            }
+        }
+    }
+
+    try {
+        Media::CompositionTarget::Rendering(*tracked.renderingToken);
+    } catch (winrt::hresult_error const&) {
+        // Already revoked, or otherwise invalid - nothing left to do.
+    }
+    tracked.renderingToken.reset();
+}
+
 void StartPersistentIconColorMaintenance(
     winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer player,
     FrameworkElement button) {
@@ -860,9 +912,14 @@ void StartPersistentIconColorMaintenance(
             (*frameCounter)++;
             bool logThisFrame = (*frameCounter % 60) == 0;
 
+            // Unloading is handled explicitly and synchronously by
+            // StopIconColorMaintenance (called from Wh_ModBeforeUninit),
+            // which revokes this callback outright - so this is just a
+            // defensive early-out for the vanishingly unlikely case of a
+            // frame landing in the same tick g_unloading flips, before
+            // that revoke runs. No brush restoration or self-revoke here
+            // (both are StopIconColorMaintenance's job now).
             if (g_unloading) {
-                RecolorAnimatedVisualPlayer(player, std::nullopt);
-                Media::CompositionTarget::Rendering(*token);
                 return;
             }
 
@@ -984,6 +1041,14 @@ void StartPersistentIconColorMaintenance(
             Wh_Log(L"Icon color maintenance: caught unknown exception");
           }
         });
+
+    // Stashed so Wh_ModBeforeUninit can revoke this subscription
+    // synchronously via StopIconColorMaintenance - see its comment for why
+    // that's necessary rather than relying on this callback noticing
+    // g_unloading on its own next invocation.
+    if (auto tracked = FindTrackedButton(button)) {
+        tracked->renderingToken = token;
+    }
 }
 
 std::wstring FilePathToFileUri(const std::wstring& path) {
@@ -1452,6 +1517,12 @@ void Wh_ModAfterInit() {
 
 void Wh_ModBeforeUninit() {
     g_unloading = true;
+    // Stop every button's persistent render-loop subscription synchronously
+    // before anything else - see StopIconColorMaintenance for why this
+    // can't be left to the render callback noticing g_unloading on its own.
+    for (auto& tracked : g_trackedButtons) {
+        StopIconColorMaintenance(tracked);
+    }
     ReapplyAllTrackedButtons();  // restores native icon (RestoreIconMode, via g_unloading)
 }
 
