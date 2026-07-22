@@ -3,8 +3,9 @@
 // @name            Windows 11 Start Button Customizer
 // @description     Custom icon and recolor (animation-preserving, with depth gradient and press-sweep) for the Windows 11 taskbar Start button
 // @version         1.0
-// @author          arist
-// @github          https://github.com/arist
+// @author          AristideBH
+// @github          https://github.com/AristideBH
+// @homepage        https://aristide-bh.com/
 // @license         MIT
 // @include         explorer.exe
 // @architecture    x86-64
@@ -15,12 +16,22 @@
 /*
 # Windows 11 Start Button Customizer
 
-Customize the Windows 11 taskbar Start button:
+Customize the Windows 11 taskbar Start button's icon, without losing its
+native hover/press animation:
 
-- **Custom icon** mode: replace the stock icon with your own PNG/ICO file.
-- **Recolor** mode: tint the stock icon while keeping its native
-  animation/theme behavior, with an optional per-tile depth gradient and
-  a one-shot highlight sweep on press.
+- **System default** — leave the icon untouched.
+- **Custom icon** — replace the stock icon with your own PNG/ICO file.
+- **Recolor** — tint the stock icon to any color, with two independent
+  add-ons:
+  - **Gradient shading** — a diagonal light-to-dark tint across the icon's
+    four tiles (echoing the original flag icon's look), plus a brightness
+    boost while hovered, pressed, or the Start menu is open.
+  - **Click shimmer** — a one-shot highlight sweep that plays across the
+    icon each time the Start button is clicked, either in a custom color
+    or auto-lightened from the icon color.
+
+Gradient shading and click shimmer can be toggled independently - shimmer
+on a flat-colored icon, gradient shading with no shimmer, both, or neither.
 
 Only Windows 11 25H2 is supported. Applies to the Start button on every
 taskbar instance (multi-monitor).
