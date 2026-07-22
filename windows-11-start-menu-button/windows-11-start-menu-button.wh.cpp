@@ -58,17 +58,19 @@ taskbar instance (multi-monitor).
   - recolorShimmerColor: "#FF0000"
     $name: Shimmer color
     $description: >-
-      Hex color applied only while the icon's native hover/press animation
-      is actively playing, creating a shimmer effect on interaction. Set
-      equal to the resting color to disable the shimmer. Used when Icon
-      mode is "Recolor".
+      Tint for the one-shot diagonal highlight sweep shown when the button
+      is pressed. Set equal to the resting color to auto-derive a whitened
+      tint from it instead of specifying one. Used when Icon mode is
+      "Recolor".
   - recolorGradient: true
     $name: Depth gradient
     $description: >-
-      Derive a subtle diagonal light-to-dark gradient from the resting and
-      shimmer colors, similar to the shading on the original flag icon,
-      instead of filling each shape with one flat tone. Used when Icon mode
-      is "Recolor".
+      Derive a diagonal light-to-dark gradient spanning the whole icon from
+      the resting color, similar to the shading on the original flag icon,
+      instead of filling each shape with one flat tone. Also enables the
+      hover/press/menu-open brighten and the press sweep; when off, the
+      icon is a flat single-tone fill with no animated states. Used when
+      Icon mode is "Recolor".
   $name: Icon
   $description: Icon mode, custom icon path, and recolor tint colors
 - default:
@@ -151,6 +153,7 @@ taskbar instance (multi-monitor).
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -202,6 +205,44 @@ enum ButtonState {
 
 std::atomic<bool> g_unloading;
 std::atomic<bool> g_taskbarViewDllLoaded;
+
+// -----------------------------------------------------------------------
+// Per-button tracked state (declared early: StartPersistentIconColorMaintenance,
+// defined further down, looks up TrackedButton state every frame)
+// -----------------------------------------------------------------------
+
+struct TrackedButton {
+    winrt::weak_ref<FrameworkElement> buttonRef;
+    winrt::weak_ref<FrameworkElement> panelRef;
+    ButtonState lastState = kStateDefault;
+    bool menuOpen = false;  // spec state D: Start menu held open
+    // Icon depth-gradient animation state (read/written from the
+    // per-frame loop in StartPersistentIconColorMaintenance).
+    float iconElevatedAmount = 0.0f;  // 0..1, ramped over kHoverTransitionMs
+    ULONGLONG iconLastFrameTimeMs = 0;
+    bool iconPressSweepActive = false;
+    ULONGLONG iconPressSweepStartMs = 0;
+    winrt::Windows::UI::Xaml::Controls::Image customIconOverlay{nullptr};
+    winrt::event_token pointerEnteredToken;
+    winrt::event_token pointerExitedToken;
+    winrt::event_token pointerPressedToken;
+    winrt::event_token pointerReleasedToken;
+    winrt::event_token pointerCaptureLostToken;
+    winrt::event_token checkedToken;
+    winrt::event_token uncheckedToken;
+};
+
+std::vector<TrackedButton> g_trackedButtons;
+
+TrackedButton* FindTrackedButton(const FrameworkElement& button) {
+    for (auto& tracked : g_trackedButtons) {
+        auto elem = tracked.buttonRef.get();
+        if (elem && elem == button) {
+            return &tracked;
+        }
+    }
+    return nullptr;
+}
 
 // -----------------------------------------------------------------------
 // XAML tree helpers (pattern verified against public Windhawk taskbar mods)
@@ -384,53 +425,156 @@ winrt::Windows::UI::Color AdjustLightness(winrt::Windows::UI::Color color,
                                       toByte(outB)};
 }
 
-// Mimics the shading on the original flag icon's gradient-filled squares: a
-// diagonal light-to-dark sweep derived from a single configured color,
-// rather than a flat single-tone fill.
+// -----------------------------------------------------------------------
+// Depth gradient: ONE diagonal gradient conceptually spanning the whole
+// icon (all 4 flag tiles), not 4 independent per-tile gradients. Each
+// shape's brush gets Absolute-mode StartPoint/EndPoint expressed in *that
+// shape's own pre-transform geometry space*:
+//   local = (global - accumulatedOffset) / accumulatedScale
+// where accumulatedOffset/Scale is this shape's position/scale within the
+// icon's overall Composition tree, walked down from the root visual
+// (translation + scale only - rotation/TransformMatrix assumed unused by
+// this asset's static grid layout; unverified against a live 25H2 build,
+// same caveat as the rest of this file). Recomputed every frame (not
+// captured once) since Explorer's native hover/press Lottie animation is
+// suspected to move/scale these shapes during transitions - same reason
+// StartPersistentIconColorMaintenance already reasserts colors every tick
+// instead of once.
+// "Global" space is just the AnimatedVisualPlayer's own render size,
+// assuming the Lottie art fills its own bounds exactly.
+// -----------------------------------------------------------------------
+
+using Float2 = winrt::Windows::Foundation::Numerics::float2;
+using Float3 = winrt::Windows::Foundation::Numerics::float3;
+
 constexpr float kGradientLightenAmount = 0.18f;
 constexpr float kGradientDarkenAmount = 0.18f;
+// Extra brighten/shadow-relief while hovered/pressed/menu-open, ramped in
+// over kHoverTransitionMs rather than stepped instantly.
+constexpr float kElevatedLightenBoost = 0.10f;
+constexpr float kElevatedDarkenRelief = 0.06f;
+constexpr float kHoverTransitionMs = 180.0f;
+// One-shot diagonal highlight sweep triggered on press.
+constexpr float kSweepDurationMs = 300.0f;
+constexpr float kSweepBandWidth = 0.15f;
+
+struct GradientFrameParams {
+    winrt::Windows::UI::Color baseColor{};
+    winrt::Windows::UI::Color bandColor{};
+    float elevatedAmount = 0.0f;  // 0..1, ramped
+    float sweepProgress = -1.0f;  // -1 == inactive, else raw progress 0..1
+    Float2 iconSize{0.0f, 0.0f};  // "global" gradient space (player render size)
+};
+
+winrt::Windows::UI::Color LerpColor(winrt::Windows::UI::Color a,
+                                     winrt::Windows::UI::Color b,
+                                     float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    auto lerpByte = [t](BYTE x, BYTE y) {
+        return (BYTE)std::round(x + (y - x) * t);
+    };
+    return winrt::Windows::UI::Color{lerpByte(a.A, b.A), lerpByte(a.R, b.R),
+                                      lerpByte(a.G, b.G), lerpByte(a.B, b.B)};
+}
+
+float EaseOut(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    return 1.0f - (1.0f - t) * (1.0f - t);
+}
 
 winrt::Windows::UI::Composition::CompositionBrush CreateDepthGradientBrush(
     winrt::Windows::UI::Composition::Compositor compositor,
-    winrt::Windows::UI::Color baseColor) {
+    const GradientFrameParams& params,
+    Float2 shapeOffset,
+    Float2 shapeScale) {
+    float lightenDelta =
+        kGradientLightenAmount + kElevatedLightenBoost * params.elevatedAmount;
+    float darkenDelta = std::max(
+        0.0f, kGradientDarkenAmount - kElevatedDarkenRelief * params.elevatedAmount);
+    auto lighter = AdjustLightness(params.baseColor, lightenDelta);
+    auto darker = AdjustLightness(params.baseColor, -darkenDelta);
+
+    // Color at an arbitrary offset along the base (non-sweep) gradient -
+    // used to sandwich the sweep band so it doesn't disturb the rest of
+    // the gradient.
+    auto colorAtOffset = [&](float t) { return LerpColor(lighter, darker, t); };
+
+    struct Stop {
+        float offset;
+        winrt::Windows::UI::Color color;
+    };
+    std::vector<Stop> stops = {{0.0f, lighter}, {1.0f, darker}};
+
+    if (params.sweepProgress >= 0.0f) {
+        float eased = EaseOut(params.sweepProgress);
+        float bandCenter =
+            -kSweepBandWidth / 2.0f + eased * (1.0f + kSweepBandWidth);
+        float bandStart = bandCenter - kSweepBandWidth / 2.0f;
+        float bandEnd = bandCenter + kSweepBandWidth / 2.0f;
+
+        if (bandEnd > 0.0f && bandStart < 1.0f) {
+            float clampedStart = std::clamp(bandStart, 0.0f, 1.0f);
+            float clampedCenter = std::clamp(bandCenter, 0.0f, 1.0f);
+            float clampedEnd = std::clamp(bandEnd, 0.0f, 1.0f);
+            stops.push_back({clampedStart, colorAtOffset(clampedStart)});
+            stops.push_back({clampedCenter, params.bandColor});
+            stops.push_back({clampedEnd, colorAtOffset(clampedEnd)});
+        }
+    }
+
+    std::sort(stops.begin(), stops.end(),
+              [](const Stop& a, const Stop& b) { return a.offset < b.offset; });
+
     auto gradientBrush = compositor.CreateLinearGradientBrush();
-    gradientBrush.StartPoint({0.0f, 0.0f});
-    gradientBrush.EndPoint({1.0f, 1.0f});
+    gradientBrush.MappingMode(
+        winrt::Windows::UI::Composition::CompositionMappingMode::Absolute);
 
-    auto lighter = AdjustLightness(baseColor, kGradientLightenAmount);
-    auto darker = AdjustLightness(baseColor, -kGradientDarkenAmount);
+    // Degenerate scale (shape not yet laid out) - fall back to unscaled
+    // rather than dividing by ~0.
+    Float2 safeScale{shapeScale.x != 0.0f ? shapeScale.x : 1.0f,
+                      shapeScale.y != 0.0f ? shapeScale.y : 1.0f};
+    gradientBrush.StartPoint((Float2{0.0f, 0.0f} - shapeOffset) / safeScale);
+    gradientBrush.EndPoint((params.iconSize - shapeOffset) / safeScale);
 
-    auto stops = gradientBrush.ColorStops();
-    stops.Append(compositor.CreateColorGradientStop(0.0f, lighter));
-    stops.Append(compositor.CreateColorGradientStop(1.0f, darker));
+    auto colorStops = gradientBrush.ColorStops();
+    for (auto& stop : stops) {
+        colorStops.Append(
+            compositor.CreateColorGradientStop(stop.offset, stop.color));
+    }
 
     return gradientBrush;
 }
 
 winrt::Windows::UI::Composition::CompositionBrush CreateRecolorBrush(
     winrt::Windows::UI::Composition::Compositor compositor,
-    winrt::Windows::UI::Color color) {
+    const GradientFrameParams& params,
+    Float2 shapeOffset,
+    Float2 shapeScale) {
     if (g_settings.recolorGradient) {
-        return CreateDepthGradientBrush(compositor, color);
+        return CreateDepthGradientBrush(compositor, params, shapeOffset,
+                                         shapeScale);
     }
-    return compositor.CreateColorBrush(color);
+    return compositor.CreateColorBrush(params.baseColor);
 }
 
 int ReplaceBrush(
     winrt::Windows::UI::Composition::Compositor compositor,
     void* identity,
     winrt::Windows::UI::Composition::CompositionBrush currentBrush,
-    std::optional<winrt::Windows::UI::Color> targetColor,
+    const std::optional<GradientFrameParams>& frameParams,
+    Float2 shapeOffset,
+    Float2 shapeScale,
     std::function<void(winrt::Windows::UI::Composition::CompositionBrush)> setter) {
     if (!compositor) {
         return 0;
     }
 
-    if (targetColor) {
+    if (frameParams) {
         if (currentBrush) {
             g_originalIconBrushes.try_emplace(identity, currentBrush);
         }
-        setter(CreateRecolorBrush(compositor, *targetColor));
+        setter(CreateRecolorBrush(compositor, *frameParams, shapeOffset,
+                                   shapeScale));
     } else {
         auto it = g_originalIconBrushes.find(identity);
         if (it != g_originalIconBrushes.end()) {
@@ -442,13 +586,22 @@ int ReplaceBrush(
 }
 
 int RecolorShapeBrushes(winrt::Windows::UI::Composition::CompositionShape shape,
-                         std::optional<winrt::Windows::UI::Color> targetColor,
+                         const std::optional<GradientFrameParams>& frameParams,
+                         Float2 accOffset,
+                         Float2 accScale,
                          int depth = 0) {
     if (!shape || depth > 12) {
         return 0;
     }
 
     int count = 0;
+
+    // CompositionShape's own Offset/Scale place it within its parent -
+    // they don't affect its FillBrush's internal UV mapping, but they do
+    // affect where this shape (and its children) sit in the icon overall,
+    // so accumulate through every shape, leaf or container.
+    Float2 totalOffset = accOffset + accScale * shape.Offset();
+    Float2 totalScale = accScale * shape.Scale();
 
     if (auto spriteShape =
             shape.try_as<winrt::Windows::UI::Composition::CompositionSpriteShape>()) {
@@ -457,7 +610,7 @@ int RecolorShapeBrushes(winrt::Windows::UI::Composition::CompositionShape shape,
         if (spriteShape.FillBrush()) {
             count += ReplaceBrush(
                 compositor, Identity(spriteShape), spriteShape.FillBrush(),
-                targetColor, [spriteShape](auto brush) {
+                frameParams, totalOffset, totalScale, [spriteShape](auto brush) {
                     spriteShape.FillBrush(brush);
                 });
         }
@@ -468,7 +621,7 @@ int RecolorShapeBrushes(winrt::Windows::UI::Composition::CompositionShape shape,
                 reinterpret_cast<char*>(Identity(spriteShape)) + 1;
             count += ReplaceBrush(
                 compositor, strokeIdentity, spriteShape.StrokeBrush(),
-                targetColor, [spriteShape](auto brush) {
+                frameParams, totalOffset, totalScale, [spriteShape](auto brush) {
                     spriteShape.StrokeBrush(brush);
                 });
         }
@@ -477,7 +630,8 @@ int RecolorShapeBrushes(winrt::Windows::UI::Composition::CompositionShape shape,
     if (auto containerShape =
             shape.try_as<winrt::Windows::UI::Composition::CompositionContainerShape>()) {
         for (auto child : containerShape.Shapes()) {
-            count += RecolorShapeBrushes(child, targetColor, depth + 1);
+            count += RecolorShapeBrushes(child, frameParams, totalOffset,
+                                          totalScale, depth + 1);
         }
     }
 
@@ -485,7 +639,9 @@ int RecolorShapeBrushes(winrt::Windows::UI::Composition::CompositionShape shape,
 }
 
 int RecolorVisualBrushes(winrt::Windows::UI::Composition::Visual visual,
-                          std::optional<winrt::Windows::UI::Color> targetColor,
+                          const std::optional<GradientFrameParams>& frameParams,
+                          Float3 accOffset,
+                          Float3 accScale,
                           int depth = 0) {
     if (!visual || depth > 12) {
         return 0;
@@ -493,12 +649,17 @@ int RecolorVisualBrushes(winrt::Windows::UI::Composition::Visual visual,
 
     int count = 0;
 
+    Float3 totalOffset = accOffset + accScale * visual.Offset();
+    Float3 totalScale = accScale * visual.Scale();
+    Float2 totalOffset2{totalOffset.x, totalOffset.y};
+    Float2 totalScale2{totalScale.x, totalScale.y};
+
     if (auto spriteVisual =
             visual.try_as<winrt::Windows::UI::Composition::SpriteVisual>()) {
         if (spriteVisual.Brush()) {
             count += ReplaceBrush(
                 spriteVisual.Compositor(), Identity(spriteVisual),
-                spriteVisual.Brush(), targetColor,
+                spriteVisual.Brush(), frameParams, totalOffset2, totalScale2,
                 [spriteVisual](auto brush) { spriteVisual.Brush(brush); });
         }
     }
@@ -506,14 +667,16 @@ int RecolorVisualBrushes(winrt::Windows::UI::Composition::Visual visual,
     if (auto shapeVisual =
             visual.try_as<winrt::Windows::UI::Composition::ShapeVisual>()) {
         for (auto shape : shapeVisual.Shapes()) {
-            count += RecolorShapeBrushes(shape, targetColor, depth + 1);
+            count += RecolorShapeBrushes(shape, frameParams, totalOffset2,
+                                          totalScale2, depth + 1);
         }
     }
 
     if (auto container =
             visual.try_as<winrt::Windows::UI::Composition::ContainerVisual>()) {
         for (auto child : container.Children()) {
-            count += RecolorVisualBrushes(child, targetColor, depth + 1);
+            count += RecolorVisualBrushes(child, frameParams, totalOffset,
+                                           totalScale, depth + 1);
         }
     }
 
@@ -522,15 +685,19 @@ int RecolorVisualBrushes(winrt::Windows::UI::Composition::Visual visual,
 
 int RecolorAnimatedVisualPlayer(
     winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer player,
-    std::optional<winrt::Windows::UI::Color> targetColor) {
+    const std::optional<GradientFrameParams>& frameParams) {
     int found = 0;
+    Float3 rootOffset{0.0f, 0.0f, 0.0f};
+    Float3 rootScale{1.0f, 1.0f, 1.0f};
     if (auto ownVisual =
             Hosting::ElementCompositionPreview::GetElementVisual(player)) {
-        found += RecolorVisualBrushes(ownVisual, targetColor);
+        found +=
+            RecolorVisualBrushes(ownVisual, frameParams, rootOffset, rootScale);
     }
     if (auto childVisual =
             Hosting::ElementCompositionPreview::GetElementChildVisual(player)) {
-        found += RecolorVisualBrushes(childVisual, targetColor);
+        found += RecolorVisualBrushes(childVisual, frameParams, rootOffset,
+                                       rootScale);
     }
     return found;
 }
@@ -574,19 +741,21 @@ std::optional<winrt::Windows::UI::Color> ParseHexColor(std::wstring hex) {
 // gets fought/reset by the icon's own native hover/press Lottie animation
 // playback - confirmed by the override only visibly appearing WHILE that
 // animation is actively playing, then reverting once it settles at rest.
-// Rather than fight that, embrace it: drive two distinct colors off
-// player.IsPlaying() every single frame, for the button's entire lifetime
-// (only stopped on unload) - a "shimmer" color shown exactly while a
-// hover/press transition is animating, and a steady "resting" color
-// otherwise. Both are continuously reasserted, so there's no reversion
-// window regardless of when Explorer recreates the underlying brush
-// objects.
+// So this still reasserts every frame for the button's entire lifetime
+// (only stopped on unload) - but *which* color/gradient it reasserts is
+// now driven by our own tracked interaction state (idle/hover/pressed,
+// see TrackedButton::lastState, plus TrackedButton::menuOpen), not
+// player.IsPlaying(). IsPlaying() was only ever a proxy for "Explorer's
+// animation is fighting us right now" - it can't express hover-brighten
+// vs. a one-shot press sweep vs. a sustained menu-open hold, which are
+// genuinely different states, not different phases of the same animation.
 void StartPersistentIconColorMaintenance(
-    winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer player) {
+    winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer player,
+    FrameworkElement button) {
     auto token = std::make_shared<winrt::event_token>();
     auto frameCounter = std::make_shared<int>(0);
     *token = Media::CompositionTarget::Rendering(
-        [player, token, frameCounter](
+        [player, button, token, frameCounter](
             winrt::Windows::Foundation::IInspectable const&,
             winrt::Windows::Foundation::IInspectable const&) {
             (*frameCounter)++;
@@ -608,20 +777,85 @@ void StartPersistentIconColorMaintenance(
                 return;
             }
 
-            bool animating = player.IsPlaying();
-            auto colorStr = animating ? g_settings.recolorShimmerColor
-                                       : g_settings.recolorColor;
-            auto color = ParseHexColor(colorStr);
-            int touched = 0;
-            if (color) {
-                touched = RecolorAnimatedVisualPlayer(player, *color);
+            auto tracked = FindTrackedButton(button);
+            auto baseColor = ParseHexColor(g_settings.recolorColor);
+            if (!tracked || !baseColor) {
+                int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
+                if (logThisFrame) {
+                    Wh_Log(L"Icon color maintenance: no tracked button or "
+                           L"unparsable resting color, restoring original, "
+                           L"touched=%d",
+                           touched);
+                }
+                return;
             }
+
+            ULONGLONG now = GetTickCount64();
+            if (tracked->iconLastFrameTimeMs == 0) {
+                tracked->iconLastFrameTimeMs = now;
+            }
+            float deltaMs = (float)(now - tracked->iconLastFrameTimeMs);
+            tracked->iconLastFrameTimeMs = now;
+
+            // "Elevated" = hover, pressed, or menu held open - all three
+            // share the same brighten treatment per spec (state D reuses
+            // hover's "elevated brightness tone").
+            bool elevated =
+                tracked->lastState != kStateDefault || tracked->menuOpen;
+            float target = elevated ? 1.0f : 0.0f;
+            float rampStep = deltaMs / kHoverTransitionMs;
+            if (tracked->iconElevatedAmount < target) {
+                tracked->iconElevatedAmount =
+                    std::min(target, tracked->iconElevatedAmount + rampStep);
+            } else if (tracked->iconElevatedAmount > target) {
+                tracked->iconElevatedAmount =
+                    std::max(target, tracked->iconElevatedAmount - rampStep);
+            }
+
+            // One-shot sweep: (re)triggered every time we transition into
+            // Pressed, runs for kSweepDurationMs regardless of how long the
+            // press is held, then clears itself.
+            if (tracked->lastState == kStatePressed &&
+                !tracked->iconPressSweepActive) {
+                tracked->iconPressSweepActive = true;
+                tracked->iconPressSweepStartMs = now;
+            }
+
+            float sweepProgress = -1.0f;
+            if (tracked->iconPressSweepActive) {
+                float elapsed = (float)(now - tracked->iconPressSweepStartMs);
+                if (elapsed >= kSweepDurationMs) {
+                    tracked->iconPressSweepActive = false;
+                } else {
+                    sweepProgress = elapsed / kSweepDurationMs;
+                }
+            }
+
+            // Band tint: explicit override if configured to something other
+            // than the resting color, otherwise auto-derive by pushing the
+            // resting color toward white.
+            auto shimmerColor = ParseHexColor(g_settings.recolorShimmerColor);
+            winrt::Windows::UI::Color bandColor =
+                (shimmerColor &&
+                 g_settings.recolorShimmerColor != g_settings.recolorColor)
+                    ? *shimmerColor
+                    : AdjustLightness(*baseColor, 0.5f);
+
+            GradientFrameParams params;
+            params.baseColor = *baseColor;
+            params.bandColor = bandColor;
+            params.elevatedAmount = tracked->iconElevatedAmount;
+            params.sweepProgress = sweepProgress;
+            params.iconSize = {(float)player.ActualWidth(),
+                                (float)player.ActualHeight()};
+
+            int touched = RecolorAnimatedVisualPlayer(player, params);
             if (logThisFrame) {
                 Wh_Log(
-                    L"Icon color maintenance: animating=%d colorStr=\"%s\" "
-                    L"parsed=%d touched=%d",
-                    (int)animating, colorStr.c_str(), (int)color.has_value(),
-                    touched);
+                    L"Icon color maintenance: state=%d menuOpen=%d "
+                    L"elevated=%.2f sweep=%.2f touched=%d",
+                    (int)tracked->lastState, (int)tracked->menuOpen,
+                    tracked->iconElevatedAmount, sweepProgress, touched);
             }
         });
 }
@@ -642,34 +876,6 @@ std::wstring FilePathToFileUri(const std::wstring& path) {
         uri += (c == L'\\') ? L'/' : c;
     }
     return uri;
-}
-
-// -----------------------------------------------------------------------
-// Per-button tracked state
-// -----------------------------------------------------------------------
-
-struct TrackedButton {
-    winrt::weak_ref<FrameworkElement> buttonRef;
-    winrt::weak_ref<FrameworkElement> panelRef;
-    ButtonState lastState = kStateDefault;
-    winrt::Windows::UI::Xaml::Controls::Image customIconOverlay{nullptr};
-    winrt::event_token pointerEnteredToken;
-    winrt::event_token pointerExitedToken;
-    winrt::event_token pointerPressedToken;
-    winrt::event_token pointerReleasedToken;
-    winrt::event_token pointerCaptureLostToken;
-};
-
-std::vector<TrackedButton> g_trackedButtons;
-
-TrackedButton* FindTrackedButton(const FrameworkElement& button) {
-    for (auto& tracked : g_trackedButtons) {
-        auto elem = tracked.buttonRef.get();
-        if (elem && elem == button) {
-            return &tracked;
-        }
-    }
-    return nullptr;
 }
 
 // -----------------------------------------------------------------------
@@ -907,13 +1113,38 @@ void SetupButtonTracking(FrameworkElement button, FrameworkElement panel) {
             updateState(sender.try_as<FrameworkElement>(), kStateDefault);
         });
 
+    // Spec state D (menu held open) - unverified guess that
+    // Taskbar.ExperienceToggleButton derives from Primitives.ToggleButton
+    // (consistent with the "ToggleButton" in its class name), same
+    // try-and-log-if-it-fails pattern as the rest of this mod. If the cast
+    // fails, state D simply never triggers; everything else still works.
+    if (auto toggleButton = button.try_as<Controls::Primitives::ToggleButton>()) {
+        tracked.checkedToken = toggleButton.Checked(
+            [](winrt::Windows::Foundation::IInspectable const& sender,
+               auto const&) {
+                if (auto t = FindTrackedButton(sender.try_as<FrameworkElement>())) {
+                    t->menuOpen = true;
+                }
+            });
+        tracked.uncheckedToken = toggleButton.Unchecked(
+            [](winrt::Windows::Foundation::IInspectable const& sender,
+               auto const&) {
+                if (auto t = FindTrackedButton(sender.try_as<FrameworkElement>())) {
+                    t->menuOpen = false;
+                }
+            });
+    } else {
+        Wh_Log(L"Button is not a ToggleButton, menu-open icon state will "
+               L"not be detected");
+    }
+
     ApplyState(button, panel, tracked, kStateDefault);
 
     if (auto iconElement = FindIconElement(panel)) {
         if (auto player =
                 iconElement
                     .try_as<winrt::Microsoft::UI::Xaml::Controls::AnimatedVisualPlayer>()) {
-            StartPersistentIconColorMaintenance(player);
+            StartPersistentIconColorMaintenance(player, button);
         }
     }
 }
