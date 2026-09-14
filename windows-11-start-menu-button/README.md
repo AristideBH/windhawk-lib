@@ -17,6 +17,7 @@ Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → *
 ### Key Features:
 
 - **Three Icon Modes —** System default (untouched), Custom icon (your own PNG/ICO), or Recolor (tint the stock icon).
+- **System Accent Color —** Optionally follow Windows' current accent color instead of a fixed hex value, updating live when you change it in Settings.
 - **Gradient Shading —** A diagonal light-to-dark tint across the icon's four tiles, echoing the original flag icon's own shading, with independently tunable light-side and dark-side strength.
 - **Hover & Press Glow —** The icon brightens on hover, press, or while the Start menu is held open, with configurable boost amount and fade speed.
 - **Click Shimmer —** A one-shot highlight sweep plays across the icon on every click, staggered per-tile so it reads as a single diagonal wave rather than a flat flash. Sweep color, duration, and width are all configurable — use a custom color or let it auto-lighten from the icon color.
@@ -26,7 +27,7 @@ Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → *
 
 - **Icon mode** — System default / Custom icon / Recolor.
 - **Custom icon** — image file path (PNG or ICO).
-- **Recolor** — icon color, plus three sub-sections:
+- **Recolor** — icon color (or "use system accent color" toggle), plus three sub-sections:
   - **Gradient shading** — on/off, light side strength, dark side strength.
   - **Click shimmer** — on/off, shimmer color (or auto-lighten amount), sweep duration, sweep width.
   - **Hover & press glow** — extra brightness, shadow reduction, fade speed.

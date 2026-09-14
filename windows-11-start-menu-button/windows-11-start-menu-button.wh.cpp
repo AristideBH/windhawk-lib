@@ -2,7 +2,7 @@
 // @id              windows-11-start-menu-button
 // @name            Windows 11 Start Button Customizer
 // @description     Custom icon and recolor (animation-preserving, with depth gradient and press-sweep) for the Windows 11 taskbar Start button
-// @version         1.0
+// @version         1.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -23,8 +23,8 @@ native hover/press animation:
 
 - **System default** — leave the icon untouched.
 - **Custom icon** — replace the stock icon with your own PNG/ICO file.
-- **Recolor** — tint the stock icon to any color, with two independent
-  add-ons:
+- **Recolor** — tint the stock icon to any color, or follow the system
+  accent color live, with two independent add-ons:
   - **Gradient shading** — a diagonal light-to-dark tint across the icon's
     four tiles (echoing the original flag icon's look), plus a brightness
     boost while hovered, pressed, or the Start menu is open.
@@ -64,9 +64,16 @@ taskbar instance (multi-monitor).
   $name: Custom icon
   $description: Settings used when Icon mode is "Custom icon".
 - recolor:
+  - useAccentColor: false
+    $name: Use system accent color
+    $description: >-
+      Follow Windows' current accent color instead of Icon color below.
+      Updates live when the accent color changes in Settings.
   - color: "#BABABA"
     $name: Icon color
-    $description: Hex color (#RRGGBB or #AARRGGBB) for the icon at rest.
+    $description: >-
+      Hex color (#RRGGBB or #AARRGGBB) for the icon at rest. Ignored when
+      "Use system accent color" is on.
   - gradient:
     - enabled: true
       $name: Add gradient shading
@@ -161,6 +168,7 @@ taskbar instance (multi-monitor).
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/base.h>
 
 // The Start button's icon is a Lottie-based Microsoft.UI.Xaml.Controls.
@@ -185,6 +193,7 @@ enum class IconMode {
 struct {
     IconMode mode;
     std::wstring customIconPath;
+    bool recolorUseAccentColor;
     std::wstring recolorColor;
     std::wstring recolorShimmerColor;
     bool recolorGradient;
@@ -843,6 +852,21 @@ std::optional<winrt::Windows::UI::Color> ParseHexColor(std::wstring hex) {
     return winrt::Windows::UI::Color{a, r, g, b};
 }
 
+// Resolves the recolor mode's resting icon color: the system accent color
+// when "Use system accent color" is on, otherwise the manual hex field.
+std::optional<winrt::Windows::UI::Color> GetRecolorBaseColor() {
+    if (g_settings.recolorUseAccentColor) {
+        try {
+            winrt::Windows::UI::ViewManagement::UISettings uiSettings;
+            return uiSettings.GetColorValue(
+                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return ParseHexColor(g_settings.recolorColor);
+}
+
 // Empirically (live on 25H2): a one-shot or briefly-retried brush override
 // gets fought/reset by the icon's own native hover/press Lottie animation
 // playback - confirmed by the override only visibly appearing WHILE that
@@ -934,7 +958,7 @@ void StartPersistentIconColorMaintenance(
             }
 
             auto tracked = FindTrackedButton(button);
-            auto baseColor = ParseHexColor(g_settings.recolorColor);
+            auto baseColor = GetRecolorBaseColor();
             if (!tracked || !baseColor) {
                 int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
                 if (logThisFrame) {
@@ -1149,7 +1173,7 @@ void ApplyIconMode(FrameworkElement panel, TrackedButton& tracked) {
             if (auto iconElementAsIcon =
                     iconElement.try_as<Controls::IconElement>()) {
                 if (g_settings.mode == IconMode::Recolor) {
-                    auto color = ParseHexColor(g_settings.recolorColor);
+                    auto color = GetRecolorBaseColor();
                     if (color) {
                         iconElementAsIcon.Foreground(
                             Media::SolidColorBrush{*color});
@@ -1452,6 +1476,8 @@ void LoadSettings() {
     auto modeStr = GetStringSetting(L"mode");
     g_settings.mode = ParseMode(modeStr.c_str());
     g_settings.customIconPath = GetStringSetting(L"customIcon.path");
+    g_settings.recolorUseAccentColor =
+        Wh_GetIntSetting(L"recolor.useAccentColor") != 0;
     g_settings.recolorColor = GetStringSetting(L"recolor.color");
     g_settings.recolorGradient = Wh_GetIntSetting(L"recolor.gradient.enabled") != 0;
 
