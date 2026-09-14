@@ -2,7 +2,7 @@
 // @id              windows-11-start-menu-button
 // @name            Windows 11 Start Button Customizer
 // @description     Custom icon and recolor (animation-preserving, with depth gradient and press-sweep) for the Windows 11 taskbar Start button
-// @version         1.1
+// @version         1.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -16,7 +16,13 @@
 /*
 # Windows 11 Start Button Customizer
 
-![video](https://i.imgur.com/Q8aFc4p.gif)
+> **Note:** This mod is vibe-coded - built largely with AI assistance and
+> tested manually by the author, without a full independent code audit. Use
+> at your own judgment, and please report anything odd via GitHub Issues.
+
+![Silver recolor demo](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/windows-11-start-menu-button/demo/demo-recolor-silver.gif)
+
+![Flat color + click shimmer demo](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/windows-11-start-menu-button/demo/demo-recolor-flat-shimmer.gif)
 
 Customize the Windows 11 taskbar Start button's icon, without losing its
 native hover/press animation:
@@ -40,7 +46,7 @@ taskbar instance (multi-monitor).
 
 ## Requirements
 
-- Windows 11 25H2, 64-bit
+- Windows 11 25H2, build 26200.9445 or later, 64-bit
 - Windhawk v1.4 or later
 */
 // ==/WindhawkModReadme==
@@ -211,6 +217,12 @@ struct {
     float shimmerAutoAmount;
 } g_settings;
 
+// Bumped every time LoadSettings() runs, so the per-frame render loop can
+// tell "settings just changed, must reapply at least once" apart from
+// "still idle since the last applied frame, safe to skip" without diffing
+// every individual field.
+int g_settingsGeneration = 0;
+
 enum ButtonState {
     kStateDefault = 0,
     kStateHover = 1,
@@ -237,6 +249,16 @@ struct TrackedButton {
     bool iconPressSweepActive = false;
     ULONGLONG iconPressSweepStartMs = 0;
     winrt::Windows::UI::Xaml::Controls::Image customIconOverlay{nullptr};
+    // Last frame actually pushed to the Composition tree, so the render
+    // loop (StartPersistentIconColorMaintenance) can skip the tree walk
+    // and brush recreation entirely once the icon is sitting idle at rest
+    // with nothing left to change - see the dirty-check at its call site.
+    bool hasLastApplied = false;
+    int lastAppliedSettingsGeneration = -1;
+    float lastAppliedElevatedAmount = 0.0f;
+    bool lastAppliedSweepActive = false;
+    winrt::Windows::UI::Color lastAppliedBaseColor{};
+    winrt::Windows::UI::Color lastAppliedBandColor{};
     winrt::event_token pointerEnteredToken;
     winrt::event_token pointerExitedToken;
     winrt::event_token pointerPressedToken;
@@ -523,6 +545,10 @@ winrt::Windows::UI::Color LerpColor(winrt::Windows::UI::Color a,
     };
     return winrt::Windows::UI::Color{lerpByte(a.A, b.A), lerpByte(a.R, b.R),
                                       lerpByte(a.G, b.G), lerpByte(a.B, b.B)};
+}
+
+bool ColorsEqual(winrt::Windows::UI::Color a, winrt::Windows::UI::Color b) {
+    return a.A == b.A && a.R == b.R && a.G == b.G && a.B == b.B;
 }
 
 float EaseOut(float t) {
@@ -947,8 +973,25 @@ void StartPersistentIconColorMaintenance(
                 return;
             }
 
+            auto tracked = FindTrackedButton(button);
+
             if (g_settings.mode != IconMode::Recolor) {
+                // Once the original brushes are restored for the current
+                // settings generation, every further idle frame would just
+                // re-set the same brushes it already restored - walking the
+                // whole Composition shape tree for nothing. Only re-run
+                // when something (mode, or any other setting) actually
+                // changed since the last restore.
+                if (tracked && tracked->hasLastApplied &&
+                    tracked->lastAppliedSettingsGeneration ==
+                        g_settingsGeneration) {
+                    return;
+                }
                 int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
+                if (tracked) {
+                    tracked->hasLastApplied = true;
+                    tracked->lastAppliedSettingsGeneration = g_settingsGeneration;
+                }
                 if (logThisFrame) {
                     Wh_Log(L"Icon color maintenance: mode!=Recolor, "
                            L"restoring original, touched=%d",
@@ -957,7 +1000,6 @@ void StartPersistentIconColorMaintenance(
                 return;
             }
 
-            auto tracked = FindTrackedButton(button);
             auto baseColor = GetRecolorBaseColor();
             if (!tracked || !baseColor) {
                 int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
@@ -1036,7 +1078,36 @@ void StartPersistentIconColorMaintenance(
             params.elevatedAmount = tracked->iconElevatedAmount;
             params.sweepProgress = sweepProgress;
 
+            // Idle dirty-check: once elevatedAmount has finished ramping to
+            // its target and no sweep is running, this frame would produce
+            // pixel-identical brushes to the last one actually applied -
+            // walking the shape tree and allocating a fresh gradient brush
+            // per shape again is pure waste while the icon just sits at
+            // rest (the overwhelming majority of frames). Anything that
+            // could change the outcome (a settings edit, ramp still in
+            // progress, a sweep starting/running, or the accent color
+            // changing live) invalidates one of these checks and forces a
+            // real reapply.
+            bool sweepActiveNow = sweepProgress >= 0.0f;
+            if (tracked->hasLastApplied &&
+                tracked->lastAppliedSettingsGeneration == g_settingsGeneration &&
+                !sweepActiveNow && !tracked->lastAppliedSweepActive &&
+                tracked->lastAppliedElevatedAmount == tracked->iconElevatedAmount &&
+                ColorsEqual(tracked->lastAppliedBaseColor, *baseColor) &&
+                ColorsEqual(tracked->lastAppliedBandColor, bandColor)) {
+                if (logThisFrame) {
+                    Wh_Log(L"Icon color maintenance: idle, skipping reapply");
+                }
+                return;
+            }
+
             int touched = RecolorAnimatedVisualPlayer(player, params);
+            tracked->hasLastApplied = true;
+            tracked->lastAppliedSettingsGeneration = g_settingsGeneration;
+            tracked->lastAppliedElevatedAmount = tracked->iconElevatedAmount;
+            tracked->lastAppliedSweepActive = sweepActiveNow;
+            tracked->lastAppliedBaseColor = *baseColor;
+            tracked->lastAppliedBandColor = bandColor;
             // Unthrottled while the sweep is running (~a few dozen frames
             // at most) so a capture can't miss it the way the 60-frame
             // throttle below did - this is the direct evidence for whether
@@ -1473,6 +1544,8 @@ std::wstring GetStringSetting(PCWSTR name) {
 }
 
 void LoadSettings() {
+    g_settingsGeneration++;
+
     auto modeStr = GetStringSetting(L"mode");
     g_settings.mode = ParseMode(modeStr.c_str());
     g_settings.customIconPath = GetStringSetting(L"customIcon.path");

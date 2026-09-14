@@ -2,6 +2,10 @@
 
 A collection of [Windhawk](https://windhawk.net/) mods for Windows.
 
+> **Note:** These mods are vibe-coded — built largely with AI assistance and
+> tested manually by the author, without a full independent code audit. Use
+> at your own judgment, and please report anything odd via GitHub Issues.
+
 ## Mods
 
 | Mod | Description |
