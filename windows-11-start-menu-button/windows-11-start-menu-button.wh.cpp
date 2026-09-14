@@ -2,7 +2,7 @@
 // @id              windows-11-start-menu-button
 // @name            Windows 11 Start Button Customizer
 // @description     Custom icon and recolor (animation-preserving, with depth gradient and press-sweep) for the Windows 11 taskbar Start button
-// @version         1.0
+// @version         1.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -16,15 +16,21 @@
 /*
 # Windows 11 Start Button Customizer
 
-![video](https://i.imgur.com/Q8aFc4p.gif)
+> **Note:** This mod is vibe-coded - built largely with AI assistance and
+> tested manually by the author, without a full independent code audit. Use
+> at your own judgment, and please report anything odd via GitHub Issues.
+
+![Silver recolor demo](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/windows-11-start-menu-button/demo/demo-recolor-silver.gif)
+
+![Flat color + click shimmer demo](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/windows-11-start-menu-button/demo/demo-recolor-flat-shimmer.gif)
 
 Customize the Windows 11 taskbar Start button's icon, without losing its
 native hover/press animation:
 
 - **System default** — leave the icon untouched.
 - **Custom icon** — replace the stock icon with your own PNG/ICO file.
-- **Recolor** — tint the stock icon to any color, with two independent
-  add-ons:
+- **Recolor** — tint the stock icon to any color, or follow the system
+  accent color live, with two independent add-ons:
   - **Gradient shading** — a diagonal light-to-dark tint across the icon's
     four tiles (echoing the original flag icon's look), plus a brightness
     boost while hovered, pressed, or the Start menu is open.
@@ -40,7 +46,7 @@ taskbar instance (multi-monitor).
 
 ## Requirements
 
-- Windows 11 25H2, 64-bit
+- Windows 11 25H2, build 26200.9445 or later, 64-bit
 - Windhawk v1.4 or later
 */
 // ==/WindhawkModReadme==
@@ -64,9 +70,16 @@ taskbar instance (multi-monitor).
   $name: Custom icon
   $description: Settings used when Icon mode is "Custom icon".
 - recolor:
+  - useAccentColor: false
+    $name: Use system accent color
+    $description: >-
+      Follow Windows' current accent color instead of Icon color below.
+      Updates live when the accent color changes in Settings.
   - color: "#BABABA"
     $name: Icon color
-    $description: Hex color (#RRGGBB or #AARRGGBB) for the icon at rest.
+    $description: >-
+      Hex color (#RRGGBB or #AARRGGBB) for the icon at rest. Ignored when
+      "Use system accent color" is on.
   - gradient:
     - enabled: true
       $name: Add gradient shading
@@ -161,6 +174,7 @@ taskbar instance (multi-monitor).
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/base.h>
 
 // The Start button's icon is a Lottie-based Microsoft.UI.Xaml.Controls.
@@ -185,6 +199,7 @@ enum class IconMode {
 struct {
     IconMode mode;
     std::wstring customIconPath;
+    bool recolorUseAccentColor;
     std::wstring recolorColor;
     std::wstring recolorShimmerColor;
     bool recolorGradient;
@@ -201,6 +216,12 @@ struct {
     float sweepBandWidth;
     float shimmerAutoAmount;
 } g_settings;
+
+// Bumped every time LoadSettings() runs, so the per-frame render loop can
+// tell "settings just changed, must reapply at least once" apart from
+// "still idle since the last applied frame, safe to skip" without diffing
+// every individual field.
+int g_settingsGeneration = 0;
 
 enum ButtonState {
     kStateDefault = 0,
@@ -228,6 +249,16 @@ struct TrackedButton {
     bool iconPressSweepActive = false;
     ULONGLONG iconPressSweepStartMs = 0;
     winrt::Windows::UI::Xaml::Controls::Image customIconOverlay{nullptr};
+    // Last frame actually pushed to the Composition tree, so the render
+    // loop (StartPersistentIconColorMaintenance) can skip the tree walk
+    // and brush recreation entirely once the icon is sitting idle at rest
+    // with nothing left to change - see the dirty-check at its call site.
+    bool hasLastApplied = false;
+    int lastAppliedSettingsGeneration = -1;
+    float lastAppliedElevatedAmount = 0.0f;
+    bool lastAppliedSweepActive = false;
+    winrt::Windows::UI::Color lastAppliedBaseColor{};
+    winrt::Windows::UI::Color lastAppliedBandColor{};
     winrt::event_token pointerEnteredToken;
     winrt::event_token pointerExitedToken;
     winrt::event_token pointerPressedToken;
@@ -514,6 +545,10 @@ winrt::Windows::UI::Color LerpColor(winrt::Windows::UI::Color a,
     };
     return winrt::Windows::UI::Color{lerpByte(a.A, b.A), lerpByte(a.R, b.R),
                                       lerpByte(a.G, b.G), lerpByte(a.B, b.B)};
+}
+
+bool ColorsEqual(winrt::Windows::UI::Color a, winrt::Windows::UI::Color b) {
+    return a.A == b.A && a.R == b.R && a.G == b.G && a.B == b.B;
 }
 
 float EaseOut(float t) {
@@ -843,6 +878,21 @@ std::optional<winrt::Windows::UI::Color> ParseHexColor(std::wstring hex) {
     return winrt::Windows::UI::Color{a, r, g, b};
 }
 
+// Resolves the recolor mode's resting icon color: the system accent color
+// when "Use system accent color" is on, otherwise the manual hex field.
+std::optional<winrt::Windows::UI::Color> GetRecolorBaseColor() {
+    if (g_settings.recolorUseAccentColor) {
+        try {
+            winrt::Windows::UI::ViewManagement::UISettings uiSettings;
+            return uiSettings.GetColorValue(
+                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return ParseHexColor(g_settings.recolorColor);
+}
+
 // Empirically (live on 25H2): a one-shot or briefly-retried brush override
 // gets fought/reset by the icon's own native hover/press Lottie animation
 // playback - confirmed by the override only visibly appearing WHILE that
@@ -923,8 +973,25 @@ void StartPersistentIconColorMaintenance(
                 return;
             }
 
+            auto tracked = FindTrackedButton(button);
+
             if (g_settings.mode != IconMode::Recolor) {
+                // Once the original brushes are restored for the current
+                // settings generation, every further idle frame would just
+                // re-set the same brushes it already restored - walking the
+                // whole Composition shape tree for nothing. Only re-run
+                // when something (mode, or any other setting) actually
+                // changed since the last restore.
+                if (tracked && tracked->hasLastApplied &&
+                    tracked->lastAppliedSettingsGeneration ==
+                        g_settingsGeneration) {
+                    return;
+                }
                 int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
+                if (tracked) {
+                    tracked->hasLastApplied = true;
+                    tracked->lastAppliedSettingsGeneration = g_settingsGeneration;
+                }
                 if (logThisFrame) {
                     Wh_Log(L"Icon color maintenance: mode!=Recolor, "
                            L"restoring original, touched=%d",
@@ -933,8 +1000,7 @@ void StartPersistentIconColorMaintenance(
                 return;
             }
 
-            auto tracked = FindTrackedButton(button);
-            auto baseColor = ParseHexColor(g_settings.recolorColor);
+            auto baseColor = GetRecolorBaseColor();
             if (!tracked || !baseColor) {
                 int touched = RecolorAnimatedVisualPlayer(player, std::nullopt);
                 if (logThisFrame) {
@@ -1012,7 +1078,36 @@ void StartPersistentIconColorMaintenance(
             params.elevatedAmount = tracked->iconElevatedAmount;
             params.sweepProgress = sweepProgress;
 
+            // Idle dirty-check: once elevatedAmount has finished ramping to
+            // its target and no sweep is running, this frame would produce
+            // pixel-identical brushes to the last one actually applied -
+            // walking the shape tree and allocating a fresh gradient brush
+            // per shape again is pure waste while the icon just sits at
+            // rest (the overwhelming majority of frames). Anything that
+            // could change the outcome (a settings edit, ramp still in
+            // progress, a sweep starting/running, or the accent color
+            // changing live) invalidates one of these checks and forces a
+            // real reapply.
+            bool sweepActiveNow = sweepProgress >= 0.0f;
+            if (tracked->hasLastApplied &&
+                tracked->lastAppliedSettingsGeneration == g_settingsGeneration &&
+                !sweepActiveNow && !tracked->lastAppliedSweepActive &&
+                tracked->lastAppliedElevatedAmount == tracked->iconElevatedAmount &&
+                ColorsEqual(tracked->lastAppliedBaseColor, *baseColor) &&
+                ColorsEqual(tracked->lastAppliedBandColor, bandColor)) {
+                if (logThisFrame) {
+                    Wh_Log(L"Icon color maintenance: idle, skipping reapply");
+                }
+                return;
+            }
+
             int touched = RecolorAnimatedVisualPlayer(player, params);
+            tracked->hasLastApplied = true;
+            tracked->lastAppliedSettingsGeneration = g_settingsGeneration;
+            tracked->lastAppliedElevatedAmount = tracked->iconElevatedAmount;
+            tracked->lastAppliedSweepActive = sweepActiveNow;
+            tracked->lastAppliedBaseColor = *baseColor;
+            tracked->lastAppliedBandColor = bandColor;
             // Unthrottled while the sweep is running (~a few dozen frames
             // at most) so a capture can't miss it the way the 60-frame
             // throttle below did - this is the direct evidence for whether
@@ -1149,7 +1244,7 @@ void ApplyIconMode(FrameworkElement panel, TrackedButton& tracked) {
             if (auto iconElementAsIcon =
                     iconElement.try_as<Controls::IconElement>()) {
                 if (g_settings.mode == IconMode::Recolor) {
-                    auto color = ParseHexColor(g_settings.recolorColor);
+                    auto color = GetRecolorBaseColor();
                     if (color) {
                         iconElementAsIcon.Foreground(
                             Media::SolidColorBrush{*color});
@@ -1449,9 +1544,13 @@ std::wstring GetStringSetting(PCWSTR name) {
 }
 
 void LoadSettings() {
+    g_settingsGeneration++;
+
     auto modeStr = GetStringSetting(L"mode");
     g_settings.mode = ParseMode(modeStr.c_str());
     g_settings.customIconPath = GetStringSetting(L"customIcon.path");
+    g_settings.recolorUseAccentColor =
+        Wh_GetIntSetting(L"recolor.useAccentColor") != 0;
     g_settings.recolorColor = GetStringSetting(L"recolor.color");
     g_settings.recolorGradient = Wh_GetIntSetting(L"recolor.gradient.enabled") != 0;
 
