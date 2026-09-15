@@ -1,6 +1,6 @@
-# Windows 11 Start Button Customizer
+# Windows 11 Start Button Tinter
 
-**Windows 11 Start Button Customizer —** is a [Windhawk](https://windhawk.net/) mod that lets you restyle the Windows 11 taskbar Start button's icon — swap it for your own image, or recolor the stock icon with a diagonal gradient shade and a click shimmer — all while keeping its native hover/press animation intact.
+**Windows 11 Start Button Tinter —** is a [Windhawk](https://windhawk.net/) mod that lets you recolor the Windows 11 taskbar Start button's icon, with a diagonal gradient shade and a click shimmer, all while keeping its native hover/press animation intact.
 
 > **Note:** This mod is vibe-coded — built largely with AI assistance and
 > tested manually by the author, without a full independent code audit. Use
@@ -13,15 +13,17 @@
 
 1. Install [Windhawk](https://windhawk.net/).
 2. Open **Windhawk** and go to **Explore** → **Search**.
-3. Enter **Windows 11 Start Button Customizer** in the search field.
-4. In the results, select **Windows 11 Start Button Customizer**.
+3. Enter **Windows 11 Start Button Tinter** in the search field.
+4. In the results, select **Windows 11 Start Button Tinter**.
 5. Click the "Install" button.
 
 Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → **+** (create a new mod), paste the contents of [`windows-11-start-menu-button.wh.cpp`](windows-11-start-menu-button/windows-11-start-menu-button.wh.cpp), and save.
 
+> **Note:** After installing or updating this mod, restart Explorer once (Task Manager → Windows Explorer → Restart) so it picks up the Start button. Without a restart, the mod only notices the button on its next layout change (e.g. a monitor/DPI change), not immediately.
+
 ### Key Features:
 
-- **Three Icon Modes —** System default (untouched), Custom icon (your own PNG/ICO), or Recolor (tint the stock icon).
+- **Two Icon Modes —** System default (untouched) or Recolor (tint the stock icon).
 - **System Accent Color —** Optionally follow Windows' current accent color instead of a fixed hex value, updating live when you change it in Settings.
 - **Gradient Shading —** A diagonal light-to-dark tint across the icon's four tiles, echoing the original Windows icon's own shading, with independently tunable light-side and dark-side strength.
 - **Hover & Press Glow —** The icon brightens on hover, press, or while the Start menu is held open, with configurable boost amount and fade speed.
@@ -30,8 +32,7 @@ Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → *
 
 ### Settings Overview:
 
-- **Icon mode** — System default / Custom icon / Recolor.
-- **Custom icon** — image file path (PNG or ICO).
+- **Icon mode** — System default / Recolor.
 - **Recolor** — icon color (or "use system accent color" toggle), plus three sub-sections:
   - **Gradient shading** — on/off, light side strength, dark side strength.
   - **Click shimmer** — on/off, shimmer color (or auto-lighten amount), sweep duration, sweep width.
