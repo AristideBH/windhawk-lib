@@ -1,6 +1,6 @@
-# Windows 11 Start Button Customizer
+# Windows 11 Start Button Tinter
 
-**Windows 11 Start Button Customizer —** is a [Windhawk](https://windhawk.net/) mod that lets you recolor the Windows 11 taskbar Start button's icon, with a diagonal gradient shade and a click shimmer, all while keeping its native hover/press animation intact.
+**Windows 11 Start Button Tinter —** is a [Windhawk](https://windhawk.net/) mod that lets you recolor the Windows 11 taskbar Start button's icon, with a diagonal gradient shade and a click shimmer, all while keeping its native hover/press animation intact.
 
 > **Note:** This mod is vibe-coded — built largely with AI assistance and
 > tested manually by the author, without a full independent code audit. Use
@@ -13,8 +13,8 @@
 
 1. Install [Windhawk](https://windhawk.net/).
 2. Open **Windhawk** and go to **Explore** → **Search**.
-3. Enter **Windows 11 Start Button Customizer** in the search field.
-4. In the results, select **Windows 11 Start Button Customizer**.
+3. Enter **Windows 11 Start Button Tinter** in the search field.
+4. In the results, select **Windows 11 Start Button Tinter**.
 5. Click the "Install" button.
 
 Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → **+** (create a new mod), paste the contents of [`windows-11-start-menu-button.wh.cpp`](windows-11-start-menu-button/windows-11-start-menu-button.wh.cpp), and save.

@@ -10,7 +10,7 @@ A collection of [Windhawk](https://windhawk.net/) mods for Windows.
 
 | Mod | Description |
 | --- | --- |
-| [Windows 11 Start Button Customizer](windows-11-start-menu-button/README.md) | Recolor (with system accent color, gradient shading, and click shimmer) for the Windows 11 taskbar Start button, animation-preserving. |
+| [Windows 11 Start Button Tinter](windows-11-start-menu-button/README.md) | Recolor (with system accent color, gradient shading, and click shimmer) for the Windows 11 taskbar Start button, animation-preserving. |
 
 ## License
 
