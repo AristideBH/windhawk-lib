@@ -19,6 +19,8 @@
 
 Not published to the Windhawk store yet? Open **Windhawk** → **Explore** → **+** (create a new mod), paste the contents of [`windows-11-start-menu-button.wh.cpp`](windows-11-start-menu-button/windows-11-start-menu-button.wh.cpp), and save.
 
+> **Note:** After installing or updating this mod, restart Explorer once (Task Manager → Windows Explorer → Restart) so it picks up the Start button. Without a restart, the mod only notices the button on its next layout change (e.g. a monitor/DPI change), not immediately.
+
 ### Key Features:
 
 - **Two Icon Modes —** System default (untouched) or Recolor (tint the stock icon).
