@@ -395,23 +395,41 @@ swapped/reordered by a different compiler backend), or (b) a materially
 different prologue shape entirely, and adjust the match (and offset
 extraction) accordingly. Do not guess further without that data.
 
-**Resolved (2026-09-16)**: the diagnostic hex dump the user reported back
-(`7F 23 03 D5 FD 7B BF A9 FD 03 00 91 08 0C 41 F8`) is an exact match for
-the ARM64 prologue (`pacibsp` / `stp fp,lr,[sp,#-0x10]!` / `mov fp,sp` /
-`ldr x8,[x0,#0x10]!`) that `taskbar-ai-quota.wh.cpp` itself already
-handles in a `#elif defined(_M_ARM64)` branch - the user is on an ARM64
-Windows machine (Surface/Copilot+ PC class device), and this mod's first
-port of "Taskbar XAML Access" (Incident 2) only kept the x64 branch,
-dropping the reference mod's existing ARM64 support entirely. That was a
-real scope-cutting mistake made without checking the user's hardware, not
-a genuine platform limitation - the upstream mod already solved this.
-Ported the missing `#elif defined(_M_ARM64)` branch (same byte/word
-pattern and offset-extraction bit shift as the reference) alongside the
-existing `#if defined(_M_X64)` one, and added a matching diagnostic word
-dump for the ARM64 path too, in case this exact pattern also turns out to
-need adjusting for some ARM64 Windows builds. Updated `@architecture` in
-the mod header from `x86-64` to `x86-64 arm64` to reflect actual
-capability (worth noting: the mod compiled and ran successfully on the
-user's ARM64 machine even while the header still said `x86-64` only,
-suggesting Windhawk doesn't hard-gate local/manually-loaded mods on this
-field - not re-verified, just observed).
+**First attempt at a fix was itself wrong (2026-09-16)**: added an
+`#elif defined(_M_ARM64)` branch (matching `taskbar-ai-quota.wh.cpp`'s
+own ARM64 support) alongside the existing `#if defined(_M_X64)` one.
+Re-tested live - same failure, byte-for-byte identical dump, still
+logged from the `_M_X64` branch (`"bytes:"`, not the ARM64 branch's
+`"words:"`). That ruled out the first theory: the user's mod is still
+being compiled with `_M_X64` defined (confirmed by which branch's log
+message fired) even on their ARM64 machine, so the ARM64 branch could
+never have been reached no matter how correct its pattern was -
+Windhawk's local/dev editor evidently always compiles mods here as x64
+regardless of `@architecture` or the actual host CPU.
+
+**Real explanation**: `_M_X64` (this mod's own compile-time target) and
+"what architecture `TaskbarHost::FrameHeight`'s actual code is" are two
+different things on Windows 11 on Arm. Explorer there runs as an
+**ARM64EC** process - a hybrid mode where x64-compiled code (this mod,
+always, per the above) and genuinely-native-ARM64 system DLL code
+(`taskbar.dll`) coexist in the same process and call each other through
+ABI-compatible thunks. The x64 mod can call `TaskbarHost::FrameHeight`
+just fine through that thunk layer - but the raw instruction bytes *at*
+that address are real ARM64 machine code regardless, because that's what
+the function actually is. A compile-time `#if defined(_M_ARM64)` branch
+in *this mod's own source* can therefore never fire in this scenario on
+any machine, since Windhawk builds it as x64 here unconditionally.
+
+**Fix (2026-09-16, unverified live)**: replaced the `#if defined(_M_X64)
+/ #elif defined(_M_ARM64)` compile-time branch with a single runtime
+check that tries the x64 pattern, then the ARM64 pattern, unconditionally
+- the two byte/word shapes are structurally distinct enough not to
+false-positive against each other. This works regardless of which
+architecture Explorer's ARM64EC process actually executes the target
+function as, and regardless of what architecture Windhawk happens to
+compile this mod's own code for. Reverted the `@architecture` header
+change from the previous (wrong) fix attempt back to `x86-64` - it isn't
+the relevant lever here (Windhawk's local editor didn't honor it for
+architecture selection either way, per the same live evidence above),
+and the runtime dual-check makes it a non-issue regardless of what value
+it holds.

@@ -8,7 +8,7 @@
 // @homepage        https://aristide-bh.com/
 // @license         MIT
 // @include         explorer.exe
-// @architecture    x86-64 arm64
+// @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32
 // ==/WindhawkMod==
 
@@ -242,25 +242,41 @@ HRESULT TryGetTaskbarElementAbi(HWND hTaskbarWnd, void** result) {
     // TaskbarHost::FrameHeight's prologue moves `this + offset` into
     // rcx/x0 to reach the taskbar element pointer; the offset itself
     // isn't a stable, documented constant, so it's recovered by matching
-    // the compiled function's own machine code. Both x64 and ARM64
-    // patterns are ported from taskbar-ai-quota.wh.cpp - this mod's
-    // first pass here only kept the x64 branch (a real scope-cutting
-    // mistake: confirmed live on 2026-09-16, this exact ARM64 byte
-    // sequence - pacibsp / stp fp,lr / mov fp,sp / ldr x8 - showed up in
-    // this mod's own diagnostic hex dump on a user's ARM64 machine, see
-    // PLAN.md's "Incident 3").
+    // the compiled function's own machine code.
+    //
+    // This checks both the x64 and ARM64 prologue shapes at *runtime*,
+    // unconditionally - not gated by `_M_X64`/`_M_ARM64` (this mod's own
+    // compile-time target), because those two things aren't the same
+    // thing on Windows 11 on Arm: confirmed live (2026-09-16) that even
+    // though Windhawk's local/dev editor compiles this mod as x64
+    // (`_M_X64` true) on an ARM64 machine, `TaskbarHost::FrameHeight`'s
+    // actual instruction bytes are genuine ARM64 machine code - Explorer
+    // there runs as an ARM64EC process, where x64-compiled code (this
+    // mod) and native ARM64 system DLL code (taskbar.dll) coexist and
+    // call each other through ABI-compatible thunks, so what architecture
+    // *this mod* was compiled as says nothing about what architecture
+    // the *target function's own code* actually is. An `#if
+    // defined(_M_ARM64)` compile-time branch (this mod's first attempt
+    // at ARM64 support) can therefore never fire in that scenario, no
+    // matter the machine, since the mod itself is always built x64 here.
     size_t taskbarElementIUnknownOffset;
-#if defined(_M_X64)
     {
-        // 48:83EC 28 | sub rsp,28
-        // 48:83C1 48 | add rcx,48
+        // x64: 48:83EC 28 | sub rsp,28 / 48:83C1 48 | add rcx,48
         const BYTE* b = (const BYTE*)TaskbarHost_FrameHeight_Original;
+        // ARM64: 7f2303d5 pacibsp / fd7bbfa9 stp fp,lr,[sp,#-0x10]! /
+        // fd030091 mov fp,sp / 080c41f8 ldr x8,[x0,#0x10]!
+        const DWORD* p = (const DWORD*)TaskbarHost_FrameHeight_Original;
+
         if (b[0] == 0x48 && b[1] == 0x83 && b[2] == 0xEC && b[4] == 0x48 &&
             b[5] == 0x83 && b[6] == 0xC1 && b[7] <= 0x7F) {
             taskbarElementIUnknownOffset = b[7];
+        } else if (p[0] == 0xD503237F && (p[1] & 0xFFC07FFF) == 0xA9807BFD &&
+                   p[2] == 0x910003FD &&
+                   (p[3] & 0xFFF00FE0) == 0xF8400C00) {
+            taskbarElementIUnknownOffset = (p[3] >> 12) & 0xFF;
         } else {
             // Diagnostic: this exact build's compiled prologue doesn't
-            // match the expected pattern. Dump the first bytes so a
+            // match either expected pattern. Dump the first bytes so a
             // correct pattern/offset can be derived from real data
             // instead of guessed - see PLAN.md's "Incident 3".
             wchar_t hex[64] = {};
@@ -274,31 +290,6 @@ HRESULT TryGetTaskbarElementAbi(HWND hTaskbarWnd, void** result) {
             return E_NOINTERFACE;
         }
     }
-#elif defined(_M_ARM64)
-    {
-        // 7f2303d5 pacibsp
-        // fd7bbfa9 stp     fp, lr, [sp, #-0x10]!
-        // fd030091 mov     fp, sp
-        // 080c41f8 ldr     x8, [x0, #0x10]!
-        const DWORD* p = (const DWORD*)TaskbarHost_FrameHeight_Original;
-        if (p[0] == 0xD503237F && (p[1] & 0xFFC07FFF) == 0xA9807BFD &&
-            p[2] == 0x910003FD && (p[3] & 0xFFF00FE0) == 0xF8400C00) {
-            taskbarElementIUnknownOffset = (p[3] >> 12) & 0xFF;
-        } else {
-            wchar_t hex[80] = {};
-            for (int i = 0; i < 4; i++) {
-                wchar_t word[16];
-                wsprintfW(word, L"%08X ", p[i]);
-                wcscat_s(hex, word);
-            }
-            Wh_Log(L"Unsupported TaskbarHost::FrameHeight, words: %s", hex);
-            cleanup();
-            return E_NOINTERFACE;
-        }
-    }
-#else
-#error "Unsupported architecture"
-#endif
 
     auto* taskbarElementIUnknown = *(IUnknown**)(
         (BYTE*)taskbarHostSharedPtr[0] + taskbarElementIUnknownOffset);
