@@ -1031,3 +1031,30 @@ two-finger touchpad gesture over this element, that's a stronger signal
 this is a genuine OS/driver-level gesture-claiming issue outside what
 any XAML-level fix can reach - worth knowing before investing further in
 this specific feature.
+
+**Result (2026-09-16): confirmed - none of the four fire.** The user
+explicitly checked all four for a two-finger touchpad swipe over the
+widget: `ManipulationStarted`, `ManipulationDelta`,
+`PointerWheelChanged`, `WM_MOUSEWHEEL` - none logged anything.
+
+**Conclusion: this is an OS/driver-level limitation, not a bug in this
+mod's code, and not one further application-level changes can reach.**
+The gesture never arrives at this element at any layer checked - not
+Win32, not XAML's pointer pipeline, not XAML's gesture recognizer. Since
+`ManipulationMode`/`ManipulationDelta` is WinRT's own native mechanism
+for exactly this kind of input and still saw nothing, the touchpad
+driver (or whatever OS-level component decides which window/region a
+two-finger pan should target) is plausibly not recognizing this
+symbol-hook-injected element as a valid scroll target at all - unlike a
+native taskbar control, or a normal top-level app window. Reaching
+lower than this would mean raw HID input interception or low-level
+`WM_POINTER` hooking - a disproportionate amount of effort and risk for
+one of three navigation methods, when the other two (mouse wheel,
+dot-click) are already confirmed working.
+
+**Decision: deprioritized.** Two-finger trackpad scroll is left as a
+known, documented limitation rather than pursued further for now. Mouse
+wheel and dot-click already give full navigation coverage; drag
+(press-and-hold-and-move) remains unconfirmed either way but uses the
+same underlying pointer-event mechanism already proven to work for
+right-click, so it's not expected to share this specific problem.
