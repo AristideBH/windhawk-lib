@@ -443,3 +443,69 @@ the relevant lever here (Windhawk's local editor didn't honor it for
 architecture selection either way, per the same live evidence above),
 and the runtime dual-check makes it a non-issue regardless of what value
 it holds.
+
+## Incident 4: injected in the wrong place, nav unreliable on trackpad (2026-09-16)
+
+**Symptom** (first fully-visible live report, v0.1.3): the stack is
+visible and readable in the taskbar, but sits between the running-app
+icons and the tray dropdown - not at the far left, next to the Start
+button, spaced from it, where the user's other taskbar-area mods
+(media player, AI quota) already live. Right-click and its submenu work.
+Wheel/drag/dot-click don't, at least not on the trackpad available for
+testing right now (no mouse tested yet).
+
+**Root cause (position)**: `InjectWidgetStackGrid` inserted into
+`SystemTrayFrameGrid` (the system tray's own column grid, right side of
+a centered taskbar) - the correct node for tray icons, wrong node
+entirely for "far left, next to Start." Confirmed by reading
+`taskbar-fluent-media-player.wh.cpp` (Salyts) - the mod already running
+in exactly the position the user wants this one in - which never touches
+`SystemTrayFrameGrid` for its own placement: it finds
+`Taskbar.TaskbarFrame` → `RootGrid` (the taskbar's actual root, parent of
+both the tray and the pinned/running-icon repeater and Start button),
+locates the Start button inside `RootGrid`'s `TaskbarFrameRepeater`
+(name varies: `StartButton`/`StartMenuButton`/`StartMenuLaunchButton`/
+`LaunchListButton`, tried in order - name depends on Windows build and
+whether another mod replaces the Start button), and adds itself as a
+free-floating child of `RootGrid` with a `Margin.Left` computed from the
+Start button's `TransformToVisual` position, kept live via a
+`RootGrid.LayoutUpdated` handler so it follows if the Start button's own
+position/size changes (DPI change, taskbar realignment, a Start-button
+mod resizing it).
+
+**Fix (2026-09-16, unverified live)**: ported this positioning approach
+(`FindTaskbarRootGrid`, `FindStartButton`, `RepositionWidgetStack` +
+`LayoutUpdated` tracking), attributed, simplified from the reference's
+full version - dropped its mutual margin-reservation logic (which pushes
+the Start button's own margin to make room) since a centered taskbar
+layout already has genuine empty space between the Start button and the
+centered icon cluster; this mod's widgets just sit in that existing gap
+rather than carving out new space. `UiState::injectionParent` is now
+`RootGrid` (not the tray grid) and `ownedColumn`/column-shifting logic is
+gone entirely, replaced by `trackedElement` (the Start button) +
+`layoutUpdatedToken`.
+
+**Root cause (dots unclickable)**: the dot indicators were bare 4-6px
+`Ellipse` elements - a `Fill`-only shape's hit-test region is
+essentially just its own small rendered geometry, near-impossible to
+land a trackpad pointer on precisely. Fixed by making each dot's visible
+`Ellipse` `IsHitTestVisible(false)` and wrapping it in a larger (10×14px)
+`Grid` with an explicit `Transparent` `Background` (required - a `Grid`
+with no `Background` at all isn't hit-testable, only its
+already-hit-testable descendants are, which is also why `RightTapped`
+worked when clicking on a widget pane - a `Border` with a real
+`Background` - but not when aiming at open/background space) as the
+actual `Tapped` target.
+
+**Wheel/drag still unclear**: not fixed yet, because it isn't understood
+yet - `PointerPressed`/`PointerMoved`/`PointerWheelChanged` are wired the
+same way (bubbled routed events on `g_ui.root`) as `RightTapped`, which
+does work, so there's no confirmed root cause the way there was for
+position and dot size. Left as-is pending a retest, ideally with an
+actual mouse (to isolate whether it's a touchpad-gesture-routing issue
+specific to two-finger scroll / press-drag-release timing, vs. a real
+bug in the handlers themselves) and more specific reporting (does
+scrolling do *nothing at all*, or does drag seem to almost-but-not-quite
+register - the current drag threshold requires ~16px of movement before
+it commits a step, which a light/short trackpad drag might simply not
+reach).

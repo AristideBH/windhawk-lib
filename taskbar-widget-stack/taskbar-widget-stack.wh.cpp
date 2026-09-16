@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.3
+// @version         0.1.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -342,6 +342,75 @@ FrameworkElement FindChildByName(FrameworkElement const& root,
     return nullptr;
 }
 
+// The taskbar's root Grid (parent of both TaskbarFrameRepeater - pinned/
+// running app icons and the Start button - and SystemTrayFrameGrid).
+// Ported (with attribution) from taskbar-fluent-media-player.wh.cpp
+// (Salyts) - that mod positions itself the same way this one now does
+// (an element floating in RootGrid, anchored to the Start button by
+// margin, not a column inserted into SystemTrayFrameGrid), which is
+// exactly where the user already runs it, immediately left of the
+// centered app icons - confirmed to be the right target after the first
+// version landed in the wrong place (the system tray, on the right).
+Grid FindTaskbarRootGrid(FrameworkElement const& root) {
+    int count = VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < count; i++) {
+        auto c = VisualTreeHelper::GetChild(root, i).try_as<FrameworkElement>();
+        if (c && winrt::get_class_name(c) == L"Taskbar.TaskbarFrame") {
+            auto rootGrid = FindChildByName(c, L"RootGrid");
+            return rootGrid ? rootGrid.try_as<Grid>() : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+constexpr const wchar_t* kStartButtonNames[] = {
+    L"StartButton",
+    L"StartMenuButton",
+    L"StartMenuLaunchButton",
+    L"LaunchListButton",
+};
+
+// The Start button's name varies (depends on Windows build and other
+// taskbar mods, e.g. a Start-button-replacing mod) - searches direct
+// children of `repeater` first, then one level of grandchildren, per
+// the same two-pass approach in taskbar-fluent-media-player.wh.cpp.
+FrameworkElement FindStartButton(FrameworkElement const& repeater) {
+    if (!repeater) {
+        return nullptr;
+    }
+    int childCount = VisualTreeHelper::GetChildrenCount(repeater);
+    for (int i = 0; i < childCount; i++) {
+        auto child = VisualTreeHelper::GetChild(repeater, i).try_as<FrameworkElement>();
+        if (!child) {
+            continue;
+        }
+        for (auto name : kStartButtonNames) {
+            if (child.Name() == name) {
+                return child;
+            }
+        }
+    }
+    for (int i = 0; i < childCount; i++) {
+        auto child = VisualTreeHelper::GetChild(repeater, i).try_as<FrameworkElement>();
+        if (!child) {
+            continue;
+        }
+        int subCount = VisualTreeHelper::GetChildrenCount(child);
+        for (int k = 0; k < subCount; k++) {
+            auto subChild = VisualTreeHelper::GetChild(child, k).try_as<FrameworkElement>();
+            if (!subChild) {
+                continue;
+            }
+            for (auto name : kStartButtonNames) {
+                if (subChild.Name() == name) {
+                    return subChild;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
 // Defined further down (it calls into the widget-stack functions declared
 // later in this file); forward-declared so HookTaskbarDllSymbols can wire
 // it up as the TrayUI::StartTaskbar hook target.
@@ -463,9 +532,10 @@ struct UiState {
     HWND hWnd;
     DWORD ownerThreadId = 0;
     bool windowSubclassed = false;
-    Grid injectionParent{nullptr};
-    ColumnDefinition ownedColumn{nullptr};
+    Grid injectionParent{nullptr};  // The taskbar's RootGrid (not the tray).
     Grid root{nullptr};
+    FrameworkElement trackedElement{nullptr};  // The Start button we anchor to.
+    winrt::event_token layoutUpdatedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -672,22 +742,35 @@ void RefreshDots() {
     g_ui.dotsPanel.Children().Clear();
     auto enabled = EnabledIndices();
     for (int idx : enabled) {
-        wuxs::Ellipse dot;
         bool active = idx == g_ui.activeIndex;
         double r = active ? 3.0 : 2.0;
+
+        wuxs::Ellipse dot;
         dot.Width(r * 2);
         dot.Height(r * 2);
-        dot.Margin({0, 2, 0, 2});
+        dot.HorizontalAlignment(HorizontalAlignment::Center);
+        dot.VerticalAlignment(VerticalAlignment::Center);
         SolidColorBrush brush{winrt::Windows::UI::ColorHelper::FromArgb(
             255, active ? 255 : 140, active ? 255 : 140, active ? 255 : 140)};
         dot.Fill(brush);
-        dot.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
-                          wuxi::TappedRoutedEventArgs const&) {
+        dot.IsHitTestVisible(false);  // The hit target below handles input.
+
+        // Hit target is deliberately much bigger than the visible dot -
+        // a 4-6px circle is close to unhittable with an imprecise
+        // pointer (confirmed live: reported unclickable on a trackpad).
+        Grid hitTarget;
+        hitTarget.Width(kDotsColumnWidth);
+        hitTarget.Height(14);
+        hitTarget.Background(SolidColorBrush{
+            winrt::Windows::UI::Colors::Transparent()});  // Needed to be hit-testable at all.
+        hitTarget.Children().Append(dot);
+        hitTarget.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
+                                wuxi::TappedRoutedEventArgs const&) {
             if (g_settings.navDots) {
                 GoToWidget(idx);
             }
         });
-        g_ui.dotsPanel.Children().Append(dot);
+        g_ui.dotsPanel.Children().Append(hitTarget);
     }
 }
 
@@ -809,10 +892,40 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
     return DefSubclassProc(hWnd, msg, wParam, lParam);
 }
 
+constexpr double kStartButtonGap = 4.0;
+
+// Repositions the widget stack immediately to the right of the tracked
+// Start button, in RootGrid's coordinate space. Called once at injection
+// and on every `RootGrid.LayoutUpdated` after that, so it follows the
+// Start button if its own position/width changes (DPI change, a
+// different Start-button mod resizing it, taskbar realignment, ...) -
+// same idea as taskbar-fluent-media-player.wh.cpp's tracking, simplified
+// (no mutual margin reservation - unlike a centered app-icon cluster,
+// which repositions to make room, this mod doesn't need the Start
+// button to move for it; the gap it sits in already exists naturally in
+// a centered taskbar layout).
+void RepositionWidgetStack() {
+    if (!g_ui.root || !g_ui.trackedElement || !g_ui.injectionParent) {
+        return;
+    }
+    try {
+        auto transform = g_ui.trackedElement.TransformToVisual(g_ui.injectionParent);
+        auto point = transform.TransformPoint({0, 0});
+        double left = point.X + g_ui.trackedElement.ActualWidth() + kStartButtonGap;
+        auto margin = g_ui.root.Margin();
+        if (std::abs(margin.Left - left) > 0.5) {
+            g_ui.root.Margin({left, 0, 0, 0});
+        }
+    } catch (...) {
+    }
+}
+
 // Builds the full widget-stack element (dots column + clipped, slidable
-// widget panes) and inserts it as a new column 0 in `trayGrid`. Must run
-// on the taskbar's own UI thread (same requirement as touching any XAML
-// element - see PLAN.md's "Incident" section).
+// widget panes) and adds it as a floating child of the taskbar's
+// RootGrid, anchored to the right of the Start button - see
+// `RepositionWidgetStack`. Must run on the taskbar's own UI thread (same
+// requirement as touching any XAML element - see PLAN.md's "Incident"
+// section).
 bool InjectWidgetStackGrid(HWND hWnd) {
     if (g_ui.root) {
         return true;  // Already injected for this taskbar instance.
@@ -826,18 +939,23 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     if (!rootElement) {
         return false;
     }
-    auto trayFrame = FindChildByName(rootElement, L"SystemTrayFrameGrid");
-    auto trayGrid = trayFrame ? trayFrame.try_as<Grid>() : nullptr;
-    // On a cold start the XamlRoot can be ready before the tray's own
-    // contents are realized in the visual tree - bail and let the retry
-    // loop poll until SystemTrayFrameGrid appears.
-    if (!trayGrid) {
+    auto taskbarRootGrid = FindTaskbarRootGrid(rootElement);
+    if (!taskbarRootGrid) {
+        return false;
+    }
+    auto repeater = FindChildByName(taskbarRootGrid, L"TaskbarFrameRepeater");
+    auto startButton = FindStartButton(repeater);
+    // On a cold start the XamlRoot can be ready before the taskbar's own
+    // contents (icons, Start button) are realized in the visual tree -
+    // bail and let the retry loop poll until they appear.
+    if (!startButton) {
         return false;
     }
 
     try {
         Grid root;
         root.VerticalAlignment(VerticalAlignment::Stretch);
+        root.HorizontalAlignment(HorizontalAlignment::Left);
         root.Width(kStackWidth);
         ColumnDefinition dotsCol;
         dotsCol.Width({kDotsColumnWidth, GridUnitType::Pixel});
@@ -869,22 +987,14 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         clipHost.Child(widgetsPanel);
         root.Children().Append(clipHost);
 
-        ColumnDefinition newCol;
-        newCol.Width({1.0, GridUnitType::Auto});
-        trayGrid.ColumnDefinitions().InsertAt(0, newCol);
-        for (uint32_t i = 0; i < trayGrid.Children().Size(); ++i) {
-            auto child = trayGrid.Children().GetAt(i).try_as<FrameworkElement>();
-            if (child) {
-                Grid::SetColumn(child, Grid::GetColumn(child) + 1);
-            }
-        }
         Grid::SetColumn(root, 0);
-        trayGrid.Children().Append(root);
+        Canvas::SetZIndex(root, 1000);
+        taskbarRootGrid.Children().Append(root);
 
         g_ui.hWnd = hWnd;
         g_ui.ownerThreadId = GetCurrentThreadId();
-        g_ui.injectionParent = trayGrid;
-        g_ui.ownedColumn = newCol;
+        g_ui.injectionParent = taskbarRootGrid;
+        g_ui.trackedElement = startButton;
         g_ui.root = root;
         g_ui.widgetsPanel = widgetsPanel;
         g_ui.dotsPanel = dotsPanel;
@@ -892,6 +1002,13 @@ bool InjectWidgetStackGrid(HWND hWnd) {
 
         WireUpNavigation();
         RebuildStackContents();
+
+        RepositionWidgetStack();
+        g_ui.layoutUpdatedToken = taskbarRootGrid.LayoutUpdated(
+            [](winrt::Windows::Foundation::IInspectable const&,
+               winrt::Windows::Foundation::IInspectable const&) {
+                RepositionWidgetStack();
+            });
 
         if (!g_ui.windowSubclassed) {
             g_ui.windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
@@ -914,24 +1031,13 @@ void RemoveWidgetStackGrid() {
     }
     try {
         StopSnapAnimation();
-        auto trayGrid = g_ui.injectionParent;
-        uint32_t rootIndex;
-        if (trayGrid.Children().IndexOf(g_ui.root, rootIndex)) {
-            trayGrid.Children().RemoveAt(rootIndex);
+        if (g_ui.layoutUpdatedToken) {
+            g_ui.injectionParent.LayoutUpdated(g_ui.layoutUpdatedToken);
         }
-        for (uint32_t i = 0; i < trayGrid.ColumnDefinitions().Size(); ++i) {
-            if (winrt::get_abi(trayGrid.ColumnDefinitions().GetAt(i)) ==
-                winrt::get_abi(g_ui.ownedColumn)) {
-                trayGrid.ColumnDefinitions().RemoveAt(i);
-                for (uint32_t j = 0; j < trayGrid.Children().Size(); ++j) {
-                    auto child =
-                        trayGrid.Children().GetAt(j).try_as<FrameworkElement>();
-                    if (child && Grid::GetColumn(child) > (int)i) {
-                        Grid::SetColumn(child, Grid::GetColumn(child) - 1);
-                    }
-                }
-                break;
-            }
+        auto rootGrid = g_ui.injectionParent;
+        uint32_t rootIndex;
+        if (rootGrid.Children().IndexOf(g_ui.root, rootIndex)) {
+            rootGrid.Children().RemoveAt(rootIndex);
         }
     } catch (...) {
         Wh_Log(L"RemoveWidgetStackGrid: exception");
