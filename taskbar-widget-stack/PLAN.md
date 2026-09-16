@@ -394,3 +394,24 @@ byte offset (e.g. a different immediate encoding, or the two instructions
 swapped/reordered by a different compiler backend), or (b) a materially
 different prologue shape entirely, and adjust the match (and offset
 extraction) accordingly. Do not guess further without that data.
+
+**Resolved (2026-09-16)**: the diagnostic hex dump the user reported back
+(`7F 23 03 D5 FD 7B BF A9 FD 03 00 91 08 0C 41 F8`) is an exact match for
+the ARM64 prologue (`pacibsp` / `stp fp,lr,[sp,#-0x10]!` / `mov fp,sp` /
+`ldr x8,[x0,#0x10]!`) that `taskbar-ai-quota.wh.cpp` itself already
+handles in a `#elif defined(_M_ARM64)` branch - the user is on an ARM64
+Windows machine (Surface/Copilot+ PC class device), and this mod's first
+port of "Taskbar XAML Access" (Incident 2) only kept the x64 branch,
+dropping the reference mod's existing ARM64 support entirely. That was a
+real scope-cutting mistake made without checking the user's hardware, not
+a genuine platform limitation - the upstream mod already solved this.
+Ported the missing `#elif defined(_M_ARM64)` branch (same byte/word
+pattern and offset-extraction bit shift as the reference) alongside the
+existing `#if defined(_M_X64)` one, and added a matching diagnostic word
+dump for the ARM64 path too, in case this exact pattern also turns out to
+need adjusting for some ARM64 Windows builds. Updated `@architecture` in
+the mod header from `x86-64` to `x86-64 arm64` to reflect actual
+capability (worth noting: the mod compiled and ran successfully on the
+user's ARM64 machine even while the header still said `x86-64` only,
+suggesting Windhawk doesn't hard-gate local/manually-loaded mods on this
+field - not re-verified, just observed).
