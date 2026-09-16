@@ -85,7 +85,11 @@ instance (multi-monitor) - not yet verified live, see `PLAN.md`.
 #include <windowsx.h>
 
 #include <algorithm>
+#include <atomic>
 #include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -134,6 +138,8 @@ struct Widget {
 std::vector<Widget> g_widgets;
 HWND g_overlayWnd;
 HWND g_taskbarWnd;
+HANDLE g_initWorkerThread;
+std::atomic<bool> g_stopRequested{false};
 int g_activeIndex = 0;
 int g_animFromIndex = 0;
 DWORD g_animStartTick;
@@ -467,6 +473,103 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam,
     }
 }
 
+// Runs `task` synchronously on the thread that owns `hWnd`, blocking the
+// calling thread until it completes (or `timeoutMs` elapses). Required
+// because `Wh_ModInit` is not guaranteed to run on Explorer's main UI
+// thread: a window created directly from the wrong thread ends up *owned*
+// by that wrong thread (its message queue, not the taskbar's), so Explorer
+// never pumps messages for it - and if Explorer's own thread ever blocks on
+// a SendMessage to that window, the whole taskbar freezes with no crash to
+// log. Confirmed live: this mod froze Explorer on first activation before
+// this fix.
+//
+// Ported from the same technique used by taskbar-ai-quota.wh.cpp and
+// taskbar-fluent-media-player.wh.cpp (ramensoftware/windhawk-mods) -
+// WH_CALLWNDPROC hook + a registered window message - since that's the
+// confirmed-working pattern for marshaling work onto a specific window's
+// thread from Windhawk mod code. Payloads are looked up by ID in a shared,
+// mutex-guarded table (rather than read straight off the message's lParam)
+// because a WH_CALLWNDPROC hook fires for *every* matching message seen by
+// its target thread, including ones sent by a concurrent, unrelated
+// RunFromWindowThread call to the same thread (e.g. the init-poll worker's
+// create call racing Wh_ModBeforeUninit's destroy call) - each hook must
+// only ever claim and run the one payload its own call actually sent.
+bool RunFromWindowThread(HWND hWnd, const std::function<void()>& task,
+                          DWORD timeoutMs = 3000) {
+    DWORD tid = GetWindowThreadProcessId(hWnd, nullptr);
+    if (!tid) {
+        return false;
+    }
+    if (tid == GetCurrentThreadId()) {
+        task();
+        return true;
+    }
+
+    struct Payload {
+        const std::function<void()>* task;
+        std::atomic<bool> ran{false};
+    };
+    static std::mutex pendingMutex;
+    static std::vector<std::pair<UINT_PTR, Payload*>> pending;
+    static std::atomic<UINT_PTR> nextId{1};
+
+    Payload payload{&task};
+    UINT_PTR id = nextId.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lk(pendingMutex);
+        pending.push_back({id, &payload});
+    }
+
+    static const UINT kMsg = RegisterWindowMessageW(
+        L"Windhawk_taskbar-widget-stack_RunFromWindowThread");
+    HHOOK hook = SetWindowsHookExW(
+        WH_CALLWNDPROC,
+        [](int code, WPARAM w, LPARAM l) -> LRESULT {
+            if (code == HC_ACTION) {
+                auto* cwp = reinterpret_cast<const CWPSTRUCT*>(l);
+                if (cwp->message == kMsg) {
+                    Payload* claimed = nullptr;
+                    {
+                        std::lock_guard<std::mutex> lk(pendingMutex);
+                        auto it = std::find_if(
+                            pending.begin(), pending.end(),
+                            [id = (UINT_PTR)cwp->wParam](const auto& e) {
+                                return e.first == id;
+                            });
+                        if (it != pending.end()) {
+                            claimed = it->second;
+                            pending.erase(it);
+                        }
+                    }
+                    if (claimed) {
+                        (*claimed->task)();
+                        claimed->ran.store(true, std::memory_order_release);
+                    }
+                }
+            }
+            return CallNextHookEx(nullptr, code, w, l);
+        },
+        nullptr, tid);
+    if (!hook) {
+        std::lock_guard<std::mutex> lk(pendingMutex);
+        std::erase_if(pending, [id](const auto& e) { return e.first == id; });
+        return false;
+    }
+
+    SendMessageTimeoutW(hWnd, kMsg, id, 0,
+                         SMTO_ABORTIFHUNG | SMTO_BLOCK, timeoutMs, nullptr);
+    UnhookWindowsHookEx(hook);
+
+    // If nothing claimed it (target thread hung / send timed out before
+    // dispatch), remove it from the table so a later, unrelated message
+    // can't accidentally match this stale ID.
+    {
+        std::lock_guard<std::mutex> lk(pendingMutex);
+        std::erase_if(pending, [id](const auto& e) { return e.first == id; });
+    }
+    return payload.ran.load(std::memory_order_acquire);
+}
+
 // Locates the tray notification area to park the overlay next to, using
 // the standard window chain for this category of taskbar mod. Unverified
 // against the actual mods this is meant to sit alongside - see PLAN.md
@@ -520,18 +623,11 @@ void LoadSettings() {
     g_settings.navDrag = Wh_GetIntSetting(L"nav.drag");
 }
 
-}  // namespace
-
-BOOL Wh_ModInit() {
-    LoadSettings();
-    InitPlaceholderWidgets();
-
-    HWND notify = FindTrayNotifyWnd();
-    if (!g_taskbarWnd) {
-        Wh_Log(L"Shell_TrayWnd not found; mod inactive this session");
-        return TRUE;  // Non-fatal: taskbar may not be up yet.
-    }
-
+// Registers the overlay window class and creates the overlay. Must run via
+// RunFromWindowThread(g_taskbarWnd, ...) so the window ends up owned by
+// Explorer's main UI thread (see RunFromWindowThread's comment above) -
+// never call this directly.
+void CreateOverlayWindowOnTaskbarThread() {
     WNDCLASSW wc{};
     wc.lpfnWndProc = OverlayWndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
@@ -544,13 +640,47 @@ BOOL Wh_ModInit() {
         kOverlayWidth, 32, g_taskbarWnd, nullptr, wc.hInstance, nullptr);
 
     RepositionOverlay();
+}
+
+// Polls for Shell_TrayWnd (it may not exist yet when Wh_ModInit runs, e.g.
+// right after an Explorer restart) and, once found, marshals the overlay's
+// creation onto its owning thread. Runs on its own worker thread so it
+// never blocks Wh_ModInit; stops early if g_stopRequested is set (mod
+// unloading) or after ~5 minutes if the taskbar never appears.
+DWORD WINAPI InitWorkerProc(LPVOID) {
+    for (int attempt = 0; attempt < 600; attempt++) {
+        if (g_stopRequested.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        FindTrayNotifyWnd();
+        if (g_taskbarWnd) {
+            RunFromWindowThread(g_taskbarWnd, CreateOverlayWindowOnTaskbarThread);
+            return 0;
+        }
+        Sleep(500);
+    }
+    Wh_Log(L"Shell_TrayWnd never appeared; giving up");
+    return 0;
+}
+
+}  // namespace
+
+BOOL Wh_ModInit() {
+    LoadSettings();
+    InitPlaceholderWidgets();
+
+    g_stopRequested = false;
+    g_initWorkerThread =
+        CreateThread(nullptr, 0, InitWorkerProc, nullptr, 0, nullptr);
+    if (!g_initWorkerThread) {
+        Wh_Log(L"Failed to start init worker thread");
+        return FALSE;
+    }
 
     return TRUE;
 }
 
-void Wh_ModAfterInit() {
-    RepositionOverlay();
-}
+void Wh_ModAfterInit() {}
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
@@ -560,13 +690,30 @@ void Wh_ModSettingsChanged() {
 }
 
 void Wh_ModBeforeUninit() {
+    // Stop the init-poll worker first so it can't start creating the
+    // overlay window after teardown below has already run.
+    g_stopRequested = true;
+    if (g_initWorkerThread) {
+        WaitForSingleObject(g_initWorkerThread, 3000);
+        CloseHandle(g_initWorkerThread);
+        g_initWorkerThread = nullptr;
+    }
+
     // Explicit teardown before DLL unload - an overlay window surviving
     // with its WndProc pointing into unmapped memory is the same crash
     // class documented in windows-11-start-menu-button/PLAN.md's "Crash
     // containment" section (CFG fail-fast on an orphaned callback).
+    //
+    // DestroyWindow (like CreateWindow) must run on the window's owning
+    // thread - "a thread cannot use DestroyWindow to destroy a window
+    // created by a different thread" (MSDN) - so this is marshaled the
+    // same way creation was.
     if (g_overlayWnd) {
-        KillTimer(g_overlayWnd, kSnapTimerId);
-        DestroyWindow(g_overlayWnd);
+        HWND overlay = g_overlayWnd;
+        RunFromWindowThread(overlay, [overlay] {
+            KillTimer(overlay, kSnapTimerId);
+            DestroyWindow(overlay);
+        });
         g_overlayWnd = nullptr;
     }
     UnregisterClassW(kOverlayClassName, GetModuleHandleW(nullptr));

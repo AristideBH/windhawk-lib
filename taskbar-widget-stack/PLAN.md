@@ -157,3 +157,74 @@ format.
   position/size looks correct next to the other taskbar mods, verify all
   three nav modes, verify dot indicators track enabled widgets only, verify
   popup-menu enable/disable/reorder persists across Explorer restarts.
+
+## Incident: Explorer froze on first activation (2026-09-16), fixed
+
+**Symptom** (reported live): activating the mod for the first time froze
+Explorer completely — no window repainted, taskbar unresponsive — with
+nothing in Windhawk's debug log at the time. After manually restarting
+`explorer.exe`, a second activation logged `Shell_TrayWnd not found; mod
+inactive this session` instead of freezing (this run happened to start
+before Explorer had created its taskbar window, so the mod's old code took
+its no-op early-return branch and never reached the risky code path at
+all — consistent with, not contradicting, the diagnosis below).
+
+**Root cause**: `Wh_ModInit` called `CreateWindowExW(..., g_taskbarWnd,
+...)` directly, with no verification of which thread `Wh_ModInit` itself
+runs on. `Wh_ModInit` is **not guaranteed to run on Explorer's main UI
+thread**. A `WS_CHILD` window's owning thread is whichever thread called
+`CreateWindow` — not necessarily its parent's thread — so the overlay
+window ended up owned by whatever thread loaded the mod, which never pumps
+Windows messages (`GetMessage`/`DispatchMessage` loop). Any message
+Explorer's real UI thread needed to deliver to that window via a blocking
+`SendMessage` (e.g. parent-notify on resize/theme change) would then never
+return, freezing Explorer's entire main thread with no exception thrown —
+matches the observed "frozen, nothing in the logs" symptom exactly.
+
+Confirmed by reading the actual source of both real mods referenced in
+this mod's design (`taskbar-ai-quota.wh.cpp` and
+`taskbar-fluent-media-player.wh.cpp`, both in
+`ramensoftware/windhawk-mods`): neither ever calls `CreateWindowExW`/
+`DestroyWindow` against a taskbar-owned `HWND` directly from `Wh_ModInit`.
+Both implement and use a `RunFromWindowThread()` helper — a
+`WH_CALLWNDPROC` hook plus a registered window message — specifically to
+marshal such calls onto the target window's owning thread first. This
+mod's original PLAN.md draft had already flagged this pattern as a
+reference point but the first implementation didn't actually apply it —
+that gap is what caused the freeze.
+
+**Fix** (2026-09-16, unverified live — no Windows machine in this dev
+session):
+1. Ported a `RunFromWindowThread()` helper into
+   `taskbar-widget-stack.wh.cpp`, matching the reference mods' technique:
+   `WH_CALLWNDPROC` hook + registered message, with payloads claimed by ID
+   from a shared, mutex-guarded table (not read directly off the message's
+   `lParam`) so two concurrent calls targeting the same thread can't
+   double-claim each other's payload — a real hazard once teardown and the
+   init-poll worker (next point) can both target the taskbar thread.
+2. `Wh_ModInit` no longer creates the overlay inline. It starts a worker
+   thread (`InitWorkerProc`) that polls for `Shell_TrayWnd` every 500ms (up
+   to ~5 minutes) — fixing the secondary bug the post-restart log line
+   exposed, where the mod just gave up permanently if the taskbar wasn't up
+   yet at `Wh_ModInit` time instead of waiting for it. Once found, it calls
+   `RunFromWindowThread(g_taskbarWnd, CreateOverlayWindowOnTaskbarThread)`
+   so `RegisterClassW`/`CreateWindowExW`/positioning all run on Explorer's
+   own thread and the resulting window is owned by it (and therefore
+   pumped by Explorer's already-running message loop, same as any other
+   taskbar UI).
+3. `Wh_ModBeforeUninit` now signals the worker to stop and joins it
+   (`WaitForSingleObject`) before tearing anything else down, then
+   marshals `DestroyWindow` the same way creation was marshaled —
+   `DestroyWindow`, like `CreateWindow`, must run on the window's owning
+   thread per MSDN ("a thread cannot use DestroyWindow to destroy a window
+   created by a different thread"), which the original code also got
+   wrong.
+
+**Still not verified live** — this fix is reasoned from (a) the confirmed
+Win32 thread-affinity rules for window creation/destruction and (b) two
+independently-authored, known-working mods applying the identical pattern
+for the identical reason, but this development environment has no Windows
+machine to actually load the fixed mod and reproduce/rule out the freeze.
+Needs a live retest before this incident is considered closed: re-enable
+the mod, confirm Explorer stays responsive from first activation, and
+confirm the overlay still appears (the init-poll worker is new code too).
