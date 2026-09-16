@@ -509,3 +509,54 @@ scrolling do *nothing at all*, or does drag seem to almost-but-not-quite
 register - the current drag threshold requires ~16px of movement before
 it commits a step, which a light/short trackpad drag might simply not
 reach).
+
+## Incident 5: still overlapping Task View; wheel confirmed broken even with a mouse (2026-09-16)
+
+**Symptom** (v0.1.4 retest): stack now appears near Start, but overlaps
+the Task View (virtual desktops) button - a screenshot showed the
+widget's "Media Player" label rendered directly on top of it. Dots
+untestable in that state. Wheel still didn't respond, and this time
+tested with an actual mouse, not just a trackpad - ruling out "trackpad
+gesture quirk" as the wheel explanation.
+
+**Root cause (overlap)**: `RepositionWidgetStack` anchored to the Start
+button alone, but Task View and (when present) the search box live in
+`TaskbarFrameRepeater` immediately after Start, in their own
+fixed-position slots - not part of the centered/reflowing icon group.
+The real empty gap starts after all of the repeater's fixed leading
+content, not right after Start specifically.
+
+**Fix (2026-09-16, unverified live)**: `RepositionWidgetStack` now
+tracks the whole `TaskbarFrameRepeater` element (`g_ui.trackedElement`),
+not the Start button - positions at `repeater.right + gap` instead of
+`startButton.right + gap`. `FindStartButton` is still called during
+injection, but now purely as a readiness check (confirms the repeater's
+content has actually been realized before we compute a position from
+it), not as the position anchor itself.
+
+**Root cause (wheel)**: `PointerWheelChanged`'s handler called
+`args.GetCurrentPoint(nullptr).Properties().MouseWheelDelta()` - every
+other pointer handler in this mod calls `GetCurrentPoint(elem)` with a
+real element (`sender.as<UIElement>()`), never `nullptr`. Suspect the
+`nullptr` overload throws in this hosting context (a mod-injected XAML
+island inside Explorer, not a normal app window) and the exception gets
+silently swallowed by the WinRT event-dispatch boundary before reaching
+this mod's own code - consistent with "wheel does literally nothing,
+with or without a trackpad" and with `RightTapped`/`PointerPressed`
+(which never call `GetCurrentPoint(nullptr)`) working. Not confirmed via
+a debugger (none available in this dev environment) - a plausible,
+testable theory, not certain.
+
+**Fix (2026-09-16, unverified live)**: changed the wheel handler to call
+`args.GetCurrentPoint(elem)` with `elem = sender.as<UIElement>()`,
+matching every other handler, and wrapped the body in try/catch (matches
+this mod's existing crash-isolation pattern elsewhere, and would at
+least stop future silent failures here from being invisible - though if
+this theory is right, the WinRT boundary was already swallowing the
+exception before it could reach this try/catch, so this addition is
+about testability, not the actual fix).
+
+**Still open**: drag and dot-click, unconfirmed either way in this
+report (dots were unusable due to the overlap; drag wasn't specifically
+retested). Retest all three - wheel, drag, dot-click - once position is
+confirmed fixed.
