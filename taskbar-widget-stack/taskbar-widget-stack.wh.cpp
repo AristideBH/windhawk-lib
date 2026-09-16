@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.11
+// @version         0.1.12
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -79,7 +79,7 @@ prototype - not yet verified live, see `PLAN.md`.
     use the right-click menu on the stack in the taskbar to reorder live
     (updates these settings).
 */
-// ==WindhawkModSettings==
+// ==/WindhawkModSettings==
 
 #include <windhawk_utils.h>
 

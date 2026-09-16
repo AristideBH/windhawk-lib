@@ -840,3 +840,38 @@ on the next retest - whichever one is tells us exactly which line breaks
 the chain, the same way narrowing between `ApplySliderTarget` and
 `OnRenderingTick` was meant to (still open, now folded into this same
 full trace instead of a separate round).
+
+## Incident 12: found it - `==WindhawkModSettings==` closing marker was wrong (2026-09-16)
+
+**Root cause**: the trace pinpointed it immediately - `PointerWheelChanged:
+navWheel setting is off`. The user separately noticed Windhawk's own
+settings panel for this mod showed "Aucun paramètre disponible pour ce
+mod" (no settings available). The metadata block's closing delimiter was
+written as `// ==WindhawkModSettings==` - identical to the *opening*
+delimiter, missing the leading `/` that makes it `// ==/WindhawkModSettings==`.
+Windhawk couldn't find a valid closing marker, so it silently treated
+the whole settings block as absent - every `Wh_GetIntSetting` call
+therefore returned Windhawk's default-for-missing-key value (0 /
+false), which is exactly why `navWheel`/`navDots`/`navDrag` all read as
+off despite each defaulting to `true` in the (never-actually-parsed)
+YAML.
+
+This typo has been present since this mod's very first commit - it
+predates every other incident in this file and plausibly explains part
+of "dots don't respond" too (`navDots` would have read false the same
+way), though dots were also blocked by the mispositioning in Incidents
+4-6 for most of that time, so it's hard to say how much of the dot
+symptom was this bug alone versus overlapping with position.
+
+**Fix (2026-09-16, unverified live)**: corrected the closing marker to
+`// ==/WindhawkModSettings==`. Expect this to fix wheel, drag, and dots
+all at once, since all three read `g_settings.nav*` flags gated by the
+same broken settings block.
+
+**Left the Incident 11 diagnostic logs in place for this retest** (not
+stripped yet) - if the settings fix is the true, complete fix, the
+chain should now log all the way through
+`ApplySliderTarget`/`OnRenderingTick` and the stack should visibly
+switch; if something else is *also* wrong, the trace will show exactly
+where it stops next. Plan to remove the verbose diagnostic logging once
+this is confirmed working end to end.
