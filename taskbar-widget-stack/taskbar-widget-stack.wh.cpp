@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.10
+// @version         0.1.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -653,8 +653,11 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
 void RefreshDots();
 
 void GoToWidget(int widgetIndex, bool animate = true) {
+    Wh_Log(L"GoToWidget: widgetIndex=%d activeIndex=%d widgetsCount=%d",
+           widgetIndex, g_ui.activeIndex, (int)g_widgets.size());
     if (widgetIndex < 0 || widgetIndex >= (int)g_widgets.size() ||
         widgetIndex == g_ui.activeIndex) {
+        Wh_Log(L"GoToWidget: guard returned early");
         return;
     }
     g_ui.activeIndex = widgetIndex;
@@ -664,12 +667,17 @@ void GoToWidget(int widgetIndex, bool animate = true) {
 
 void StepWidget(int direction) {
     auto enabled = EnabledIndices();
+    Wh_Log(L"StepWidget: direction=%d enabledCount=%d", direction,
+           (int)enabled.size());
     if (enabled.size() < 2) {
+        Wh_Log(L"StepWidget: fewer than 2 enabled widgets, returning");
         return;
     }
     auto it = std::find(enabled.begin(), enabled.end(), g_ui.activeIndex);
     int pos = it != enabled.end() ? (int)std::distance(enabled.begin(), it) : 0;
     int next = (pos + direction + (int)enabled.size()) % (int)enabled.size();
+    Wh_Log(L"StepWidget: pos=%d next=%d enabled[next]=%d", pos, next,
+           enabled[next]);
     GoToWidget(enabled[next]);
 }
 
@@ -711,15 +719,19 @@ void WireUpNavigation() {
            wuxi::PointerRoutedEventArgs const& args) {
             Wh_Log(L"PointerWheelChanged fired");
             if (!g_settings.navWheel) {
+                Wh_Log(L"PointerWheelChanged: navWheel setting is off");
                 return;
             }
             try {
                 auto elem = sender.as<UIElement>();
                 int delta =
                     args.GetCurrentPoint(elem).Properties().MouseWheelDelta();
+                Wh_Log(L"PointerWheelChanged: delta=%d, calling StepWidget",
+                       delta);
                 StepWidget(delta > 0 ? -1 : 1);
                 args.Handled(true);
             } catch (...) {
+                Wh_Log(L"PointerWheelChanged: exception");
             }
         });
 

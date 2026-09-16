@@ -815,3 +815,28 @@ non-native content). If both log as expected but there's still no
 visible change, the bug is likely in what's actually being clipped/
 transformed (the `widgetsPanel`/`clipHost` structure itself), not in the
 animation driver.
+
+## Incident 10 confirmed fixed; Incident 11 narrowed further (2026-09-16)
+
+**Right-click**: retested, no crash. The `RunAsync`-deferred
+`ShowContextMenu` fix holds.
+
+**Wheel**: retested with the Incident 11 diagnostics in place -
+`PointerWheelChanged fired` and `WM_MOUSEWHEEL on taskbar hwnd` both
+logged (twice, for two scroll gestures), but **neither
+`ApplySliderTarget` nor `OnRenderingTick` logged at all** - meaning the
+call chain breaks somewhere between the wheel handler and
+`ApplySliderTarget`, i.e. inside `StepWidget`/`GoToWidget`, or the
+handler never gets past its own `navWheel` check / `try` block. The
+previous diagnostic wasn't fine-grained enough to tell which.
+
+**Fix (2026-09-16, still diagnostic, not a real fix yet)**: added
+`Wh_Log` calls tracing every step of the chain: after the `navWheel`
+check passes (with the computed `delta`), inside `StepWidget` (enabled
+count, and the computed `pos`/`next`/target index), and inside
+`GoToWidget` (`widgetIndex`/`activeIndex`/`widgetsCount`, and whether
+its own guard returns early). One of these must be the last line to log
+on the next retest - whichever one is tells us exactly which line breaks
+the chain, the same way narrowing between `ApplySliderTarget` and
+`OnRenderingTick` was meant to (still open, now folded into this same
+full trace instead of a separate round).
