@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.6
+// @version         0.1.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -656,6 +656,13 @@ void WireUpNavigation() {
     g_ui.root.PointerWheelChanged(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
+            // Diagnostic (2026-09-16, "Incident 7"): unconditional, ahead
+            // of the navWheel check, so we can tell live whether this
+            // handler fires at all - the previous fix (GetCurrentPoint
+            // nullptr -> elem) didn't resolve the "wheel does nothing"
+            // report, so the next step is confirming whether the routed
+            // event even reaches this mod's code before guessing again.
+            Wh_Log(L"PointerWheelChanged fired");
             if (!g_settings.navWheel) {
                 return;
             }
@@ -663,9 +670,11 @@ void WireUpNavigation() {
                 auto elem = sender.as<UIElement>();
                 int delta =
                     args.GetCurrentPoint(elem).Properties().MouseWheelDelta();
+                Wh_Log(L"PointerWheelChanged delta=%d", delta);
                 StepWidget(delta > 0 ? -1 : 1);
                 args.Handled(true);
             } catch (...) {
+                Wh_Log(L"PointerWheelChanged: exception");
             }
         });
 
@@ -869,6 +878,15 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
+    if (msg == WM_MOUSEWHEEL) {
+        // Diagnostic (2026-09-16, "Incident 7"): confirms whether the
+        // raw Win32 message even reaches the taskbar HWND this mod
+        // subclasses, to tell apart "Windows never delivers
+        // WM_MOUSEWHEEL here while hovering the widget" from "it
+        // arrives, but XAML's own PointerWheelChanged routing doesn't
+        // carry it to this mod's injected element."
+        Wh_Log(L"WM_MOUSEWHEEL on taskbar hwnd");
+    }
     if (msg == WM_NCDESTROY) {
         // The XAML tree is already dying - don't touch trayGrid's
         // children/columns (matches the approach in

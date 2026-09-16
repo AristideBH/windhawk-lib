@@ -598,3 +598,42 @@ attempting to inject - not for positioning.
 This is simpler and more robust than either tracking attempt, not just
 a stopgap: the left edge is the actual place being targeted, so there's
 nothing to track relative to in the first place.
+
+## Incident 7: position confirmed fixed; wheel still dead with a diagnostic pending (2026-09-16)
+
+**Symptom**: v0.1.6 retest confirms the left-edge placement is correct.
+Wheel scroll still does nothing at all, still with a real mouse
+confirmed this round too - so the Incident 5 fix (`GetCurrentPoint(elem)`
+instead of `nullptr`) did not resolve it. That rules out the specific
+"the nullptr overload throws" theory without more data.
+
+**Decision: stop guessing, get a real signal first.** Two theories fixed
+in a row without confirming the actual failure point risks a third wrong
+guess. Added two unconditional diagnostic `Wh_Log` calls (ahead of any
+early-return, so they fire regardless of settings/state):
+1. Inside `PointerWheelChanged`'s handler itself, at entry - confirms
+   whether XAML's routed-event system ever delivers the wheel event to
+   this mod's injected element at all.
+2. On `WM_MOUSEWHEEL` in `TaskbarWindowSubclassProc` (the taskbar HWND
+   this mod already subclasses for `WM_NCDESTROY`/`WM_DISPLAYCHANGE`) -
+   confirms whether the raw Win32 message even reaches the taskbar
+   window while hovering the widget, one layer below XAML.
+
+**What each outcome would mean, for the next round**:
+- Neither log fires → Windows isn't delivering `WM_MOUSEWHEEL` to this
+  HWND while hovering this exact screen region at all (a Win32-level
+  routing issue - default focus-based `WM_MOUSEWHEEL` targeting, or
+  another mod's window intercepting it first at that location -
+  independent of anything in this mod's own XAML code).
+- The Win32 log fires but the XAML one doesn't → the message arrives at
+  the taskbar HWND but XAML's own routed-pointer pipeline isn't
+  delivering it to this mod's specific injected element (points at
+  something about how/where this mod's content is hosted in the visual
+  tree, or a hit-testing gap upstream of the handler).
+- Both fire → the handler runs; the bug is downstream in this mod's own
+  logic (`StepWidget`/`GoToWidget`/the slider transform), not event
+  delivery at all - would mean re-examining that path specifically
+  instead of the event wiring.
+
+Not a fix yet - purpose-built to make the next report diagnostic rather
+than another "still doesn't work."
