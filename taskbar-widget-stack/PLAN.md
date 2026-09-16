@@ -875,3 +875,44 @@ chain should now log all the way through
 switch; if something else is *also* wrong, the trace will show exactly
 where it stops next. Plan to remove the verbose diagnostic logging once
 this is confirmed working end to end.
+
+## Incident 13: fixed marker exposed a second bug - invalid `widgets` YAML (2026-09-16)
+
+**Symptom**: after the Incident 12 fix, Windhawk's settings parser now
+actually reads the block - and immediately rejected it: `bad
+indentation of a sequence entry (20:5)`, pointing at the `widgets`
+group's structure.
+
+**Root cause**: the `widgets` block tried to express "a list of
+same-shaped groups" as anonymous nested sequences (`- - id: ...` with
+no key naming each widget), by analogy with how `recolor`/`gradient`
+work as single named groups in `windows-11-start-menu-button.wh.cpp`.
+That reference pattern only covers *one* level of "a named group with a
+field list + its own `$name`/`$description`" - it doesn't establish that
+*repeating* that shape anonymously (an array of anonymous groups) is
+valid syntax, and it turned out not to be: a bare `$name:` key at the
+same indentation as its enclosing sequence's own `-` markers doesn't
+resolve the way a single named group's trailing `$name:` does.
+
+Checked whether `taskbar-ai-quota.wh.cpp` (which has a genuinely
+repeatable list - user-added accounts) solves this same problem: it
+doesn't use the YAML settings block for that at all - it has its own
+native Settings window instead. That's a real signal Windhawk's
+standard YAML settings format isn't well-suited to repeatable/array-of-
+groups, which is presumably exactly why a mod that actually needed that
+built custom UI instead of fighting the schema.
+
+**Fix (2026-09-16, unverified live)**: removed the `widgets` settings
+block entirely rather than reworking its YAML - it was checked and
+confirmed to have **no effect on the mod's actual behavior**: the C++
+code builds `g_widgets` entirely from hardcoded values in
+`InitPlaceholderWidgets()` and never reads a widget's `id`/`enabled`
+from Windhawk settings at all (this was already flagged as an
+unimplemented TODO - "persist reordered/toggled state back to Windhawk
+settings ... Not implemented in this prototype"). So this settings
+block was inert even when it parsed - removing it costs nothing
+functionally right now and unblocks the `nav` settings (which *are*
+real and used) from being blocked by the same parse failure. Proper
+per-widget settings (add/remove/reorder/persist) are deferred to the
+SDK milestone in "Next steps," where the actual schema needed will be
+clearer once real (non-placeholder) widgets exist.

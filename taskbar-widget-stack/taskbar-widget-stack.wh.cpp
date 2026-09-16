@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.12
+// @version         0.1.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -62,22 +62,6 @@ prototype - not yet verified live, see `PLAN.md`.
       the nearest one on release.
   $name: Navigation
   $description: Which ways of switching between stacked widgets are active.
-- widgets:
-  - - id: placeholder-a
-      $name: Widget ID
-    - enabled: true
-      $name: Enabled
-    $name: Widget 1 (placeholder A)
-  - - id: placeholder-b
-      $name: Widget ID
-    - enabled: true
-      $name: Enabled
-    $name: Widget 2 (placeholder B)
-  $name: Widgets
-  $description: >-
-    Placeholder widgets for this prototype. Order here is the stack order;
-    use the right-click menu on the stack in the taskbar to reorder live
-    (updates these settings).
 */
 // ==/WindhawkModSettings==
 
