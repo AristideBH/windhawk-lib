@@ -1058,3 +1058,32 @@ wheel and dot-click already give full navigation coverage; drag
 (press-and-hold-and-move) remains unconfirmed either way but uses the
 same underlying pointer-event mechanism already proven to work for
 right-click, so it's not expected to share this specific problem.
+
+## Drag confirmed working; log cleanup (2026-09-16)
+
+**Drag**: confirmed working live, but reported "very sensitive" and
+"inverted." Fixed both: raised the step threshold from half a pane's
+height to a full pane's height, and flipped the direction so dragging
+up steps to the *previous* widget (matches "dragging the content down
+to reveal what's above," the usual touch-scroll feel, rather than the
+original's opposite mapping).
+
+**Diagnostic logging cleanup**: removed all the `Wh_Log` calls added
+across Incidents 7-15 to trace the wheel/crash/settings bugs (the
+step-by-step chain through `StepWidget`/`GoToWidget`/
+`ApplySliderTarget`/`OnRenderingTick`, the "fired" logs on
+`PointerWheelChanged`/`PointerPressed`/`PointerReleased`/`RightTapped`,
+`ManipulationStarted`'s entire diagnostic-only subscription, and
+`WM_MOUSEWHEEL` on the taskbar subclass) - all served their purpose and
+are no longer needed now that those bugs are fixed and confirmed live.
+Kept the logs that mirror this repo's other mod's ongoing-diagnostic
+conventions: injection success/failure, the `TaskbarHost::FrameHeight`
+unsupported-pattern dump (still valuable if a future Windows build
+changes that prologue again), `HookTaskbarDllSymbols` failure, and the
+retry loop giving up.
+
+This closes out the debugging phase this file's "Incident" log
+documents in detail - the mod now does what the original prototype set
+out to do (see "Prototype scope" at the top of this file), modulo the
+two known, deprioritized gaps: two-finger trackpad scroll (Incident 15)
+and the still-unbuilt widget SDK (see "Next steps").

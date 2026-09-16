@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.15
+// @version         0.1.16
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -527,7 +527,6 @@ struct UiState {
     winrt::event_token releasedToken;
     winrt::event_token rightTappedToken;
     winrt::event_token manipulationToken;
-    winrt::event_token manipulationStartedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -574,19 +573,8 @@ void StopSnapAnimation() {
 
 void ApplySliderTarget(int widgetIndex, bool animate);
 
-bool g_loggedFirstTick = false;  // Diagnostic, "Incident 11".
-
 void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
                       winrt::Windows::Foundation::IInspectable const&) {
-    if (!g_loggedFirstTick) {
-        // Confirms whether CompositionTarget::Rendering ever actually
-        // invokes this callback at all in this hosting context - only
-        // proven to work so far for a different element/scenario in
-        // this repo's other mod. Logged once, not every tick, to avoid
-        // flooding (Rendering fires every frame while subscribed).
-        g_loggedFirstTick = true;
-        Wh_Log(L"OnRenderingTick: first invocation");
-    }
     if (!g_ui.animating || !g_ui.sliderTransform) {
         StopSnapAnimation();
         return;
@@ -598,7 +586,6 @@ void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
     try {
         g_ui.sliderTransform.TranslateY(y);
     } catch (...) {
-        Wh_Log(L"OnRenderingTick: TranslateY threw");
         StopSnapAnimation();
         return;
     }
@@ -608,12 +595,6 @@ void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
 }
 
 void ApplySliderTarget(int widgetIndex, bool animate) {
-    // Diagnostic, "Incident 11": GoToWidget/StepWidget both confirmed
-    // firing via their own logs, but no visible change was reported -
-    // this narrows whether the state change even reaches this function
-    // and what value it's trying to apply.
-    Wh_Log(L"ApplySliderTarget: widgetIndex=%d animate=%d hasTransform=%d",
-           widgetIndex, (int)animate, (int)(bool)g_ui.sliderTransform);
     if (!g_ui.sliderTransform) {
         return;
     }
@@ -629,8 +610,6 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
     g_ui.animFromY = g_ui.sliderTransform.TranslateY();
     g_ui.animToY = y;
     g_ui.animStartTick = GetTickCount64();
-    Wh_Log(L"ApplySliderTarget: animating fromY=%.1f toY=%.1f", g_ui.animFromY,
-           g_ui.animToY);
     if (!g_ui.animating) {
         g_ui.animating = true;
         g_ui.renderingToken = CompositionTarget::Rendering(OnRenderingTick);
@@ -640,11 +619,8 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
 void RefreshDots();
 
 void GoToWidget(int widgetIndex, bool animate = true) {
-    Wh_Log(L"GoToWidget: widgetIndex=%d activeIndex=%d widgetsCount=%d",
-           widgetIndex, g_ui.activeIndex, (int)g_widgets.size());
     if (widgetIndex < 0 || widgetIndex >= (int)g_widgets.size() ||
         widgetIndex == g_ui.activeIndex) {
-        Wh_Log(L"GoToWidget: guard returned early");
         return;
     }
     g_ui.activeIndex = widgetIndex;
@@ -654,17 +630,12 @@ void GoToWidget(int widgetIndex, bool animate = true) {
 
 void StepWidget(int direction) {
     auto enabled = EnabledIndices();
-    Wh_Log(L"StepWidget: direction=%d enabledCount=%d", direction,
-           (int)enabled.size());
     if (enabled.size() < 2) {
-        Wh_Log(L"StepWidget: fewer than 2 enabled widgets, returning");
         return;
     }
     auto it = std::find(enabled.begin(), enabled.end(), g_ui.activeIndex);
     int pos = it != enabled.end() ? (int)std::distance(enabled.begin(), it) : 0;
     int next = (pos + direction + (int)enabled.size()) % (int)enabled.size();
-    Wh_Log(L"StepWidget: pos=%d next=%d enabled[next]=%d", pos, next,
-           enabled[next]);
     GoToWidget(enabled[next]);
 }
 
@@ -695,37 +666,25 @@ void WireUpNavigation() {
         return;
     }
 
-    // Diagnostic (2026-09-16, "Incident 9"): unconditional Wh_Log at the
-    // top of every handler, ahead of any early-return, since even dot
-    // clicks stopped responding after the reposition to RootGrid (not
-    // just wheel) - need to know whether *any* pointer input reaches
-    // this element at all before guessing further, same approach that
-    // worked for the FrameHeight and crash diagnoses.
     g_ui.wheelToken = g_ui.root.PointerWheelChanged(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
-            Wh_Log(L"PointerWheelChanged fired");
             if (!g_settings.navWheel) {
-                Wh_Log(L"PointerWheelChanged: navWheel setting is off");
                 return;
             }
             try {
                 auto elem = sender.as<UIElement>();
                 int delta =
                     args.GetCurrentPoint(elem).Properties().MouseWheelDelta();
-                Wh_Log(L"PointerWheelChanged: delta=%d, calling StepWidget",
-                       delta);
                 StepWidget(delta > 0 ? -1 : 1);
                 args.Handled(true);
             } catch (...) {
-                Wh_Log(L"PointerWheelChanged: exception");
             }
         });
 
     g_ui.pressedToken = g_ui.root.PointerPressed(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
-            Wh_Log(L"PointerPressed fired");
             if (!g_settings.navDrag) {
                 return;
             }
@@ -746,8 +705,15 @@ void WireUpNavigation() {
             double y = args.GetCurrentPoint(elem).Position().Y;
             double dy = y - g_ui.dragStartY;
             double height = PaneHeight();
-            if (std::abs(dy) > height / 2) {
-                StepWidget(dy < 0 ? 1 : -1);
+            // Threshold raised from half a pane to a full pane, and
+            // direction flipped (2026-09-16): confirmed live as "very
+            // sensitive" and "inverted" - dragging up now steps to the
+            // previous widget (matches dragging the *content* down to
+            // reveal what's above, the usual touch-scroll feel) and
+            // needs a full pane's worth of movement per step instead of
+            // half.
+            if (std::abs(dy) > height) {
+                StepWidget(dy < 0 ? -1 : 1);
                 g_ui.dragStartY = y;
             }
         });
@@ -755,7 +721,6 @@ void WireUpNavigation() {
     g_ui.releasedToken = g_ui.root.PointerReleased(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
-            Wh_Log(L"PointerReleased fired");
             if (!g_ui.dragging) {
                 return;
             }
@@ -766,7 +731,6 @@ void WireUpNavigation() {
     g_ui.rightTappedToken = g_ui.root.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::RightTappedRoutedEventArgs const& args) {
-            Wh_Log(L"RightTapped fired");
             POINT pt;
             GetCursorPos(&pt);
             HWND hWnd = g_ui.hWnd;
@@ -807,19 +771,13 @@ void WireUpNavigation() {
     // pan gestures, independent of wheel synthesis - requires
     // `ManipulationMode` to declare interest in vertical translation.
     g_ui.root.ManipulationMode(wuxi::ManipulationModes::TranslateY);
-    g_ui.manipulationStartedToken = g_ui.root.ManipulationStarted(
-        [](winrt::Windows::Foundation::IInspectable const&,
-           wuxi::ManipulationStartedRoutedEventArgs const&) {
-            Wh_Log(L"ManipulationStarted fired");  // Diagnostic, "Incident 15".
-        });
     g_ui.manipulationToken = g_ui.root.ManipulationDelta(
         [](winrt::Windows::Foundation::IInspectable const&,
            wuxi::ManipulationDeltaRoutedEventArgs const& args) {
-            double dy = args.Delta().Translation.Y;
-            Wh_Log(L"ManipulationDelta fired, dy=%.2f", dy);  // Diagnostic, "Incident 15".
             if (!g_settings.navWheel) {
                 return;
             }
+            double dy = args.Delta().Translation.Y;
             g_ui.manipulationAccumY += dy;
             double height = PaneHeight();
             while (std::abs(g_ui.manipulationAccumY) > height / 2) {
@@ -855,9 +813,6 @@ void UnwireNavigation() {
         }
         if (g_ui.manipulationToken) {
             g_ui.root.ManipulationDelta(g_ui.manipulationToken);
-        }
-        if (g_ui.manipulationStartedToken) {
-            g_ui.root.ManipulationStarted(g_ui.manipulationStartedToken);
         }
     } catch (...) {
     }
@@ -1009,15 +964,6 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
-    if (msg == WM_MOUSEWHEEL) {
-        // Diagnostic (2026-09-16, "Incident 7"): confirms whether the
-        // raw Win32 message even reaches the taskbar HWND this mod
-        // subclasses, to tell apart "Windows never delivers
-        // WM_MOUSEWHEEL here while hovering the widget" from "it
-        // arrives, but XAML's own PointerWheelChanged routing doesn't
-        // carry it to this mod's injected element."
-        Wh_Log(L"WM_MOUSEWHEEL on taskbar hwnd");
-    }
     if (msg == WM_NCDESTROY) {
         // The XAML tree is already dying - don't touch trayGrid's
         // children/columns (matches the approach in
