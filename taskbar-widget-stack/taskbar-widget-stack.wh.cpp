@@ -9,7 +9,7 @@
 // @license         MIT
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
