@@ -1002,3 +1002,32 @@ request - now that dot clicks are confirmed working (Incident 12's
 settings-marker fix was the real cause of "unclickable," not the dot's
 hit-test size), the enlarged hit target's only remaining effect was
 making the indicators look bulkier than intended.
+
+## Incident 15: ManipulationDelta retest - no dedicated log, but that log didn't exist yet (2026-09-16)
+
+**Symptom**: v0.1.14 retest, two-finger trackpad scroll - "no dedicated
+log". This isn't yet evidence the fix failed: the Incident 14 code never
+actually logged anything from `ManipulationDelta`'s handler, so "no
+dedicated log" was expected regardless of whether the handler fired.
+Genuinely unknown after this report: whether `ManipulationDelta` fired
+at all, and whether `PointerWheelChanged`/`WM_MOUSEWHEEL` (which do have
+logs) also stayed silent for this same gesture - not explicitly
+reconfirmed for the touchpad case specifically in this round.
+
+**Fix (2026-09-16, diagnostic, not a real fix)**: added `Wh_Log` to
+`ManipulationDelta`'s handler (logs `dy` on every call, unconditionally,
+ahead of the `navWheel` check) and a new `ManipulationStarted` handler
+that logs on its own (confirms whether XAML's gesture recognizer
+acknowledges the gesture as a manipulation *at all*, independent of
+whether `ManipulationDelta` ever gets called afterward - a stronger,
+earlier signal than waiting for delta events).
+
+**Next retest should check all of**: `ManipulationStarted` fired?
+`ManipulationDelta` fired (and with what `dy`)? Also
+`PointerWheelChanged`/`WM_MOUSEWHEEL` (re-confirm they really don't fire
+for touchpad two-finger scroll specifically, not just recalled from the
+earlier mouse-wheel test). If none of the four log anything at all for a
+two-finger touchpad gesture over this element, that's a stronger signal
+this is a genuine OS/driver-level gesture-claiming issue outside what
+any XAML-level fix can reach - worth knowing before investing further in
+this specific feature.

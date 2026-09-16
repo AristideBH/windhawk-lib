@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.14
+// @version         0.1.15
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -527,6 +527,7 @@ struct UiState {
     winrt::event_token releasedToken;
     winrt::event_token rightTappedToken;
     winrt::event_token manipulationToken;
+    winrt::event_token manipulationStartedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -806,13 +807,20 @@ void WireUpNavigation() {
     // pan gestures, independent of wheel synthesis - requires
     // `ManipulationMode` to declare interest in vertical translation.
     g_ui.root.ManipulationMode(wuxi::ManipulationModes::TranslateY);
+    g_ui.manipulationStartedToken = g_ui.root.ManipulationStarted(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           wuxi::ManipulationStartedRoutedEventArgs const&) {
+            Wh_Log(L"ManipulationStarted fired");  // Diagnostic, "Incident 15".
+        });
     g_ui.manipulationToken = g_ui.root.ManipulationDelta(
         [](winrt::Windows::Foundation::IInspectable const&,
            wuxi::ManipulationDeltaRoutedEventArgs const& args) {
+            double dy = args.Delta().Translation.Y;
+            Wh_Log(L"ManipulationDelta fired, dy=%.2f", dy);  // Diagnostic, "Incident 15".
             if (!g_settings.navWheel) {
                 return;
             }
-            g_ui.manipulationAccumY += args.Delta().Translation.Y;
+            g_ui.manipulationAccumY += dy;
             double height = PaneHeight();
             while (std::abs(g_ui.manipulationAccumY) > height / 2) {
                 StepWidget(g_ui.manipulationAccumY < 0 ? 1 : -1);
@@ -847,6 +855,9 @@ void UnwireNavigation() {
         }
         if (g_ui.manipulationToken) {
             g_ui.root.ManipulationDelta(g_ui.manipulationToken);
+        }
+        if (g_ui.manipulationStartedToken) {
+            g_ui.root.ManipulationStarted(g_ui.manipulationStartedToken);
         }
     } catch (...) {
     }
