@@ -745,3 +745,73 @@ work." If literally nothing logs for any of the four, the issue is
 "nothing reaches this element at all" (an architectural problem with
 where/how this mod's content sits in `RootGrid`) rather than anything
 specific to wheel or to dots.
+
+## Incident 9 results: input reaches every handler; two separate bugs isolated (2026-09-16)
+
+The Incident 9 diagnostics fully answered the question: pointer input
+does reach this mod's element - `PointerPressed`, `RightTapped`,
+`PointerWheelChanged`, and each dot's `Tapped` all logged as firing.
+That rules out "nothing reaches RootGrid's child at all." Two separate,
+narrower problems remain:
+
+1. **Right-click still crashes Explorer**, immediately after
+   `RightTapped` logs. The Incident 8 fix (revoking dangling event
+   tokens) was real and worth keeping, but wasn't the whole story for
+   this specific crash.
+2. **Wheel and dot-click both log correctly but produce no visible
+   change** - no snap-scroll, no widget switch. Since the *handlers*
+   fire, this is a downstream bug in this mod's own navigation/rendering
+   logic, not an event-delivery problem.
+
+## Incident 10: right-click crash - re-entrant modal loop from a XAML event handler (2026-09-16)
+
+**Root cause (theory, unverified live)**: `ShowContextMenu` calls
+`TrackPopupMenu`, which pumps its own nested Win32 message loop,
+synchronously from inside `RightTapped`'s handler - itself already
+running from within XAML's own routed-event dispatch on the same UI
+thread. Re-entering with a blocking modal loop while still inside that
+dispatch call stack is a known-hazardous pattern for UI frameworks in
+general; it plausibly corrupts internal XAML/Composition dispatcher
+state rather than crashing directly inside `TrackPopupMenu` itself,
+which would explain why the crash's earlier Event Viewer signature
+(Incident 8: exception `0xC0000005`, faulting module "unknown") didn't
+point at a specific recognizable function.
+
+**Fix (2026-09-16, unverified live)**: `RightTapped`'s handler no longer
+calls `ShowContextMenu` directly. It captures the target `HWND` and
+click point, then defers the call via
+`sender.Dispatcher().RunAsync(CoreDispatcherPriority::Normal, ...)` (the
+`Windows::UI::Core::CoreDispatcher` associated with this mod's own
+element - the same general "queue it, don't call it inline" pattern
+`taskbar-fluent-media-player.wh.cpp` uses elsewhere for its own
+dispatcher-queued work). This lets `RightTapped`'s handler return and
+XAML's dispatch fully unwind before `TrackPopupMenu`'s nested loop ever
+starts, removing the re-entrancy rather than working around its
+symptoms.
+
+## Incident 11: navigation handlers fire, but nothing visibly updates (2026-09-16, in progress)
+
+**Symptom**: `StepWidget`/`GoToWidget` are confirmed reached (their
+callers' logs fire), but no snap-scroll or widget switch is visible.
+
+**Not fixed yet - diagnostics added instead of guessing**: `Wh_Log`
+calls in `ApplySliderTarget` (logs `widgetIndex`, `animate`, and whether
+`g_ui.sliderTransform` is non-null - confirms whether this function
+receives a sane call and has a live transform to act on) and in
+`OnRenderingTick` (logs once, on its very first-ever invocation -
+confirms whether `CompositionTarget::Rendering` actually invokes this
+mod's callback in this hosting context at all; this exact API is proven
+to work in this repo's other mod, but for a different element/scenario,
+so it isn't yet confirmed here specifically). Also logs if
+`TranslateY()` throws inside the tick.
+
+**What the next result would mean**: if `ApplySliderTarget` logs a
+sane `widgetIndex`/`animate`/`hasTransform=1` but `OnRenderingTick`
+never logs its first-invocation line, `CompositionTarget::Rendering`
+isn't actually driving this mod's animation in this context - would
+need a different mechanism (e.g. a plain multimedia/dispatcher timer
+instead of relying on the compositor's per-frame callback for injected,
+non-native content). If both log as expected but there's still no
+visible change, the bug is likely in what's actually being clipped/
+transformed (the `widgetsPanel`/`clipHost` structure itself), not in the
+animation driver.

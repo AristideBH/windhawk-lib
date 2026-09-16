@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.9
+// @version         0.1.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -93,6 +93,7 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
@@ -586,8 +587,19 @@ void StopSnapAnimation() {
 
 void ApplySliderTarget(int widgetIndex, bool animate);
 
+bool g_loggedFirstTick = false;  // Diagnostic, "Incident 11".
+
 void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
                       winrt::Windows::Foundation::IInspectable const&) {
+    if (!g_loggedFirstTick) {
+        // Confirms whether CompositionTarget::Rendering ever actually
+        // invokes this callback at all in this hosting context - only
+        // proven to work so far for a different element/scenario in
+        // this repo's other mod. Logged once, not every tick, to avoid
+        // flooding (Rendering fires every frame while subscribed).
+        g_loggedFirstTick = true;
+        Wh_Log(L"OnRenderingTick: first invocation");
+    }
     if (!g_ui.animating || !g_ui.sliderTransform) {
         StopSnapAnimation();
         return;
@@ -599,6 +611,7 @@ void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
     try {
         g_ui.sliderTransform.TranslateY(y);
     } catch (...) {
+        Wh_Log(L"OnRenderingTick: TranslateY threw");
         StopSnapAnimation();
         return;
     }
@@ -608,6 +621,12 @@ void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
 }
 
 void ApplySliderTarget(int widgetIndex, bool animate) {
+    // Diagnostic, "Incident 11": GoToWidget/StepWidget both confirmed
+    // firing via their own logs, but no visible change was reported -
+    // this narrows whether the state change even reaches this function
+    // and what value it's trying to apply.
+    Wh_Log(L"ApplySliderTarget: widgetIndex=%d animate=%d hasTransform=%d",
+           widgetIndex, (int)animate, (int)(bool)g_ui.sliderTransform);
     if (!g_ui.sliderTransform) {
         return;
     }
@@ -623,6 +642,8 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
     g_ui.animFromY = g_ui.sliderTransform.TranslateY();
     g_ui.animToY = y;
     g_ui.animStartTick = GetTickCount64();
+    Wh_Log(L"ApplySliderTarget: animating fromY=%.1f toY=%.1f", g_ui.animFromY,
+           g_ui.animToY);
     if (!g_ui.animating) {
         g_ui.animating = true;
         g_ui.renderingToken = CompositionTarget::Rendering(OnRenderingTick);
@@ -744,12 +765,35 @@ void WireUpNavigation() {
         });
 
     g_ui.rightTappedToken = g_ui.root.RightTapped(
-        [](winrt::Windows::Foundation::IInspectable const&,
+        [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::RightTappedRoutedEventArgs const& args) {
             Wh_Log(L"RightTapped fired");
             POINT pt;
             GetCursorPos(&pt);
-            ShowContextMenu(g_ui.hWnd, pt);
+            HWND hWnd = g_ui.hWnd;
+            // Deferred via the dispatcher rather than called directly:
+            // TrackPopupMenu (inside ShowContextMenu) pumps its own
+            // nested Win32 message loop. Calling it synchronously from
+            // inside a XAML routed-event callback re-enters the XAML
+            // dispatcher's own call stack with a blocking modal loop -
+            // confirmed live (2026-09-16, "Incident 10") as the trigger
+            // for an Explorer crash right after this handler fires (the
+            // Incident 8 dangling-delegate fix was real but didn't
+            // account for this separate hazard). Queuing the call
+            // instead lets this event handler return and the XAML
+            // dispatch fully unwind before the popup menu's own message
+            // loop ever starts.
+            try {
+                auto dispatcher = sender.as<UIElement>().Dispatcher();
+                if (dispatcher) {
+                    dispatcher.RunAsync(
+                        winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+                        [hWnd, pt] { ShowContextMenu(hWnd, pt); });
+                } else {
+                    ShowContextMenu(hWnd, pt);
+                }
+            } catch (...) {
+            }
             args.Handled(true);
         });
 }
