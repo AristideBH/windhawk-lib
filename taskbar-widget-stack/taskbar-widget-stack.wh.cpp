@@ -92,6 +92,8 @@ prototype - not yet verified live, see `PLAN.md`.
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Input.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
@@ -747,8 +749,7 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // and removing with a different one (even with identical bodies) silently
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
-                                            LPARAM lParam, UINT_PTR,
-                                            DWORD_PTR) {
+                                            LPARAM lParam, UINT_PTR) {
     if (msg == WM_NCDESTROY) {
         // The XAML tree is already dying - don't touch trayGrid's
         // children/columns (matches the approach in
@@ -881,7 +882,10 @@ void RemoveWidgetStackGrid() {
     try {
         StopSnapAnimation();
         auto trayGrid = g_ui.injectionParent;
-        trayGrid.Children().Remove(g_ui.root);
+        uint32_t rootIndex;
+        if (trayGrid.Children().IndexOf(g_ui.root, rootIndex)) {
+            trayGrid.Children().RemoveAt(rootIndex);
+        }
         for (uint32_t i = 0; i < trayGrid.ColumnDefinitions().Size(); ++i) {
             if (winrt::get_abi(trayGrid.ColumnDefinitions().GetAt(i)) ==
                 winrt::get_abi(g_ui.ownedColumn)) {
