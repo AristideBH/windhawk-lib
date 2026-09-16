@@ -152,11 +152,21 @@ format.
    windhawk.net listing.
 
 ## Verification
-- Not yet tested — no Windows target available in this session. User to
-  load in Windhawk against `explorer.exe` on Windows 11 25H2, verify overlay
-  position/size looks correct next to the other taskbar mods, verify all
-  three nav modes, verify dot indicators track enabled widgets only, verify
-  popup-menu enable/disable/reorder persists across Explorer restarts.
+- **2026-09-16, confirmed live**: `InjectWidgetStackGrid` logs "Injected
+  widget stack" with no error and no Explorer freeze, on the user's ARM64
+  Windows machine (v0.1.3 - runtime dual-arch `TaskbarHost::FrameHeight`
+  scan, see "Incident 3"). This is the first live confirmation the mod's
+  XAML injection actually runs end to end (symbol hooks resolve, XamlRoot
+  reached, `SystemTrayFrameGrid` found, column inserted). Visual
+  confirmation (does the stack actually render/look right in the
+  taskbar, do the two placeholder widgets show, do dots appear) and nav
+  testing (wheel/drag/dot-click/right-click menu) - still pending as of
+  this writing, awaiting the user's next report.
+- Still to verify: overlay position/size looks correct next to the other
+  taskbar mods, all three nav modes work, dot indicators track enabled
+  widgets only, popup-menu enable/disable/reorder persists across
+  Explorer restarts, multi-monitor (explicitly out of scope for now, see
+  "Scope note" above).
 
 ## Incident: Explorer froze on first activation (2026-09-16), fixed
 
