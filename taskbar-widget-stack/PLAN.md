@@ -637,3 +637,71 @@ early-return, so they fire regardless of settings/state):
 
 Not a fix yet - purpose-built to make the next report diagnostic rather
 than another "still doesn't work."
+
+## Incident 8: Explorer crash from dangling XAML event delegates (2026-09-16)
+
+**Symptom**: v0.1.7 retest - wheel still silent, *no diagnostic log
+fired at all* (neither the XAML-side nor the Win32-side one added for
+Incident 7), and this time right-click crashed Explorer outright
+(auto-restarted, Windhawk's toolbox reopened). Got the crash's real
+signature from Windows Event Viewer (Event ID 1000, requested and
+provided by the user): `Explorer.EXE` faulted with exception code
+`0xC0000005` (`STATUS_ACCESS_VIOLATION`), faulting module **"unknown"**,
+fault offset **0x0**.
+
+**Root cause**: an "unknown" faulting module with a `0x0` offset is the
+textbook signature of executing a call through a **dangling function
+pointer** - jumping to an address that used to contain code but no
+longer maps to any loaded module, so the crash handler can't attribute
+it to one. `WireUpNavigation` registered five XAML pointer-event
+handlers on `g_ui.root` (`PointerWheelChanged`, `PointerPressed`,
+`PointerMoved`, `PointerReleased`, `RightTapped`) via
+`.EventName(lambda)` and **discarded every returned `event_token`** -
+never explicitly revoking any of them. `g_ui.root` isn't a window this
+mod owns and fully controls the lifetime of; it's an element living in
+Explorer's own long-lived taskbar visual tree. Registering a delegate on
+it without ever revoking means the event source can hold a live
+reference to a delegate whose invoke thunk lives inside this mod's own
+DLL indefinitely - and Windhawk unloads/reloads that DLL on every
+recompile (this session's had many by now). If any subscription
+survives a reload and later fires, it calls into memory the old DLL used
+to occupy but no longer does. This is the *same general crash class*
+already documented in this repo's other mod
+(windows-11-start-menu-button/PLAN.md's "Crash containment" section) and
+already partly handled in this mod for `CompositionTarget::Rendering`
+(via `StopSnapAnimation`, revoked on every teardown path) - but these
+five pointer-event subscriptions were never covered by that same
+discipline.
+
+The "no diagnostic log at all, even at the Win32 level" result from the
+same test round is now understood as likely confounded by this crash,
+not proof either pipeline stage is broken - if hovering/scrolling near
+the widget triggered (or coincided with) the crash before either log
+line could be written, "no log" doesn't distinguish "never fires" from
+"fired, but we crashed before or during logging it." Needs a clean
+retest once this fix lands.
+
+**Fix (2026-09-16, unverified live)**: `UiState` now stores each
+subscription's `event_token`
+(`wheelToken`/`pressedToken`/`movedToken`/`releasedToken`/
+`rightTappedToken`). A new `UnwireNavigation()` explicitly revokes all
+five, called from every teardown path that resets `g_ui`:
+`RemoveWidgetStackGrid` (normal removal - explicit unload, taskbar
+re-creation via the `TrayUI::StartTaskbar` hook) and
+`TaskbarWindowSubclassProc`'s `WM_NCDESTROY`/`WM_DISPLAYCHANGE` branches
+(matching where `StopSnapAnimation` was already called for the same
+reason). Left the per-dot `Tapped` handlers in `RefreshDots` as-is -
+those are registered on short-lived `Ellipse`/`Grid` objects recreated
+(and the old ones discarded, via `dotsPanel.Children().Clear()`) on
+every rebuild, so their own object lifetime - and with it their
+delegate's - should unwind cleanly through ordinary WinRT reference
+counting without this mod holding any other reference to them; lower
+risk than `g_ui.root`, which persists for the whole time the widget
+stack is on-screen and directly spans DLL-reload boundaries during dev
+iteration.
+
+Kept the `WM_MOUSEWHEEL`-on-taskbar-HWND diagnostic log from Incident 7
+for one more round, now that a crash isn't expected to interfere with
+it - still useful to confirm whether the wheel problem is Win32-level
+routing or something else, once Explorer stays up long enough to test
+cleanly.

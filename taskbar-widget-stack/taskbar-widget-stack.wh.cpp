@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.7
+// @version         0.1.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -534,6 +534,13 @@ struct UiState {
     bool windowSubclassed = false;
     Grid injectionParent{nullptr};  // The taskbar's RootGrid (not the tray).
     Grid root{nullptr};
+    // Pointer-event subscription tokens on `root` - see WireUpNavigation's
+    // comment for why these must be captured and explicitly revoked.
+    winrt::event_token wheelToken;
+    winrt::event_token pressedToken;
+    winrt::event_token movedToken;
+    winrt::event_token releasedToken;
+    winrt::event_token rightTappedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -648,21 +655,33 @@ void StepWidget(int direction) {
 void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
 
+// Registers this mod's pointer-event handlers on `g_ui.root` and stores
+// each subscription's `event_token` in `UiState` so `UnwireNavigation`
+// can explicitly revoke them later. This matters more here than for a
+// typical XAML app: `g_ui.root` lives in Explorer's own long-lived
+// visual tree, not a window this mod owns and fully controls the
+// lifetime of. Registering with `.EventName(handler)` and never revoking
+// leaves the event source holding a strong reference to a delegate whose
+// invoke thunk lives inside this mod's DLL - if Windhawk unloads that
+// DLL (every recompile does this) while the element (or anything else)
+// still holds that reference, any later invocation jumps into now-freed
+// memory. Confirmed live (2026-09-16): Explorer crashed with exception
+// 0xC0000005 (access violation), faulting module "unknown", fault offset
+// 0x0 - the textbook signature of a call through a dangling function
+// pointer into unmapped memory, not a in-module bug. Matches the same
+// general crash class already documented in this repo's other mod
+// (windows-11-start-menu-button/PLAN.md's "Crash containment" section),
+// this mod's own `CompositionTarget::Rendering` handling already
+// accounted for it (see `StopSnapAnimation`) - these five pointer-event
+// subscriptions didn't.
 void WireUpNavigation() {
     if (!g_ui.root) {
         return;
     }
 
-    g_ui.root.PointerWheelChanged(
+    g_ui.wheelToken = g_ui.root.PointerWheelChanged(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
-            // Diagnostic (2026-09-16, "Incident 7"): unconditional, ahead
-            // of the navWheel check, so we can tell live whether this
-            // handler fires at all - the previous fix (GetCurrentPoint
-            // nullptr -> elem) didn't resolve the "wheel does nothing"
-            // report, so the next step is confirming whether the routed
-            // event even reaches this mod's code before guessing again.
-            Wh_Log(L"PointerWheelChanged fired");
             if (!g_settings.navWheel) {
                 return;
             }
@@ -670,15 +689,13 @@ void WireUpNavigation() {
                 auto elem = sender.as<UIElement>();
                 int delta =
                     args.GetCurrentPoint(elem).Properties().MouseWheelDelta();
-                Wh_Log(L"PointerWheelChanged delta=%d", delta);
                 StepWidget(delta > 0 ? -1 : 1);
                 args.Handled(true);
             } catch (...) {
-                Wh_Log(L"PointerWheelChanged: exception");
             }
         });
 
-    g_ui.root.PointerPressed(
+    g_ui.pressedToken = g_ui.root.PointerPressed(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
             if (!g_settings.navDrag) {
@@ -691,7 +708,7 @@ void WireUpNavigation() {
             elem.CapturePointer(args.Pointer());
         });
 
-    g_ui.root.PointerMoved(
+    g_ui.movedToken = g_ui.root.PointerMoved(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
             if (!g_ui.dragging || !g_settings.navDrag) {
@@ -707,7 +724,7 @@ void WireUpNavigation() {
             }
         });
 
-    g_ui.root.PointerReleased(
+    g_ui.releasedToken = g_ui.root.PointerReleased(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
             if (!g_ui.dragging) {
@@ -717,7 +734,7 @@ void WireUpNavigation() {
             sender.as<UIElement>().ReleasePointerCapture(args.Pointer());
         });
 
-    g_ui.root.RightTapped(
+    g_ui.rightTappedToken = g_ui.root.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const&,
            wuxi::RightTappedRoutedEventArgs const& args) {
             POINT pt;
@@ -725,6 +742,32 @@ void WireUpNavigation() {
             ShowContextMenu(g_ui.hWnd, pt);
             args.Handled(true);
         });
+}
+
+// Revokes everything `WireUpNavigation` registered. Must run before
+// `g_ui.root` is discarded/reset - see `WireUpNavigation`'s comment.
+void UnwireNavigation() {
+    if (!g_ui.root) {
+        return;
+    }
+    try {
+        if (g_ui.wheelToken) {
+            g_ui.root.PointerWheelChanged(g_ui.wheelToken);
+        }
+        if (g_ui.pressedToken) {
+            g_ui.root.PointerPressed(g_ui.pressedToken);
+        }
+        if (g_ui.movedToken) {
+            g_ui.root.PointerMoved(g_ui.movedToken);
+        }
+        if (g_ui.releasedToken) {
+            g_ui.root.PointerReleased(g_ui.releasedToken);
+        }
+        if (g_ui.rightTappedToken) {
+            g_ui.root.RightTapped(g_ui.rightTappedToken);
+        }
+    } catch (...) {
+    }
 }
 
 Border BuildWidgetPane(Widget& widget) {
@@ -899,9 +942,11 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
         // (windows-11-start-menu-button/PLAN.md's "Crash containment"
         // section).
         StopSnapAnimation();
+        UnwireNavigation();
         g_ui = {};
     } else if (msg == WM_DISPLAYCHANGE && !g_stopRequested) {
         StopSnapAnimation();
+        UnwireNavigation();
         g_ui = {};
         // Re-poll for the (possibly recreated) taskbar and
         // SystemTrayFrameGrid rather than assuming this exact HWND
@@ -1029,6 +1074,7 @@ void RemoveWidgetStackGrid() {
     }
     try {
         StopSnapAnimation();
+        UnwireNavigation();
         auto rootGrid = g_ui.injectionParent;
         uint32_t rootIndex;
         if (rootGrid.Children().IndexOf(g_ui.root, rootIndex)) {
