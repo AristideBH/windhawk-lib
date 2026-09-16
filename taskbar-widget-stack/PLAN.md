@@ -560,3 +560,41 @@ about testability, not the actual fix).
 report (dots were unusable due to the overlap; drag wasn't specifically
 retested). Retest all three - wheel, drag, dot-click - once position is
 confirmed fixed.
+
+## Incident 6: repeater-anchor fix made the stack disappear entirely (2026-09-16)
+
+**Symptom**: with the Incident 5 fix live (v0.1.5), the stack stopped
+rendering anywhere at all - no error, just gone. The user clarified what
+"correct position" actually means: flush against the taskbar's *left*
+edge, in the exact spot the native Widgets button (weather/stocks)
+normally occupies - which the user hides and has always used for their
+other taskbar-area mods (see this file's "Context" section). That's to
+the *left* of the Start button, not to the right of anything in the
+repeater.
+
+**Root cause**: `TaskbarFrameRepeater` isn't just the leading buttons
+(Start/search/Task View) - it also repeats every pinned and running app
+icon. Its right edge is therefore way out past the centered icon
+cluster, not "right after Task View" as assumed in Incident 5's fix.
+Anchoring `Margin.Left` to `repeater.right + gap` pushed the stack far
+past the visible taskbar bounds, off-screen - which reads as "just
+disappeared," not a crash or an error.
+
+**Fix (2026-09-16, unverified live)**: dropped element-tracking for
+position entirely - two attempts at it (Start button, then the whole
+repeater) both put the stack in the wrong place because both
+misjudged what a given taskbar element's bounds actually correspond to.
+The requested position doesn't need tracking at all: it's simply
+RootGrid's own left edge, which doesn't move. `InjectWidgetStackGrid`
+now sets a small fixed `Margin.Left` (`kLeftEdgeGap`, 6px) on `root` at
+creation and never touches it again - no `LayoutUpdated` subscription,
+no tracked element, no `RepositionWidgetStack` function. Removed
+`UiState::trackedElement`/`layoutUpdatedToken` (both now unused) and the
+teardown code that revoked the `LayoutUpdated` token. `FindStartButton`
+is still called during injection, purely as a signal that the taskbar's
+content has been realized (not just `RootGrid` itself existing) before
+attempting to inject - not for positioning.
+
+This is simpler and more robust than either tracking attempt, not just
+a stopgap: the left edge is the actual place being targeted, so there's
+nothing to track relative to in the first place.

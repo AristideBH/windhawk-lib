@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.5
+// @version         0.1.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -534,8 +534,6 @@ struct UiState {
     bool windowSubclassed = false;
     Grid injectionParent{nullptr};  // The taskbar's RootGrid (not the tray).
     Grid root{nullptr};
-    FrameworkElement trackedElement{nullptr};  // TaskbarFrameRepeater we anchor after.
-    winrt::event_token layoutUpdatedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -897,47 +895,24 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
     return DefSubclassProc(hWnd, msg, wParam, lParam);
 }
 
-constexpr double kRepeaterGap = 4.0;
-
-// Repositions the widget stack immediately to the right of the tracked
-// element, in RootGrid's coordinate space. Called once at injection and
-// on every `RootGrid.LayoutUpdated` after that, so it follows if the
-// tracked element's own position/width changes (DPI change, taskbar
-// realignment, ...) - same idea as taskbar-fluent-media-player.wh.cpp's
-// tracking, simplified (no mutual margin reservation - unlike a centered
-// app-icon cluster, which repositions to make room, this mod doesn't
-// need the tracked element to move for it; the gap it sits in already
-// exists naturally in a centered taskbar layout).
-//
-// Tracks the whole `TaskbarFrameRepeater`, not just the Start button:
-// confirmed live (2026-09-16) that anchoring to the Start button alone
-// overlapped Task View/search, which sit in the repeater right after
-// Start - those aren't part of the centered/reflowing icon group, they
-// have their own fixed space immediately following Start. The real gap
-// is after all of the repeater's fixed-position leading content, not
-// right after Start specifically.
-void RepositionWidgetStack() {
-    if (!g_ui.root || !g_ui.trackedElement || !g_ui.injectionParent) {
-        return;
-    }
-    try {
-        auto transform = g_ui.trackedElement.TransformToVisual(g_ui.injectionParent);
-        auto point = transform.TransformPoint({0, 0});
-        double left = point.X + g_ui.trackedElement.ActualWidth() + kRepeaterGap;
-        auto margin = g_ui.root.Margin();
-        if (std::abs(margin.Left - left) > 0.5) {
-            g_ui.root.Margin({left, 0, 0, 0});
-        }
-    } catch (...) {
-    }
-}
+// Flush against the taskbar's left edge, where the native Widgets
+// button (weather/stocks) normally sits - the user hides that button and
+// uses this exact space for taskbar-area mods, confirmed against their
+// live setup (see PLAN.md's "Context"). Not tracking any other element's
+// position: two rounds of trying that (Start button alone, then the
+// whole TaskbarFrameRepeater) both put the stack somewhere wrong -
+// TaskbarFrameRepeater in particular turned out to also contain every
+// pinned/running app icon, not just the leading buttons, so anchoring to
+// its right edge pushed the stack far off to the right, past the visible
+// taskbar bounds ("disappeared"). The true left edge needs no tracking
+// at all - it's RootGrid's own edge, which doesn't move.
+constexpr double kLeftEdgeGap = 6.0;
 
 // Builds the full widget-stack element (dots column + clipped, slidable
 // widget panes) and adds it as a floating child of the taskbar's
-// RootGrid, anchored to the right of the leading-icon repeater - see
-// `RepositionWidgetStack`. Must run on the taskbar's own UI thread (same
-// requirement as touching any XAML element - see PLAN.md's "Incident"
-// section).
+// RootGrid, flush against its left edge. Must run on the taskbar's own
+// UI thread (same requirement as touching any XAML element - see
+// PLAN.md's "Incident" section).
 bool InjectWidgetStackGrid(HWND hWnd) {
     if (g_ui.root) {
         return true;  // Already injected for this taskbar instance.
@@ -955,15 +930,11 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     if (!taskbarRootGrid) {
         return false;
     }
+    // Used only as a readiness check (confirms the taskbar's own content
+    // - not just RootGrid itself - has been realized in the visual tree)
+    // before we inject; positioning no longer depends on it.
     auto repeater = FindChildByName(taskbarRootGrid, L"TaskbarFrameRepeater");
-    // FindStartButton is used only as a readiness check here (confirms
-    // the repeater's content, not just the repeater element itself, has
-    // been realized) - positioning tracks the whole repeater, not the
-    // Start button specifically, see RepositionWidgetStack's comment.
     auto startButton = FindStartButton(repeater);
-    // On a cold start the XamlRoot can be ready before the taskbar's own
-    // contents (icons, Start button) are realized in the visual tree -
-    // bail and let the retry loop poll until they appear.
     if (!repeater || !startButton) {
         return false;
     }
@@ -972,6 +943,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         Grid root;
         root.VerticalAlignment(VerticalAlignment::Stretch);
         root.HorizontalAlignment(HorizontalAlignment::Left);
+        root.Margin({kLeftEdgeGap, 0, 0, 0});
         root.Width(kStackWidth);
         ColumnDefinition dotsCol;
         dotsCol.Width({kDotsColumnWidth, GridUnitType::Pixel});
@@ -1010,7 +982,6 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.hWnd = hWnd;
         g_ui.ownerThreadId = GetCurrentThreadId();
         g_ui.injectionParent = taskbarRootGrid;
-        g_ui.trackedElement = repeater;
         g_ui.root = root;
         g_ui.widgetsPanel = widgetsPanel;
         g_ui.dotsPanel = dotsPanel;
@@ -1018,13 +989,6 @@ bool InjectWidgetStackGrid(HWND hWnd) {
 
         WireUpNavigation();
         RebuildStackContents();
-
-        RepositionWidgetStack();
-        g_ui.layoutUpdatedToken = taskbarRootGrid.LayoutUpdated(
-            [](winrt::Windows::Foundation::IInspectable const&,
-               winrt::Windows::Foundation::IInspectable const&) {
-                RepositionWidgetStack();
-            });
 
         if (!g_ui.windowSubclassed) {
             g_ui.windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
@@ -1047,9 +1011,6 @@ void RemoveWidgetStackGrid() {
     }
     try {
         StopSnapAnimation();
-        if (g_ui.layoutUpdatedToken) {
-            g_ui.injectionParent.LayoutUpdated(g_ui.layoutUpdatedToken);
-        }
         auto rootGrid = g_ui.injectionParent;
         uint32_t rootIndex;
         if (rootGrid.Children().IndexOf(g_ui.root, rootIndex)) {
