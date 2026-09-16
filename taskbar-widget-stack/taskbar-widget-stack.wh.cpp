@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.13
+// @version         0.1.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -526,6 +526,7 @@ struct UiState {
     winrt::event_token movedToken;
     winrt::event_token releasedToken;
     winrt::event_token rightTappedToken;
+    winrt::event_token manipulationToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     CompositeTransform sliderTransform{nullptr};
@@ -538,6 +539,7 @@ struct UiState {
     bool dragging = false;
     double dragStartY = 0;
     winrt::Windows::UI::Xaml::Input::Pointer dragPointer{nullptr};
+    double manipulationAccumY = 0;
 };
 
 UiState g_ui;
@@ -792,6 +794,33 @@ void WireUpNavigation() {
             }
             args.Handled(true);
         });
+
+    // Two-finger trackpad scroll, separately from `PointerWheelChanged`
+    // (confirmed live, 2026-09-16, "Incident 14": a real mouse wheel
+    // reliably fires `PointerWheelChanged`/`WM_MOUSEWHEEL`, but a
+    // Precision Touchpad's two-finger pan over this element did not -
+    // plausibly because the taskbar's own native touchpad-gesture
+    // handling consumes it before the OS's generic "synthesize
+    // WM_MOUSEWHEEL from an unclaimed touchpad pan" fallback ever runs).
+    // `ManipulationDelta` is the WinRT-native channel for touch/touchpad
+    // pan gestures, independent of wheel synthesis - requires
+    // `ManipulationMode` to declare interest in vertical translation.
+    g_ui.root.ManipulationMode(wuxi::ManipulationModes::TranslateY);
+    g_ui.manipulationToken = g_ui.root.ManipulationDelta(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           wuxi::ManipulationDeltaRoutedEventArgs const& args) {
+            if (!g_settings.navWheel) {
+                return;
+            }
+            g_ui.manipulationAccumY += args.Delta().Translation.Y;
+            double height = PaneHeight();
+            while (std::abs(g_ui.manipulationAccumY) > height / 2) {
+                StepWidget(g_ui.manipulationAccumY < 0 ? 1 : -1);
+                g_ui.manipulationAccumY +=
+                    g_ui.manipulationAccumY < 0 ? height / 2 : -(height / 2);
+            }
+            args.Handled(true);
+        });
 }
 
 // Revokes everything `WireUpNavigation` registered. Must run before
@@ -815,6 +844,9 @@ void UnwireNavigation() {
         }
         if (g_ui.rightTappedToken) {
             g_ui.root.RightTapped(g_ui.rightTappedToken);
+        }
+        if (g_ui.manipulationToken) {
+            g_ui.root.ManipulationDelta(g_ui.manipulationToken);
         }
     } catch (...) {
     }
@@ -850,33 +882,27 @@ void RefreshDots() {
         bool active = idx == g_ui.activeIndex;
         double r = active ? 3.0 : 2.0;
 
+        // Back to the original small dot with no enlarged hit target
+        // (2026-09-16): the earlier "unclickable dots" symptom turned out
+        // to be the broken WindhawkModSettings closing marker (see
+        // "Incident 12"), not the dot's own hit-test size - now that
+        // clicks are confirmed working, the oversized 10x14 transparent
+        // hit box isn't needed and was just making the indicators look
+        // bulkier than intended.
         wuxs::Ellipse dot;
         dot.Width(r * 2);
         dot.Height(r * 2);
-        dot.HorizontalAlignment(HorizontalAlignment::Center);
-        dot.VerticalAlignment(VerticalAlignment::Center);
+        dot.Margin({0, 2, 0, 2});
         SolidColorBrush brush{winrt::Windows::UI::ColorHelper::FromArgb(
             255, active ? 255 : 140, active ? 255 : 140, active ? 255 : 140)};
         dot.Fill(brush);
-        dot.IsHitTestVisible(false);  // The hit target below handles input.
-
-        // Hit target is deliberately much bigger than the visible dot -
-        // a 4-6px circle is close to unhittable with an imprecise
-        // pointer (confirmed live: reported unclickable on a trackpad).
-        Grid hitTarget;
-        hitTarget.Width(kDotsColumnWidth);
-        hitTarget.Height(14);
-        hitTarget.Background(SolidColorBrush{
-            winrt::Windows::UI::Colors::Transparent()});  // Needed to be hit-testable at all.
-        hitTarget.Children().Append(dot);
-        hitTarget.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
-                                wuxi::TappedRoutedEventArgs const&) {
-            Wh_Log(L"Dot Tapped fired, idx=%d", idx);  // Diagnostic, "Incident 9".
+        dot.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
+                          wuxi::TappedRoutedEventArgs const&) {
             if (g_settings.navDots) {
                 GoToWidget(idx);
             }
         });
-        g_ui.dotsPanel.Children().Append(hitTarget);
+        g_ui.dotsPanel.Children().Append(dot);
     }
 }
 

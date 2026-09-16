@@ -960,3 +960,45 @@ subclass) - left in deliberately per "Incident 12"'s note, to catch
 anything unexpected during this confirmation round. Now that the core
 mechanics are confirmed working, these should be trimmed back down
 before this prototype is considered done - noted in "Next steps."
+
+## Incident 14: two-finger trackpad scroll via ManipulationDelta (2026-09-16)
+
+**Theory**: a real mouse wheel reliably produces
+`PointerWheelChanged`/`WM_MOUSEWHEEL`, confirmed live, but a Precision
+Touchpad's two-finger pan over the same element did not (not root-caused
+with certainty - plausibly the taskbar's own native touchpad-gesture
+handling claims the pan for itself, e.g. for its built-in
+window-switching gestures, before the OS's generic "synthesize
+`WM_MOUSEWHEEL` from an unclaimed touchpad pan" fallback ever runs).
+
+**Fix (2026-09-16, unverified live)**: added a second, independent
+navigation channel using `ManipulationDelta` - the WinRT-native
+mechanism for touch/touchpad pan gestures, which XAML processes from
+the raw pointer stream independently of whether it also gets translated
+into a wheel message. Set `root.ManipulationMode(ManipulationModes::TranslateY)`
+and accumulate `args.Delta().Translation.Y` across calls, stepping the
+widget (`StepWidget`) each time the accumulated distance crosses half a
+pane's height, then reducing the accumulator by that amount (not
+resetting to zero) so a fast/long gesture can trigger multiple steps
+rather than being capped at one. Gated on the existing `navWheel`
+setting - conceptually the same "scroll" input class as the mouse wheel,
+not a new setting.
+
+**Known overlap risk, not yet tested for**: manipulation events fire for
+*any* pointer device, including a plain mouse - a literal single-finger/
+mouse click-and-drag could now trigger both this manipulation-based
+stepping *and* the existing `PointerPressed`/`PointerMoved`-based drag
+logic (gated on `navDrag`) simultaneously, if both settings are on
+(both default to `true`). Not confirmed whether this actually
+double-steps in practice, or whether manipulation recognition only
+kicks in for gestures distinct enough from a normal drag (some slop/
+threshold before manipulation events start firing is typical). Flagging
+so a reported "wheel/drag feels twitchy when done with a mouse instead
+of a touchpad" isn't mistaken for a new, unrelated bug.
+
+Also reverted the dots' hit-target back to the original small `Ellipse`
+with a simple margin (no oversized transparent wrapper) per explicit
+request - now that dot clicks are confirmed working (Incident 12's
+settings-marker fix was the real cause of "unclickable," not the dot's
+hit-test size), the enlarged hit target's only remaining effect was
+making the indicators look bulkier than intended.
