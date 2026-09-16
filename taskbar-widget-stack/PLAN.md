@@ -333,3 +333,64 @@ don't match the ported symbol strings," which will need the Windhawk
 debug log's specific failure point (which symbol failed to hook, or
 which `fail(...)` reason `InjectWidgetStackGrid`/`TryGetTaskbarElementAbi`
 hit) to tell apart on the next test.
+
+## Build/link fixes found while getting the rewrite to actually compile (2026-09-16)
+
+Real compiler/linker output from the user's Windhawk install surfaced three
+issues the rewrite above didn't catch without an actual build:
+1. Several C++/WinRT calls (`PointerPoint::Properties()`/`Position()`,
+   `IVector<T>::Append`/`Clear`/`GetAt`/`Size`/`InsertAt`) use WinRT's
+   deduced-return-type pattern, whose real definitions only arrive via the
+   full `winrt/Windows.UI.Input.h` and `winrt/Windows.Foundation.Collections.h`
+   headers - only their forward-declaring "0.h" variants were visible
+   before adding those includes.
+2. `WindhawkUtils`' `WH_SUBCLASSPROC` is a 5-parameter signature (no
+   `dwRefData`), not comctl32's 6-parameter `SUBCLASSPROC` -
+   `TaskbarWindowSubclassProc` had the wrong arity.
+3. `UIElementCollection` has no `Remove(value)`, only `RemoveAt(index)` -
+   switched to `IndexOf` + `RemoveAt` in `RemoveWidgetStackGrid`.
+4. Link step failed with undefined `SetWindowSubclass`/
+   `RemoveWindowSubclass`/`DefSubclassProc` - missing `-lcomctl32` in
+   `@compilerOptions` (present in `taskbar-ai-quota.wh.cpp`'s own
+   `@compilerOptions` for the same reason, missed when trimming that list
+   down for this mod).
+
+## Incident 3: "Unsupported TaskbarHost::FrameHeight" at runtime (2026-09-16)
+
+**Symptom**: mod now compiles, links, loads, and its symbol hooks resolve
+(`HookTaskbarDllSymbols` doesn't fail - if it had, `Wh_ModInit` would log
+that and return `FALSE`, which isn't what's happening). But every
+injection attempt (the retry-poll loop fires roughly every 500ms) logs
+`TryGetTaskbarElementAbi: Unsupported TaskbarHost::FrameHeight` and bails,
+so `SystemTrayFrameGrid` is never reached and nothing gets injected.
+
+**Root cause**: the byte-pattern match against `TaskbarHost::FrameHeight`'s
+compiled prologue (see "Incident 2" above - this recovers an internal,
+undocumented field offset from the function's own machine code, since
+there's no other way to get it) doesn't match on this user's exact
+Windows build. This is the single most version-fragile piece of the
+entire ported "Taskbar XAML Access" layer, by design (a fixed byte
+pattern against compiler-generated code) - and it's now confirmed fragile
+in practice, not just in theory.
+
+Researched whether `taskbar-ai-quota`'s own upstream (Cleroth/
+windhawk-taskbar-ai-quota) has hit and fixed this: no. No GitHub issue on
+that repo mentions "FrameHeight" or this exact log line; the repo's most
+recent relevant fix (v1.6.3, PR ramensoftware/windhawk-mods#5510, "fix
+newer taskbars and quota reporting") widens which XAML panel types it
+accepts (`Grid` vs `StackPanel`, via `try_as`) but doesn't touch the
+`FrameHeight` byte-pattern scanner at all. So this mod has no known,
+published fix to copy - the upstream mod may simply not have been tested
+against this exact Windows build yet either.
+
+**Fix attempted (2026-09-16, diagnostic only, not a real fix yet)**: added
+a hex dump of `TaskbarHost::FrameHeight`'s first 16 bytes to the log line
+on pattern-match failure (`TryGetTaskbarElementAbi`), since guessing a
+replacement byte pattern with no ground truth from the user's actual
+compiled binary would be irresponsible reverse-engineering. **Next
+step once that log line comes back**: use the real bytes to work out (a)
+whether it's the same `sub rsp,XX` / `add rcx,XX` shape at a different
+byte offset (e.g. a different immediate encoding, or the two instructions
+swapped/reordered by a different compiler backend), or (b) a materially
+different prologue shape entirely, and adjust the match (and offset
+extraction) accordingly. Do not guess further without that data.

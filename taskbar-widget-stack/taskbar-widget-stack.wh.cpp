@@ -103,6 +103,7 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cwchar>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -252,7 +253,17 @@ HRESULT TryGetTaskbarElementAbi(HWND hTaskbarWnd, void** result) {
             b[5] == 0x83 && b[6] == 0xC1 && b[7] <= 0x7F) {
             taskbarElementIUnknownOffset = b[7];
         } else {
-            Wh_Log(L"Unsupported TaskbarHost::FrameHeight");
+            // Diagnostic: this exact build's compiled prologue doesn't
+            // match the expected pattern. Dump the first bytes so a
+            // correct pattern/offset can be derived from real data
+            // instead of guessed - see PLAN.md's "Incident 3".
+            wchar_t hex[64] = {};
+            for (int i = 0; i < 16; i++) {
+                wchar_t byteStr[4];
+                wsprintfW(byteStr, L"%02X ", b[i]);
+                wcscat_s(hex, byteStr);
+            }
+            Wh_Log(L"Unsupported TaskbarHost::FrameHeight, bytes: %s", hex);
             cleanup();
             return E_NOINTERFACE;
         }
