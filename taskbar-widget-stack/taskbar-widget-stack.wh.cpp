@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.8
+// @version         0.1.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -679,9 +679,16 @@ void WireUpNavigation() {
         return;
     }
 
+    // Diagnostic (2026-09-16, "Incident 9"): unconditional Wh_Log at the
+    // top of every handler, ahead of any early-return, since even dot
+    // clicks stopped responding after the reposition to RootGrid (not
+    // just wheel) - need to know whether *any* pointer input reaches
+    // this element at all before guessing further, same approach that
+    // worked for the FrameHeight and crash diagnoses.
     g_ui.wheelToken = g_ui.root.PointerWheelChanged(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
+            Wh_Log(L"PointerWheelChanged fired");
             if (!g_settings.navWheel) {
                 return;
             }
@@ -698,6 +705,7 @@ void WireUpNavigation() {
     g_ui.pressedToken = g_ui.root.PointerPressed(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
+            Wh_Log(L"PointerPressed fired");
             if (!g_settings.navDrag) {
                 return;
             }
@@ -727,6 +735,7 @@ void WireUpNavigation() {
     g_ui.releasedToken = g_ui.root.PointerReleased(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
+            Wh_Log(L"PointerReleased fired");
             if (!g_ui.dragging) {
                 return;
             }
@@ -737,6 +746,7 @@ void WireUpNavigation() {
     g_ui.rightTappedToken = g_ui.root.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const&,
            wuxi::RightTappedRoutedEventArgs const& args) {
+            Wh_Log(L"RightTapped fired");
             POINT pt;
             GetCursorPos(&pt);
             ShowContextMenu(g_ui.hWnd, pt);
@@ -821,6 +831,7 @@ void RefreshDots() {
         hitTarget.Children().Append(dot);
         hitTarget.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
                                 wuxi::TappedRoutedEventArgs const&) {
+            Wh_Log(L"Dot Tapped fired, idx=%d", idx);  // Diagnostic, "Incident 9".
             if (g_settings.navDots) {
                 GoToWidget(idx);
             }

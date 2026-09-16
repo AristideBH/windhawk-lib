@@ -705,3 +705,43 @@ for one more round, now that a crash isn't expected to interfere with
 it - still useful to confirm whether the wheel problem is Win32-level
 routing or something else, once Explorer stays up long enough to test
 cleanly.
+
+## Incident 9: crash fixed (no crash this round); wheel AND dot-clicks both silent (2026-09-16)
+
+**Symptom**: v0.1.8 retest - clean injection log, no crash this time
+(the Incident 8 fix held). But now *dot clicks also don't respond*, not
+just wheel - a new, broader symptom than before (dots were previously
+untested due to the Task View overlap, not previously confirmed
+non-working). Also: neither the `PointerWheelChanged`-side log nor the
+`WM_MOUSEWHEEL`-Win32-side log appeared at all this round, and this
+time there's no crash to blame it on - a real result, not a confounded
+one.
+
+**Reasoning**: wheel and dot-click use different event types
+(`PointerWheelChanged` on `root` vs. `Tapped` on each dot's own hit
+target) and different elements - if *both* are silent with no crash to
+explain it, that points at something more fundamental than a
+per-event-type bug: either no pointer input reaches this mod's part of
+the visual tree at all since the reposition to `RootGrid` (Incident 4-6
+changed the injection parent from `SystemTrayFrameGrid` to `RootGrid`;
+right-click's earlier "works" report was under the old
+`SystemTrayFrameGrid` placement and hasn't been confirmed since), or a
+hit-testing/z-order issue specific to how this mod's element sits among
+`RootGrid`'s other children now.
+
+**Not fixed yet - added broader diagnostics instead of guessing which
+of these it is**: `Wh_Log` calls added, unconditionally, at the top of
+`PointerPressed`, `PointerReleased`, `RightTapped` (previously only
+`PointerWheelChanged` had one) and the dots' `Tapped` handler. Left
+`PointerMoved` unlogged (it only matters once `PointerPressed` has
+already fired and set `dragging`, so it's downstream of that signal, not
+useful for narrowing *whether anything at all* reaches the element).
+
+**Next retest should specifically isolate, not just retry**: press-and-
+hold (or a plain click) directly on a widget pane, right-click on a
+widget pane, click a dot, and scroll - reported separately with their
+individual log lines (or lack of any), not lumped as "still doesn't
+work." If literally nothing logs for any of the four, the issue is
+"nothing reaches this element at all" (an architectural problem with
+where/how this mod's content sits in `RootGrid`) rather than anything
+specific to wheel or to dots.
