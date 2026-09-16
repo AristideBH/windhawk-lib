@@ -139,16 +139,28 @@ format.
   z-order/positioning adjustments once tested live.
 
 ## Next steps (not started)
-1. Get this prototype confirmed working live (overlay renders, scroll/snap/
-   dots/drag feel right, popup menu enable/disable/reorder persists).
-2. Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to design
+1. ~~Get this prototype confirmed working live~~ - **done, 2026-09-16**:
+   injection, positioning, mouse-wheel scroll, dot-click, and right-click's
+   menu all confirmed live. Drag (press-and-hold-and-move) not yet
+   specifically confirmed; two-finger trackpad scroll confirmed *not*
+   working (see "Known open item" above) - lower priority, not blocking.
+2. Trim the diagnostic `Wh_Log` calls added across Incidents 7-13 (wheel
+   handler's step trace, `StepWidget`/`GoToWidget`/`ApplySliderTarget`/
+   `OnRenderingTick`, dots' `Tapped`, `WM_MOUSEWHEEL` on the taskbar
+   subclass) now that the mechanics they were diagnosing are confirmed
+   working - keep only what's useful for future troubleshooting, not a
+   full step-by-step trace of every interaction.
+3. Investigate two-finger trackpad scroll not triggering navigation
+   (mouse wheel and dot-click both work) - not yet root-caused, see
+   "Known open item" above.
+4. Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to design
    the real widget SDK contract (paint callback signature, size negotiation,
    input forwarding, versioning/ABI-stability story).
-3. Port one real widget (likely AI quota, simpler) through the new SDK as
+5. Port one real widget (likely AI quota, simpler) through the new SDK as
    the SDK's first real consumer, before attempting the media player.
-4. Revisit config UI: replace the native popup menu with a custom-drawn
+6. Revisit config UI: replace the native popup menu with a custom-drawn
    drag-and-drop reorder panel, per the original request.
-5. Write a versioned SDK doc once the ABI stabilizes, ahead of any public
+7. Write a versioned SDK doc once the ABI stabilizes, ahead of any public
    windhawk.net listing.
 
 ## Verification
@@ -916,3 +928,35 @@ real and used) from being blocked by the same parse failure. Proper
 per-widget settings (add/remove/reorder/persist) are deferred to the
 SDK milestone in "Next steps," where the actual schema needed will be
 clearer once real (non-placeholder) widgets exist.
+
+## Prototype mechanics confirmed working live (2026-09-16)
+
+After the settings-marker and settings-YAML fixes (Incidents 12-13),
+confirmed live: mouse wheel scroll and dot-click navigation both switch
+widgets correctly (snap animation included). Right-click's context menu
+(enable/disable/reorder) already confirmed earlier, no crash. This is
+the first point in this mod's development where the core "iOS widget
+stack" mechanic - injection, positioning, snap-scroll, dots, and two of
+the three navigation modes - is confirmed working end to end on real
+hardware, closing out the prototype's original goal (see "Prototype
+scope" at the top of this file).
+
+**Known open item**: two-finger trackpad scroll doesn't trigger
+navigation, even though mouse wheel does. Not yet root-caused - Windows
+normally synthesizes `WM_MOUSEWHEEL` from a Precision Touchpad's
+two-finger vertical pan for most UI elements, so this could be a driver/
+OS-level quirk specific to how this element is hosted (injected via
+symbol-hook reflection into Explorer's tree, not a native control) that
+doesn't get recognized as a valid scroll target the same way, rather
+than a bug of the same kind as the ones just fixed. Not yet
+investigated further - lower priority than the crashes/positioning/dead-
+navigation bugs already resolved, since mouse wheel and dot-click both
+give working alternate paths to the same navigation.
+
+**Diagnostic logs still in the code** (`ApplySliderTarget`,
+`OnRenderingTick`, `GoToWidget`, `StepWidget`, the wheel handler's
+step-by-step trace, the dots' `Tapped`, `WM_MOUSEWHEEL` on the taskbar
+subclass) - left in deliberately per "Incident 12"'s note, to catch
+anything unexpected during this confirmation round. Now that the core
+mechanics are confirmed working, these should be trimmed back down
+before this prototype is considered done - noted in "Next steps."
