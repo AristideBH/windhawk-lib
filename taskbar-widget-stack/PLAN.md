@@ -228,3 +228,108 @@ machine to actually load the fixed mod and reproduce/rule out the freeze.
 Needs a live retest before this incident is considered closed: re-enable
 the mod, confirm Explorer stays responsive from first activation, and
 confirm the overlay still appears (the init-poll worker is new code too).
+
+## Incident 2: no freeze, but nothing visible in the taskbar (2026-09-16)
+
+**Symptom**: after the thread-marshal fix above, Explorer stayed
+responsive on activation (confirming that fix), but the widget stack
+never appeared anywhere in the taskbar, with no error logged.
+
+**Root cause**: architectural, not a bug in the fix above. This mod's
+overlay was a classic Win32 `WS_CHILD` window drawn with GDI. The Windows
+11 taskbar is a XAML island rendered via DirectComposition - a classic
+child `HWND` can exist, own its messages correctly, and still never
+actually be visible, because it isn't part of the composited XAML surface
+at all. Confirmed by reading the actual source of both real mods this
+design was originally modeled on: neither `taskbar-ai-quota.wh.cpp` nor
+`taskbar-fluent-media-player.wh.cpp` (both `ramensoftware/windhawk-mods`)
+uses a Win32 overlay window for its visible content. Both build real
+`winrt::Windows::UI::Xaml` elements (`Grid`, `StackPanel`, `TextBlock`,
+...) and insert them as children directly into the taskbar's own live
+XAML visual tree, specifically into a node named `SystemTrayFrameGrid`.
+This is the same category of technique as this repo's other mod
+(`windows-11-start-menu-button`), which manipulates the Start button's
+Composition tree directly rather than overlaying a separate window.
+
+**Fix (2026-09-16, unverified live)**: full rewrite of
+`taskbar-widget-stack.wh.cpp` (now v0.2) from Win32/GDI to XAML injection:
+
+- **Taskbar XAML Access** (ported near-verbatim, with attribution, from
+  `taskbar-ai-quota.wh.cpp`, Cleroth, MIT-licensed): symbol-hooks into
+  `taskbar.dll` for `CTaskBand::GetTaskbarHost`, the
+  `CTaskBand::`vftable'{for `ITaskListWndSite'}` vtable,
+  `TaskbarHost::FrameHeight` (its compiled prologue is pattern-matched to
+  recover an internal, undocumented field offset - x64 only, no ARM64
+  support, matching the mod it's ported from), and
+  `std::_Ref_count_base::_Decref`. `TryGetTaskbarElementAbi` walks these to
+  reach the taskbar's root `FrameworkElement` and, from it,
+  `GetTaskbarXamlRoot` gets a real `XamlRoot`; `FindChildByName` then
+  recursively locates `SystemTrayFrameGrid` in the live visual tree. Not
+  independently re-derived - ported because this is exactly the kind of
+  reverse-engineered, version-sensitive internal structure where a hand-
+  rolled reimplementation risks being subtly wrong in a way that (unlike
+  the guarded, fails-safe original) could misinterpret memory. Chose to
+  depend on the validated technique from a mod already in real-world use
+  rather than reinvent it blind, with no Windows machine to verify either
+  way.
+- **`InjectWidgetStackGrid`**: inserts a new `Grid` (dots column + a
+  clipped, slidable widget-panes column) as trayGrid's leftmost child,
+  following the same "insert a new `ColumnDefinition` at 0, shift existing
+  children's `Grid.Column` by one" pattern `taskbar-ai-quota` uses for its
+  quota bars.
+- **Navigation**: real XAML pointer events (`PointerWheelChanged`,
+  `PointerPressed`/`PointerMoved`/`PointerReleased` for drag,
+  `Tapped` per dot, `RightTapped` for the config menu) instead of raw
+  `WM_*` handling - these fire naturally on the taskbar's own UI thread
+  since they're XAML-tree events, so the earlier `RunFromWindowThread`
+  marshaling isn't needed for them (only for reaching the tree in the
+  first place, and for `TrackPopupMenu`'s owning-thread requirement, which
+  is satisfied automatically here since `RightTapped` already runs there).
+- **Snap animation**: `CompositeTransform.TranslateY` on the widgets
+  `StackPanel`, driven by a `CompositionTarget.Rendering` subscription
+  (same idiom already used and crash-hardened in this repo's other mod)
+  instead of a Win32 timer. Explicitly revoked both on natural completion
+  and from `TaskbarWindowSubclassProc`'s `WM_NCDESTROY`/`WM_DISPLAYCHANGE`
+  handling *before* resetting the rest of the UI state - resetting state
+  first, discovered while reviewing this rewrite, would have silently
+  orphaned that subscription with no reference left to revoke it, the
+  same crash class documented in `windows-11-start-menu-button/PLAN.md`'s
+  "Crash containment" section.
+- **Lifecycle**: `TrayUI::StartTaskbar` is now symbol-hooked too (also
+  ported from the reference mod) to catch taskbar re-creation (e.g. a
+  display change) precisely, in addition to the existing poll-based retry
+  loop for the cold-start race where `SystemTrayFrameGrid` isn't realized
+  in the tree yet when the mod first attempts injection. The taskbar
+  `HWND` is subclassed (`WindhawkUtils::SetWindowSubclassFromAnyThread`)
+  for `WM_NCDESTROY` cleanup and `WM_DISPLAYCHANGE`-triggered re-injection
+  - installed and removed via the *same named function*
+  (`TaskbarWindowSubclassProc`), not two separately-written lambdas with
+  identical bodies, since `RemoveWindowSubclass` matches by exact function
+  pointer and two distinct lambdas (even identical ones) are two distinct
+  pointers - removal would have silently failed to find anything to
+  remove. Both of these were caught during review of this rewrite, not
+  live - flagging in case either resurfaces as a live symptom (subscription
+  never revoked; subclass never actually removed on unload).
+
+**Scope note**: this rewrite targets the primary taskbar
+(`Shell_TrayWnd`) only. `taskbar-ai-quota` also supports
+`Shell_SecondaryTrayWnd` (secondary monitors) via a parallel set of
+symbol hooks (`CSecondaryTaskBand_*`) - deliberately left out here to
+keep this rewrite reviewable; multi-monitor remains an open question (see
+"Open questions" above), now narrowed to "port the secondary-taskband
+symbols too" as the concrete next step if needed.
+
+**Still not verified live** - no Windows machine in this development
+environment. This is now a materially riskier prototype than a pure
+Win32 overlay would have been: it depends on reverse-engineered internal
+Explorer/taskbar.dll structures (the same ones a real, published mod
+already depends on, but still version-sensitive) rather than only
+documented Win32 APIs. If `HookTaskbarDllSymbols` fails to resolve any of
+the symbol strings against the user's exact Windows build, the mod
+degrades safely (`Wh_ModInit` returns `FALSE`, logged, nothing injected)
+rather than crashing - but that also means "nothing appears" could now
+mean either "still broken" or "this exact Windows build's internals
+don't match the ported symbol strings," which will need the Windhawk
+debug log's specific failure point (which symbol failed to hook, or
+which `fail(...)` reason `InjectWidgetStackGrid`/`TryGetTaskbarElementAbi`
+hit) to tell apart on the next test.

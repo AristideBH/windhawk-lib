@@ -26,4 +26,9 @@ tray, switchable like an iOS widget stack:
 ## Status
 
 Not yet tested live (no Windows machine in the development environment this
-prototype was written in). See `PLAN.md` → "Verification" and "Next steps".
+prototype was written in). Went through two live-tested-and-fixed rounds
+already - an Explorer freeze on first activation, then an invisible
+overlay that led to a rewrite from a Win32 overlay window to real XAML
+injection into the taskbar's own visual tree - both documented in
+`PLAN.md`'s "Incident" sections. See `PLAN.md` → "Verification" and "Next
+steps" for what's still open.
