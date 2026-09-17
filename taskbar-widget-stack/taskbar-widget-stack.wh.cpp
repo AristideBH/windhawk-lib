@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.21
+// @version         0.1.22
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -558,6 +558,22 @@ bool g_rawInputRegistered;
 bool g_hidContactActive;
 LONG g_hidPrevY;
 double g_hidAccumY;
+ULONGLONG g_hidLastStepTick;
+
+// Incident 19: the step threshold used for drag/ManipulationDelta is
+// PaneHeight() (an on-screen DIP measurement of the rendered widget
+// pane), but raw HID Y is in the touchpad sensor's own logical unit
+// resolution (typically ~0-3052 for a Precision Touchpad) - an
+// entirely different, much finer-grained unit space. Reusing
+// PaneHeight() as the HID threshold meant a single deliberate swipe's
+// raw delta cleared it many times over, firing several steps per
+// gesture (the "janky"/skippy behavior reported after Incident 18's
+// hover/two-finger gating fix). This is a rough empirical guess, not
+// derived from a device descriptor (parsing that was already ruled out
+// in Incident 17 as too risky to do blind) - expect this to need
+// live-tuning like every other HID constant so far.
+constexpr double kHidStepThresholdUnits = 380.0;
+constexpr ULONGLONG kHidStepDebounceMs = 220;
 std::mutex g_retryThreadMutex;
 std::atomic<bool> g_stopRequested{false};
 
@@ -1070,11 +1086,31 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                         LONG dy = y - g_hidPrevY;
                         g_hidPrevY = y;
                         g_hidAccumY += dy;
-                        double height = PaneHeight();
-                        while (std::abs(g_hidAccumY) > height / 2) {
-                            StepWidget(g_hidAccumY < 0 ? 1 : -1);
-                            g_hidAccumY +=
-                                g_hidAccumY < 0 ? height / 2 : -(height / 2);
+                        // Incident 19: step at most once per debounce
+                        // window, in HID sensor units rather than
+                        // PaneHeight()'s on-screen DIPs (see
+                        // kHidStepThresholdUnits above) - a burst of
+                        // WM_INPUT samples during one continuous swipe
+                        // used to clear the old (wrong-unit) threshold
+                        // several times over, firing multiple rapid
+                        // steps for a single gesture.
+                        ULONGLONG now = GetTickCount64();
+                        if (std::abs(g_hidAccumY) > kHidStepThresholdUnits) {
+                            if (now - g_hidLastStepTick >
+                                kHidStepDebounceMs) {
+                                StepWidget(g_hidAccumY < 0 ? 1 : -1);
+                                g_hidLastStepTick = now;
+                                g_hidAccumY = 0;
+                            } else {
+                                // Still within the debounce window -
+                                // clamp instead of letting a held swipe
+                                // accumulate unboundedly, so the very
+                                // next eligible tick steps once, not
+                                // several times back-to-back.
+                                g_hidAccumY = g_hidAccumY < 0
+                                                  ? -kHidStepThresholdUnits
+                                                  : kHidStepThresholdUnits;
+                            }
                         }
                     }
                 }

@@ -1357,3 +1357,48 @@ whether the motion is smooth or still needs a sensitivity/threshold
 adjustment (the `height / 2` step threshold, shared with drag, hasn't
 been tuned specifically for HID's raw sensor units, which may not be
 1:1 with the pointer-event coordinates drag was tuned against).
+
+## Incident 19: still janky after the hover/two-finger gate - wrong-unit threshold, needed debouncing (2026-09-17)
+
+**Live test result of Incident 18's fix (video capture)**: direction
+now correct, no longer fires on one finger or off-stack, but motion is
+still janky - a single two-finger swipe skips through several widgets
+instead of stepping through them one at a time smoothly.
+
+**Root cause, found on re-reading the flagged risk in Incident 19's
+threshold rather than more gating**: the step threshold reused
+`PaneHeight() / 2` - an on-screen DIP measurement of the rendered
+widget pane (tens of units) - copied straight from the drag/
+`ManipulationDelta` handlers, where it's correct because those deal in
+pointer-event coordinates that already live in that same DIP space.
+Raw HID Y, in contrast, is in the touchpad sensor's own logical unit
+resolution (Precision Touchpads commonly report a Y range on the order
+of ~0-3052), a completely different and much finer-grained scale. A
+single deliberate swipe's raw delta cleared the DIP-sized threshold
+several times over within one `WM_INPUT` burst, so the old `while
+(...) StepWidget(...)` loop fired multiple steps for what was, on
+screen, one continuous gesture - exactly the "several widgets skip"
+behavior seen in the video.
+
+**Fix**:
+- Introduced `kHidStepThresholdUnits` (380.0, in raw HID Y units) as
+  its own constant, separate from `PaneHeight()`, since the two are in
+  unrelated unit spaces. This is a rough empirical guess - there's no
+  device descriptor read to derive it from (still ruled out per
+  Incident 17's risk framing) - so it's a first live-tuning attempt,
+  not a derived value.
+- Replaced the `while`-loop (which could fire several `StepWidget`
+  calls off a single large delta) with a single conditional step plus
+  a `kHidStepDebounceMs` (220ms) cooldown tracked via
+  `g_hidLastStepTick`/`GetTickCount64()` - this is the debouncing
+  requested directly. While within the cooldown, the accumulator is
+  clamped to the threshold instead of left to grow unboundedly, so a
+  continued hold past one step doesn't queue up extra steps to fire
+  the instant the cooldown lifts.
+
+**Next retest**: two-finger scroll again - check whether it now steps
+one widget per deliberate swipe instead of skipping several. Both the
+threshold value and the debounce window are first guesses and may
+still need tuning in either direction (higher threshold if it's still
+too eager, lower/shorter debounce if it now feels sluggish or
+unresponsive to quick repeated swipes).
