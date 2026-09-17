@@ -1558,3 +1558,66 @@ into the taskbar's own context menu. Worth reading before doing "Next
 steps" item 7 (replacing `TrackPopupMenu` with a custom XAML menu) -
 it would remove this whole hazard class by removing the nested Win32
 message loop entirely, not just guard around it.
+
+## Incident 21: `g_contextMenuOpen` guard didn't fix it - crash was in the call itself (2026-09-17)
+
+**Result**: crashed again, this time immediately on right-click,
+before the menu ever appeared - ruling out Incident 20's guard (it
+only protects the window around `TrackPopupMenu`, and this crash
+happens before that call is even reached). Event Viewer capture this
+time (first real crash data pulled for this bug, unlike Incident 20's
+code-only reasoning):
+
+```
+Faulting application: Explorer.EXE
+Faulting module name: unknown, version 0.0.0.0
+Exception code: 0xc0000005
+Fault offset: 0x0000000000000000
+```
+
+Same signature as Incidents 8/10's original crash - access violation,
+faulting module "unknown", offset `0x0`.
+
+**Root cause**: not a dangling delegate this time (Incident 20's
+theory) - the actual problem is that `IsCursorOverWidgetStack`
+(Incident 18) calls `g_ui.root.TransformToVisual(nullptr)` directly
+from the `WM_INPUT` handler, i.e. from inside raw input delivery. This
+mod's `try { ... } catch (...) { ... }` around that call only catches
+C++ exceptions; MSVC's default `/EHsc` does *not* translate structured
+exceptions (access violations) into catchable C++ ones, so if
+`TransformToVisual`/`ActualWidth`/`ActualHeight` ever faults at the OS
+level when called from this unusual context (a live XAML/composition
+call reached from raw HID input delivery, not from XAML's own normal
+event dispatch), the `catch (...)` here does nothing to stop it -
+explaining why guarding the surrounding window (Incident 20) didn't
+help: the dangerous call was still reachable and still unprotected by
+anything that could actually catch what it does.
+
+**Fix**: stopped calling `TransformToVisual` from the input path
+entirely. Added `UpdateStackScreenRect()`, which does that computation
+once and caches the result (converted to absolute screen pixels) in
+`g_ui.stackScreenRect`; it's called only from `RebuildStackContents`,
+a call site that always runs on the taskbar's own UI thread in a
+normal, non-reentrant context (initial injection, and after every
+toggle/reorder/settings-change) - never from raw input delivery or a
+nested modal loop. `IsCursorOverWidgetStack` is now pure Win32
+(`GetCursorPos` + `PtInRect` against the cached rect) with no XAML/COM
+calls at all, so there's nothing left in the `WM_INPUT` path that can
+reach into XAML/composition internals. Incident 20's
+`g_contextMenuOpen` guard is left in place (harmless, still prevents
+touchpad nav from stepping widgets while the menu is open) but is no
+longer what's relied on for correctness here.
+
+**Trade-off**: the cached rect only updates when `RebuildStackContents`
+runs. If the taskbar moves/resizes without triggering that (not
+expected in this prototype's single-monitor, primary-taskbar scope -
+`WM_DISPLAYCHANGE` already forces a full re-injection, which rebuilds
+it), the cached rect could go stale. Acceptable for now; worth
+revisiting if multi-monitor/DPI-change support is ever added.
+
+**Next retest**: right-click the stack again (same conditions as
+before - finger on the touchpad right after, if that's how the crash
+was triggered) and confirm no crash. Also confirm touchpad scroll
+still only reacts while hovering the stack (the whole point of
+`IsCursorOverWidgetStack`), since its hit-test logic changed even
+though its intent didn't.

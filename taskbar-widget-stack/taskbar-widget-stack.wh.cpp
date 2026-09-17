@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.25
+// @version         0.1.26
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -617,6 +617,11 @@ struct UiState {
     double dragStartY = 0;
     winrt::Windows::UI::Xaml::Input::Pointer dragPointer{nullptr};
     double manipulationAccumY = 0;
+    // Cached screen-coordinate bounds of `root`, refreshed by
+    // UpdateStackScreenRect() from RebuildStackContents (a safe,
+    // known-context call site) - see that function's comment for why
+    // this exists (Incident 21).
+    RECT stackScreenRect{};
 };
 
 UiState g_ui;
@@ -1053,6 +1058,49 @@ void ApplyStackWidth(double contentWidth) {
     }
 }
 
+// Recomputes `g_ui.stackScreenRect` from `root`'s live XAML layout -
+// this is the ONLY place `TransformToVisual` is called (Incident 21).
+// It used to be called directly from the WM_INPUT handler
+// (IsCursorOverWidgetStack, Incident 18) to hit-test the cursor against
+// the stack for gating touchpad-scroll - that meant a live XAML/
+// composition call running from inside raw input delivery, potentially
+// reentrant with a native modal loop (TrackPopupMenu) or otherwise an
+// unusual point in the UI thread's state; Explorer kept crashing
+// (0xC0000005, faulting module "unknown", offset 0x0 - consistent with
+// a fault inside that internal call, not a C++ exception our try/catch
+// could have caught at all, since MSVC's default /EHsc doesn't
+// translate structured/access-violation exceptions into catchable C++
+// ones). Guarding around it (Incident 20) didn't fix it because the
+// dangerous call itself was still reachable outside that guard's
+// window. Removing the call from the input path entirely - caching the
+// result instead, refreshed only from RebuildStackContents, a call
+// site on the taskbar's own UI thread with none of those hazards - is
+// the actual fix: IsCursorOverWidgetStack below no longer touches XAML
+// at all.
+void UpdateStackScreenRect() {
+    if (!g_ui.root || !g_ui.hWnd) {
+        g_ui.stackScreenRect = {};
+        return;
+    }
+    try {
+        UINT dpi = GetDpiForWindow(g_ui.hWnd);
+        double scale = dpi > 0 ? dpi / 96.0 : 1.0;
+        auto transform = g_ui.root.TransformToVisual(nullptr);
+        auto topLeft = transform.TransformPoint({0, 0});
+        auto bottomRight = transform.TransformPoint(
+            {(float)g_ui.root.ActualWidth(), (float)g_ui.root.ActualHeight()});
+        POINT tl{(LONG)std::lround(topLeft.X * scale),
+                 (LONG)std::lround(topLeft.Y * scale)};
+        POINT br{(LONG)std::lround(bottomRight.X * scale),
+                 (LONG)std::lround(bottomRight.Y * scale)};
+        ClientToScreen(g_ui.hWnd, &tl);
+        ClientToScreen(g_ui.hWnd, &br);
+        g_ui.stackScreenRect = {tl.x, tl.y, br.x, br.y};
+    } catch (...) {
+        g_ui.stackScreenRect = {};
+    }
+}
+
 // (Re)builds the widget panes and dots from the current g_widgets list.
 // Every widget is torn down (Destroy()) and rebuilt (Create()) on every
 // call - toggle/reorder/settings-change all funnel through here - rather
@@ -1110,6 +1158,7 @@ void RebuildStackContents() {
         ApplySliderTarget(g_ui.activeIndex, /*animate=*/false);
     }
     RefreshDots();
+    UpdateStackScreenRect();
 }
 
 // Set for the duration of ShowContextMenu's TrackPopupMenu call - see
@@ -1188,29 +1237,16 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // no matter where the cursor is - gating on this is what makes the
 // touchpad-scroll handler below only react while actually over the
 // stack, instead of hijacking every touchpad touch anywhere on the
-// taskbar).
-bool IsCursorOverWidgetStack(HWND hWnd) {
-    if (!g_ui.root) {
-        return false;
-    }
+// taskbar). Pure Win32 (GetCursorPos + PtInRect) against a rect cached
+// by UpdateStackScreenRect() - deliberately does NOT call into XAML
+// itself; see that function's comment (Incident 21) for why calling
+// TransformToVisual from here specifically was crashing Explorer.
+bool IsCursorOverWidgetStack() {
     POINT pt;
-    if (!GetCursorPos(&pt) || !ScreenToClient(hWnd, &pt)) {
+    if (!GetCursorPos(&pt)) {
         return false;
     }
-    try {
-        UINT dpi = GetDpiForWindow(hWnd);
-        double scale = dpi > 0 ? dpi / 96.0 : 1.0;
-        double clientX = pt.x / scale;
-        double clientY = pt.y / scale;
-        auto transform = g_ui.root.TransformToVisual(nullptr);
-        auto topLeft = transform.TransformPoint({0, 0});
-        auto bottomRight = transform.TransformPoint(
-            {(float)g_ui.root.ActualWidth(), (float)g_ui.root.ActualHeight()});
-        return clientX >= topLeft.X && clientX <= bottomRight.X &&
-               clientY >= topLeft.Y && clientY <= bottomRight.Y;
-    } catch (...) {
-        return false;
-    }
+    return PtInRect(&g_ui.stackScreenRect, pt);
 }
 
 // Named (not an inline lambda) because SetWindowSubclass/RemoveWindowSubclass
@@ -1262,7 +1298,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                     BYTE contactCount = bytes[38];
                     bool touching =
                         (status & 0x03) != 0 && contactCount >= 2 &&
-                        IsCursorOverWidgetStack(hWnd);
+                        IsCursorOverWidgetStack();
                     LONG y = (LONG)(WORD)(bytes[4] | (bytes[5] << 8));
 
                     if (!touching) {
