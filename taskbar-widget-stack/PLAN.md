@@ -1774,3 +1774,19 @@ confirm toggling a widget and moving up/down all work and immediately
 update the stack, and confirm no crash. Also worth checking the
 flyout's default placement looks reasonable next to the narrow stack -
 `ShowAt` positioning can be tuned with `FlyoutShowOptions` if not.
+
+**Result (0.1.29): confirmed working.** One compile error first -
+`FlyoutBase::Closed`/`ShowAt` are declared with a deduced `auto`
+return type in `Windows.UI.Xaml.Controls.h`'s own header, and the
+actual definitions live in `Windows.UI.Xaml.Controls.Primitives.h`,
+which wasn't included - added it, fixed the build. After that: no
+crash, menu appears, toggle/move-up/move-down all work and update the
+stack immediately. Right-click is confirmed stable again.
+
+**Session status as of 0.1.29**: touchpad scroll (Incidents 17-22),
+right-click (Incident 23), dots, wheel, drag, and the `IWidget`
+interface with both placeholders are all confirmed working live.
+`nav.wrap`/`nav.overscroll` (Incident 22) added but not yet
+specifically retested. Still open: the "touchpad scroll only reacts
+after first clicking the taskbar to focus it" characteristic noted
+alongside Incident 22 - not investigated.
