@@ -169,3 +169,75 @@ separate taskbar element, and that changing a `show*`/`refreshSeconds`
 setting here rebuilds correctly in place; (2) `taskbar-widget-stack` not
 installed or disabled: confirm this mod still falls back to its own
 standalone injection exactly as before this round.
+
+## Incident 3: registration never happened - both mods loaded standalone and overlapped (2026-09-17)
+
+**Result**: both mods compile and run, but the bars appeared as a
+separate, overlapping element instead of inside `taskbar-widget-stack`'s
+pane, and the widget never showed up in that mod's settings window. No
+log lines from either the "Registered with taskbar-widget-stack" or
+"WidgetStack_RegisterWidget failed" branches added in Incident 2 - so the
+registration path wasn't being attempted at all going by its own logging,
+which was the actual diagnostic signal here even without a captured log
+file.
+
+**Root cause**: a load-order race, invisible from either mod's code in
+isolation. Both mods start their own independent retry-inject thread
+around Explorer startup, each polling every 500ms with no ordering
+guarantee between them. `taskbar-widget-stack` only publishes its
+`SetPropW` registration functions *after* its own XAML injection
+succeeds - so on the very first (and often only) attempt,
+`taskbar-widget-system-usage`'s `GetPropW(tray, kRegisterWidgetPropName)`
+came back null (the host hadn't gotten there yet), which is exactly why
+no "falling back to standalone" log appeared either: that log only fires
+when a registration function *was* found but the call itself failed, not
+when the property lookup itself came back empty. `TryRegisterOrInject`
+then silently fell through to `InjectSystemUsageGrid`, which succeeded
+immediately - and because `RetryInjectThreadProc` stopped the whole retry
+loop as soon as *any* path succeeded, this mod never looked for the host
+again afterward, even once `taskbar-widget-stack` finished its own
+injection moments later and published its properties.
+
+**Fix**: `TryRegisterOrInject` now checks for the host's registration
+property on every call, not just when nothing is active yet - if the
+host becomes available while this mod is already running standalone, it
+tears down the standalone element (`RemoveSystemUsageGrid`) and switches
+to registering with the host instead. `RetryInjectThreadProc` now only
+stops the loop early once `g_remoteRegistered` is actually true; if only
+the standalone fallback succeeded, it keeps polling for the rest of its
+~5-minute retry budget so a `taskbar-widget-stack` that appears seconds
+later still gets picked up.
+
+**A second, related bug found and fixed while making that change**: the
+standalone injection path tracked whether the taskbar's window subclass
+(`TaskbarWindowSubclassProc`, needed to catch `WM_NCDESTROY`/
+`WM_DISPLAYCHANGE`) was installed via a field inside `UiState`
+(`g_ui.windowSubclassed`). Since switching from standalone to registered
+mode resets `g_ui` entirely (`g_ui = {}`), that flag would silently go
+back to `false` even though the subclass itself was still attached to
+the taskbar HWND - and `Wh_ModBeforeUninit`'s subclass-removal code was
+only reachable from the standalone teardown branch, so once registered,
+it would never run. Left uncaught, this mod's DLL would stay subclassed
+onto Explorer's taskbar window after being disabled/unloaded - exactly
+the "XAML-hosting HWND referencing this DLL's code alive across a
+Windhawk reload" failure mode this file's own comments already flag as
+something to avoid. Fixed by moving that tracking to file-scope globals
+(`g_windowSubclassed`/`g_subclassedHwnd`) that survive a `g_ui` reset,
+and removing the subclass unconditionally in `Wh_ModBeforeUninit`
+whenever it's set, regardless of which mode (standalone or registered)
+ends up active by the time the mod unloads.
+
+**Still a known limitation**: if the retry loop's ~5-minute budget runs
+out before `taskbar-widget-stack` ever becomes available (e.g. the user
+enables it well after Explorer has already started), this mod stays on
+its standalone fallback for the rest of that Explorer session - it won't
+pick up the host until the next Explorer/mod reload. Not fixed this
+round; a longer-lived low-frequency background poll would close this gap
+but adds complexity for a corner case, so left as documented behavior
+for now.
+
+**Next retest**: same two scenarios as Incident 2, now expecting actual
+registration to succeed even under Explorer-startup timing (not just in
+principle) - confirm the bars end up inside the stack's pane, confirm the
+widget shows in the stack's settings window, and confirm no duplicate/
+overlapping element remains on the taskbar.

@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.2
+// @version         0.1.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -502,7 +502,6 @@ void LoadSettings() {
 
 struct UiState {
     HWND hWnd{nullptr};
-    bool windowSubclassed = false;
     Grid injectionParent{nullptr};  // The taskbar's RootGrid (standalone mode).
     Panel remoteParentPanel{nullptr};  // taskbar-widget-stack's widgetsPanel
                                         // (registered mode) - mutually
@@ -527,6 +526,13 @@ struct UiState {
 
 UiState g_ui;
 HWND g_taskbarWnd;
+// Tracked outside UiState (unlike Incident 34-era code) so it survives a
+// `g_ui = {}` reset - Incident 3 (PLAN.md): switching from standalone to
+// registered mode resets g_ui, but the subclass itself stays attached to
+// the HWND regardless, and must still be removed at Wh_ModBeforeUninit
+// however this mod ends up active. See TaskbarWindowSubclassProc.
+bool g_windowSubclassed = false;
+HWND g_subclassedHwnd;
 HANDLE g_retryThread;
 HANDLE g_injectEvent;
 std::mutex g_retryThreadMutex;
@@ -987,9 +993,12 @@ bool InjectSystemUsageGrid(HWND hWnd) {
         g_ui.injectionParent = taskbarRootGrid;
         g_ui.root = root;
 
-        if (!g_ui.windowSubclassed) {
-            g_ui.windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
+        if (!g_windowSubclassed) {
+            g_windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
                 hWnd, TaskbarWindowSubclassProc, 0);
+            if (g_windowSubclassed) {
+                g_subclassedHwnd = hWnd;
+            }
         }
 
         InitPdh();
@@ -1043,19 +1052,30 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
     return DefSubclassProc(hWnd, msg, wParam, lParam);
 }
 
-// Tries taskbar-widget-stack's registration first (GetPropW discovery on
-// Shell_TrayWnd, per the "Cross-mod widget ABI" section above); falls
-// back to this mod's own standalone injection if the host mod isn't
-// present/loaded/registered yet. Must run on `tray`'s own thread - both
-// paths touch XAML.
+// Tries taskbar-widget-stack's registration (GetPropW discovery on
+// Shell_TrayWnd, per the "Cross-mod widget ABI" section above) on every
+// call, even if this mod is already active standalone - Incident 3
+// (PLAN.md): both mods start their own independent retry loops around
+// the same time with no load-order guarantee, so the host's property
+// frequently isn't published yet the first few times this runs. If
+// we're already self-injected when the host does show up, tear the
+// standalone element down first so the two don't end up stacked on top
+// of each other. Falls back to standalone injection only when the host
+// still isn't found. Must run on `tray`'s own thread - both paths touch
+// XAML.
 bool TryRegisterOrInject(HWND tray) {
-    if (g_ui.root || g_remoteRegistered) {
-        return true;  // Already active for this taskbar instance.
+    if (g_remoteRegistered) {
+        return true;  // Already registered with the host - nothing to do.
     }
 
     auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
         tray, kRegisterWidgetPropName);
     if (registerFn) {
+        if (g_ui.root) {
+            Wh_Log(L"taskbar-widget-stack became available - switching "
+                   L"from standalone to registered");
+            RemoveSystemUsageGrid();
+        }
         LoadSettings();
         WidgetStackWidgetAbiV1 abi;
         FillWidgetAbi(abi);
@@ -1071,6 +1091,9 @@ bool TryRegisterOrInject(HWND tray) {
         Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
     }
 
+    if (g_ui.root) {
+        return true;  // Already active standalone; host still not found.
+    }
     return InjectSystemUsageGrid(tray);
 }
 
@@ -1082,16 +1105,22 @@ DWORD WINAPI RetryInjectThreadProc(LPVOID) {
         HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
         if (tray) {
             g_taskbarWnd = tray;
-            bool ok = false;
-            RunFromWindowThread(tray, [&] { ok = TryRegisterOrInject(tray); });
-            if (ok) {
-                return 0;
+            RunFromWindowThread(tray, [&] { TryRegisterOrInject(tray); });
+            if (g_remoteRegistered) {
+                return 0;  // Fully done - host owns the widget's lifecycle.
             }
+            // Not registered yet (host not found, or its call failed).
+            // Keep looping even if the standalone fallback above is
+            // already active for this taskbar instance, so a
+            // taskbar-widget-stack that appears later still gets picked
+            // up (see the comment on TryRegisterOrInject).
         }
         WaitForSingleObject(g_injectEvent, 500);
         ResetEvent(g_injectEvent);
     }
-    Wh_Log(L"Giving up on system usage bars injection");
+    if (!g_ui.root && !g_remoteRegistered) {
+        Wh_Log(L"Giving up on system usage bars injection");
+    }
     return 0;
 }
 
@@ -1192,6 +1221,17 @@ void Wh_ModBeforeUninit() {
         }
     }
 
+    // Removed unconditionally, regardless of which mode ends up active -
+    // standalone mode is the only one that installs it, but a mid-session
+    // switch to registered mode (TryRegisterOrInject) doesn't remove it,
+    // so it can still be attached here even while g_remoteRegistered is
+    // true (Incident 3, PLAN.md).
+    if (g_windowSubclassed && g_subclassedHwnd) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(
+            g_subclassedHwnd, TaskbarWindowSubclassProc);
+        g_windowSubclassed = false;
+    }
+
     if (g_remoteRegistered && g_hostUnregisterFn && g_remoteHostHwnd) {
         HWND hWnd = g_remoteHostHwnd;
         auto unregisterFn = g_hostUnregisterFn;
@@ -1202,10 +1242,6 @@ void Wh_ModBeforeUninit() {
         g_remoteRegistered = false;
     } else if (g_ui.root && g_ui.hWnd) {
         HWND hWnd = g_ui.hWnd;
-        if (g_ui.windowSubclassed) {
-            WindhawkUtils::RemoveWindowSubclassFromAnyThread(
-                hWnd, TaskbarWindowSubclassProc);
-        }
         RunFromWindowThread(hWnd, RemoveSystemUsageGrid);
     }
     g_ui = {};
