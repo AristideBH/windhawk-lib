@@ -2,7 +2,7 @@
 // @id              taskbar-widget-media-player
 // @name            Taskbar Widget Media Player
 // @description     Fork of Salyts' Taskbar Fluent Media Player, integrated with taskbar-widget-stack's cross-mod widget ABI - registers as a widget in that mod's stack if it's installed and enabled, falls back to this mod's own original standalone injection otherwise.
-// @version         0.1.1
+// @version         0.1.2
 // @author          AristideBH (fork), Salyts (original)
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -7611,12 +7611,6 @@ bool g_mpRemoteRegistered = false;
 HWND g_mpRemoteHostHwnd = nullptr;
 WidgetStack_RegisterWidget_t g_mpHostRegisterFn = nullptr;
 WidgetStack_UnregisterWidget_t g_mpHostUnregisterFn = nullptr;
-// Set just before this mod calls the host's own unregisterFn itself, so
-// MediaPlayer_Destroy can tell that apart from the host calling Destroy()
-// on its own (disabled/unloaded, or its own TrayUI::StartTaskbar hook
-// rebuilding its grid) - see taskbar-widget-system-usage.wh.cpp's
-// Incident 8 for the reasoning, ported here unchanged.
-bool g_mpExpectingHostDestroy = false;
 Panel g_mpRemoteParentPanel{nullptr};
 Border g_mpRemoteContainer{nullptr};
 int g_mpWidgetContextTag = 0;
@@ -7742,25 +7736,21 @@ void __cdecl MediaPlayer_Destroy(void* /*context*/) {
     g_blurBgCache.Invalidate();
     g_cachedAppIconSize = -1;
 
-    bool expected = g_mpExpectingHostDestroy;
-    g_mpExpectingHostDestroy = false;
-    if (!expected && !g_unloading && g_taskbarWnd) {
-        // The host called Destroy() on us without this mod ever calling
-        // its own unregisterFn first - taskbar-widget-stack getting
-        // disabled/unloaded, or rebuilding its grid on its own
-        // TrayUI::StartTaskbar hook, are the two ways this happens.
-        // g_mpRemoteRegistered would otherwise stay true forever - fall
-        // back (or re-register, if this was just the host's own taskbar
-        // rebuild and it's already ready again) via the same check-host-
-        // first logic used everywhere else.
-        g_mpRemoteRegistered = false;
-        g_mpRemoteHostHwnd = nullptr;
-        g_mpHostRegisterFn = nullptr;
-        g_mpHostUnregisterFn = nullptr;
-        Wh_Log(L"MediaPlayer_Destroy: host-initiated, retrying registration "
-               L"or falling back to standalone");
-        TryRegisterOrApplySettings(g_taskbarWnd);
-    }
+    // Incident 2 (PLAN.md) reverted the auto-recovery this comment used to
+    // describe: taskbar-widget-stack.wh.cpp's RebuildStackContents calls
+    // Destroy() on EVERY registered widget on EVERY rebuild (settings
+    // change, any widget registering/unregistering, reorder - not just
+    // when THIS widget is actually being removed), immediately followed
+    // by Create() again in the same synchronous call, including on a
+    // widget's own first-ever registration (push_back then rebuild, before
+    // its own Create() has run once). Treating every Destroy() as "the
+    // host is gone, recover" made a normal rebuild indistinguishable from
+    // that, and recovering by re-registering synchronously from inside
+    // Destroy() triggered another RebuildStackContents, whose own
+    // Destroy() calls triggered another recovery attempt, unboundedly -
+    // explorer.exe crashed/restarted within about a second of two remote
+    // widgets being registered at once. Destroy() now only cleans up; it
+    // never re-registers or retries anything.
 }
 
 void __cdecl MediaPlayer_GetId(void* /*context*/,
@@ -10508,7 +10498,6 @@ void Wh_ModUninit() {
                 // the equivalent cleanup RemovePlayerGrid would have)
                 // before returning - see WidgetStack_UnregisterWidget
                 // in taskbar-widget-stack.wh.cpp.
-                g_mpExpectingHostDestroy = true;
                 g_mpHostUnregisterFn(kMPWidgetContext);
                 g_mpRemoteRegistered = false;
             } else {
@@ -10567,7 +10556,6 @@ void Wh_ModSettingsChanged() {
                     // RemovePlayerGrid/InjectPlayerGrid directly - see
                     // taskbar-widget-system-usage.wh.cpp's own
                     // Wh_ModSettingsChanged for the identical shape.
-                    g_mpExpectingHostDestroy = true;
                     g_mpHostUnregisterFn(kMPWidgetContext);
                     g_mpRemoteRegistered = false;
                     g_cachedAlbumTitle.clear();

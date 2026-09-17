@@ -46,9 +46,10 @@ same discovery mechanism (`GetPropW` on `Shell_TrayWnd` for
 `TaskbarWidgetStack_RegisterWidgetFn_v1`/
 `..._UnregisterWidgetFn_v1`), same fallback/upgrade logic
 (`TryRegisterOrApplySettings` mirrors `taskbar-widget-system-usage.wh.cpp`'s
-`TryRegisterOrInject` almost line for line), same host-disappearance
-recovery (`MediaPlayer_Destroy`'s `g_mpExpectingHostDestroy` check
-mirrors that file's Incident 8 fix).
+`TryRegisterOrInject` almost line for line). An earlier version of this
+mod also ported that file's Incident 8 host-disappearance recovery
+(`g_mpExpectingHostDestroy`); this was reverted in Incident 2 below - see
+that entry, and `taskbar-widget-system-usage`'s own Incident 9, for why.
 
 **`MediaPlayer_Create`** calls the original `BuildPlayerGrid()`
 unmodified to get the player's content `Grid`, wraps it in a `Border`
@@ -132,6 +133,54 @@ same `hWnd` value on the line immediately before the
 
 **Next retest**: recompile; if this was the only build error, move on to
 the actual live-test checklist below.
+
+## Incident 2: Explorer crash/restart when registered alongside a second remote widget (2026-09-17)
+
+**Symptom** (live test, user report): enabling this mod alongside
+`taskbar-widget-stack` and `taskbar-widget-system-usage` crashed/
+restarted `explorer.exe` within about a second, with thousands of
+alternating `SystemUsage_Destroy`/`MediaPlayer_Destroy`
+"host-initiated, retrying registration or falling back to standalone"
+log lines in between. Separately, before the crash, the widget was
+observed sitting in its own standalone position rather than inside the
+stack - likely just a downstream symptom of the crash loop, not
+independently confirmed as a distinct bug.
+
+**Root cause**: same root cause as
+`taskbar-widget-system-usage/PLAN.md`'s Incident 9 - full explanation
+there. In short: `taskbar-widget-stack.wh.cpp`'s `RebuildStackContents()`
+destroys and recreates every registered widget on every rebuild,
+including a widget's own very first registration (it's pushed onto the
+list, then the very next rebuild call tears it straight back down before
+its `Create()` has run once). This mod's `MediaPlayer_Destroy` treated
+every `Destroy()` call it didn't itself expect as "the host disappeared"
+and reacted by calling `TryRegisterOrApplySettings(g_taskbarWnd)`
+*synchronously, inline, directly from inside `Destroy()`* - unlike
+`taskbar-widget-system-usage`'s equivalent (which spawns a thread), this
+created immediate, unbounded C++ call-stack recursion: `Destroy` →
+re-register → the host's `RebuildStackContents` → `Destroy` on the
+newly-duplicated entry → re-register → ... This is almost certainly why
+Explorer crashed within about a second here specifically, faster/harder
+than the same underlying bug in `taskbar-widget-system-usage` alone.
+
+**Fix**: fully reverted the auto-recovery block ported in from Incident
+8 of `taskbar-widget-system-usage`. `MediaPlayer_Destroy` no longer
+checks `g_mpExpectingHostDestroy` or calls
+`TryRegisterOrApplySettings` - it only tears down UI/cache state now.
+Removed the now-dead `g_mpExpectingHostDestroy` global and its two
+set-sites (`Wh_ModSettingsChanged`, `Wh_ModUninit`). This knowingly
+reintroduces the "no automatic recovery if the host disappears
+mid-session" gap as an accepted limitation, matching
+`taskbar-widget-system-usage`'s own Incident 9 reversion - the "fix"
+for that gap was actively dangerous once two remote widgets shared a
+host.
+
+**Next retest**: enable this mod alongside `taskbar-widget-stack` and
+`taskbar-widget-system-usage` together and confirm Explorer no longer
+crashes/restarts and all three widgets register into the stack cleanly.
+Separately re-check whether the widget now correctly shows up inside
+the stack (rather than its own standalone position) once the crash loop
+is gone - if it still doesn't, that's a distinct bug to diagnose fresh.
 
 ## Next retest
 

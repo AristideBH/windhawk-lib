@@ -489,3 +489,61 @@ bars reappear standalone within a few seconds rather than staying gone
 for the rest of the session; separately confirm a normal settings change
 (font size, a show/hide toggle) still cleanly re-registers without
 spuriously also falling back to standalone.
+
+## Incident 9: Incident 8's fallback caused an Explorer crash once a second remote widget (taskbar-widget-media-player) was also registered (2026-09-17)
+
+**Symptom** (live test, user report): enabling
+`taskbar-widget-media-player` alongside this mod and
+`taskbar-widget-stack` crashed/restarted `explorer.exe` within about a
+second. The log showed thousands of alternating
+`SystemUsage_Destroy: host-initiated, falling back to standalone` /
+`MediaPlayer_Destroy: host-initiated, retrying registration or falling
+back to standalone` lines within milliseconds, then explorer's PID
+changed (crash/restart), then the same explosion recurred.
+
+**Root cause**: `taskbar-widget-stack.wh.cpp`'s `RebuildStackContents()`
+calls `Destroy()` on *every* widget in `g_widgets` on *every* rebuild -
+any widget registering, unregistering, a settings change, a reorder -
+not just when a specific widget is actually being removed - immediately
+followed by `Create()` again on all still-registered widgets, in the
+same synchronous call. This is long-standing and intentional, and was
+always safe for local placeholder widgets. It is NOT safe once a
+`Destroy()` callback has a side effect: `WidgetStack_RegisterWidget`
+itself does `g_widgets.push_back(...)` then calls
+`RebuildStackContents()` - which destroys ALL widgets, including the
+brand-new one, *before its own first `Create()` has ever run*.
+Incident 8's `g_expectingHostDestroy` flag was only ever set to `true`
+before this mod called the host's `unregisterFn` itself - never before
+calling `registerFn` - so this routine "destroy the brand-new widget as
+part of the blanket rebuild" event was indistinguishable, from this
+mod's side, from "the host tore me down unexpectedly," and triggered
+Incident 8's recovery path (`StartRetryInject()`) from inside
+`Destroy()`. With one remote widget alone this mostly resolved itself
+(the retry thread's own registration attempt would eventually settle);
+with two remote widgets registered together, each one's
+rebuild-triggered `Destroy()` retried and re-triggered the other's
+rebuild, compounding into the runaway explosion in the log and crashing
+Explorer. `taskbar-widget-media-player`'s equivalent recovery call was
+written synchronously/inline rather than via a spawned thread, which is
+the more directly self-recursive half of this same bug (see that mod's
+own PLAN.md, Incident 2).
+
+**Fix**: fully reverted Incident 8. `SystemUsage_Destroy` no longer
+checks any flag or attempts recovery - it only tears down UI state and
+returns. Removed the now-dead `g_expectingHostDestroy` global and its
+two set-sites. This knowingly reintroduces Incident 8's original gap
+(no automatic recovery if the host disappears mid-session) as an
+accepted limitation - the "fix" for that gap was actively dangerous.
+A safer design (e.g. a delayed/deferred check scheduled from outside
+`Destroy()`, never called synchronously or recursively from inside it)
+is a possible future improvement, not attempted here.
+
+**Next retest**: enable `taskbar-widget-stack`,
+`taskbar-widget-system-usage`, and `taskbar-widget-media-player`
+together and confirm Explorer no longer crashes/restarts, all three
+widgets register cleanly into the stack, and reordering/settings
+changes on any of them no longer produce runaway log output. Separately
+re-verify Incident 8's original scenario (disabling
+`taskbar-widget-stack` while this mod is registered) now simply leaves
+this mod with no visible bars until Explorer restarts or the mod is
+re-triggered some other way - no automatic standalone fallback anymore.
