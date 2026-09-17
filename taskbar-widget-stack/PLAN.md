@@ -1244,3 +1244,64 @@ the ground truth needed to map real byte offsets to Report ID/contact
 fields/contact count, the same "diagnose from real data, not guesswork"
 approach that resolved the ARM64 `TaskbarHost::FrameHeight` pattern
 (Incident 3).
+
+**Result (2026-09-17), full 40-byte report analyzed:**
+
+Confirmed fields, all validated against dozens of consecutive samples:
+- `bRawData[0]` = Report ID, constant `0x04`.
+- `bRawData[1]` = contact 1 status byte - `0x03` while actively
+  touching, `0x01` transiently near lift-off, `0x00` when contact 1 is
+  up. Bits 0/1 read as TipSwitch/Confidence.
+- `bRawData[2:4]` (little-endian uint16) = contact 1 X.
+- `bRawData[4:6]` (little-endian uint16) = contact 1 Y. Both confirmed
+  by smooth, continuous trajectories matching real finger movement
+  across many consecutive samples, including a "clutch" re-grip
+  (position resets to a new starting point mid-gesture).
+- `bRawData[36:38]` (little-endian uint16) = Scan Time - confirmed
+  monotonically increasing by ~60 units per ~6-7ms sample interval
+  (consistent with 100µs ticks).
+- `bRawData[38]` = Contact Count - confirmed `0x01` during single-finger
+  stretches and `0x02` exactly during rows where extra non-zero bytes
+  appear mid-report (a genuine second contact briefly down).
+- `bRawData[39]` = Button state (`0x00` throughout, no click involved).
+
+**Not resolved - contacts 2+**: tried to map the middle bytes as
+contiguous 5-byte slots (status+X+Y) per contact, 7 slots to fill
+`1 + 7*5 + 4 = 40`. This did not validate against a real two-contact
+row (`04 03 B9 0A CD 06 00 00 13 04 08 6F 09 00 ...`): slot 0
+(indices 1-5) matched contact 1 correctly (status=`03`, X=2745,
+Y=1741), but slot 1 (indices 6-10, expected to be contact 2) showed
+status=`00` (inactive) while slot 2 (indices 11-15) showed a
+plausible-looking active status with X=0,Y=0 - not a believable real
+touch position. So either the slot size/stride is wrong, or contact
+IDs aren't in touch order, or both. Given the stated risk of this
+whole approach (no reference implementation, no way to iterate
+locally), guessing further here was judged not worth it.
+
+**Decision - track contact 1's Y only.** Rather than resolve the
+ambiguous multi-contact layout, `TaskbarWindowSubclassProc`'s
+`WM_INPUT` handler now uses only the two fields proven solid across
+every sample: contact 1's status (to know when a touch starts/ends)
+and Y (`bRawData[4:6]`). It tracks a "previous Y" reset on every fresh
+touch-down (including a clutch re-grip, which naturally resets tracking
+since contact 1 goes inactive between grips), accumulates the
+frame-to-frame delta, and steps the active widget via `StepWidget` once
+the accumulated delta passes half a pane's height - mirroring the
+existing drag/`ManipulationDelta` accumulation pattern already tuned
+in Incidents 12/15. This works for a two-finger scroll because both
+fingers move together, so contact 1 alone still tracks the gesture's
+vertical motion; it also means a *one*-finger drag on the touchpad
+(if the OS ever routes it as a raw HID contact-1 move rather than a
+cursor move) would trigger the same stepping - acceptable for now,
+revisit if it proves to conflict with normal pointer use.
+
+Direction is unverified and, like drag in Incident 12, will likely need
+one live-tuning round: currently wired so a decreasing Y (swipe toward
+the top of the pad) steps to the previous widget, matching the sign
+convention already tuned for drag.
+
+**Next retest**: two-finger scroll again - this time check whether the
+active widget actually changes, not just whether logs appear. This is
+genuinely unverified code with no way to test it outside real hardware,
+consistent with the risk flagged when this HID route was approved.
+Direction/sensitivity may need a follow-up correction, same as drag did.

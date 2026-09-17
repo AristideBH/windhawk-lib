@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.19
+// @version         0.1.20
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -548,6 +548,16 @@ HANDLE g_retryThread;
 HANDLE g_injectEvent;
 HHOOK g_mouseHook;
 bool g_rawInputRegistered;
+
+// HID Digitizer touchpad-scroll state (Incident 17). Only contact 1's
+// status/X/Y fields (bRawData[1], [2:4], [4:6]) are trusted - the
+// multi-contact slot layout for a genuine second finger did not validate
+// cleanly against real two-contact sample data, so it's deliberately not
+// parsed. Tracking contact 1's Y alone is still enough to detect the
+// vertical motion of a two-finger scroll gesture.
+bool g_hidContactActive;
+LONG g_hidPrevY;
+double g_hidAccumY;
 std::mutex g_retryThreadMutex;
 std::atomic<bool> g_stopRequested{false};
 
@@ -966,18 +976,26 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
-    if (msg == WM_INPUT) {
-        // Diagnostic (2026-09-17, "Incident 17"): raw HID input from the
-        // Precision Touchpad, registered via RegisterRawInputDevices
-        // (usage page 0x0D "Digitizer", usage 0x05 "Touch Pad") - the
-        // lowest level of touchpad data an application can see, below
-        // every OS-level gesture/wheel synthesis already confirmed dead
-        // for this gesture (Incidents 9, 14, 15, 16). Only dumping raw
-        // bytes for now, not parsing them - there's no reference
-        // implementation to port for this one (unlike everything else in
-        // this file so far), so confirming *any* data arrives at all
-        // comes first, before risking a first-principles HID Digitizer
-        // report parse silently misinterpreting it.
+    if (msg == WM_INPUT && g_settings.navWheel) {
+        // Raw HID input from the Precision Touchpad (Incident 17),
+        // registered via RegisterRawInputDevices (usage page 0x0D
+        // "Digitizer", usage 0x05 "Touch Pad") - the lowest level of
+        // touchpad data an application can see, needed because every
+        // OS-level gesture/wheel synthesis is confirmed dead for this
+        // gesture (Incidents 9, 14, 15, 16).
+        //
+        // Byte layout confirmed from live captures (report ID 0x04,
+        // sizeHid=40): bRawData[1] = contact 1 status (bit0 tip-switch,
+        // bit1 confidence - 0x03 while touching, 0x00 when contact 1 is
+        // up), bRawData[2:4]/[4:6] = contact 1 X/Y as little-endian
+        // uint16, bRawData[38] = contact count. The slot layout for
+        // contacts 2+ did NOT validate cleanly against a real
+        // two-contact sample (a naive 5-bytes-per-slot hypothesis put an
+        // inactive status where a second contact should be), so it's
+        // deliberately not parsed here - only contact 1's Y is tracked,
+        // which is enough to see the vertical motion of a two-finger
+        // scroll (both fingers move together) without risking a
+        // misparsed slot layout.
         UINT size = 0;
         GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &size,
                          sizeof(RAWINPUTHEADER));
@@ -986,24 +1004,35 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
             if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer.data(),
                                  &size, sizeof(RAWINPUTHEADER)) == size) {
                 auto* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
-                if (raw->header.dwType == RIM_TYPEHID) {
-                    DWORD count = raw->data.hid.dwCount;
-                    DWORD sizeHid = raw->data.hid.dwSizeHid;
-                    // Widened from 20 to the full report (2026-09-17):
-                    // real data confirmed arriving, and the X/Y-looking
-                    // pattern in the first 20 bytes suggests a second
-                    // contact's data lives past that point - need the
-                    // whole report to find the contact-count field and
-                    // confirm the layout before writing any parser.
-                    wchar_t hex[256] = {};
-                    DWORD bytesToShow = std::min<DWORD>(sizeHid, 48);
-                    for (DWORD i = 0; i < bytesToShow; i++) {
-                        wchar_t b[4];
-                        wsprintfW(b, L"%02X ", raw->data.hid.bRawData[i]);
-                        wcscat_s(hex, b);
+                if (raw->header.dwType == RIM_TYPEHID &&
+                    raw->data.hid.dwSizeHid >= 6) {
+                    const BYTE* bytes = raw->data.hid.bRawData;
+                    BYTE status = bytes[1];
+                    bool touching = (status & 0x03) != 0;
+                    LONG y = (LONG)(WORD)(bytes[4] | (bytes[5] << 8));
+
+                    if (!touching) {
+                        // Contact lifted - drop tracking so the next
+                        // touch-down doesn't see a bogus jump from
+                        // whatever Y the finger happened to lift at.
+                        g_hidContactActive = false;
+                    } else if (!g_hidContactActive) {
+                        // Fresh touch-down (or the "clutch" re-grip seen
+                        // in captures): start tracking from here instead
+                        // of diffing against a stale previous position.
+                        g_hidContactActive = true;
+                        g_hidPrevY = y;
+                    } else {
+                        LONG dy = y - g_hidPrevY;
+                        g_hidPrevY = y;
+                        g_hidAccumY += dy;
+                        double height = PaneHeight();
+                        while (std::abs(g_hidAccumY) > height / 2) {
+                            StepWidget(g_hidAccumY < 0 ? -1 : 1);
+                            g_hidAccumY +=
+                                g_hidAccumY < 0 ? height / 2 : -(height / 2);
+                        }
                     }
-                    Wh_Log(L"WM_INPUT HID: count=%u sizeHid=%u bytes=%s",
-                           count, sizeHid, hex);
                 }
             }
         }
