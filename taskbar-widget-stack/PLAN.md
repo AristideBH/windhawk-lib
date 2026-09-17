@@ -1836,3 +1836,9 @@ explicit Segoe MDL2 Assets glyphs (``/`` for up/down
 chevrons, `` for the settings gear) instead of the `Symbol`
 enum, to remove this whole class of "which enum members actually
 exist" guesswork.
+
+**Then, per user request**: dropped the icons on "Move up"/"Move
+down" entirely (text-only) - simpler than chasing the exact right
+glyph, and the "Stack settings" gear icon (outside the per-widget
+submenu) was left as-is since the request was scoped to the widget
+submenu specifically.
