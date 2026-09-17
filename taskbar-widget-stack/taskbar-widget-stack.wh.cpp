@@ -2,14 +2,14 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.41
+// @version         0.1.42
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
 // @license         MIT
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32 -ladvapi32 -ldwmapi -lpdh
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32 -ladvapi32 -ldwmapi
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -101,8 +101,6 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <windows.h>
 #include <unknwn.h>
 #include <dwmapi.h>
-#include <pdh.h>
-#include <pdhmsg.h>
 
 #ifdef GetCurrentTime
 #undef GetCurrentTime
@@ -888,14 +886,14 @@ std::vector<int> EnabledIndices() {
     return result;
 }
 
-// Bumped from 32 to 76 (Incident 30): the new SystemUsageWidget needs
-// three readable bar rows, and every pane must share one height (the
-// slider offset math is `-widgetIndex * PaneHeight()`), so this
-// affects every widget's pane, including the two placeholders (now
-// visually tall/empty by comparison - acceptable, they were always
-// meant to be temporary).
+// Reverted to 32 (Incident 34): was bumped to 76 for SystemUsageWidget's
+// three bar rows (Incident 30), but that widget has since been extracted
+// into its own standalone mod (taskbar-widget-system-usage) rather than
+// living in-process here - see PLAN.md. Every pane shares this one height
+// (the slider offset math is `-widgetIndex * PaneHeight()`), so with no
+// tall content left in this file, there's no reason for it to stay tall.
 double PaneHeight() {
-    return 76.0;
+    return 32.0;
 }
 
 void StopSnapAnimation() {
@@ -1022,13 +1020,6 @@ void StepWidget(int direction) {
 
 void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
-// Shared by the settings window's Navigation/Layout tabs and any
-// widget's own BuildSettingsPanel() (Incident 31) - forward-declared
-// here since SystemUsageWidget, defined before the settings window
-// section, needs it too.
-ToggleSwitch MakeSettingsToggle(std::wstring header,
-                                 bool initial,
-                                 std::function<void(bool)> onChanged);
 
 // Registers this mod's pointer-event handlers on `g_ui.root` and stores
 // each subscription's `event_token` in `UiState` so `UnwireNavigation`
@@ -1259,495 +1250,6 @@ class PlaceholderWidget : public IWidget {
     double desiredWidth_;
     Border root_{nullptr};
     Panel parent_{nullptr};
-};
-
-// This SDK's first non-placeholder widget (Incident 30) - three
-// horizontal bars (CPU/RAM/GPU, label left, percent right). Each
-// metric comes from a different WinAPI:
-// - CPU: delta of GetSystemTimes() samples between ticks (the
-//   standard technique - GetSystemTimes' own "kernel time" already
-//   includes idle time, so busy% = (totalDelta - idleDelta) /
-//   totalDelta).
-// - RAM: GlobalMemoryStatusEx's dwMemoryLoad - already a percentage,
-//   no math needed.
-// - GPU: PDH's "\GPU Engine(*)\Utilization Percentage" wildcard
-//   counter - the same technique Task Manager's own GPU graphs use.
-//   The only one of the three that can fail to set up at all (some
-//   GPU drivers don't expose these counters) - handled by showing
-//   "N/A" on just that row rather than failing the whole widget.
-//   Simplification: takes the MAX across all reported engine
-//   instances rather than Task Manager's more selective per-engine-
-//   type accounting, so this can read a little differently from Task
-//   Manager's own GPU% on some systems - close enough for a simple
-//   bar, not presented as an exact match.
-//
-// Owns its own DispatcherTimer for polling, per IWidget::Tick()'s own
-// contract ("a widget needing its own cadence owns that timer
-// internally") rather than a host-driven tick that doesn't exist yet.
-// The Tick() lambda captures `this` by raw pointer - safe only because
-// Destroy() (via StopTimer()) revokes that delegate before the widget
-// object itself can be destructed, which is why Wh_ModBeforeUninit was
-// also changed (this same commit) to call every widget's Destroy() on
-// full mod unload - a gap that existed since Incident 5's IWidget
-// design but was never exercised until a widget actually held a
-// timer.
-class SystemUsageWidget : public IWidget {
-   public:
-    std::wstring Id() const override { return L"system-usage"; }
-    std::wstring DisplayName() const override { return L"System\nUsage"; }
-
-    double Create(const WidgetHost& host) override {
-        LoadSettingsFields();
-
-        // Incident 32: `root` must be exactly `host.paneHeight` tall
-        // (every widget's pane has to be, for the slider's
-        // `-widgetIndex * PaneHeight()` offset math to line up), but
-        // setting VerticalAlignment on `root` itself doesn't center
-        // its own children within that fixed height - VerticalAlignment
-        // describes how an element sits in the space *its parent*
-        // gives it, not how its own children sit within it. That was
-        // the actual bug behind the clipped CPU row (rows top-aligned
-        // within the full 76px box, so with the CPU/RAM/GPU block
-        // shorter than 76px, everything just sat at the top with dead
-        // space below - fine when nothing was hidden, but with CPU
-        // cut off it looked like the whole block was pushed up too
-        // far). Fix: `root` (fixed height) holds one child, `content`
-        // (a plain vertical StackPanel, natural/Auto height), and
-        // *that* child's own VerticalAlignment(Center) is what
-        // actually centers it within root's fixed height - one level
-        // removed from where it was set before.
-        Grid root;
-        root.Height(host.paneHeight);
-
-        StackPanel content;
-        content.Orientation(Orientation::Vertical);
-        content.VerticalAlignment(VerticalAlignment::Center);
-        content.Padding({4, 0, 4, 0});
-
-        if (showCpu_) {
-            BuildRow(content, L"CPU", cpuFillCol_, cpuEmptyCol_,
-                     cpuPercentText_);
-        }
-        if (showRam_) {
-            BuildRow(content, L"RAM", ramFillCol_, ramEmptyCol_,
-                     ramPercentText_);
-        }
-        if (showGpu_) {
-            BuildRow(content, L"GPU", gpuFillCol_, gpuEmptyCol_,
-                     gpuPercentText_);
-        }
-
-        root.Children().Append(content);
-        host.parent.Children().Append(root);
-        root_ = root;
-        parent_ = host.parent;
-
-        InitPdh();
-        SampleCpu();  // primes the delta baseline, first return unused
-        UpdateValues();
-        StartTimer();
-        return kDesiredWidth;
-    }
-
-    void Tick() override {}
-
-    double OnSettingsChanged() override { return kDesiredWidth; }
-
-    bool HasSettings() const override { return true; }
-
-    // Built on demand (Incident 31) - shown when the settings window's
-    // Widgets tab gear button for this entry is clicked. Each control
-    // persists directly to this widget's own private-store keys (under
-    // "widget.system-usage.*", separate from the stack-wide nav/layout
-    // keys) and calls RebuildStackContents() to take effect
-    // immediately - the same pattern ToggleWidgetEnabled/MoveWidget
-    // already use, rather than inventing a second apply path.
-    FrameworkElement BuildSettingsPanel() override {
-        StackPanel panel;
-        panel.Orientation(Orientation::Vertical);
-        panel.Margin({16, 16, 16, 16});
-        panel.Spacing(12);
-
-        TextBlock heading;
-        heading.Text(L"System Usage");
-        heading.FontSize(14);
-        panel.Children().Append(heading);
-
-        panel.Children().Append(MakeSettingsToggle(
-            L"Show CPU", showCpu_, [](bool on) {
-                WritePrivateDword(L"widget.system-usage.showCpu",
-                                   on ? 1 : 0);
-                RebuildStackContents();
-            }));
-        panel.Children().Append(MakeSettingsToggle(
-            L"Show RAM", showRam_, [](bool on) {
-                WritePrivateDword(L"widget.system-usage.showRam",
-                                   on ? 1 : 0);
-                RebuildStackContents();
-            }));
-        panel.Children().Append(MakeSettingsToggle(
-            L"Show GPU", showGpu_, [](bool on) {
-                WritePrivateDword(L"widget.system-usage.showGpu",
-                                   on ? 1 : 0);
-                RebuildStackContents();
-            }));
-
-        StackPanel refreshGroup;
-        refreshGroup.Orientation(Orientation::Vertical);
-        refreshGroup.Spacing(4);
-        TextBlock refreshLabel;
-        refreshLabel.Text(winrt::hstring(
-            L"Refresh every " + std::to_wstring(refreshSeconds_) + L"s"));
-        refreshGroup.Children().Append(refreshLabel);
-        Slider refreshSlider;
-        refreshSlider.Minimum(1);
-        refreshSlider.Maximum(5);
-        refreshSlider.StepFrequency(1);
-        refreshSlider.Value(refreshSeconds_);
-        refreshSlider.ValueChanged(
-            [refreshLabel](
-                winrt::Windows::Foundation::IInspectable const&,
-                winrt::Windows::UI::Xaml::Controls::Primitives::
-                    RangeBaseValueChangedEventArgs const& args) {
-                int seconds = (int)args.NewValue();
-                WritePrivateDword(L"widget.system-usage.refreshSeconds",
-                                   (DWORD)seconds);
-                refreshLabel.Text(winrt::hstring(
-                    L"Refresh every " + std::to_wstring(seconds) + L"s"));
-                // Takes effect on the next toggle/reorder-triggered
-                // rebuild rather than immediately - this widget's own
-                // timer interval isn't re-read live, and restarting it
-                // here (without a full Destroy()/Create()) would be a
-                // second, redundant apply path. Simple and honest
-                // about the limitation rather than half-implementing
-                // "live" for one setting and not others.
-            });
-        refreshGroup.Children().Append(refreshSlider);
-        panel.Children().Append(refreshGroup);
-
-        TextBlock note;
-        note.Text(
-            L"Refresh rate applies next time the stack rebuilds "
-            L"(e.g. after toggling or reordering a widget).");
-        note.FontSize(11);
-        note.TextWrapping(TextWrapping::Wrap);
-        SolidColorBrush noteBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(255, 160, 160, 160)};
-        note.Foreground(noteBrush);
-        panel.Children().Append(note);
-
-        return panel;
-    }
-
-    void Destroy() override {
-        StopTimer();
-        ClosePdh();
-        if (root_ && parent_) {
-            try {
-                uint32_t index;
-                if (parent_.Children().IndexOf(root_, index)) {
-                    parent_.Children().RemoveAt(index);
-                }
-            } catch (...) {
-            }
-        }
-        root_ = nullptr;
-        parent_ = nullptr;
-    }
-
-   private:
-    // Reduced from 170 (Incident 31): the internal layout already
-    // uses Star-weighted columns for the bar track, so it stretches to
-    // fill whatever width the stack ends up at (driven by
-    // layout.maxWidth or a wider sibling widget) - this only needs to
-    // be wide enough to read comfortably on its own, not to dictate
-    // the stack's width.
-    static constexpr double kDesiredWidth = 130.0;
-
-    void BuildRow(StackPanel& content,
-                  const wchar_t* label,
-                  ColumnDefinition& fillCol,
-                  ColumnDefinition& emptyCol,
-                  TextBlock& percentText) {
-        Grid row;
-        // Tight, content-sized columns (Incident 31 - the first pass's
-        // 30/32px fixed columns were wider than "CPU"/"100%" need,
-        // leaving visible dead space on both sides of the bar) plus a
-        // small margin between rows instead of relying on Star-height
-        // rows to space them (which left uneven whitespace above/below
-        // each row's actual content).
-        row.Margin({0, 1, 0, 1});
-        ColumnDefinition labelCol;
-        labelCol.Width({22, GridUnitType::Pixel});
-        ColumnDefinition trackCol;
-        trackCol.Width({1.0, GridUnitType::Star});
-        ColumnDefinition percentCol;
-        percentCol.Width({26, GridUnitType::Pixel});
-        row.ColumnDefinitions().Append(labelCol);
-        row.ColumnDefinitions().Append(trackCol);
-        row.ColumnDefinitions().Append(percentCol);
-
-        TextBlock labelText;
-        labelText.Text(winrt::hstring(label));
-        labelText.FontSize(9);
-        labelText.VerticalAlignment(VerticalAlignment::Center);
-        SolidColorBrush textBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(255, 220, 220, 220)};
-        labelText.Foreground(textBrush);
-        Grid::SetColumn(labelText, 0);
-        row.Children().Append(labelText);
-
-        // Halved from 8 to 4 (user request, 2026-09-17).
-        Border track;
-        track.Height(4);
-        track.Margin({4, 0, 4, 0});
-        track.CornerRadius({2, 2, 2, 2});
-        SolidColorBrush trackBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 70, 70)};
-        track.Background(trackBrush);
-        track.VerticalAlignment(VerticalAlignment::Center);
-        Grid::SetColumn(track, 1);
-
-        fillCol = ColumnDefinition();
-        fillCol.Width({0.0, GridUnitType::Star});
-        emptyCol = ColumnDefinition();
-        emptyCol.Width({100.0, GridUnitType::Star});
-        Grid fillGrid;
-        fillGrid.ColumnDefinitions().Append(fillCol);
-        fillGrid.ColumnDefinitions().Append(emptyCol);
-        Border fill;
-        SolidColorBrush fillBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 170, 230)};
-        fill.Background(fillBrush);
-        fill.CornerRadius({2, 2, 2, 2});
-        Grid::SetColumn(fill, 0);
-        fillGrid.Children().Append(fill);
-        track.Child(fillGrid);
-        row.Children().Append(track);
-
-        percentText = TextBlock();
-        percentText.Text(L"0%");
-        percentText.FontSize(9);
-        percentText.HorizontalAlignment(HorizontalAlignment::Left);
-        percentText.VerticalAlignment(VerticalAlignment::Center);
-        percentText.Foreground(textBrush);
-        Grid::SetColumn(percentText, 2);
-        row.Children().Append(percentText);
-
-        content.Children().Append(row);
-    }
-
-    void ApplyBar(ColumnDefinition& fillCol,
-                   ColumnDefinition& emptyCol,
-                   TextBlock& percentText,
-                   double percent) {
-        percent = std::clamp(percent, 0.0, 100.0);
-        try {
-            fillCol.Width({percent, GridUnitType::Star});
-            emptyCol.Width({100.0 - percent, GridUnitType::Star});
-            wchar_t buf[8];
-            wsprintfW(buf, L"%d%%", (int)std::lround(percent));
-            percentText.Text(buf);
-        } catch (...) {
-        }
-    }
-
-    void UpdateValues() {
-        // Only touches the rows actually built (Incident 31 - a
-        // hidden metric's ColumnDefinition/TextBlock members stay
-        // null, so calling ApplyBar on them would throw - caught, but
-        // wasteful - skipping is simpler than relying on the catch).
-        if (showCpu_) {
-            ApplyBar(cpuFillCol_, cpuEmptyCol_, cpuPercentText_, SampleCpu());
-        }
-        if (showRam_) {
-            ApplyBar(ramFillCol_, ramEmptyCol_, ramPercentText_, SampleRam());
-        }
-        if (showGpu_) {
-            double gpu = pdhOk_ ? SampleGpu() : -1.0;
-            if (gpu >= 0.0) {
-                ApplyBar(gpuFillCol_, gpuEmptyCol_, gpuPercentText_, gpu);
-            } else {
-                ApplyBar(gpuFillCol_, gpuEmptyCol_, gpuPercentText_, 0.0);
-                try {
-                    gpuPercentText_.Text(L"N/A");
-                } catch (...) {
-                }
-            }
-        }
-    }
-
-    double SampleCpu() {
-        FILETIME idleTime, kernelTime, userTime;
-        if (!GetSystemTimes(&idleTime, &kernelTime, &userTime)) {
-            return lastCpuPercent_;
-        }
-        auto toULL = [](const FILETIME& ft) -> ULONGLONG {
-            ULARGE_INTEGER u;
-            u.LowPart = ft.dwLowDateTime;
-            u.HighPart = ft.dwHighDateTime;
-            return u.QuadPart;
-        };
-        ULONGLONG idle = toULL(idleTime);
-        ULONGLONG kernel = toULL(kernelTime);
-        ULONGLONG user = toULL(userTime);
-
-        if (haveCpuSample_) {
-            ULONGLONG idleDelta = idle - lastIdle_;
-            // GetSystemTimes' kernelTime already includes idle time.
-            ULONGLONG totalDelta = (kernel - lastKernel_) + (user - lastUser_);
-            if (totalDelta > 0) {
-                double busy =
-                    (double)(totalDelta - idleDelta) / (double)totalDelta;
-                lastCpuPercent_ = std::clamp(busy * 100.0, 0.0, 100.0);
-            }
-        }
-        lastIdle_ = idle;
-        lastKernel_ = kernel;
-        lastUser_ = user;
-        haveCpuSample_ = true;
-        return lastCpuPercent_;
-    }
-
-    double SampleRam() {
-        MEMORYSTATUSEX status{};
-        status.dwLength = sizeof(status);
-        if (GlobalMemoryStatusEx(&status)) {
-            return (double)status.dwMemoryLoad;
-        }
-        return 0.0;
-    }
-
-    void InitPdh() {
-        if (PdhOpenQueryW(nullptr, 0, &pdhQuery_) != ERROR_SUCCESS) {
-            pdhOk_ = false;
-            return;
-        }
-        if (PdhAddEnglishCounterW(pdhQuery_,
-                                   L"\\GPU Engine(*)\\Utilization Percentage",
-                                   0, &pdhCounter_) != ERROR_SUCCESS) {
-            PdhCloseQuery(pdhQuery_);
-            pdhQuery_ = nullptr;
-            pdhOk_ = false;
-            return;
-        }
-        // Primes the query - PDH counters need at least one prior
-        // sample before a formatted value means anything.
-        PdhCollectQueryData(pdhQuery_);
-        pdhOk_ = true;
-    }
-
-    void ClosePdh() {
-        if (pdhQuery_) {
-            PdhCloseQuery(pdhQuery_);
-            pdhQuery_ = nullptr;
-        }
-        pdhCounter_ = nullptr;
-        pdhOk_ = false;
-    }
-
-    double SampleGpu() {
-        if (PdhCollectQueryData(pdhQuery_) != ERROR_SUCCESS) {
-            return -1.0;
-        }
-        DWORD bufferSize = 0, itemCount = 0;
-        PDH_STATUS status = PdhGetFormattedCounterArrayW(
-            pdhCounter_, PDH_FMT_DOUBLE, &bufferSize, &itemCount, nullptr);
-        if (status != PDH_MORE_DATA || bufferSize == 0) {
-            return -1.0;
-        }
-        std::vector<BYTE> buffer(bufferSize);
-        auto* items =
-            reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
-        if (PdhGetFormattedCounterArrayW(pdhCounter_, PDH_FMT_DOUBLE,
-                                          &bufferSize, &itemCount,
-                                          items) != ERROR_SUCCESS) {
-            return -1.0;
-        }
-        double maxUsage = 0.0;
-        for (DWORD i = 0; i < itemCount; i++) {
-            if (items[i].FmtValue.CStatus == ERROR_SUCCESS) {
-                maxUsage = std::max(maxUsage, items[i].FmtValue.doubleValue);
-            }
-        }
-        return std::clamp(maxUsage, 0.0, 100.0);
-    }
-
-    void StartTimer() {
-        timer_ = DispatcherTimer();
-        timer_.Interval(std::chrono::seconds(std::max(1, refreshSeconds_)));
-        timerToken_ = timer_.Tick(
-            [this](winrt::Windows::Foundation::IInspectable const&,
-                   winrt::Windows::Foundation::IInspectable const&) {
-                UpdateValues();
-            });
-        timer_.Start();
-    }
-
-    void StopTimer() {
-        if (timer_) {
-            try {
-                if (timerToken_) {
-                    timer_.Tick(timerToken_);
-                }
-                timer_.Stop();
-            } catch (...) {
-            }
-            timer_ = nullptr;
-        }
-    }
-
-    // Own settings (Incident 31) - separate keys from the stack-wide
-    // nav/layout ones, under "widget.system-usage.*". Loaded fresh at
-    // the start of every Create() (i.e. every rebuild), matching how
-    // g_settings itself is loaded - simpler than trying to patch
-    // already-built XAML in place when a value changes.
-    void LoadSettingsFields() {
-        DWORD v;
-        showCpu_ = !ReadPrivateDword(L"widget.system-usage.showCpu", v) ||
-                   v != 0;
-        showRam_ = !ReadPrivateDword(L"widget.system-usage.showRam", v) ||
-                   v != 0;
-        showGpu_ = !ReadPrivateDword(L"widget.system-usage.showGpu", v) ||
-                   v != 0;
-        if (ReadPrivateDword(L"widget.system-usage.refreshSeconds", v) &&
-            v >= 1 && v <= 5) {
-            refreshSeconds_ = (int)v;
-        }
-    }
-
-    Grid root_{nullptr};
-    Panel parent_{nullptr};
-
-    ColumnDefinition cpuFillCol_{nullptr};
-    ColumnDefinition cpuEmptyCol_{nullptr};
-    TextBlock cpuPercentText_{nullptr};
-
-    ColumnDefinition ramFillCol_{nullptr};
-    ColumnDefinition ramEmptyCol_{nullptr};
-    TextBlock ramPercentText_{nullptr};
-
-    ColumnDefinition gpuFillCol_{nullptr};
-    ColumnDefinition gpuEmptyCol_{nullptr};
-    TextBlock gpuPercentText_{nullptr};
-
-    DispatcherTimer timer_{nullptr};
-    winrt::event_token timerToken_;
-
-    ULONGLONG lastIdle_ = 0;
-    ULONGLONG lastKernel_ = 0;
-    ULONGLONG lastUser_ = 0;
-    bool haveCpuSample_ = false;
-    double lastCpuPercent_ = 0.0;
-
-    PDH_HQUERY pdhQuery_ = nullptr;
-    PDH_HCOUNTER pdhCounter_ = nullptr;
-    bool pdhOk_ = false;
-
-    bool showCpu_ = true;
-    bool showRam_ = true;
-    bool showGpu_ = true;
-    int refreshSeconds_ = 1;
 };
 
 void RefreshDots() {
@@ -2989,12 +2491,6 @@ void InitPlaceholderWidgets() {
         winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 150, 90),
         kMinContentWidth);
     g_widgets.push_back(std::move(aiQuota));
-
-    // This SDK's first non-placeholder widget (Incident 30) - see
-    // SystemUsageWidget's own comment.
-    WidgetEntry systemUsage;
-    systemUsage.widget = std::make_unique<SystemUsageWidget>();
-    g_widgets.push_back(std::move(systemUsage));
 
     LoadWidgetOrderState();
 }

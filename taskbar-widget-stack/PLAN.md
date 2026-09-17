@@ -2299,3 +2299,39 @@ compiles fine, but binding a non-const `Panel&` *reference* to a
 Fixed by changing `BuildRow`'s parameter to `StackPanel&` directly,
 since `content` in `Create()` is always a `StackPanel` - no need for
 `Panel&`'s generality here.
+
+## Incident 34: SystemUsageWidget extracted into its own standalone mod (2026-09-17)
+
+**Request**: rather than keep building real widgets in-process against
+this mod's own `IWidget` SDK, the user wants widgets to eventually be
+genuinely separate, independently-installed Windhawk mods, integrated
+through a real cross-mod API instead of compiled directly into this
+file. First step (this round, scope explicitly limited to it per a
+"grill me" check): move `SystemUsageWidget` out into its own mod
+folder, `taskbar-widget-system-usage/` at the repo root - not yet
+integrated with anything, just relocated and made to stand on its own.
+
+**What changed here**: `SystemUsageWidget` (the class, its registration
+in `InitPlaceholderWidgets`, the PDH includes and `-lpdh` compiler
+option) removed entirely - not duplicated. `PaneHeight()` reverted
+76px -> 32px (the bump existed only for this widget's three bar rows;
+nothing left in this file needs it). The `IWidget` interface's
+`HasSettings()`/`BuildSettingsPanel()` hook and the settings window's
+gear-button machinery (Incident 31) are *not* removed - they're generic
+infrastructure for any future widget that wants per-widget settings,
+just currently unused since both remaining widgets are plain
+placeholders.
+
+**Where it went**: see `taskbar-widget-system-usage/PLAN.md` for the
+new mod's own design doc - it duplicates this mod's "Taskbar XAML
+Access" section and `RunFromWindowThread` (necessary; each Windhawk mod
+is a separate DLL, nothing can be shared at build time between them)
+and reuses the confirmed-working bar-building/CPU-RAM-GPU-sampling code
+verbatim, but has all-new (so: unverified) injection/removal/settings-
+reload glue, since it now injects and owns its own taskbar element
+directly rather than being hosted by this mod's widget stack.
+
+**Not done**: the actual cross-mod integration. Decided direction
+(exported functions + `GetProcAddress`, since both mods share one
+`explorer.exe` process despite being separate DLLs) is recorded in the
+new mod's `PLAN.md`, not designed or implemented yet.
