@@ -2100,3 +2100,76 @@ them depended on this handler).
 both placeholder widgets are narrower than any width worth adjusting
 to. Revisit once a real, wider widget (media player/AI quota) is
 ported through the SDK.
+
+## Incident 30: first non-placeholder widget - CPU/RAM/GPU usage bars (2026-09-17)
+
+**Request**: a "super simple" widget showing CPU/GPU/RAM usage as
+three horizontal bars, label left, percent right - the SDK's first
+real (non-placeholder) `IWidget` consumer.
+
+**Implementation** (`SystemUsageWidget`): three metrics, three
+different WinAPIs:
+- **CPU**: delta of two `GetSystemTimes()` samples one tick apart.
+  `GetSystemTimes`' own `kernelTime` already includes idle time (a
+  well-known quirk of that API), so `busy% = (totalDelta - idleDelta)
+  / totalDelta` where `totalDelta = kernelDelta + userDelta`.
+- **RAM**: `GlobalMemoryStatusEx`'s `dwMemoryLoad` - already a
+  percentage, no computation needed.
+- **GPU**: PDH's `\GPU Engine(*)\Utilization Percentage` wildcard
+  counter - the same technique Task Manager's own GPU graphs are
+  built on. The only one of the three that can fail to set up at all
+  (some GPU drivers/configurations don't expose these counters) -
+  handled per-row (shows "N/A" on just the GPU row) rather than
+  failing the whole widget. **Known simplification**: takes the MAX
+  across all reported engine instances rather than Task Manager's
+  more selective per-engine-type accounting, so it can read a little
+  differently from Task Manager's own GPU% on some systems - flagged
+  as an approximation, not presented as an exact match.
+
+**Bars**: each row is a `Grid` with a label `TextBlock`, a track
+`Border` containing a fill `Border` whose width is driven by two
+`ColumnDefinition`s' `Star` weights (`percent`/`100-percent`) rather
+than a pixel width - avoids needing to know the track's actual
+rendered pixel width at all, a trick already established in this file
+via other `Star`-weighted columns. Updating a bar just re-sets those
+two `Star` weights and the percent `TextBlock`'s text - cheap, no
+tree rebuild needed per tick.
+
+**Own `DispatcherTimer`**: per `IWidget::Tick()`'s own documented
+contract ("a widget needing its own cadence owns that timer
+internally" - written when `Tick()` was added with no host-side
+caller yet, back in the SDK design), `SystemUsageWidget` runs its own
+1-second `DispatcherTimer` rather than waiting for a host tick that
+still doesn't exist. Its `Tick` lambda captures `this` by raw
+pointer - the first widget in this SDK to hold any resource at all
+(a timer, a PDH query) beyond its own XAML element, which surfaced a
+real gap: **`Wh_ModBeforeUninit` never called `Destroy()` on any
+widget** before this - it only tore down the taskbar grid itself.
+Harmless for the placeholders (nothing to leak), but would have left
+this widget's timer delegate (referencing a `this` about to be freed
+at DLL unload) alive indefinitely. Fixed by having
+`RemoveWidgetStackGrid` (called from both `Wh_ModBeforeUninit` and the
+taskbar-restart path) call every widget's `Destroy()` unconditionally,
+before its own early-return check, since a widget may have run
+`Create()` in an earlier rebuild even if `g_ui.root` was since cleared
+for an unrelated reason.
+
+**Pane height bumped 32px -> 76px** (`PaneHeight()`) - three readable
+bar rows don't fit in the old single-line height, and every widget's
+pane must share one height (the slider offset math is
+`-widgetIndex * PaneHeight()`). Affects the two placeholders too (now
+visually tall/empty by comparison) - accepted, they were always meant
+to be temporary. Desired width guessed at 170px (`kDesiredWidth`) -
+untested, will very likely need live tuning like nearly everything
+else in this file has.
+
+**Next retest**: enable this widget and confirm CPU/RAM update every
+~1s and look plausible against Task Manager, GPU either shows a
+plausible percentage or "N/A" (not a crash or a stuck 0%), the bars
+visually fill proportionally rather than glitching, and the pane looks
+readable at the new 76px height (adjust `kDesiredWidth` if the row
+layout looks cramped or too wide). Also worth toggling other widgets
+on/off a few times while this one is enabled, to exercise the
+Destroy()-then-Create() cycle (timer/PDH query torn down and rebuilt)
+without a leak or crash - and confirm Explorer restarts/mod reloads
+cleanly now that a widget actually holds a timer.
