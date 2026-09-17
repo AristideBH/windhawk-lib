@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.32
+// @version         0.1.33
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -81,6 +81,16 @@ prototype - not yet verified live, see `PLAN.md`.
       Upper bound, in pixels, for how wide the widget stack can grow to fit
       its widest enabled widget. Widgets narrower than this stretch to fill
       it.
+  - indicator:
+    - hideWhenSingle: true
+      $name: Hide when only one widget
+      $description: >-
+        Don't show the dot indicator column when there's only one enabled
+        widget - it has nothing to indicate.
+    $name: Indicator
+    $description: >-
+      Dot indicator appearance and behavior. More visual options
+      (color/size/shape) are likely to land here later.
   $name: Layout
   $description: Sizing behavior for the widget stack.
 */
@@ -216,6 +226,7 @@ struct {
     bool navWrap = true;
     bool navOverscroll = true;
     int layoutMaxWidth = 520;
+    bool layoutHideIndicatorWhenSingle = true;
 } g_settings;
 
 // ---------------------------------------------------------------------
@@ -613,6 +624,10 @@ struct UiState {
     // enabled/disabled/ported - see PLAN.md's "Widget SDK design".
     Border clipHost{nullptr};
     RectangleGeometry clipGeom{nullptr};
+    // Collapsed to 0 width by ApplyStackWidth() when
+    // layout.indicator.hideWhenSingle is on and only one widget is
+    // enabled - see Incident 25.
+    ColumnDefinition dotsColumn{nullptr};
     CompositeTransform sliderTransform{nullptr};
     int activeIndex = 0;
     winrt::event_token renderingToken;
@@ -1063,6 +1078,11 @@ void RefreshDots() {
     }
     g_ui.dotsPanel.Children().Clear();
     auto enabled = EnabledIndices();
+    if (g_settings.layoutHideIndicatorWhenSingle && enabled.size() <= 1) {
+        // The dots column itself is collapsed to 0 width by
+        // ApplyStackWidth in this case - nothing to build.
+        return;
+    }
     for (int idx : enabled) {
         bool active = idx == g_ui.activeIndex;
         // Same size regardless of active state (2026-09-17) - only the
@@ -1098,17 +1118,23 @@ void RefreshDots() {
 }
 
 // Resizes the stack's content column (root/clipHost/clipGeom) to
-// `contentWidth` DIPs (excluding the dots column) - called from
+// `contentWidth` DIPs, plus the dots column itself (0 when
+// layout.indicator.hideWhenSingle applies - Incident 25) - called from
 // RebuildStackContents whenever the set of enabled/crashed widgets or
 // their reported desired widths might have changed. See PLAN.md's
-// "Widget SDK design" for why this exists (real ported widgets are
-// wider than the two placeholders' original fixed 30px pane).
+// "Widget SDK design" for why the content-width part exists (real
+// ported widgets are wider than the two placeholders' original fixed
+// 30px pane).
 void ApplyStackWidth(double contentWidth) {
-    if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom) {
+    if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom || !g_ui.dotsColumn) {
         return;
     }
     try {
-        g_ui.root.Width(contentWidth + kDotsColumnWidth);
+        bool hideIndicator = g_settings.layoutHideIndicatorWhenSingle &&
+                              EnabledIndices().size() <= 1;
+        double dotsWidth = hideIndicator ? 0.0 : kDotsColumnWidth;
+        g_ui.dotsColumn.Width({dotsWidth, GridUnitType::Pixel});
+        g_ui.root.Width(contentWidth + dotsWidth);
         g_ui.clipHost.Width(contentWidth);
         auto rect = g_ui.clipGeom.Rect();
         rect.Width = (float)contentWidth;
@@ -1314,15 +1340,20 @@ void ShowContextMenu(HWND, POINT) {
             widgetItem.Items().Append(innerSeparator);
 
             // No icons on these two (user request, 2026-09-17) -
-            // text only.
+            // text only. Disabled (grayed out, non-clickable) at
+            // either end of g_widgets - MoveWidget's own bounds check
+            // already made clicking a no-op there, but leaving them
+            // clickable-looking was misleading.
             MenuFlyoutItem up;
             up.Text(L"Move up");
+            up.IsEnabled(i > 0);
             up.Click([i](winrt::Windows::Foundation::IInspectable const&,
                           RoutedEventArgs const&) { MoveWidget(i, -1); });
             widgetItem.Items().Append(up);
 
             MenuFlyoutItem down;
             down.Text(L"Move down");
+            down.IsEnabled(i < (int)g_widgets.size() - 1);
             down.Click([i](winrt::Windows::Foundation::IInspectable const&,
                             RoutedEventArgs const&) { MoveWidget(i, 1); });
             widgetItem.Items().Append(down);
@@ -1597,6 +1628,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.root = root;
         g_ui.widgetsPanel = widgetsPanel;
         g_ui.dotsPanel = dotsPanel;
+        g_ui.dotsColumn = dotsCol;
         g_ui.clipHost = clipHost;
         g_ui.clipGeom = clipGeom;
         g_ui.sliderTransform = transform;
@@ -1713,6 +1745,8 @@ void LoadSettings() {
     g_settings.navOverscroll = Wh_GetIntSetting(L"nav.overscroll");
     int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
+    g_settings.layoutHideIndicatorWhenSingle =
+        Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
 }
 
 void InitPlaceholderWidgets() {

@@ -1842,3 +1842,34 @@ down" entirely (text-only) - simpler than chasing the exact right
 glyph, and the "Stack settings" gear icon (outside the per-widget
 submenu) was left as-is since the request was scoped to the widget
 submenu specifically.
+
+## Incident 25: disabled bounds on Move up/down, hide indicator with one widget (2026-09-17)
+
+**Move up/down bounds-awareness**: `MoveWidget`'s own bounds check
+already made clicking "Move up" at index 0 (or "Move down" at the
+last index) a no-op, but the menu items looked equally clickable at
+every position, which is misleading. Both `MenuFlyoutItem`s now set
+`IsEnabled` (`i > 0` for up, `i < g_widgets.size() - 1` for down), so
+the native Control disabled/grayed-out visual and non-interactivity
+both come for free.
+
+**Hide the dot indicator with only one widget**: added a new settings
+group, `layout.indicator.hideWhenSingle` (bool, default `true`) -
+named as its own subgroup (rather than a flat `layout.*` key) since
+more indicator visual options (color/size/shape) are expected to land
+there later. `RefreshDots` now returns early (building no dots) when
+this setting is on and `EnabledIndices().size() <= 1`. Just skipping
+the dots themselves would leave an empty gap where the fixed-width
+dots column used to be, though, so `ApplyStackWidth` now also owns a
+`ColumnDefinition` reference (`g_ui.dotsColumn`, stored at injection
+time alongside `clipHost`/`clipGeom`) and collapses it to 0px in the
+same case, with `root`'s own total width adjusted to match (no
+`+ kDotsColumnWidth` when collapsed) - the stack visually shrinks to
+just the widget pane's width, not just an indicator-less strip with a
+dead gap on its left.
+
+**Next retest**: with two widgets enabled, confirm "Move up" is
+grayed out for the first widget's submenu and "Move down" for the
+second's. Disable one widget so only one remains enabled and confirm
+the dot column disappears entirely (stack narrows, no empty gap) -
+then re-enable the second and confirm the dot column comes back.
