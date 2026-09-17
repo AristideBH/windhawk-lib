@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.26
+// @version         0.1.27
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -62,6 +62,16 @@ prototype - not yet verified live, see `PLAN.md`.
     $description: >-
       Vertically drag the stack itself to scrub between widgets, snapping to
       the nearest one on release.
+  - wrap: true
+    $name: Wrap around
+    $description: >-
+      Stepping past the last widget goes back to the first (and vice versa).
+      Turn off to stop at the ends instead.
+  - overscroll: true
+    $name: Overscroll bounce
+    $description: >-
+      When wrap-around is off, bounce slightly when trying to step past the
+      first or last widget instead of doing nothing.
   $name: Navigation
   $description: Which ways of switching between stacked widgets are active.
 - layout:
@@ -208,6 +218,8 @@ struct {
     bool navWheel = true;
     bool navDots = true;
     bool navDrag = true;
+    bool navWrap = true;
+    bool navOverscroll = true;
     int layoutMaxWidth = 520;
 } g_settings;
 
@@ -613,6 +625,13 @@ struct UiState {
     ULONGLONG animStartTick = 0;
     double animFromY = 0;
     double animToY = 0;
+    // Overscroll bounce (Incident 22, nav.overscroll): when set,
+    // OnRenderingTick starts a second short animation back to
+    // bounceBaseY once the current one (the "out" leg, to an overshoot
+    // position) completes, instead of just stopping - see
+    // BounceAtBoundary.
+    bool bouncePending = false;
+    double bounceBaseY = 0;
     bool dragging = false;
     double dragStartY = 0;
     winrt::Windows::UI::Xaml::Input::Pointer dragPointer{nullptr};
@@ -699,6 +718,17 @@ void OnRenderingTick(winrt::Windows::Foundation::IInspectable const&,
         return;
     }
     if (t >= 1.0) {
+        if (g_ui.bouncePending) {
+            // "Out" leg of an overscroll bounce just finished - start
+            // the "back" leg to bounceBaseY, reusing the same
+            // animating/renderingToken state rather than a second
+            // CompositionTarget::Rendering subscription.
+            g_ui.bouncePending = false;
+            g_ui.animFromY = y;
+            g_ui.animToY = g_ui.bounceBaseY;
+            g_ui.animStartTick = GetTickCount64();
+            return;
+        }
         StopSnapAnimation();
     }
 }
@@ -708,6 +738,7 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
         return;
     }
     double y = -widgetIndex * PaneHeight();
+    g_ui.bouncePending = false;
     if (!animate) {
         StopSnapAnimation();
         try {
@@ -718,6 +749,29 @@ void ApplySliderTarget(int widgetIndex, bool animate) {
     }
     g_ui.animFromY = g_ui.sliderTransform.TranslateY();
     g_ui.animToY = y;
+    g_ui.animStartTick = GetTickCount64();
+    if (!g_ui.animating) {
+        g_ui.animating = true;
+        g_ui.renderingToken = CompositionTarget::Rendering(OnRenderingTick);
+    }
+}
+
+// nav.overscroll: gives a small bump-and-settle instead of doing
+// nothing when nav.wrap is off and StepWidget is asked to go past the
+// first/last widget - two short ease-out legs sharing OnRenderingTick's
+// existing animation state (see its bouncePending handling above)
+// rather than a separate animation mechanism.
+constexpr double kOverscrollPixels = 8.0;
+
+void BounceAtBoundary(int direction) {
+    if (!g_ui.sliderTransform) {
+        return;
+    }
+    double base = -g_ui.activeIndex * PaneHeight();
+    g_ui.bounceBaseY = base;
+    g_ui.bouncePending = true;
+    g_ui.animFromY = g_ui.sliderTransform.TranslateY();
+    g_ui.animToY = base - direction * kOverscrollPixels;
     g_ui.animStartTick = GetTickCount64();
     if (!g_ui.animating) {
         g_ui.animating = true;
@@ -744,8 +798,19 @@ void StepWidget(int direction) {
     }
     auto it = std::find(enabled.begin(), enabled.end(), g_ui.activeIndex);
     int pos = it != enabled.end() ? (int)std::distance(enabled.begin(), it) : 0;
-    int next = (pos + direction + (int)enabled.size()) % (int)enabled.size();
-    GoToWidget(enabled[next]);
+    int rawNext = pos + direction;
+    if (rawNext < 0 || rawNext >= (int)enabled.size()) {
+        // nav.wrap (Incident 22): stepping past either end used to
+        // always wrap around unconditionally - now optional.
+        if (g_settings.navWrap) {
+            int wrapped = (rawNext + (int)enabled.size()) % (int)enabled.size();
+            GoToWidget(enabled[wrapped]);
+        } else if (g_settings.navOverscroll) {
+            BounceAtBoundary(direction);
+        }
+        return;
+    }
+    GoToWidget(enabled[rawNext]);
 }
 
 void ShowContextMenu(HWND hWnd, POINT screenPt);
@@ -840,6 +905,17 @@ void WireUpNavigation() {
     g_ui.rightTappedToken = g_ui.root.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::RightTappedRoutedEventArgs const& args) {
+            // Diagnostic (Incident 22, 2026-09-17): two targeted fixes
+            // (Incidents 20 and 21) both failed to stop this crash, and
+            // it reproduces with an identical signature both times
+            // (0xC0000005, faulting module "unknown", offset 0x0) - at
+            // this point guessing further from the code alone isn't
+            // productive. These Wh_Log calls exist to find exactly
+            // which line runs last before the crash, the same
+            // diagnose-before-fixing approach that resolved Incident
+            // 9's wheel/dot bug and the HID byte layout - remove once
+            // the actual crash site is found.
+            Wh_Log(L"RightTapped: fired");
             POINT pt;
             GetCursorPos(&pt);
             HWND hWnd = g_ui.hWnd;
@@ -857,14 +933,21 @@ void WireUpNavigation() {
             // loop ever starts.
             try {
                 auto dispatcher = sender.as<UIElement>().Dispatcher();
+                Wh_Log(L"RightTapped: got dispatcher=%d",
+                       dispatcher ? 1 : 0);
                 if (dispatcher) {
                     dispatcher.RunAsync(
                         winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                        [hWnd, pt] { ShowContextMenu(hWnd, pt); });
+                        [hWnd, pt] {
+                            Wh_Log(L"RightTapped: deferred callback running");
+                            ShowContextMenu(hWnd, pt);
+                            Wh_Log(L"RightTapped: ShowContextMenu returned");
+                        });
                 } else {
                     ShowContextMenu(hWnd, pt);
                 }
             } catch (...) {
+                Wh_Log(L"RightTapped: exception scheduling ShowContextMenu");
             }
             args.Handled(true);
         });
@@ -1083,6 +1166,17 @@ void UpdateStackScreenRect() {
         return;
     }
     try {
+        // Forces measure+arrange to run synchronously before reading
+        // ActualWidth/ActualHeight/TransformToVisual (Incident 22): this
+        // is called right after RebuildStackContents mutates the tree
+        // (resizes root/clipHost, adds/removes widget panes), and
+        // without this, a fresh XAML layout pass may not have run yet -
+        // ActualWidth/ActualHeight would then still reflect a stale (or
+        // zero, on first injection) prior size, giving a degenerate
+        // cached rect that IsCursorOverWidgetStack could never match,
+        // matching the "touchpad scroll stopped working" report after
+        // this caching was introduced.
+        g_ui.root.UpdateLayout();
         UINT dpi = GetDpiForWindow(g_ui.hWnd);
         double scale = dpi > 0 ? dpi / 96.0 : 1.0;
         auto transform = g_ui.root.TransformToVisual(nullptr);
@@ -1167,6 +1261,7 @@ void RebuildStackContents() {
 bool g_contextMenuOpen = false;
 
 void ShowContextMenu(HWND hWnd, POINT screenPt) {
+    Wh_Log(L"ShowContextMenu: start, %zu widgets", g_widgets.size());
     HMENU menu = CreatePopupMenu();
     for (int i = 0; i < (int)g_widgets.size(); i++) {
         UINT flags = MF_STRING | (g_widgets[i].enabled ? MF_CHECKED : 0);
@@ -1183,23 +1278,22 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
             menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveDownBase + i,
             (L"Move down: " + g_widgets[i].widget->DisplayName()).c_str());
     }
+    Wh_Log(L"ShowContextMenu: menu built");
 
     SetForegroundWindow(hWnd);
+    Wh_Log(L"ShowContextMenu: foreground set, calling TrackPopupMenu");
     // TrackPopupMenu pumps its own nested Win32 message loop on this
-    // thread - WM_INPUT for the touchpad keeps arriving while it's open
-    // (Incident 20: right-click started crashing Explorer again after
-    // Incident 18 added a touchpad WM_INPUT handler that reaches into
-    // the live XAML tree via TransformToVisual - a finger still resting
-    // on the touchpad right after the click means that handler can fire
-    // and touch XAML elements while this native modal loop has control,
-    // the same "don't touch XAML reentrant with a blocking modal loop"
-    // hazard Incident 10 already hit once with TrackPopupMenu itself).
-    // Guarding the handler with this flag for TrackPopupMenu's duration
-    // avoids that without touching the menu call itself.
+    // thread. g_contextMenuOpen (Incident 20) originally guarded against
+    // WM_INPUT reaching into XAML while this loop has control -
+    // Incident 21 removed that XAML call from the WM_INPUT path
+    // entirely, so this flag is no longer load-bearing for that hazard,
+    // but is left in place since it's still a reasonable "don't step
+    // widgets while the menu is open" guard.
     g_contextMenuOpen = true;
     UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                screenPt.x, screenPt.y, 0, hWnd, nullptr);
     g_contextMenuOpen = false;
+    Wh_Log(L"ShowContextMenu: TrackPopupMenu returned cmd=%u", cmd);
     DestroyMenu(menu);
     if (cmd == 0) {
         return;
@@ -1582,6 +1676,8 @@ void LoadSettings() {
     g_settings.navWheel = Wh_GetIntSetting(L"nav.wheel");
     g_settings.navDots = Wh_GetIntSetting(L"nav.dots");
     g_settings.navDrag = Wh_GetIntSetting(L"nav.drag");
+    g_settings.navWrap = Wh_GetIntSetting(L"nav.wrap");
+    g_settings.navOverscroll = Wh_GetIntSetting(L"nav.overscroll");
     int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
 }

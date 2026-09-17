@@ -1621,3 +1621,80 @@ was triggered) and confirm no crash. Also confirm touchpad scroll
 still only reacts while hovering the stack (the whole point of
 `IsCursorOverWidgetStack`), since its hit-test logic changed even
 though its intent didn't.
+
+**Result: still crashed, identical signature.** Retested - same
+0xC0000005, faulting module "unknown", offset 0x0, and this time
+confirmed it happens immediately on right-click, before the menu ever
+appears (ruling out Incident 20's `TrackPopupMenu`-adjacent theory
+even more directly than the code reasoning already had). Since
+Incident 21 removed the only XAML call (`TransformToVisual`) from the
+`WM_INPUT` path entirely and the crash is unchanged, that hypothesis is
+now also disproven - two targeted fixes in a row, both wrong. See
+Incident 22.
+
+## Incident 22: two failed hypotheses in a row - switched to instrumentation (2026-09-17)
+
+**Decision**: stop guessing from the code. Neither Incident 20's
+`g_contextMenuOpen` guard nor Incident 21's removal of
+`TransformToVisual` from the `WM_INPUT` path changed anything about
+this crash, and nothing else obviously touches XAML from an unusual
+context along the `RightTapped` → `ShowContextMenu` →
+`TrackPopupMenu` path (unchanged since Incident 10, which did fix a
+real crash there once). Added `Wh_Log` calls at each step of that path
+(`RightTapped: fired`, `...got dispatcher=`, `...deferred callback
+running`, `ShowContextMenu: start`, `...menu built`, `...foreground
+set, calling TrackPopupMenu`, `...TrackPopupMenu returned cmd=`) so
+the next crash pinpoints exactly which line ran last, the same
+diagnose-before-fixing approach that resolved Incident 9's wheel/dot
+bug and the HID byte layout - these are temporary and should be
+stripped once the actual crash site is found.
+
+**Next retest**: right-click, then check the Windhawk debug log for
+the last `RightTapped`/`ShowContextMenu` line printed before the
+crash (or share the whole log around that time) - that narrows the
+crash to a specific few lines instead of an entire call chain.
+
+## Also this round: touchpad-scroll regression, nav.wrap/nav.overscroll settings (2026-09-17)
+
+**Touchpad scroll stopped reacting at all** after Incident 21's
+rect-caching change. Root cause: `UpdateStackScreenRect` is called
+from `RebuildStackContents`, right after the tree is mutated
+(`root`/`clipHost` resized, widget panes rebuilt) - but
+`ActualWidth`/`ActualHeight`/`TransformToVisual` reflect the *last
+completed* XAML layout pass, which hadn't necessarily run yet at that
+point (especially on the very first call, right after injection,
+where it could still be 0). That would cache a degenerate
+(possibly zero-size) rect, which `IsCursorOverWidgetStack`'s
+`PtInRect` could never match - explaining "stopped working entirely"
+rather than just behaving oddly. Fixed by calling
+`g_ui.root.UpdateLayout()` (forces measure+arrange synchronously)
+before reading any of those values in `UpdateStackScreenRect`.
+
+**User also reported, as separate context**: touchpad scroll
+previously only worked "when no app window has focus, only when I
+first clicked on the taskbar" - i.e. `RIDEV_INPUTSINK`'s documented
+"receives input regardless of foreground focus" doesn't seem to hold
+in practice for this device/setup. **Not investigated yet** - noted
+here as a known characteristic/limitation rather than guessed at
+blind, given three wrong guesses already this session on a related
+crash. Worth its own diagnostic round (does `WM_INPUT` actually stop
+arriving when another app has focus, or does something else in this
+mod's gating suppress it) once the right-click crash is resolved.
+
+**Added `nav.wrap` and `nav.overscroll` settings** (both default
+`true`, requested by user): `StepWidget` previously always wrapped
+past either end unconditionally; now it only does that when
+`nav.wrap` is on. When it's off and `nav.overscroll` is on, stepping
+past an end triggers `BounceAtBoundary` - a small (8px) overshoot-and-
+settle animation reusing `OnRenderingTick`'s existing ease-out lerp
+for both legs (out to the overshoot position, then back to the
+current widget's resting position), via a new `bouncePending`/
+`bounceBaseY` pair on `UiState` rather than a second animation
+mechanism. When both settings are off, stepping past an end does
+nothing, matching the pre-existing behavior before `nav.wrap` existed.
+
+**Next retest** (once the right-click crash is separately resolved):
+confirm wrap-around can be turned off and the stack then stops at the
+first/last widget instead of cycling, and confirm the overscroll bump
+feels like a quick bounce rather than a stutter or an unwanted extra
+step.
