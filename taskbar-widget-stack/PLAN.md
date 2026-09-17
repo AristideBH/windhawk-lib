@@ -1977,3 +1977,49 @@ window fails to open or Explorer crashes, capture whatever Windhawk
 log line appears last (`OpenSettingsWindow: ...`) and, if it's a
 crash, the Event Viewer exception details - this is the least-tested
 piece of this whole mod so far.
+
+## Incident 27: settings window confirmed opening - dark/light title bar, Windows 8-style tabs (2026-09-17)
+
+**Result**: the window opens and works (no crash) - the highest-risk
+part of Incident 26 (WindowsXamlManager/DesktopWindowXamlSource on
+Explorer's UI thread) turned out fine on the first try. Two visual
+issues reported: the title bar doesn't follow the Windows dark/light
+theme, and the Pivot-based tabs look dated ("Windows 8").
+
+**Title bar theme**: this window is a brand new top-level HWND, not
+hosted inside the taskbar's own island - it doesn't inherit dark/light
+from anything automatically. Added `IsSystemDarkModeActive()` (reads
+`HKCU\...\Themes\Personalize\AppsUseLightTheme`, the same value
+Windows' own Settings app writes) and `ApplyTitleBarTheme()`
+(`DwmSetWindowAttribute` with attribute 20 -
+`DWMWA_USE_IMMERSIVE_DARK_MODE` on Windows 10 2004+/Windows 11, falling
+back to 19 for older builds since an unsupported attribute id fails
+harmlessly rather than crashing) - called right after the window is
+created. Also set the root XAML element's `RequestedTheme` to match,
+so the *content* (not just the DWM-drawn frame) follows the same
+light/dark choice - a separately-hosted island doesn't get this for
+free either. Not yet wired to *live* theme changes (`WM_SETTINGCHANGE`)
+- it's set once at window-open time; switching Windows' theme while
+the window is already open wouldn't update it until reopened. Added
+`-ldwmapi` to `@compilerOptions`.
+
+**Tabs**: replaced `Pivot`/`PivotItem` with `NavigationView`
+(`PaneDisplayMode::Top`) - `Pivot`'s header strip is the older,
+phone-hub-era look (large text, underline indicator) `NavigationView`'s
+top mode renders as a segmented pill-style row closer to Windows 11's
+own Settings-app tabs. Deliberately not `TabView`, which would look
+even closer to Windows 11 but ships only via the WinUI 2/3 NuGet
+package, not the OS's own `Windows.UI.Xaml` - would have reintroduced
+exactly the "no new runtime dependency" trade-off already decided
+against. `NavigationView` has no per-item `Content` the way
+`Pivot`/`TabView` do, so tab switching is hand-rolled in
+`SelectionChanged`: each `NavigationViewItem` carries a string `Tag`,
+and the handler swaps a shared `ContentControl`'s `Content` based on
+it.
+
+**Next retest**: reopen "Stack settings" - confirm the title bar now
+matches the current Windows theme, and that the tab row looks like a
+segmented pill row rather than the old underline-tab style. Since
+theme-following isn't live yet, no need to test switching Windows'
+theme while the window is open - reopening it after a theme change is
+the only way it'd pick up a difference right now.

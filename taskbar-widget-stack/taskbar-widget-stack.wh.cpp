@@ -2,14 +2,14 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.34
+// @version         0.1.35
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
 // @license         MIT
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32 -ladvapi32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32 -ladvapi32 -ldwmapi
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -100,6 +100,7 @@ prototype - not yet verified live, see `PLAN.md`.
 
 #include <windows.h>
 #include <unknwn.h>
+#include <dwmapi.h>
 
 #ifdef GetCurrentTime
 #undef GetCurrentTime
@@ -1495,6 +1496,39 @@ SettingsWindowState g_settingsWindow;
 constexpr wchar_t kSettingsWindowClassName[] =
     L"TaskbarWidgetStackSettingsWindow";
 
+// Reads the same registry value Windows' own Settings > Personalization
+// page writes, so this window's title bar and content follow whatever
+// the user has picked, light or dark - not just "matches the taskbar"
+// (this window isn't hosted in the taskbar's own island, so it doesn't
+// inherit that for free).
+bool IsSystemDarkModeActive() {
+    DWORD value = 1;
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                       L"Software\\Microsoft\\Windows\\CurrentVersion\\"
+                       L"Themes\\Personalize",
+                       0, KEY_READ, &key) == ERROR_SUCCESS) {
+        DWORD size = sizeof(value), type = 0;
+        RegQueryValueExW(key, L"AppsUseLightTheme", nullptr, &type,
+                          (BYTE*)&value, &size);
+        RegCloseKey(key);
+    }
+    return value == 0;
+}
+
+// Colors the window's own non-client frame (title bar) dark or light -
+// DwmSetWindowAttribute, not anything XAML controls. Attribute 20 is
+// DWMWA_USE_IMMERSIVE_DARK_MODE on Windows 10 2004+ and Windows 11;
+// some earlier 1903/1909 builds used 19 instead - tried as a fallback
+// since passing an unsupported attribute id is documented to just fail
+// harmlessly rather than crash.
+void ApplyTitleBarTheme(HWND hWnd, bool dark) {
+    BOOL value = dark ? TRUE : FALSE;
+    if (DwmSetWindowAttribute(hWnd, 20, &value, sizeof(value)) != S_OK) {
+        DwmSetWindowAttribute(hWnd, 19, &value, sizeof(value));
+    }
+}
+
 void CloseSettingsWindow();
 
 LRESULT CALLBACK SettingsWindowProc(HWND hWnd, UINT msg, WPARAM wParam,
@@ -1644,6 +1678,9 @@ bool OpenSettingsWindow() {
         // or it wouldn't know to destroy this HWND at all.
         g_settingsWindow.hWnd = hWnd;
 
+        bool darkMode = IsSystemDarkModeActive();
+        ApplyTitleBarTheme(hWnd, darkMode);
+
         auto manager = wuxh::WindowsXamlManager::InitializeForCurrentThread();
         wuxh::DesktopWindowXamlSource source;
         auto sourceNative = source.as<IDesktopWindowXamlSourceNative>();
@@ -1660,38 +1697,89 @@ bool OpenSettingsWindow() {
         SetWindowPos(xamlIslandHwnd, nullptr, 0, 0, rc.right - rc.left,
                      rc.bottom - rc.top, SWP_SHOWWINDOW);
 
-        Pivot pivot;
+        // NavigationView with PaneDisplayMode::Top (Incident 27,
+        // replacing the first pass's Pivot) - Pivot's header strip is
+        // the older, phone-hub-era look (large text, underline
+        // indicator); NavigationView's top mode renders a segmented
+        // pill-style tab row closer to Windows 11's own look, and -
+        // unlike TabView - ships in the OS's own Windows.UI.Xaml
+        // (no WinUI 2/3 NuGet package needed, matching the "same UWP
+        // toolkit, no new dependency" decision above). NavigationView
+        // has no per-item Content property like Pivot/TabView, so tab
+        // switching is done by hand in SelectionChanged, swapping
+        // contentHost's Content based on the selected item's Tag.
+        NavigationView navView;
+        navView.PaneDisplayMode(NavigationViewPaneDisplayMode::Top);
+        navView.IsBackButtonVisible(NavigationViewBackButtonVisible::Collapsed);
+        navView.IsSettingsVisible(false);
+        navView.RequestedTheme(darkMode ? ElementTheme::Dark
+                                         : ElementTheme::Light);
 
-        PivotItem widgetsItem;
-        widgetsItem.Header(winrt::box_value(winrt::hstring(L"Widgets")));
+        ContentControl contentHost;
+        contentHost.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        contentHost.VerticalContentAlignment(VerticalAlignment::Stretch);
+
         ScrollViewer widgetsScroller;
         widgetsScroller.Content(BuildWidgetsTab());
-        widgetsItem.Content(widgetsScroller);
         g_widgetsTabScroller = widgetsScroller;
-        pivot.Items().Append(widgetsItem);
 
-        PivotItem navItem;
-        navItem.Header(winrt::box_value(winrt::hstring(L"Navigation")));
-        navItem.Content(MakePlaceholderTab(
+        auto navPlaceholder = MakePlaceholderTab(
             L"Coming soon - for now, edit navigation settings through "
-            L"Windhawk's own settings editor for this mod."));
-        pivot.Items().Append(navItem);
-
-        PivotItem layoutItem;
-        layoutItem.Header(winrt::box_value(winrt::hstring(L"Layout")));
-        layoutItem.Content(MakePlaceholderTab(
+            L"Windhawk's own settings editor for this mod.");
+        auto layoutPlaceholder = MakePlaceholderTab(
             L"Coming soon - for now, edit layout settings through "
-            L"Windhawk's own settings editor for this mod."));
-        pivot.Items().Append(layoutItem);
-
-        PivotItem aboutItem;
-        aboutItem.Header(winrt::box_value(winrt::hstring(L"Help/About")));
-        aboutItem.Content(MakePlaceholderTab(
+            L"Windhawk's own settings editor for this mod.");
+        auto aboutPlaceholder = MakePlaceholderTab(
             L"Taskbar Widget Stack - see this mod's README and PLAN.md "
-            L"in the repo for status and roadmap."));
-        pivot.Items().Append(aboutItem);
+            L"in the repo for status and roadmap.");
 
-        source.Content(pivot);
+        NavigationViewItem widgetsNavItem;
+        widgetsNavItem.Content(winrt::box_value(winrt::hstring(L"Widgets")));
+        widgetsNavItem.Tag(winrt::box_value(winrt::hstring(L"widgets")));
+        navView.MenuItems().Append(widgetsNavItem);
+
+        NavigationViewItem navNavItem;
+        navNavItem.Content(winrt::box_value(winrt::hstring(L"Navigation")));
+        navNavItem.Tag(winrt::box_value(winrt::hstring(L"navigation")));
+        navView.MenuItems().Append(navNavItem);
+
+        NavigationViewItem layoutNavItem;
+        layoutNavItem.Content(winrt::box_value(winrt::hstring(L"Layout")));
+        layoutNavItem.Tag(winrt::box_value(winrt::hstring(L"layout")));
+        navView.MenuItems().Append(layoutNavItem);
+
+        NavigationViewItem aboutNavItem;
+        aboutNavItem.Content(winrt::box_value(winrt::hstring(L"Help/About")));
+        aboutNavItem.Tag(winrt::box_value(winrt::hstring(L"about")));
+        navView.MenuItems().Append(aboutNavItem);
+
+        navView.SelectionChanged(
+            [contentHost, widgetsScroller, navPlaceholder, layoutPlaceholder,
+             aboutPlaceholder](
+                NavigationView const&,
+                NavigationViewSelectionChangedEventArgs const& args) {
+                auto item = args.SelectedItem().try_as<NavigationViewItem>();
+                if (!item) {
+                    return;
+                }
+                auto tag = winrt::unbox_value_or<winrt::hstring>(
+                    item.Tag(), winrt::hstring{});
+                if (tag == L"widgets") {
+                    contentHost.Content(widgetsScroller);
+                } else if (tag == L"navigation") {
+                    contentHost.Content(navPlaceholder);
+                } else if (tag == L"layout") {
+                    contentHost.Content(layoutPlaceholder);
+                } else if (tag == L"about") {
+                    contentHost.Content(aboutPlaceholder);
+                }
+            });
+
+        navView.Content(contentHost);
+        navView.SelectedItem(widgetsNavItem);
+        contentHost.Content(widgetsScroller);
+
+        source.Content(navView);
 
         g_settingsWindow.hWnd = hWnd;
         g_settingsWindow.xamlIslandHwnd = xamlIslandHwnd;
