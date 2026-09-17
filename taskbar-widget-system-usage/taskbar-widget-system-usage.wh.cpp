@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.1
+// @version         0.1.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -22,14 +22,12 @@
 
 > **Extracted prototype:** this mod started as one widget (`SystemUsageWidget`)
 > inside [`taskbar-widget-stack`](../taskbar-widget-stack/README.md)'s own
-> in-process widget SDK. It's been pulled out into its own standalone mod so
-> it can be developed and installed independently - it is **not yet
-> integrated** with `taskbar-widget-stack` (that would need a real cross-mod
-> API between two separately-injected DLLs in the same `explorer.exe`
-> process, which doesn't exist yet - see `PLAN.md`). Running both mods at
-> once will very likely fight over the same taskbar position, since this one
-> currently reuses the exact same anchor point (flush left of the taskbar's
-> `RootGrid`).
+> in-process widget SDK. It's since gained real cross-mod integration - if
+> `taskbar-widget-stack` is installed and enabled, this mod's bars register
+> as one of its widgets (dots, snap-scroll, right-click menu, all shared);
+> otherwise it falls back to injecting its own standalone element, same as
+> before. This integration is new and not yet extensively live-tested - see
+> `PLAN.md`.
 
 Three small horizontal bars in the taskbar, one each for CPU, RAM, and GPU
 usage - label on the left, live percentage on the right.
@@ -434,6 +432,49 @@ bool RunFromWindowThread(HWND hWnd, const std::function<void()>& task,
 }
 
 // ---------------------------------------------------------------------
+// Cross-mod widget ABI (client side)
+//
+// Duplicated byte-for-byte from taskbar-widget-stack.wh.cpp's own copy -
+// there's no shared header between separately-built Windhawk mods, so
+// this struct/typedef layout has to be kept in sync by hand between the
+// two files. See that file's matching section for the full design
+// rationale (why a plain extern "C" struct instead of a C++ vtable, why
+// XAML elements cross as raw ABI pointers, why discovery goes through a
+// window property on Shell_TrayWnd rather than a guessed DLL name).
+// ---------------------------------------------------------------------
+
+constexpr wchar_t kRegisterWidgetPropName[] =
+    L"TaskbarWidgetStack_RegisterWidgetFn_v1";
+constexpr wchar_t kUnregisterWidgetPropName[] =
+    L"TaskbarWidgetStack_UnregisterWidgetFn_v1";
+
+extern "C" {
+
+struct WidgetStackHostAbiV1 {
+    void* taskbarHwnd;
+    void* parentPanelAbi;
+    double paneHeight;
+};
+
+struct WidgetStackWidgetAbiV1 {
+    void* context;
+    double(__cdecl* Create)(void* context, const WidgetStackHostAbiV1* host);
+    void(__cdecl* Tick)(void* context);
+    double(__cdecl* OnSettingsChanged)(void* context);
+    void(__cdecl* Destroy)(void* context);
+    void(__cdecl* GetId)(void* context, wchar_t* buffer, int bufferSize);
+    void(__cdecl* GetDisplayName)(void* context,
+                                   wchar_t* buffer,
+                                   int bufferSize);
+};
+
+using WidgetStack_RegisterWidget_t =
+    bool(__cdecl*)(const WidgetStackWidgetAbiV1* widget);
+using WidgetStack_UnregisterWidget_t = void(__cdecl*)(void* context);
+
+}  // extern "C"
+
+// ---------------------------------------------------------------------
 // System usage bars (this mod's own code)
 //
 // Extracted from taskbar-widget-stack.wh.cpp's SystemUsageWidget - see
@@ -462,7 +503,10 @@ void LoadSettings() {
 struct UiState {
     HWND hWnd{nullptr};
     bool windowSubclassed = false;
-    Grid injectionParent{nullptr};  // The taskbar's RootGrid.
+    Grid injectionParent{nullptr};  // The taskbar's RootGrid (standalone mode).
+    Panel remoteParentPanel{nullptr};  // taskbar-widget-stack's widgetsPanel
+                                        // (registered mode) - mutually
+                                        // exclusive with injectionParent.
     StackPanel root{nullptr};
 
     ColumnDefinition cpuFillCol{nullptr};
@@ -487,6 +531,20 @@ HANDLE g_retryThread;
 HANDLE g_injectEvent;
 std::mutex g_retryThreadMutex;
 std::atomic<bool> g_stopRequested{false};
+
+// Cross-mod registration state (see "Cross-mod widget ABI" above). Only
+// meaningful once TryRegisterOrInject has successfully called the host's
+// WidgetStack_RegisterWidget - mutually exclusive with the standalone
+// g_ui.root injection path.
+bool g_remoteRegistered = false;
+HWND g_remoteHostHwnd = nullptr;
+WidgetStack_RegisterWidget_t g_hostRegisterFn = nullptr;
+WidgetStack_UnregisterWidget_t g_hostUnregisterFn = nullptr;
+// A stable, unique-to-this-mod context pointer handed to the host and
+// echoed back on every callback - not read as data, just used as an
+// identity token (see RemoteWidget::Context() in the host).
+int g_widgetContextTag = 0;
+void* const kWidgetContext = &g_widgetContextTag;
 
 ULONGLONG g_lastIdle = 0;
 ULONGLONG g_lastKernel = 0;
@@ -730,6 +788,131 @@ void StopTimer() {
 }
 
 // ---------------------------------------------------------------------
+// Cross-mod widget ABI callbacks - this mod's own bars, built as a
+// registered taskbar-widget-stack widget instead of a standalone
+// top-level injection. Reuses the exact same BuildRow/ApplyBar/Sample*/
+// InitPdh/StartTimer helpers as the standalone path below; only where
+// the root element attaches (host.parent vs. the taskbar's own
+// RootGrid) and how big it's allowed to be (host-stretched, so no fixed
+// Width()) differ.
+// ---------------------------------------------------------------------
+
+// Matches the desired width this widget reported to taskbar-widget-stack
+// back when it lived in-process there, and what the standalone path's
+// own root.Width(130) uses today.
+constexpr double kDesiredWidth = 130.0;
+
+double __cdecl SystemUsage_Create(void* /*context*/,
+                                   const WidgetStackHostAbiV1* host) {
+    if (!host) {
+        return 0.0;
+    }
+    try {
+        Panel parent{nullptr};
+        winrt::copy_from_abi(parent, host->parentPanelAbi);
+        if (!parent) {
+            return 0.0;
+        }
+
+        LoadSettings();
+
+        StackPanel root;
+        root.Orientation(Orientation::Vertical);
+        // No fixed Width() here, unlike the standalone path - the host
+        // sizes this to the widest enabled widget's desired width (see
+        // IWidget::Create's contract in taskbar-widget-stack.wh.cpp) and
+        // stretches this element to fill it.
+
+        if (g_settings.showCpu) {
+            BuildRow(root, L"CPU", g_ui.cpuFillCol, g_ui.cpuEmptyCol,
+                     g_ui.cpuPercentText);
+        }
+        if (g_settings.showRam) {
+            BuildRow(root, L"RAM", g_ui.ramFillCol, g_ui.ramEmptyCol,
+                     g_ui.ramPercentText);
+        }
+        if (g_settings.showGpu) {
+            BuildRow(root, L"GPU", g_ui.gpuFillCol, g_ui.gpuEmptyCol,
+                     g_ui.gpuPercentText);
+        }
+
+        parent.Children().Append(root);
+
+        g_ui.hWnd = (HWND)host->taskbarHwnd;
+        g_ui.remoteParentPanel = parent;
+        g_ui.root = root;
+
+        InitPdh();
+        SampleCpu();  // primes the delta baseline, first return unused
+        UpdateValues();
+        StartTimer();
+
+        Wh_Log(L"SystemUsage_Create: built bars as a registered widget");
+        return kDesiredWidth;
+    } catch (...) {
+        Wh_Log(L"SystemUsage_Create: exception");
+        return 0.0;
+    }
+}
+
+void __cdecl SystemUsage_Tick(void* /*context*/) {
+    // No-op: this widget drives its own refresh cadence via its internal
+    // DispatcherTimer (StartTimer), same as the standalone path - it
+    // doesn't need the host's shared tick signal.
+}
+
+double __cdecl SystemUsage_OnSettingsChanged(void* /*context*/) {
+    // taskbar-widget-stack's own IWidget contract documents Destroy()-
+    // then-Create() as the mechanism it actually uses on a settings
+    // change (see that file's IWidget::OnSettingsChanged comment), and
+    // this mod's own Wh_ModSettingsChanged (below) follows that same
+    // pattern by unregistering and re-registering. Kept only because the
+    // ABI struct needs a typed slot here; reload settings for parity if
+    // anything ever does call it directly.
+    LoadSettings();
+    return kDesiredWidth;
+}
+
+void __cdecl SystemUsage_Destroy(void* /*context*/) {
+    StopTimer();
+    ClosePdh();
+    try {
+        if (g_ui.remoteParentPanel && g_ui.root) {
+            uint32_t index;
+            if (g_ui.remoteParentPanel.Children().IndexOf(g_ui.root, index)) {
+                g_ui.remoteParentPanel.Children().RemoveAt(index);
+            }
+        }
+    } catch (...) {
+        Wh_Log(L"SystemUsage_Destroy: exception");
+    }
+    g_ui = {};
+}
+
+void __cdecl SystemUsage_GetId(void* /*context*/,
+                                wchar_t* buffer,
+                                int bufferSize) {
+    wcsncpy_s(buffer, bufferSize, L"taskbar-widget-system-usage", _TRUNCATE);
+}
+
+void __cdecl SystemUsage_GetDisplayName(void* /*context*/,
+                                         wchar_t* buffer,
+                                         int bufferSize) {
+    wcsncpy_s(buffer, bufferSize, L"System Usage", _TRUNCATE);
+}
+
+void FillWidgetAbi(WidgetStackWidgetAbiV1& abi) {
+    abi = {};
+    abi.context = kWidgetContext;
+    abi.Create = &SystemUsage_Create;
+    abi.Tick = &SystemUsage_Tick;
+    abi.OnSettingsChanged = &SystemUsage_OnSettingsChanged;
+    abi.Destroy = &SystemUsage_Destroy;
+    abi.GetId = &SystemUsage_GetId;
+    abi.GetDisplayName = &SystemUsage_GetDisplayName;
+}
+
+// ---------------------------------------------------------------------
 // Injection lifecycle
 // ---------------------------------------------------------------------
 
@@ -860,6 +1043,37 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
     return DefSubclassProc(hWnd, msg, wParam, lParam);
 }
 
+// Tries taskbar-widget-stack's registration first (GetPropW discovery on
+// Shell_TrayWnd, per the "Cross-mod widget ABI" section above); falls
+// back to this mod's own standalone injection if the host mod isn't
+// present/loaded/registered yet. Must run on `tray`'s own thread - both
+// paths touch XAML.
+bool TryRegisterOrInject(HWND tray) {
+    if (g_ui.root || g_remoteRegistered) {
+        return true;  // Already active for this taskbar instance.
+    }
+
+    auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
+        tray, kRegisterWidgetPropName);
+    if (registerFn) {
+        LoadSettings();
+        WidgetStackWidgetAbiV1 abi;
+        FillWidgetAbi(abi);
+        if (registerFn(&abi)) {
+            g_remoteRegistered = true;
+            g_remoteHostHwnd = tray;
+            g_hostRegisterFn = registerFn;
+            g_hostUnregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+                tray, kUnregisterWidgetPropName);
+            Wh_Log(L"Registered with taskbar-widget-stack");
+            return true;
+        }
+        Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
+    }
+
+    return InjectSystemUsageGrid(tray);
+}
+
 DWORD WINAPI RetryInjectThreadProc(LPVOID) {
     for (int attempt = 0; attempt < 600; attempt++) {
         if (g_stopRequested.load(std::memory_order_acquire)) {
@@ -869,7 +1083,7 @@ DWORD WINAPI RetryInjectThreadProc(LPVOID) {
         if (tray) {
             g_taskbarWnd = tray;
             bool ok = false;
-            RunFromWindowThread(tray, [&] { ok = InjectSystemUsageGrid(tray); });
+            RunFromWindowThread(tray, [&] { ok = TryRegisterOrInject(tray); });
             if (ok) {
                 return 0;
             }
@@ -937,7 +1151,25 @@ void Wh_ModAfterInit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
-    if (g_ui.hWnd) {
+    if (g_remoteRegistered && g_hostUnregisterFn && g_hostRegisterFn &&
+        g_remoteHostHwnd) {
+        // Same Destroy()-then-Create() pattern as the standalone branch
+        // below, routed through the host's (un)registration functions so
+        // it also recomputes the stack's width - the ABI has no separate
+        // "renegotiate width" callback (see SystemUsage_OnSettingsChanged).
+        HWND hWnd = g_remoteHostHwnd;
+        auto unregisterFn = g_hostUnregisterFn;
+        auto registerFn = g_hostRegisterFn;
+        RunFromWindowThread(hWnd, [unregisterFn, registerFn] {
+            unregisterFn(kWidgetContext);
+            g_remoteRegistered = false;
+            WidgetStackWidgetAbiV1 abi;
+            FillWidgetAbi(abi);
+            if (registerFn(&abi)) {
+                g_remoteRegistered = true;
+            }
+        });
+    } else if (g_ui.hWnd) {
         HWND hWnd = g_ui.hWnd;
         RunFromWindowThread(hWnd, [] {
             RemoveSystemUsageGrid();
@@ -960,7 +1192,15 @@ void Wh_ModBeforeUninit() {
         }
     }
 
-    if (g_ui.root && g_ui.hWnd) {
+    if (g_remoteRegistered && g_hostUnregisterFn && g_remoteHostHwnd) {
+        HWND hWnd = g_remoteHostHwnd;
+        auto unregisterFn = g_hostUnregisterFn;
+        // Calls back into SystemUsage_Destroy (unwinds the timer/PDH/root
+        // element) before returning - see WidgetStack_UnregisterWidget in
+        // taskbar-widget-stack.wh.cpp.
+        RunFromWindowThread(hWnd, [unregisterFn] { unregisterFn(kWidgetContext); });
+        g_remoteRegistered = false;
+    } else if (g_ui.root && g_ui.hWnd) {
         HWND hWnd = g_ui.hWnd;
         if (g_ui.windowSubclassed) {
             WindhawkUtils::RemoveWindowSubclassFromAnyThread(

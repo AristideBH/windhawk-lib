@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.42
+// @version         0.1.43
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -221,6 +221,167 @@ class IWidget {
     // effect immediately.
     virtual bool HasSettings() const { return false; }
     virtual FrameworkElement BuildSettingsPanel() { return nullptr; }
+};
+
+// ---------------------------------------------------------------------
+// Cross-mod widget ABI (Incident 35 - see PLAN.md's "Cross-mod widget
+// integration" design)
+//
+// A second, separate widget contract for widgets that live in a
+// DIFFERENT Windhawk mod (a different DLL, injected independently into
+// this same explorer.exe process) - taskbar-widget-system-usage is the
+// first consumer. Deliberately NOT the same shape as IWidget above:
+// IWidget is a C++ interface, and C++ ABI (vtable layout, name mangling,
+// exception handling across a throw/catch boundary) isn't guaranteed
+// stable between two separately compiled DLLs, even from the same
+// compiler - so this is a plain `extern "C"` struct of function
+// pointers instead, the same kind of contract COM/Win32 itself uses for
+// cross-module calls. No shared header exists between separately-built
+// Windhawk mods (each is a single self-contained .wh.cpp), so this
+// struct is duplicated verbatim on the widget-providing mod's side
+// (taskbar-widget-system-usage.wh.cpp) - the two copies must be kept in
+// sync by hand; the "v1" in the type/export names is there so a future
+// breaking change can add a "v2" pair without silently breaking widgets
+// still using v1.
+//
+// XAML elements themselves never cross this boundary as C++/WinRT
+// wrapper objects (same ABI-stability reasoning) - only as raw
+// `IInspectable*` ABI pointers, re-wrapped locally on each side via
+// `winrt::copy_from_abi`/`winrt::get_abi`, the same technique this file
+// already uses in `GetTaskbarXamlRoot` to cross the boundary between
+// this mod's own code and taskbar.dll's internal XAML tree. Since both
+// mods run in the same process, a live COM/WinRT interface pointer
+// obtained in one DLL is valid to use directly from the other - no
+// marshaling needed, same as any other in-process COM scenario.
+//
+// Discovery: rather than have a widget-providing mod guess this mod's
+// DLL filename (not something Windhawk guarantees stays constant), this
+// mod publishes its registration function pointers as window
+// properties (`SetPropW`) on the taskbar's own HWND once it's
+// successfully injected - both mods already independently find that
+// HWND via `FindWindowW(L"Shell_TrayWnd", ...)`, so it's a natural
+// rendezvous point, the same idea as this file's own use of
+// `GetPropW(hTaskbarWnd, L"TaskbandHWND")` to read taskbar.dll's own
+// internal state.
+// ---------------------------------------------------------------------
+
+constexpr wchar_t kRegisterWidgetPropName[] =
+    L"TaskbarWidgetStack_RegisterWidgetFn_v1";
+constexpr wchar_t kUnregisterWidgetPropName[] =
+    L"TaskbarWidgetStack_UnregisterWidgetFn_v1";
+
+extern "C" {
+
+// Passed to a remote widget's Create/OnSettingsChanged callback -
+// the cross-DLL equivalent of WidgetHost above.
+struct WidgetStackHostAbiV1 {
+    void* taskbarHwnd;    // Actually an HWND - already a plain
+                           // process-wide handle, no ABI-crossing issue.
+    void* parentPanelAbi;  // IInspectable* for the host's Panel
+                            // (winrt::Windows::UI::Xaml::Controls::Panel) -
+                            // re-wrap via winrt::copy_from_abi, don't
+                            // take ownership.
+    double paneHeight;
+};
+
+// A remote widget's own callbacks, provided by the widget-owning mod.
+// `context` is opaque to this mod - passed back unchanged to every
+// call, typically null (a widget with only one instance, like
+// taskbar-widget-system-usage's bars, can just use its own globals and
+// ignore it).
+//
+// Fixed-size output buffers for the two name callbacks (rather than a
+// returned pointer) sidestep string-ownership-across-a-DLL-boundary
+// entirely - the caller (this mod) owns the buffer, so there's no
+// question of who frees what or how long a returned pointer stays
+// valid.
+struct WidgetStackWidgetAbiV1 {
+    void* context;
+    double(__cdecl* Create)(void* context, const WidgetStackHostAbiV1* host);
+    void(__cdecl* Tick)(void* context);
+    double(__cdecl* OnSettingsChanged)(void* context);
+    void(__cdecl* Destroy)(void* context);
+    void(__cdecl* GetId)(void* context, wchar_t* buffer, int bufferSize);
+    void(__cdecl* GetDisplayName)(void* context,
+                                   wchar_t* buffer,
+                                   int bufferSize);
+};
+
+using WidgetStack_RegisterWidget_t =
+    bool(__cdecl*)(const WidgetStackWidgetAbiV1* widget);
+using WidgetStack_UnregisterWidget_t = void(__cdecl*)(void* context);
+
+// Defined outside the anonymous namespace, next to Wh_ModInit et al. -
+// forward-declared here so InjectWidgetStackGrid (below) can take their
+// address for SetPropW. extern "C" linkage isn't affected by the
+// surrounding C++ namespace, so this merges fine with the out-of-namespace
+// definitions.
+__declspec(dllexport) bool __cdecl WidgetStack_RegisterWidget(
+    const WidgetStackWidgetAbiV1* widget);
+__declspec(dllexport) void __cdecl WidgetStack_UnregisterWidget(void* context);
+
+}  // extern "C"
+
+// Adapts a registered WidgetStackWidgetAbiV1 to the in-process IWidget
+// interface, so remote widgets flow through exactly the same
+// RebuildStackContents/dots/nav machinery as local ones (PlaceholderWidget
+// et al.) - the host doesn't need to know or care whether a given
+// IWidget instance is local C++ or a cross-DLL callback underneath.
+class RemoteWidget : public IWidget {
+   public:
+    explicit RemoteWidget(WidgetStackWidgetAbiV1 abi) : abi_(abi) {}
+
+    std::wstring Id() const override {
+        wchar_t buf[64] = {};
+        if (abi_.GetId) {
+            abi_.GetId(abi_.context, buf, ARRAYSIZE(buf));
+        }
+        return buf;
+    }
+
+    std::wstring DisplayName() const override {
+        wchar_t buf[64] = {};
+        if (abi_.GetDisplayName) {
+            abi_.GetDisplayName(abi_.context, buf, ARRAYSIZE(buf));
+        }
+        return buf;
+    }
+
+    double Create(const WidgetHost& host) override {
+        if (!abi_.Create) {
+            return 0.0;
+        }
+        WidgetStackHostAbiV1 hostAbi{};
+        hostAbi.taskbarHwnd = (void*)host.taskbarHwnd;
+        hostAbi.parentPanelAbi = winrt::get_abi(host.parent);
+        hostAbi.paneHeight = host.paneHeight;
+        return abi_.Create(abi_.context, &hostAbi);
+    }
+
+    void Tick() override {
+        if (abi_.Tick) {
+            abi_.Tick(abi_.context);
+        }
+    }
+
+    double OnSettingsChanged() override {
+        return abi_.OnSettingsChanged ? abi_.OnSettingsChanged(abi_.context)
+                                       : 0.0;
+    }
+
+    void Destroy() override {
+        if (abi_.Destroy) {
+            abi_.Destroy(abi_.context);
+        }
+    }
+
+    // Used by WidgetStack_UnregisterWidget to find this entry in
+    // g_widgets again by the same context pointer the widget-owning mod
+    // registered with.
+    void* Context() const { return abi_.context; }
+
+   private:
+    WidgetStackWidgetAbiV1 abi_;
 };
 
 struct WidgetEntry {
@@ -2340,6 +2501,17 @@ bool InjectWidgetStackGrid(HWND hWnd) {
             }
         }
 
+        // Publish the registration functions on the taskbar's own HWND so
+        // widget-owning mods (e.g. taskbar-widget-system-usage) can find
+        // this mod without guessing its DLL filename - mirrors this
+        // file's own GetPropW(hTaskbarWnd, L"TaskbandHWND") read of
+        // taskbar.dll's state. Set once per injection; RemoveWidgetStackGrid
+        // clears both on teardown.
+        SetPropW(hWnd, kRegisterWidgetPropName,
+                 (HANDLE)&WidgetStack_RegisterWidget);
+        SetPropW(hWnd, kUnregisterWidgetPropName,
+                 (HANDLE)&WidgetStack_UnregisterWidget);
+
         Wh_Log(L"Injected widget stack");
         return true;
     } catch (...) {
@@ -2363,6 +2535,11 @@ void RemoveWidgetStackGrid() {
             entry.widget->Destroy();
         } catch (...) {
         }
+    }
+
+    if (g_ui.hWnd) {
+        RemovePropW(g_ui.hWnd, kRegisterWidgetPropName);
+        RemovePropW(g_ui.hWnd, kUnregisterWidgetPropName);
     }
 
     if (!g_ui.root || !g_ui.injectionParent) {
@@ -2496,6 +2673,55 @@ void InitPlaceholderWidgets() {
 }
 
 }  // namespace
+
+// Cross-mod widget ABI entry points (see the "Cross-mod widget ABI"
+// section above for the design). Defined out here, matching how
+// Wh_ModInit/Wh_ModAfterInit/Wh_ModSettingsChanged/Wh_ModBeforeUninit are
+// already handled in this file - kept outside the anonymous namespace so
+// their extern "C" names are unambiguous, while still able to see
+// g_widgets/RebuildStackContents/etc. via the implicit using-directive an
+// anonymous namespace leaves behind from its point of declaration onward
+// in this translation unit (the same mechanism that already lets
+// Wh_ModInit below call LoadSettings()/InitPlaceholderWidgets()).
+extern "C" bool __cdecl WidgetStack_RegisterWidget(
+    const WidgetStackWidgetAbiV1* widget) {
+    if (!widget) {
+        return false;
+    }
+    try {
+        WidgetEntry entry;
+        entry.widget = std::make_unique<RemoteWidget>(*widget);
+        g_widgets.push_back(std::move(entry));
+        RebuildStackContents();
+        Wh_Log(L"WidgetStack_RegisterWidget: registered a remote widget");
+        return true;
+    } catch (...) {
+        Wh_Log(L"WidgetStack_RegisterWidget: exception");
+        return false;
+    }
+}
+
+extern "C" void __cdecl WidgetStack_UnregisterWidget(void* context) {
+    try {
+        auto it = std::find_if(
+            g_widgets.begin(), g_widgets.end(), [&](const WidgetEntry& e) {
+                auto* remote = dynamic_cast<RemoteWidget*>(e.widget.get());
+                return remote && remote->Context() == context;
+            });
+        if (it == g_widgets.end()) {
+            return;
+        }
+        try {
+            it->widget->Destroy();
+        } catch (...) {
+        }
+        g_widgets.erase(it);
+        RebuildStackContents();
+        Wh_Log(L"WidgetStack_UnregisterWidget: unregistered a remote widget");
+    } catch (...) {
+        Wh_Log(L"WidgetStack_UnregisterWidget: exception");
+    }
+}
 
 BOOL Wh_ModInit() {
     LoadSettings();

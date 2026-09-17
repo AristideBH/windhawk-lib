@@ -68,37 +68,16 @@ triggers a live remove-and-reinject rather than just reloading a flag.
   `RootGrid` with no coordination between them. Not fixed yet; the real
   fix is integration (below), not a position tweak.
 
-## Planned integration with `taskbar-widget-stack`
+## Integration with `taskbar-widget-stack`
 
-Decided (2026-09-17, "grill me" round): **exported functions +
-`GetProcAddress`** is the first mechanism to prototype, over a custom
-Windows-message-based protocol - both mods are separate DLLs but injected
-into the *same* `explorer.exe` process, so this is an in-process (not
-cross-process) integration problem despite being cross-DLL. Rough shape,
-not yet designed in detail or implemented:
-
-1. `taskbar-widget-stack` exports a registration function (e.g.
-   `extern "C" __declspec(dllexport) bool WidgetStack_RegisterWidget(...)`)
-   taking something resembling the existing in-process `IWidget` contract
-   - a set of function pointers (`Create`/`Tick`/`Destroy`/etc.) rather
-   than a C++ vtable, since C++ ABI isn't stable across separately
-   compiled DLLs the way a plain C function-pointer struct is.
-2. This mod (or any other widget-shaped mod) finds `taskbar-widget-stack`'s
-   loaded module via `GetModuleHandleW`/`FindWindowW`-style discovery,
-   resolves that export via `GetProcAddress`, and calls it once loaded,
-   handing over its own function pointers.
-3. Open questions not yet resolved: load-order (what if this mod's
-   `Wh_ModInit` runs before `taskbar-widget-stack`'s, or the other mod
-   isn't installed/enabled at all - this mod needs to keep working
-   standalone either way, per its current design), whether XAML
-   `UIElement`/`Panel` handles can safely cross the DLL boundary as raw
-   WinRT interface pointers (COM objects are generally
-   location-transparent within a process, but this needs to be confirmed
-   live, not assumed), and how a widget's settings would work once a
-   second mod's private-store pattern is in the mix.
-
-This section will get its own "Incident" log once integration work
-actually starts, matching `taskbar-widget-stack/PLAN.md`'s convention.
+Implemented (Incident 2, below) - see `taskbar-widget-stack/PLAN.md`'s
+Incident 35 for the host side and the full design rationale (shared
+between both files' comments). Short version: `taskbar-widget-stack`
+publishes two function pointers as window properties on `Shell_TrayWnd`;
+this mod looks them up during its own retry-inject loop and, if found,
+calls the register one with a small `extern "C"` struct of its own
+`Create`/`Tick`/`Destroy`/etc. callbacks instead of self-injecting.
+Falls back to the original standalone injection if the host isn't found.
 
 ## Incident 1: first compile/install confirmed - bars rendered at 0 width (2026-09-17)
 
@@ -131,3 +110,62 @@ original multi-widget-stack context this sizing logic was designed for.
 **Next retest**: confirm all enabled bars now render with a real fill
 proportional to their reported percentage, not just label/percent text
 with an invisible track.
+
+## Incident 2: cross-mod registration with `taskbar-widget-stack` implemented (2026-09-17)
+
+**Request**: "on continue avec l'intégration réelle" - build the real
+integration decided above, not just relocate the widget.
+
+**What changed**: added a byte-for-byte duplicate of
+`taskbar-widget-stack.wh.cpp`'s new `WidgetStackHostAbiV1`/
+`WidgetStackWidgetAbiV1` structs and typedefs, plus the two property-name
+constants they're discovered through. Six new free functions
+(`SystemUsage_Create`/`Tick`/`OnSettingsChanged`/`Destroy`/`GetId`/
+`GetDisplayName`) implement the ABI's callback slots, reusing the exact
+same `BuildRow`/`ApplyBar`/`Sample*`/`InitPdh`/`StartTimer` helpers as the
+standalone path - the only real differences are *where* the root element
+attaches (the host's `parentPanelAbi`, re-wrapped via
+`winrt::copy_from_abi`, instead of the taskbar's own `RootGrid`) and that
+it reports a desired width (`kDesiredWidth = 130.0`, matching the
+standalone path's fixed `root.Width(130)`) rather than setting one, per
+the host's `IWidget::Create` contract.
+
+`RetryInjectThreadProc`'s loop now calls a new `TryRegisterOrInject`
+first: `GetPropW(tray, kRegisterWidgetPropName)` to look for the host's
+registration function, call it with this mod's ABI struct if found, and
+only fall through to the original `InjectSystemUsageGrid` if the property
+isn't there (host not installed/enabled/injected yet). `context` sent to
+the host is a stable non-null sentinel (`kWidgetContext`, the address of
+a static tag variable) so the host's `dynamic_cast` + pointer-match
+lookup in `WidgetStack_UnregisterWidget` has something real to compare
+against.
+
+`Wh_ModSettingsChanged` and `Wh_ModBeforeUninit` both branch on whether
+registration succeeded: if so, they call the host's unregister function
+(captured at registration time, alongside the register function pointer)
+instead of the standalone `RemoveSystemUsageGrid`/teardown path - settings
+changes specifically unregister-then-reregister (mirroring the host's own
+documented Destroy-then-Create contract) since there's no separate
+"renegotiate width" callback in the ABI.
+
+**Known limitation, not handled this round**: if `taskbar-widget-stack` is
+disabled *after* this mod has already registered with it, this mod has no
+way to find out - its retry-inject thread already exited on success, and
+the stored host function pointers would point into an unloaded DLL. Not
+fixed here; would need either a liveness check or a host-side notification
+back to registered widgets before this mod would fall back to standalone
+mid-session.
+
+**Genuinely unverified**: this file has not been compiled since these
+changes - same caveat as `taskbar-widget-stack.wh.cpp`'s Incident 35 (the
+`__declspec(dllexport)`/`extern "C"` mechanism this depends on, and
+whether a `Panel` pointer really survives the ABI round trip, are reasoned
+through but not confirmed live in either file yet).
+
+**Next retest**: two scenarios - (1) both mods installed and enabled:
+confirm these bars appear *inside* `taskbar-widget-stack`'s pane
+(participating in its dots/snap-scroll/right-click menu) instead of as a
+separate taskbar element, and that changing a `show*`/`refreshSeconds`
+setting here rebuilds correctly in place; (2) `taskbar-widget-stack` not
+installed or disabled: confirm this mod still falls back to its own
+standalone injection exactly as before this round.

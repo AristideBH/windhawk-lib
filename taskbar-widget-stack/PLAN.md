@@ -2335,3 +2335,86 @@ directly rather than being hosted by this mod's widget stack.
 (exported functions + `GetProcAddress`, since both mods share one
 `explorer.exe` process despite being separate DLLs) is recorded in the
 new mod's `PLAN.md`, not designed or implemented yet.
+
+## Incident 35: cross-mod widget ABI - host side implemented (2026-09-17)
+
+**Request**: "on continue avec l'intégration réelle" - after confirming
+`taskbar-widget-system-usage` works standalone (Incident 34, and that
+mod's own Incident 1), build the actual cross-DLL registration mechanism
+so it can register its bars as a real widget in this mod's stack instead
+of self-injecting a separate element. Highest-risk, least-precedented
+piece of work in this file so far - no prior art in the reference mods
+this codebase otherwise ports from, and `__declspec(dllexport)` has never
+been used here before.
+
+**Design** (see the new "Cross-mod widget ABI" section in the source,
+right after `IWidget`'s definition, for the fully-commented version):
+
+- **Not a C++ vtable.** `IWidget` itself stays a same-file, in-process
+  interface - a C++ vtable's layout isn't guaranteed stable across
+  separately compiled DLLs even from the same compiler. Cross-DLL calls
+  go through a plain `extern "C"` struct of `__cdecl` function pointers
+  instead (`WidgetStackWidgetAbiV1`), COM/Win32-style. No shared header
+  exists between separately-built Windhawk mods, so this struct is
+  duplicated by hand in both `.wh.cpp` files and has to be kept in sync
+  manually - versioned (`V1` suffix) so a future breaking change can add
+  a `V2` pair alongside it without breaking already-registered widgets.
+- **`RemoteWidget`** adapts a registered `WidgetStackWidgetAbiV1` to the
+  in-process `IWidget` interface, so a remote widget flows through
+  exactly the same `RebuildStackContents`/dots/nav/crash-isolation
+  machinery as a local one (`PlaceholderWidget` et al.) - this file's
+  widget-stack code doesn't need to know or care whether a given
+  `IWidget` is local C++ or a cross-DLL callback underneath.
+- **XAML elements cross as raw ABI pointers**, never as C++/WinRT wrapper
+  objects: `WidgetHost::parent` (a `Panel`) is unwrapped with
+  `winrt::get_abi()` on this (sending) side - a borrow, no addref, safe
+  because the object stays alive on this call stack for the call's
+  duration - and the far side re-wraps it as needed. `HWND` needs no such
+  care; it's already a plain, process-wide-valid handle.
+- **Discovery**: this mod publishes `WidgetStack_RegisterWidget`/
+  `WidgetStack_UnregisterWidget`'s addresses as window properties
+  (`SetPropW`) on the taskbar's own HWND (`Shell_TrayWnd`) once
+  successfully injected, rather than have a widget-owning mod guess this
+  one's DLL filename. Both mods already independently locate that HWND
+  via `FindWindowW(L"Shell_TrayWnd", nullptr)`, making it a natural
+  rendezvous point - mirrors this file's own existing
+  `GetPropW(hTaskbarWnd, L"TaskbandHWND")` read of taskbar.dll's state.
+  Property names: `TaskbarWidgetStack_RegisterWidgetFn_v1`/
+  `TaskbarWidgetStack_UnregisterWidgetFn_v1`. Set in
+  `InjectWidgetStackGrid`'s success path, removed in
+  `RemoveWidgetStackGrid`.
+- **Registration**: `WidgetStack_RegisterWidget` wraps the incoming ABI
+  struct in a `RemoteWidget`, pushes it into `g_widgets`, and calls
+  `RebuildStackContents()` - the exact same list a local `PlaceholderWidget`
+  lives in, so it participates in width negotiation, dots, and the
+  right-click menu identically. `WidgetStack_UnregisterWidget` finds the
+  matching entry via `dynamic_cast<RemoteWidget*>` + a `Context()` pointer
+  match, calls `Destroy()`, erases it, and rebuilds. Both are defined
+  outside the anonymous namespace (their `extern "C"` names would be
+  ambiguous nested inside it) but forward-declared inside it, matching how
+  `Wh_ModInit` et al. are already split in this file - the implicit
+  using-directive an anonymous namespace leaves behind lets the
+  out-of-namespace bodies still see `g_widgets`/`RebuildStackContents`
+  unqualified, the same mechanism `Wh_ModInit` already relies on to call
+  `LoadSettings()`/`InitPlaceholderWidgets()`.
+
+**What's genuinely unverified**: this exact file has not been compiled or
+tested with this change. Two specific risks flagged going in: whether
+`__declspec(dllexport)` from an `extern "C"` block actually produces a
+symbol Windhawk's compiler toolchain (clang-based) links and exports as
+expected, and whether a WinRT `Panel` pointer really does survive the
+`winrt::get_abi()`/`winrt::copy_from_abi()` round trip across the DLL
+boundary the way COM's location-transparency guarantees suggest it
+should (reasoned through, not confirmed live).
+
+**Client side**: `taskbar-widget-system-usage.wh.cpp` implemented in the
+same round - see that mod's own `PLAN.md` for its half of this. Per that
+mod's existing fallback requirement, it still self-injects standalone if
+this mod isn't present/enabled/registered.
+
+**Next retest**: install both mods together, confirm the system-usage
+bars appear *inside* the widget stack (participating in dots/snap-scroll/
+right-click menu) rather than as a separate taskbar element; confirm
+disabling `taskbar-widget-stack` still leaves `taskbar-widget-system-usage`
+working standalone (its fallback path, unverified after this round's
+retry-loop changes).
