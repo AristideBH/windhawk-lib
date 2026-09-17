@@ -417,3 +417,34 @@ visually align into real columns (not drifting per row); confirm the bar
 visibly fills the remaining width up to `layout.maxWidth` rather than
 sitting at some fixed size; confirm `layout.minWidth`/`maxWidth` still
 work as a sane clamp with labels/percentage shown, hidden, and mixed.
+
+## Incident 7: table alignment confirmed working; lost vertical centering (2026-09-17)
+
+**Symptom**: Incident 6's table alignment worked (confirmed live,
+screenshot showed the three rows correctly lined up), but the bars were
+no longer centered inside their pane - all the extra vertical space
+ended up below them instead of split evenly above and below. (A
+separately reported "saved order isn't restored on a settings change"
+turned out to be testing against an un-updated `taskbar-widget-stack`
+build, not a real bug in this mod or Incident 40's fix - no code change
+needed for that one.)
+
+**Root cause**: `BuildTable()` set `HorizontalAlignment::Left` on
+`table` but dropped `VerticalAlignment::Center`, which the old
+`StackPanel root` (before Incident 6's rewrite) had set explicitly. A
+`Border`'s default child alignment is `Stretch`, so without it, `table`
+stretched to fill its container's full height (the `paneHeight`-tall
+`Border` in registered mode) - and since none of `table`'s rows are
+`Star`-sized to absorb that leftover height, the rows just stayed
+pinned at the top of that stretched space instead of the whole table
+being its own natural (smaller) height and centering within the extra
+room.
+
+**Fix**: moved `table.VerticalAlignment(VerticalAlignment::Center)` into
+`BuildTable()` itself, so both the standalone and registered paths get
+it from the one shared place instead of the standalone path setting it
+separately (which it still was, redundantly, until this fix - now
+removed there too).
+
+**Next retest**: confirm the bars sit centered in the pane again (equal
+space above and below), in both standalone and registered mode.

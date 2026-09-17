@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.6
+// @version         0.1.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -871,6 +871,14 @@ void BuildRow(Grid& table, int rowIndex, const wchar_t* label, RowRefs& refs) {
 Grid BuildTable() {
     Grid table;
     table.HorizontalAlignment(HorizontalAlignment::Left);
+    // Incident 7 (PLAN.md): lost when BuildRow/BuildTable replaced the
+    // old per-row StackPanel (which set this on its own `root`) - without
+    // it, `table` stretches to fill its container's full height (a
+    // Border's default child alignment) instead of sizing to its own
+    // rows' natural height and centering within any leftover space, so
+    // the bars ended up pinned to the top of the pane instead of
+    // centered with equal space above and below.
+    table.VerticalAlignment(VerticalAlignment::Center);
 
     ColumnDefinition labelCol;
     labelCol.Width(g_settings.showLabel
@@ -1283,7 +1291,6 @@ bool InjectSystemUsageGrid(HWND hWnd) {
         // differs only in where the table attaches (taskbarRootGrid
         // directly) and its own Margin/Padding/Z-index.
         Grid table = BuildTable();
-        table.VerticalAlignment(VerticalAlignment::Center);
         table.Margin({kLeftEdgeGap, 0, 0, 0});
         table.Padding({4, 0, 4, 0});
 
