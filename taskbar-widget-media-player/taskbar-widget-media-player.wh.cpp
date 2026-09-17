@@ -2,7 +2,7 @@
 // @id              taskbar-widget-media-player
 // @name            Taskbar Widget Media Player
 // @description     Fork of Salyts' Taskbar Fluent Media Player, integrated with taskbar-widget-stack's cross-mod widget ABI - registers as a widget in that mod's stack if it's installed and enabled, falls back to this mod's own original standalone injection otherwise.
-// @version         0.1.0
+// @version         0.1.1
 // @author          AristideBH (fork), Salyts (original)
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -10593,7 +10593,11 @@ void Wh_ModSettingsChanged() {
                     g_cachedPaletteHash = 0;
                     g_blurBgCache.Invalidate();
                     if (!g_unloading) {
-                        TryRegisterOrApplySettings(hWnd);
+                        // Capture-less lambda (RunFromWindowThread's
+                        // WindowThreadProc is a plain function pointer,
+                        // no captures allowed) - g_taskbarWnd was just
+                        // set to this same hWnd right before this call.
+                        TryRegisterOrApplySettings(g_taskbarWnd);
                         g_needsUiUpdate = true;
                     }
                 }

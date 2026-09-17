@@ -111,6 +111,28 @@ and every standalone code path that calls it, untouched.
   falls back to its own standalone injection on that monitor. Not
   specially handled, just naturally falls back.
 
+## Incident 1: first compile attempt - capture-less lambda used a local variable (2026-09-17)
+
+**Symptom**: compile error - `variable 'hWnd' cannot be implicitly
+captured in a lambda with no capture-default specified`, in
+`Wh_ModSettingsChanged`'s `RunFromWindowThread` lambda.
+
+**Root cause**: this mod's own `RunFromWindowThread(HWND, WindowThreadProc,
+void*)` takes a plain function pointer (`using WindowThreadProc =
+void(*)(void*);`), not a `std::function` - every lambda passed to it
+must be capture-less to be convertible to that pointer type (matches
+every *original* call site in this file, all `[](void*) { ... }` with
+no captures, reading only globals). My edit to that one call site's
+lambda body referenced the enclosing function's local `hWnd` parameter
+instead of a global, which requires a capture and doesn't compile.
+
+**Fix**: use the global `g_taskbarWnd` instead - it's set to that exact
+same `hWnd` value on the line immediately before the
+`RunFromWindowThread` call, so behavior is unchanged.
+
+**Next retest**: recompile; if this was the only build error, move on to
+the actual live-test checklist below.
+
 ## Next retest
 
 Install and enable this mod alongside `taskbar-widget-stack` (with the
