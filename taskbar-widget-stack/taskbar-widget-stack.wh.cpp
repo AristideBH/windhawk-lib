@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.48
+// @version         0.1.49
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -96,6 +96,8 @@ prototype - not yet verified live, see `PLAN.md`.
     - right_of_taskview: "Right of Task View"
     - left_of_widgets: "Left of Widgets button"
     - right_of_widgets: "Right of Widgets button"
+    - left_of_tray: "Left of the system tray"
+    - right_of_tray: "Right of the system tray"
   - maxWidth: 520
     $name: Maximum stack width
     $description: >-
@@ -967,7 +969,14 @@ FrameworkElement FindChildByClassName(FrameworkElement const& parent,
 // taskbar's current layout (e.g. the search box hidden, no widgets
 // button on this Windows build) - callers fall back to left_edge in
 // that case rather than injecting anchored to nothing.
-FrameworkElement ResolveTrackingAnchor(FrameworkElement const& repeater,
+//
+// `taskbarRootGrid` is only needed for the tray anchors -
+// SystemTrayFrameGrid is a sibling of `repeater` (both direct children
+// of RootGrid, per FindTaskbarRootGrid's own comment), not something
+// findable by searching inside `repeater` the way the taskbar-side
+// anchors are.
+FrameworkElement ResolveTrackingAnchor(FrameworkElement const& taskbarRootGrid,
+                                        FrameworkElement const& repeater,
                                         const std::wstring& position,
                                         std::wstring& side) {
     if (position == L"left_of_start" || position == L"right_of_start") {
@@ -992,6 +1001,15 @@ FrameworkElement ResolveTrackingAnchor(FrameworkElement const& repeater,
                                        L"Taskbar.AugmentedEntryPointButton");
         }
         return el;
+    }
+    if (position == L"left_of_tray" || position == L"right_of_tray") {
+        side = position == L"left_of_tray" ? L"left" : L"right";
+        // Live-tracked, unlike right_edge's one-time-computed margin
+        // (see kEdgeGap's comment) - this is what actually closes that
+        // gap: the tray's own width changing later (icons appearing/
+        // disappearing) moves the widget stack with it instead of
+        // leaving a stale margin.
+        return FindChildByName(taskbarRootGrid, L"SystemTrayFrameGrid");
     }
     return nullptr;
 }
@@ -2067,15 +2085,17 @@ FrameworkElement BuildLayoutTab() {
     // array indexed with a runtime value still ODR-uses the array
     // object, which would otherwise require an explicit capture).
     static constexpr const wchar_t* kPositionLabels[] = {
-        L"Left edge",         L"Center",             L"Right edge",
-        L"Left of Start",     L"Right of Start",      L"Left of Search",
-        L"Right of Search",   L"Left of Task View",   L"Right of Task View",
-        L"Left of Widgets",   L"Right of Widgets"};
+        L"Left edge",        L"Center",            L"Right edge",
+        L"Left of Start",    L"Right of Start",    L"Left of Search",
+        L"Right of Search",  L"Left of Task View",  L"Right of Task View",
+        L"Left of Widgets",  L"Right of Widgets",   L"Left of tray",
+        L"Right of tray"};
     static constexpr const wchar_t* kPositionValues[] = {
         L"left_edge",       L"center_edge",       L"right_edge",
         L"left_of_start",   L"right_of_start",    L"left_of_search",
         L"right_of_search", L"left_of_taskview",  L"right_of_taskview",
-        L"left_of_widgets", L"right_of_widgets"};
+        L"left_of_widgets", L"right_of_widgets",  L"left_of_tray",
+        L"right_of_tray"};
     ComboBox positionCombo;
     int selectedIndex = 0;
     for (int i = 0; i < ARRAYSIZE(kPositionValues); i++) {
@@ -2884,8 +2904,8 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     // config) falls back to left_edge's static placement below rather
     // than injecting anchored to nothing.
     std::wstring trackSide;
-    FrameworkElement trackAnchor =
-        ResolveTrackingAnchor(repeater, g_settings.layoutPosition, trackSide);
+    FrameworkElement trackAnchor = ResolveTrackingAnchor(
+        taskbarRootGrid, repeater, g_settings.layoutPosition, trackSide);
     if (!trackSide.empty() && !trackAnchor) {
         Wh_Log(L"ResolveTrackingAnchor: target not found for %s, falling "
                L"back to left_edge",

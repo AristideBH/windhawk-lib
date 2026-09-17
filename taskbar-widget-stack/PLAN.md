@@ -2718,3 +2718,42 @@ its moved position and the active dot doesn't jump. Then make it the
 active dot, change a setting again - confirm the active dot stays on it
 (not reset to the first widget) even though it just got destroyed and
 recreated under the hood.
+
+## Incident 41: tray-anchored tracking positions added (2026-09-17)
+
+**Feedback on Incident 38**: the design note deferring tray positions
+(PLAN.md's earlier "Design note: flexible taskbar placement") had scoped
+them out entirely, reasoning that the reference mod's tray positions use
+a structurally different, more invasive mechanism (real
+`ColumnDefinition` insertion into `SystemTrayFrameGrid`, shifting
+sibling tray icons - risky for a wide multi-widget overlay in an already
+cramped icon area). User's follow-up: still wants *some* way to anchor
+around the tray.
+
+**What changed**: two new `layout.position` values,
+`left_of_tray`/`right_of_tray`, reusing the EXISTING tracking mechanism
+(`UpdateTrackedPosition`'s `LayoutUpdated` handler + margin push) rather
+than the reference mod's column-insertion approach - `SystemTrayFrameGrid`
+itself (found via `FindChildByName(taskbarRootGrid, ...)`, a sibling of
+`repeater` under `RootGrid`, not a descendant of it) is just another
+anchor element, tracked the same way Start/Search/Task View/Widgets
+already are. `ResolveTrackingAnchor` gained a `taskbarRootGrid` parameter
+for this (the other four anchors only ever needed to search inside
+`repeater`).
+
+This also closes a known limitation from Incident 37 rather than just
+adding a new option: `right_edge`'s gap to the tray is computed ONCE at
+injection (`trayFrame.ActualWidth()`, added to a static margin) and goes
+stale if the tray's own width changes later (icons appearing/
+disappearing) - `left_of_tray` is the live-tracked equivalent of that
+same visual position, self-adjusting the same way the other four
+tracking anchors already do.
+
+**Next retest**: confirm `left_of_tray` sits flush before the tray and
+follows it as tray icons change (network/volume/battery icons appearing
+or disappearing, etc.) without needing a re-injection; confirm
+`right_of_tray` does something sane rather than rendering off-screen or
+overlapping the "show desktop" sliver at the taskbar's true right edge
+(this one's practical usefulness is genuinely unclear - included for
+parity with the reference mod's own `tray_right`, but expect it to be
+the least useful of the tracking positions).
