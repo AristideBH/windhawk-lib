@@ -179,7 +179,15 @@ format.
 6. Port one real widget (likely AI quota, simpler) through the new SDK as
    the SDK's first real consumer, before attempting the media player.
 7. Revisit config UI: replace the native popup menu with a custom-drawn
-   drag-and-drop reorder panel, per the original request.
+   drag-and-drop reorder panel, per the original request. Also removes
+   `TrackPopupMenu`'s nested Win32 message loop entirely, which is the
+   root cause class behind Incidents 10 and 20 - a real XAML-based menu
+   wouldn't reenter the taskbar's WM_INPUT/dispatcher handling the way a
+   native modal popup does. User pointed at
+   `taskbar-icon-separators` (windhawk.net) as a mod that already builds
+   a WinUI-style right-click menu / integrates with the taskbar's own
+   context menu - worth reading before designing this, may avoid
+   re-deriving the technique from scratch.
 8. Write a versioned SDK doc once the ABI stabilizes, ahead of any public
    windhawk.net listing.
 
@@ -1503,3 +1511,50 @@ threshold value and the debounce window are first guesses and may
 still need tuning in either direction (higher threshold if it's still
 too eager, lower/shorter debounce if it now feels sluggish or
 unresponsive to quick repeated swipes).
+
+## Incident 20: right-click crashing Explorer again (2026-09-17)
+
+**Report**: after HID scroll was confirmed working well and the
+`IWidget` interface was ported in, right-click on the stack started
+crashing Explorer again - same class of failure as Incidents 8 and 10,
+both already fixed once.
+
+**Root cause (reasoned from the code, not yet confirmed against a
+Windows Event Viewer capture the way Incidents 8/10 originally were -
+flag this for the next round if the fix below doesn't hold)**:
+`ShowContextMenu`'s `TrackPopupMenu` call pumps its own nested Win32
+message loop on this thread, same as when Incident 10 was fixed - and
+Incident 10's fix (deferring the call via the XAML dispatcher) still
+holds, that part wasn't touched. What's new since then is Incident 18,
+which added `IsCursorOverWidgetStack` to the `WM_INPUT` handler -  it
+calls `TransformToVisual` on live XAML elements to hit-test the
+cursor. `WM_INPUT` keeps arriving and being dispatched to
+`TaskbarWindowSubclassProc` while `TrackPopupMenu`'s nested loop has
+control of the thread (a finger still resting on the touchpad right
+after the click is enough), so that XAML call can now run reentrant
+inside a blocking native modal loop - the exact hazard class Incident
+10 already established is unsafe, just via a different code path that
+didn't exist yet when Incident 10 was fixed.
+
+**Fix**: added `g_contextMenuOpen`, set `true` for the duration of
+`TrackPopupMenu` in `ShowContextMenu` and checked (alongside the
+existing `nav.wheel` setting) before the `WM_INPUT` handler in
+`TaskbarWindowSubclassProc` does anything - touchpad input is simply
+ignored while the context menu is open, rather than trying to make the
+XAML hit-test itself safe to call reentrant.
+
+**Next retest**: right-click the stack (ideally with a finger still on
+the touchpad right after, to match how the crash was triggered) and
+confirm no crash, then confirm the menu's toggle/move actions still
+work. If this *doesn't* fix it, the next step is pulling the actual
+Windows Event Viewer exception (Event ID 1000, code/faulting
+module/offset) the way Incidents 8 and 10 did, rather than reasoning
+further from the code alone - this fix is a strong hypothesis, not a
+confirmed root cause.
+
+**Also flagged (user, 2026-09-17)**: `taskbar-icon-separators` on
+windhawk.net reportedly builds a WinUI-style right-click menu / hooks
+into the taskbar's own context menu. Worth reading before doing "Next
+steps" item 7 (replacing `TrackPopupMenu` with a custom XAML menu) -
+it would remove this whole hazard class by removing the nested Win32
+message loop entirely, not just guard around it.

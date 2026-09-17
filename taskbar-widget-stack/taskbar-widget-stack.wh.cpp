@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.24
+// @version         0.1.25
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1112,6 +1112,11 @@ void RebuildStackContents() {
     RefreshDots();
 }
 
+// Set for the duration of ShowContextMenu's TrackPopupMenu call - see
+// that function's comment on why the touchpad WM_INPUT handler checks
+// it (Incident 20).
+bool g_contextMenuOpen = false;
+
 void ShowContextMenu(HWND hWnd, POINT screenPt) {
     HMENU menu = CreatePopupMenu();
     for (int i = 0; i < (int)g_widgets.size(); i++) {
@@ -1131,8 +1136,21 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
     }
 
     SetForegroundWindow(hWnd);
+    // TrackPopupMenu pumps its own nested Win32 message loop on this
+    // thread - WM_INPUT for the touchpad keeps arriving while it's open
+    // (Incident 20: right-click started crashing Explorer again after
+    // Incident 18 added a touchpad WM_INPUT handler that reaches into
+    // the live XAML tree via TransformToVisual - a finger still resting
+    // on the touchpad right after the click means that handler can fire
+    // and touch XAML elements while this native modal loop has control,
+    // the same "don't touch XAML reentrant with a blocking modal loop"
+    // hazard Incident 10 already hit once with TrackPopupMenu itself).
+    // Guarding the handler with this flag for TrackPopupMenu's duration
+    // avoids that without touching the menu call itself.
+    g_contextMenuOpen = true;
     UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                screenPt.x, screenPt.y, 0, hWnd, nullptr);
+    g_contextMenuOpen = false;
     DestroyMenu(menu);
     if (cmd == 0) {
         return;
@@ -1201,7 +1219,7 @@ bool IsCursorOverWidgetStack(HWND hWnd) {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
-    if (msg == WM_INPUT && g_settings.navWheel) {
+    if (msg == WM_INPUT && g_settings.navWheel && !g_contextMenuOpen) {
         // Raw HID input from the Precision Touchpad (Incident 17),
         // registered via RegisterRawInputDevices (usage page 0x0D
         // "Digitizer", usage 0x05 "Touch Pad") - the lowest level of
