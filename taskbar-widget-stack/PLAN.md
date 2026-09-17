@@ -1826,3 +1826,13 @@ submenu row with the chevron, opening to reveal "Show widget"
 (checked when enabled)/"Move up"/"Move down", and confirm "Stack
 settings" appears below a separator (even though it doesn't do
 anything yet).
+
+**Result: compile error** - `Symbol::Down` doesn't exist in this
+SDK's `Windows.UI.Xaml.Controls.Symbol` enum (`Symbol::Up` alone did
+compile). Rather than keep guessing at which Symbol enum members
+exist, switched both chevrons - and, proactively, the "Stack
+settings" gear that used `Symbol::Setting` - to `FontIcon` with
+explicit Segoe MDL2 Assets glyphs (``/`` for up/down
+chevrons, `` for the settings gear) instead of the `Symbol`
+enum, to remove this whole class of "which enum members actually
+exist" guesswork.

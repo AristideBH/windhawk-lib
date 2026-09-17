@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.30
+// @version         0.1.31
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1313,16 +1313,27 @@ void ShowContextMenu(HWND, POINT) {
             MenuFlyoutSeparator innerSeparator;
             widgetItem.Items().Append(innerSeparator);
 
+            // Symbol::Down doesn't exist in this SDK's Symbol enum
+            // (confirmed by a compile error - Symbol::Up alone did
+            // compile, but relying on that asymmetry further seemed
+            // fragile), so both chevrons use FontIcon glyphs from
+            // Segoe MDL2 Assets instead of the Symbol enum.
             MenuFlyoutItem up;
             up.Text(L"Move up");
-            up.Icon(SymbolIcon(Symbol::Up));
+            FontIcon upIcon;
+            upIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+            upIcon.Glyph(L"");
+            up.Icon(upIcon);
             up.Click([i](winrt::Windows::Foundation::IInspectable const&,
                           RoutedEventArgs const&) { MoveWidget(i, -1); });
             widgetItem.Items().Append(up);
 
             MenuFlyoutItem down;
             down.Text(L"Move down");
-            down.Icon(SymbolIcon(Symbol::Down));
+            FontIcon downIcon;
+            downIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+            downIcon.Glyph(L"");
+            down.Icon(downIcon);
             down.Click([i](winrt::Windows::Foundation::IInspectable const&,
                             RoutedEventArgs const&) { MoveWidget(i, 1); });
             widgetItem.Items().Append(down);
@@ -1338,7 +1349,10 @@ void ShowContextMenu(HWND, POINT) {
         // for where it'll open one; currently a no-op click.
         MenuFlyoutItem settings;
         settings.Text(L"Stack settings");
-        settings.Icon(SymbolIcon(Symbol::Setting));
+        FontIcon settingsIcon;
+        settingsIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        settingsIcon.Glyph(L"");  // gear/settings glyph
+        settings.Icon(settingsIcon);
         flyout.Items().Append(settings);
 
         flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
