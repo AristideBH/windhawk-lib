@@ -271,3 +271,90 @@ removes `remoteContainer` from `remoteParentPanel`, not `root` directly.
 **Next retest**: confirm the bars now occupy the full pane height like
 the placeholders, and that switching to/from another widget in the stack
 (dots, scroll, drag) snaps cleanly with no partial-pane artifacts.
+
+## Incident 5: layout settings exposed - spacing, sizes, show/hide, colors (2026-09-17)
+
+**Request**: expose real configurability for the bars - spacing/gaps,
+text size, show/hide per element type, min/max width, bar thickness,
+colors. A "grill me" round beforehand settled the open design questions:
+one shared color for all three bars rather than per-metric (with a
+"threshold" mode - blue/normal below the warning percentage, then
+warning/critical colors above two configurable thresholds - as an
+alternative to a single fixed color, not per-metric colors); real min/
+max width with the layout adapting to content, not just one fixed
+adjustable number; show/hide toggles global across all three metrics
+(not per-metric-per-element); and native Windhawk settings only, no
+private settings-window store (this mod has never had one, unlike
+taskbar-widget-stack).
+
+**What changed**: 15 new settings under a `layout` group -
+`showLabel`/`showBar`/`showPercent` (global toggles), `fontSize`,
+`barThickness`, `barWidth`, `rowSpacing`, `labelGap`, `percentGap`,
+`minWidth`/`maxWidth`, and 5 color-related settings (`colorMode`:
+accent/custom/threshold, `customColor`, `thresholdWarnPercent`/
+`thresholdCriticalPercent`, `thresholdWarnColor`/`thresholdCriticalColor`).
+All native `Wh_Get*Setting` reads in `LoadSettings()`, same as this mod's
+existing `showCpu`/`showRam`/`showGpu` - no new persistence layer needed,
+since `Wh_ModSettingsChanged()` already does a full remove-then-inject
+(standalone) or unregister-then-reregister (registered) on *any* settings
+change, unconditionally - unlike `taskbar-widget-stack.wh.cpp`'s
+`layout.position`, which needed special-casing there because that file's
+`ApplyStackWidth` only re-reads *some* settings live.
+
+**Colors**: new `TryParseHexColor`/`GetAccentColor`/`ResolveBaseColor`
+helpers. `colorMode: accent` (default) reads the live Windows accent
+color via `UISettings.GetColorValue(UIColorType::Accent)` (this mod's
+first use of `Windows.UI.ViewManagement`); `custom` parses a `#RRGGBB`/
+`#AARRGGBB` hex setting instead; `threshold` keeps the resolved
+accent-or-custom color as the "normal" tier but swaps the fill Brush's
+color live (in `ApplyBar`, every tick) to a warning or critical hex color
+once the reported percentage crosses the two configurable thresholds.
+Colors are resolved once per `LoadSettings()` call (accent lookup + hex
+parsing), not per-tick - `ApplyBar` just picks between three already-
+resolved `Color` values.
+
+**Width**: `BuildRow` no longer builds a fixed 130px row - the label and
+percentage columns are now `Auto` (sized to their own text at the
+configured font size), and only the bar track itself keeps a determinate
+pixel width (`layout.barWidth`) - which is what the fill/empty Star-split
+inside the track (Incident 1's original bug) actually needs to compute
+against, not `root`'s own sizing. `root` itself sets `MinWidth`/`MaxWidth`
+from the new settings instead of an explicit `Width()`, in both the
+standalone path (`InjectSystemUsageGrid`) and the registered path
+(`SystemUsage_Create`). The registered path still has to hand the host a
+single concrete desired-width number (the ABI contract, and
+`taskbar-widget-stack.wh.cpp`'s own layout, can't understand "auto with
+bounds") - gets it by calling `root.UpdateLayout()` then reading
+`root.ActualWidth()` right after attaching to the host's panel, which
+already reflects the `MinWidth`/`MaxWidth` clamp automatically; no manual
+`std::clamp` needed on top of that.
+
+**Refactor**: the three separate `*FillCol`/`*EmptyCol`/`*PercentText`
+field triplets in `UiState` (one triplet per metric) collapsed into a
+single `RowRefs` struct (`fillCol`/`emptyCol`/`percentText`/`fillBrush`)
+and three `RowRefs` members (`cpuRow`/`ramRow`/`gpuRow`) - `BuildRow`/
+`ApplyBar` take one `RowRefs&` instead of three separate reference
+parameters.
+
+**Genuinely unverified**: none of this has been compiled or tested live
+yet - same caveat as every other round in this file. Specific risks:
+whether `UISettings.GetColorValue` actually resolves the live accent
+color correctly from inside this hosting context (falls back to the old
+hardcoded blue on any exception, so a failure here degrades rather than
+crashes); whether the `Auto`-column label/percent sizing plus `MinWidth`/
+`MaxWidth` on `root` renders as expected rather than clipping content
+when `maxWidth` is set too low for the configured font size; whether
+`root.ActualWidth()` right after `UpdateLayout()` in `SystemUsage_Create`
+reliably reflects the final size (this repo's own established caution
+around `ActualWidth`/layout timing, e.g. `taskbar-widget-stack.wh.cpp`'s
+Incident 22, is about calling `TransformToVisual` from risky/reentrant
+contexts like input handlers - `Create()` isn't one of those, but the
+measurement itself is new here regardless).
+
+**Next retest**: try each new setting individually (font size, bar
+width/thickness, gaps, min/max width, each color mode including
+threshold at a couple of different CPU loads) in both standalone and
+registered mode; confirm hiding all of label/bar/percent for a metric
+still leaves a sane (not zero-width, not overlapping) row; confirm an
+invalid hex value (typo, wrong length) falls back cleanly instead of
+crashing or rendering a garbled color.

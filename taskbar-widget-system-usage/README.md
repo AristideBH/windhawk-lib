@@ -6,6 +6,12 @@
 
 Three small horizontal bars injected into the Windows 11 taskbar - CPU,
 RAM, and GPU usage, label on the left, live percentage on the right.
+Layout, spacing, sizing, and color are all configurable through Windhawk's
+own settings UI - show/hide the label, bar, or percentage independently;
+font size, bar thickness/width, row and label/percentage gaps; a min/max
+width the widget adapts to; and a bar color that's either the Windows
+accent color, a custom hex color, or a threshold mode that switches to a
+warning/critical color as usage climbs.
 
 ## Requirements
 

@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.4
+// @version         0.1.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -30,7 +30,8 @@
 > `PLAN.md`.
 
 Three small horizontal bars in the taskbar, one each for CPU, RAM, and GPU
-usage - label on the left, live percentage on the right.
+usage - label on the left, live percentage on the right. Layout, spacing,
+sizing, and color are configurable through this mod's settings.
 
 ## Requirements
 
@@ -56,6 +57,71 @@ usage - label on the left, live percentage on the right.
 - refreshSeconds: 1
   $name: Refresh interval (seconds)
   $description: How often the bars update, from 1 to 5 seconds.
+- layout:
+  - showLabel: true
+    $name: Show labels
+    $description: Show the CPU/RAM/GPU label text.
+  - showBar: true
+    $name: Show bar
+    $description: Show the bar track/fill.
+  - showPercent: true
+    $name: Show percentage
+    $description: Show the live percentage text.
+  - fontSize: 9
+    $name: Text size
+    $description: Font size (px), shared by the label and percentage text.
+  - barThickness: 4
+    $name: Bar thickness
+    $description: Height (px) of the bar track.
+  - barWidth: 60
+    $name: Bar width
+    $description: Width (px) of the bar track.
+  - rowSpacing: 2
+    $name: Row spacing
+    $description: Vertical gap (px) between rows.
+  - labelGap: 4
+    $name: Label-to-bar gap
+    $description: Horizontal gap (px) between the label and the bar.
+  - percentGap: 4
+    $name: Bar-to-percentage gap
+    $description: Horizontal gap (px) between the bar and the percentage text.
+  - minWidth: 80
+    $name: Minimum width
+    $description: >-
+      Minimum overall widget width (px) - the bars won't shrink narrower
+      than this even if labels/percentage are hidden.
+  - maxWidth: 200
+    $name: Maximum width
+    $description: Maximum overall widget width (px).
+  - colorMode: accent
+    $name: Bar color
+    $description: >-
+      "Threshold" color-codes each bar by its current value (see the two
+      threshold settings below) instead of using one fixed color.
+    $options:
+    - accent: "Windows accent color"
+    - custom: "Custom color"
+    - threshold: "Threshold (color-codes by usage)"
+  - customColor: "#5AAAE6"
+    $name: Custom bar color
+    $description: >-
+      Hex color (e.g. #5AAAE6), used when Bar color above is set to
+      "Custom color". Also used as the "normal" (below-threshold) color
+      when Bar color is set to "Threshold".
+  - thresholdWarnPercent: 70
+    $name: "Threshold: warning at (%)"
+    $description: A bar at or above this percentage switches to the warning color.
+  - thresholdCriticalPercent: 90
+    $name: "Threshold: critical at (%)"
+    $description: A bar at or above this percentage switches to the critical color.
+  - thresholdWarnColor: "#FFC107"
+    $name: "Threshold: warning color"
+    $description: Hex color for the warning tier.
+  - thresholdCriticalColor: "#E74C3C"
+    $name: "Threshold: critical color"
+    $description: Hex color for the critical tier.
+  $name: Layout
+  $description: Sizing, spacing, and color options for the bars.
 */
 // ==/WindhawkModSettings==
 
@@ -76,6 +142,7 @@ usage - label on the left, live percentage on the right.
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 
 #include <algorithm>
 #include <atomic>
@@ -490,7 +557,101 @@ struct {
     bool showRam = true;
     bool showGpu = true;
     int refreshSeconds = 1;
+
+    // Layout (Incident 5, PLAN.md) - all native Windhawk settings (this
+    // mod has no private settings-window store the way taskbar-widget-
+    // stack does), applied on every LoadSettings() call, itself called
+    // from every settings-change path (Wh_ModSettingsChanged already
+    // does a full remove-then-inject/unregister-then-reregister
+    // unconditionally, so none of these need special-casing there the
+    // way taskbar-widget-stack.wh.cpp's layout.position did).
+    bool showLabel = true;
+    bool showBar = true;
+    bool showPercent = true;
+    int fontSize = 9;
+    int barThickness = 4;
+    int barWidth = 60;
+    int rowSpacing = 2;
+    int labelGap = 4;
+    int percentGap = 4;
+    int minWidth = 80;
+    int maxWidth = 200;
+    std::wstring colorMode = L"accent";  // "accent" | "custom" | "threshold"
+    std::wstring customColor = L"#5AAAE6";
+    int thresholdWarnPercent = 70;
+    int thresholdCriticalPercent = 90;
+    std::wstring thresholdWarnColor = L"#FFC107";
+    std::wstring thresholdCriticalColor = L"#E74C3C";
 } g_settings;
+
+std::wstring GetStringSetting(const wchar_t* name, const wchar_t* fallback) {
+    PCWSTR value = Wh_GetStringSetting(name);
+    std::wstring result = value ? value : fallback;
+    if (value) {
+        Wh_FreeStringSetting(value);
+    }
+    return result;
+}
+
+// #RRGGBB or #AARRGGBB (leading '#' optional either way). Returns false
+// (leaving `out` untouched) on anything else, so a typo'd setting falls
+// back to a sane default rather than a garbled color.
+bool TryParseHexColor(const std::wstring& hex, winrt::Windows::UI::Color& out) {
+    std::wstring s = hex;
+    if (!s.empty() && s[0] == L'#') {
+        s.erase(0, 1);
+    }
+    if (s.size() != 6 && s.size() != 8) {
+        return false;
+    }
+    wchar_t* end = nullptr;
+    unsigned long value = wcstoul(s.c_str(), &end, 16);
+    if (!end || *end != L'\0') {
+        return false;
+    }
+    BYTE a = 255, r, g, b;
+    if (s.size() == 8) {
+        a = (BYTE)((value >> 24) & 0xFF);
+        r = (BYTE)((value >> 16) & 0xFF);
+        g = (BYTE)((value >> 8) & 0xFF);
+        b = (BYTE)(value & 0xFF);
+    } else {
+        r = (BYTE)((value >> 16) & 0xFF);
+        g = (BYTE)((value >> 8) & 0xFF);
+        b = (BYTE)(value & 0xFF);
+    }
+    out = winrt::Windows::UI::ColorHelper::FromArgb(a, r, g, b);
+    return true;
+}
+
+winrt::Windows::UI::Color GetAccentColor() {
+    try {
+        winrt::Windows::UI::ViewManagement::UISettings uiSettings;
+        return uiSettings.GetColorValue(
+            winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+    } catch (...) {
+        // Same blue this mod always defaulted to, before accent-color
+        // support existed.
+        return winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 170, 230);
+    }
+}
+
+// The "normal"/below-threshold bar color - accent, or the user's custom
+// hex, resolved once per LoadSettings() rather than on every tick.
+winrt::Windows::UI::Color ResolveBaseColor() {
+    if (g_settings.colorMode == L"custom" ||
+        g_settings.colorMode == L"threshold") {
+        winrt::Windows::UI::Color c;
+        if (TryParseHexColor(g_settings.customColor, c)) {
+            return c;
+        }
+    }
+    return GetAccentColor();
+}
+
+winrt::Windows::UI::Color g_baseBarColor{};
+winrt::Windows::UI::Color g_warnColor{};
+winrt::Windows::UI::Color g_criticalColor{};
 
 void LoadSettings() {
     g_settings.showCpu = Wh_GetIntSetting(L"showCpu");
@@ -498,7 +659,64 @@ void LoadSettings() {
     g_settings.showGpu = Wh_GetIntSetting(L"showGpu");
     int seconds = Wh_GetIntSetting(L"refreshSeconds");
     g_settings.refreshSeconds = (seconds >= 1 && seconds <= 5) ? seconds : 1;
+
+    g_settings.showLabel = Wh_GetIntSetting(L"layout.showLabel");
+    g_settings.showBar = Wh_GetIntSetting(L"layout.showBar");
+    g_settings.showPercent = Wh_GetIntSetting(L"layout.showPercent");
+    int fontSize = Wh_GetIntSetting(L"layout.fontSize");
+    g_settings.fontSize = fontSize > 0 ? fontSize : 9;
+    int barThickness = Wh_GetIntSetting(L"layout.barThickness");
+    g_settings.barThickness = barThickness > 0 ? barThickness : 4;
+    int barWidth = Wh_GetIntSetting(L"layout.barWidth");
+    g_settings.barWidth = barWidth > 0 ? barWidth : 60;
+    int rowSpacing = Wh_GetIntSetting(L"layout.rowSpacing");
+    g_settings.rowSpacing = rowSpacing >= 0 ? rowSpacing : 2;
+    int labelGap = Wh_GetIntSetting(L"layout.labelGap");
+    g_settings.labelGap = labelGap >= 0 ? labelGap : 4;
+    int percentGap = Wh_GetIntSetting(L"layout.percentGap");
+    g_settings.percentGap = percentGap >= 0 ? percentGap : 4;
+    int minWidth = Wh_GetIntSetting(L"layout.minWidth");
+    g_settings.minWidth = minWidth > 0 ? minWidth : 80;
+    int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
+    g_settings.maxWidth = maxWidth > 0 ? maxWidth : 200;
+    if (g_settings.maxWidth < g_settings.minWidth) {
+        g_settings.maxWidth = g_settings.minWidth;
+    }
+    g_settings.colorMode = GetStringSetting(L"layout.colorMode", L"accent");
+    g_settings.customColor = GetStringSetting(L"layout.customColor", L"#5AAAE6");
+    int warnPct = Wh_GetIntSetting(L"layout.thresholdWarnPercent");
+    g_settings.thresholdWarnPercent = (warnPct >= 0 && warnPct <= 100) ? warnPct : 70;
+    int critPct = Wh_GetIntSetting(L"layout.thresholdCriticalPercent");
+    g_settings.thresholdCriticalPercent =
+        (critPct >= 0 && critPct <= 100) ? critPct : 90;
+    g_settings.thresholdWarnColor =
+        GetStringSetting(L"layout.thresholdWarnColor", L"#FFC107");
+    g_settings.thresholdCriticalColor =
+        GetStringSetting(L"layout.thresholdCriticalColor", L"#E74C3C");
+
+    // Resolved once here (accent-color lookup and hex parsing both do
+    // real work) rather than in ApplyBar, which runs on every tick for
+    // every visible bar.
+    g_baseBarColor = ResolveBaseColor();
+    if (!TryParseHexColor(g_settings.thresholdWarnColor, g_warnColor)) {
+        g_warnColor = winrt::Windows::UI::ColorHelper::FromArgb(255, 255, 193, 7);
+    }
+    if (!TryParseHexColor(g_settings.thresholdCriticalColor, g_criticalColor)) {
+        g_criticalColor =
+            winrt::Windows::UI::ColorHelper::FromArgb(255, 231, 76, 60);
+    }
 }
+
+// One metric row's live-updated pieces - fillCol/emptyCol drive the
+// Star-split fill proportion, percentText the live number, fillBrush the
+// bar's color (only touched when layout.colorMode is "threshold", but
+// always populated so ApplyBar never needs to branch on visibility).
+struct RowRefs {
+    ColumnDefinition fillCol{nullptr};
+    ColumnDefinition emptyCol{nullptr};
+    TextBlock percentText{nullptr};
+    SolidColorBrush fillBrush{nullptr};
+};
 
 struct UiState {
     HWND hWnd{nullptr};
@@ -512,17 +730,9 @@ struct UiState {
                                         // SystemUsage_Create's comment.
     StackPanel root{nullptr};
 
-    ColumnDefinition cpuFillCol{nullptr};
-    ColumnDefinition cpuEmptyCol{nullptr};
-    TextBlock cpuPercentText{nullptr};
-
-    ColumnDefinition ramFillCol{nullptr};
-    ColumnDefinition ramEmptyCol{nullptr};
-    TextBlock ramPercentText{nullptr};
-
-    ColumnDefinition gpuFillCol{nullptr};
-    ColumnDefinition gpuEmptyCol{nullptr};
-    TextBlock gpuPercentText{nullptr};
+    RowRefs cpuRow;
+    RowRefs ramRow;
+    RowRefs gpuRow;
 
     DispatcherTimer timer{nullptr};
     winrt::event_token timerToken;
@@ -566,83 +776,122 @@ PDH_HQUERY g_pdhQuery = nullptr;
 PDH_HCOUNTER g_pdhCounter = nullptr;
 bool g_pdhOk = false;
 
-void BuildRow(StackPanel& content,
-              const wchar_t* label,
-              ColumnDefinition& fillCol,
-              ColumnDefinition& emptyCol,
-              TextBlock& percentText) {
+// Builds one metric row from current settings (Incident 5, PLAN.md).
+// The label/percent columns are Auto (sized to their own text at the
+// configured font size) - only the bar track column is a fixed pixel
+// width (layout.barWidth). This is deliberate, not incidental: the fill/
+// empty Star-split inside the track (Incident 1's original bug) needs
+// SOME ancestor with a determinate width to proportion against, and the
+// track's own fixed-pixel column provides that regardless of how `root`
+// itself is sized (Auto + MinWidth/MaxWidth - see SystemUsage_Create/
+// InjectSystemUsageGrid) - unlike the old fixed `root.Width(130)`, which
+// was root's own determinate width incidentally solving the same
+// problem for the whole row, not just the track.
+//
+// A hidden element (layout.show*) is Collapsed and its column's width
+// forced to 0, rather than the column simply being omitted - keeps
+// column indices fixed (0/1/2 always) so nothing here needs to track
+// which columns exist for a given row.
+void BuildRow(StackPanel& content, const wchar_t* label, RowRefs& refs) {
     Grid row;
-    row.Margin({0, 1, 0, 1});
+    double halfSpacing = g_settings.rowSpacing / 2.0;
+    row.Margin({0, halfSpacing, 0, halfSpacing});
+
     ColumnDefinition labelCol;
-    labelCol.Width({22, GridUnitType::Pixel});
+    labelCol.Width(g_settings.showLabel
+                       ? GridLength{0, GridUnitType::Auto}
+                       : GridLength{0, GridUnitType::Pixel});
     ColumnDefinition trackCol;
-    trackCol.Width({1.0, GridUnitType::Star});
+    trackCol.Width(
+        g_settings.showBar
+            ? GridLength{(double)g_settings.barWidth, GridUnitType::Pixel}
+            : GridLength{0, GridUnitType::Pixel});
     ColumnDefinition percentCol;
-    percentCol.Width({26, GridUnitType::Pixel});
+    percentCol.Width(g_settings.showPercent
+                          ? GridLength{0, GridUnitType::Auto}
+                          : GridLength{0, GridUnitType::Pixel});
     row.ColumnDefinitions().Append(labelCol);
     row.ColumnDefinitions().Append(trackCol);
     row.ColumnDefinitions().Append(percentCol);
 
-    TextBlock labelText;
-    labelText.Text(winrt::hstring(label));
-    labelText.FontSize(9);
-    labelText.VerticalAlignment(VerticalAlignment::Center);
     SolidColorBrush textBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(255, 220, 220, 220)};
+
+    TextBlock labelText;
+    labelText.Text(winrt::hstring(label));
+    labelText.FontSize(g_settings.fontSize);
+    labelText.VerticalAlignment(VerticalAlignment::Center);
+    labelText.Margin({0, 0, (double)g_settings.labelGap, 0});
     labelText.Foreground(textBrush);
+    labelText.Visibility(g_settings.showLabel ? Visibility::Visible
+                                               : Visibility::Collapsed);
     Grid::SetColumn(labelText, 0);
     row.Children().Append(labelText);
 
     Border track;
-    track.Height(4);
-    track.Margin({4, 0, 4, 0});
+    track.Height(g_settings.barThickness);
     track.CornerRadius({2, 2, 2, 2});
     SolidColorBrush trackBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 70, 70)};
     track.Background(trackBrush);
     track.VerticalAlignment(VerticalAlignment::Center);
+    track.Visibility(g_settings.showBar ? Visibility::Visible
+                                         : Visibility::Collapsed);
     Grid::SetColumn(track, 1);
 
-    fillCol = ColumnDefinition();
-    fillCol.Width({0.0, GridUnitType::Star});
-    emptyCol = ColumnDefinition();
-    emptyCol.Width({100.0, GridUnitType::Star});
+    refs.fillCol = ColumnDefinition();
+    refs.fillCol.Width({0.0, GridUnitType::Star});
+    refs.emptyCol = ColumnDefinition();
+    refs.emptyCol.Width({100.0, GridUnitType::Star});
     Grid fillGrid;
-    fillGrid.ColumnDefinitions().Append(fillCol);
-    fillGrid.ColumnDefinitions().Append(emptyCol);
+    fillGrid.ColumnDefinitions().Append(refs.fillCol);
+    fillGrid.ColumnDefinitions().Append(refs.emptyCol);
     Border fill;
-    SolidColorBrush fillBrush{
-        winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 170, 230)};
-    fill.Background(fillBrush);
+    refs.fillBrush = SolidColorBrush{g_baseBarColor};
+    fill.Background(refs.fillBrush);
     fill.CornerRadius({2, 2, 2, 2});
     Grid::SetColumn(fill, 0);
     fillGrid.Children().Append(fill);
     track.Child(fillGrid);
     row.Children().Append(track);
 
-    percentText = TextBlock();
-    percentText.Text(L"0%");
-    percentText.FontSize(9);
-    percentText.HorizontalAlignment(HorizontalAlignment::Left);
-    percentText.VerticalAlignment(VerticalAlignment::Center);
-    percentText.Foreground(textBrush);
-    Grid::SetColumn(percentText, 2);
-    row.Children().Append(percentText);
+    refs.percentText = TextBlock();
+    refs.percentText.Text(L"0%");
+    refs.percentText.FontSize(g_settings.fontSize);
+    refs.percentText.HorizontalAlignment(HorizontalAlignment::Left);
+    refs.percentText.VerticalAlignment(VerticalAlignment::Center);
+    refs.percentText.Margin({(double)g_settings.percentGap, 0, 0, 0});
+    refs.percentText.Foreground(textBrush);
+    refs.percentText.Visibility(g_settings.showPercent
+                                     ? Visibility::Visible
+                                     : Visibility::Collapsed);
+    Grid::SetColumn(refs.percentText, 2);
+    row.Children().Append(refs.percentText);
 
     content.Children().Append(row);
 }
 
-void ApplyBar(ColumnDefinition& fillCol,
-              ColumnDefinition& emptyCol,
-              TextBlock& percentText,
-              double percent) {
+void ApplyBar(RowRefs& refs, double percent) {
     percent = std::clamp(percent, 0.0, 100.0);
     try {
-        fillCol.Width({percent, GridUnitType::Star});
-        emptyCol.Width({100.0 - percent, GridUnitType::Star});
-        wchar_t buf[8];
-        wsprintfW(buf, L"%d%%", (int)std::lround(percent));
-        percentText.Text(buf);
+        refs.fillCol.Width({percent, GridUnitType::Star});
+        refs.emptyCol.Width({100.0 - percent, GridUnitType::Star});
+        if (refs.percentText) {
+            wchar_t buf[8];
+            wsprintfW(buf, L"%d%%", (int)std::lround(percent));
+            refs.percentText.Text(buf);
+        }
+        if (refs.fillBrush) {
+            winrt::Windows::UI::Color color = g_baseBarColor;
+            if (g_settings.colorMode == L"threshold") {
+                if (percent >= g_settings.thresholdCriticalPercent) {
+                    color = g_criticalColor;
+                } else if (percent >= g_settings.thresholdWarnPercent) {
+                    color = g_warnColor;
+                }
+            }
+            refs.fillBrush.Color(color);
+        }
     } catch (...) {
     }
 }
@@ -748,24 +997,22 @@ double SampleGpu() {
 }
 
 void UpdateValues() {
-    if (g_settings.showCpu && g_ui.cpuPercentText) {
-        ApplyBar(g_ui.cpuFillCol, g_ui.cpuEmptyCol, g_ui.cpuPercentText,
-                  SampleCpu());
+    if (g_settings.showCpu && g_ui.cpuRow.percentText) {
+        ApplyBar(g_ui.cpuRow, SampleCpu());
     }
-    if (g_settings.showRam && g_ui.ramPercentText) {
-        ApplyBar(g_ui.ramFillCol, g_ui.ramEmptyCol, g_ui.ramPercentText,
-                  SampleRam());
+    if (g_settings.showRam && g_ui.ramRow.percentText) {
+        ApplyBar(g_ui.ramRow, SampleRam());
     }
-    if (g_settings.showGpu && g_ui.gpuPercentText) {
+    if (g_settings.showGpu && g_ui.gpuRow.percentText) {
         double gpu = g_pdhOk ? SampleGpu() : -1.0;
         if (gpu >= 0.0) {
-            ApplyBar(g_ui.gpuFillCol, g_ui.gpuEmptyCol, g_ui.gpuPercentText,
-                      gpu);
+            ApplyBar(g_ui.gpuRow, gpu);
         } else {
-            ApplyBar(g_ui.gpuFillCol, g_ui.gpuEmptyCol, g_ui.gpuPercentText,
-                      0.0);
+            ApplyBar(g_ui.gpuRow, 0.0);
             try {
-                g_ui.gpuPercentText.Text(L"N/A");
+                if (g_settings.showPercent) {
+                    g_ui.gpuRow.percentText.Text(L"N/A");
+                }
             } catch (...) {
             }
         }
@@ -807,11 +1054,6 @@ void StopTimer() {
 // Width()) differ.
 // ---------------------------------------------------------------------
 
-// Matches the desired width this widget reported to taskbar-widget-stack
-// back when it lived in-process there, and what the standalone path's
-// own root.Width(130) uses today.
-constexpr double kDesiredWidth = 130.0;
-
 double __cdecl SystemUsage_Create(void* /*context*/,
                                    const WidgetStackHostAbiV1* host) {
     if (!host) {
@@ -841,22 +1083,27 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         StackPanel root;
         root.Orientation(Orientation::Vertical);
         root.VerticalAlignment(VerticalAlignment::Center);
-        // No fixed Width() here, unlike the standalone path - the host
-        // sizes this to the widest enabled widget's desired width (see
-        // IWidget::Create's contract in taskbar-widget-stack.wh.cpp) and
-        // stretches this element to fill it.
+        root.HorizontalAlignment(HorizontalAlignment::Left);
+        // MinWidth/MaxWidth (Incident 5, PLAN.md), not a fixed Width() -
+        // the host still needs a single concrete number back from this
+        // function (its own layout can't understand "auto, with these
+        // bounds"), but that number is now measured from the actual
+        // laid-out content below rather than a hardcoded constant, and
+        // HorizontalAlignment::Left keeps this from awkwardly stretching
+        // past its own content if a sibling widget wants more room -
+        // matches IWidget::Create's contract ("should not set its own
+        // fixed Width()"): MinWidth/MaxWidth constrain, they don't fix.
+        root.MinWidth(g_settings.minWidth);
+        root.MaxWidth(g_settings.maxWidth);
 
         if (g_settings.showCpu) {
-            BuildRow(root, L"CPU", g_ui.cpuFillCol, g_ui.cpuEmptyCol,
-                     g_ui.cpuPercentText);
+            BuildRow(root, L"CPU", g_ui.cpuRow);
         }
         if (g_settings.showRam) {
-            BuildRow(root, L"RAM", g_ui.ramFillCol, g_ui.ramEmptyCol,
-                     g_ui.ramPercentText);
+            BuildRow(root, L"RAM", g_ui.ramRow);
         }
         if (g_settings.showGpu) {
-            BuildRow(root, L"GPU", g_ui.gpuFillCol, g_ui.gpuEmptyCol,
-                     g_ui.gpuPercentText);
+            BuildRow(root, L"GPU", g_ui.gpuRow);
         }
 
         container.Child(root);
@@ -872,8 +1119,21 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         UpdateValues();
         StartTimer();
 
+        // Forces a synchronous measure+arrange (same reasoning as this
+        // repo's taskbar-widget-stack.wh.cpp's UpdateStackScreenRect,
+        // Incident 22 there: ActualWidth is stale/zero until a real
+        // layout pass has run) so the returned width reflects root's
+        // actual Auto-sized content - already MinWidth/MaxWidth-clamped
+        // by the properties set above, so no extra std::clamp needed
+        // here.
+        root.UpdateLayout();
+        double desiredWidth = root.ActualWidth();
+        if (desiredWidth <= 0) {
+            desiredWidth = g_settings.minWidth;
+        }
+
         Wh_Log(L"SystemUsage_Create: built bars as a registered widget");
-        return kDesiredWidth;
+        return desiredWidth;
     } catch (...) {
         Wh_Log(L"SystemUsage_Create: exception");
         return 0.0;
@@ -895,7 +1155,7 @@ double __cdecl SystemUsage_OnSettingsChanged(void* /*context*/) {
     // ABI struct needs a typed slot here; reload settings for parity if
     // anything ever does call it directly.
     LoadSettings();
-    return kDesiredWidth;
+    return (double)g_settings.minWidth;
 }
 
 void __cdecl SystemUsage_Destroy(void* /*context*/) {
@@ -980,30 +1240,26 @@ bool InjectSystemUsageGrid(HWND hWnd) {
         root.HorizontalAlignment(HorizontalAlignment::Left);
         root.Margin({kLeftEdgeGap, 0, 0, 0});
         root.Padding({4, 0, 4, 0});
-        // Explicit width (Incident 1, live-tested): without it, `root`
-        // sizes Auto (to content), and a Star-weighted column inside an
-        // Auto-sized ancestor has no determinate space to proportion
-        // against - it collapses to 0, which is exactly what happened
-        // to the bar track's fill/empty columns (both Star-weighted)
-        // when this widget was extracted out of taskbar-widget-stack.
-        // There, the host (ApplyStackWidth) gave the equivalent element
-        // a real Width, which is what made the Star columns work at
-        // all - that's now this mod's own job. 130px matches the
-        // desired width this widget reported to that host before
-        // extraction.
-        root.Width(130);
+        // MinWidth/MaxWidth, not a fixed Width() (Incident 5, PLAN.md -
+        // supersedes the old fixed `root.Width(130)` from Incident 1).
+        // `root` sizes Auto to its rows' content - each row's label/
+        // percent columns are Auto too, only the bar track itself has a
+        // fixed pixel width (layout.barWidth) - so the fill/empty Star-
+        // split that Incident 1 originally broke here computes against
+        // the track's own determinate column width regardless of how
+        // `root` itself is sized; MinWidth/MaxWidth just clamp the
+        // overall result to the user's configured bounds.
+        root.MinWidth(g_settings.minWidth);
+        root.MaxWidth(g_settings.maxWidth);
 
         if (g_settings.showCpu) {
-            BuildRow(root, L"CPU", g_ui.cpuFillCol, g_ui.cpuEmptyCol,
-                     g_ui.cpuPercentText);
+            BuildRow(root, L"CPU", g_ui.cpuRow);
         }
         if (g_settings.showRam) {
-            BuildRow(root, L"RAM", g_ui.ramFillCol, g_ui.ramEmptyCol,
-                     g_ui.ramPercentText);
+            BuildRow(root, L"RAM", g_ui.ramRow);
         }
         if (g_settings.showGpu) {
-            BuildRow(root, L"GPU", g_ui.gpuFillCol, g_ui.gpuEmptyCol,
-                     g_ui.gpuPercentText);
+            BuildRow(root, L"GPU", g_ui.gpuRow);
         }
 
         Canvas::SetZIndex(root, 1000);
