@@ -2497,3 +2497,55 @@ layered on top of the existing injection. Deferred pending a scope
 decision with the user (a live-tracked multi-anchor system is
 meaningfully more code and testing surface than everything else in this
 incident) - see chat for the options put to them.
+
+## Incident 37: edge positions implemented (left/center/right), tracking positions deferred (2026-09-17)
+
+**Decision**: given the design note above, scoped this round to just the
+three static "edge" positions (`left_edge`/`center_edge`/`right_edge`),
+skipping the Start/Search/Task View/Widgets-button tracking positions for
+now - user's own call, citing the live-tracking system's extra code and
+testing surface. Also: this mod already tried and abandoned element
+tracking twice before (Incidents 4-6, this same file, back when the
+Start-button-relative and then whole-repeater-relative anchors both
+misjudged what a taskbar element's bounds actually meant), so starting
+with the family that's already proven robust for this mod specifically -
+not just cheaper in the abstract - is the right order to build this in.
+
+**What changed**: new `layout.position` setting (native
+`==WindhawkModSettings==` string with `$options`, default `left_edge` -
+existing behavior, unchanged), read via a new `GetStringSetting()` helper
+(this file's first use of `Wh_GetStringSetting`/`Wh_FreeStringSetting` -
+every setting before this was `Wh_GetIntSetting`). `InjectWidgetStackGrid`
+now branches on it for `root`'s `HorizontalAlignment`/`Margin`:
+`left_edge` keeps the original `kEdgeGap` (renamed from `kLeftEdgeGap`,
+same 6px value) left margin; `center_edge` centers with no margin;
+`right_edge` right-aligns with a margin that adds the system tray's
+current `ActualWidth()` (found once via `FindChildByName(taskbarRootGrid,
+L"SystemTrayFrameGrid")`) so it doesn't overlap the clock/tray icons -
+ported from `taskbar-fluent-media-player`'s own `taskbar_right_edge`
+handling, minus its live tracking (this is computed once at injection,
+like everything else in the edge family - see the design note above for
+why that's a deliberate, not lazy, choice for this mod).
+
+Also added to the private in-app settings window's Layout tab: a
+`ComboBox` for the three positions, and (since changing this setting
+doesn't take effect through `RebuildStackContents`'s existing live-apply
+path the way gap/onRight/maxWidth do - `HorizontalAlignment`/`Margin` are
+only set once, at injection) both that control's own handler and
+`Wh_ModSettingsChanged` now do an explicit remove-then-inject when the
+position actually changes, so it applies whether the user changes it
+through this mod's own settings window or through Windhawk's native
+settings UI directly.
+
+**Known limitation, consistent with the whole edge family**: the tray
+width used for `right_edge`'s margin is computed once at injection, not
+live-tracked - if the number of tray icons changes later in the same
+Explorer session, the margin can go stale until the next injection
+(toggling the setting, an Explorer restart, or a display change).
+
+**Next retest**: confirm all three positions render in the right spot
+(left edge unchanged from before this round; center actually centered;
+right sitting flush before the tray, not overlapping the clock); confirm
+switching between them via both the in-app settings window and
+Windhawk's own settings UI actually moves the stack without needing an
+Explorer restart.

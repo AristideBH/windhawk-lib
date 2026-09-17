@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.44
+// @version         0.1.45
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -75,6 +75,15 @@ prototype - not yet verified live, see `PLAN.md`.
   $name: Navigation
   $description: Which ways of switching between stacked widgets are active.
 - layout:
+  - position: left_edge
+    $name: Taskbar position
+    $description: >-
+      Where the widget stack sits in the taskbar. "Left edge" is this mod's
+      original/default placement, flush against the taskbar's own left edge.
+    $options:
+    - left_edge: "Left edge"
+    - center_edge: "Center"
+    - right_edge: "Right edge (before the system tray)"
   - maxWidth: 520
     $name: Maximum stack width
     $description: >-
@@ -420,6 +429,10 @@ struct {
     bool layoutHideIndicatorWhenSingle = true;
     int layoutIndicatorGap = 6;
     bool layoutIndicatorOnRight = false;
+    // "left_edge" (default - RootGrid's own left edge, unchanged from
+    // this mod's original/only behavior), "center_edge", or "right_edge"
+    // - see InjectWidgetStackGrid's placement comment (Incident 37).
+    std::wstring layoutPosition = L"left_edge";
 } g_settings;
 
 // ---------------------------------------------------------------------
@@ -1201,6 +1214,8 @@ void StepWidget(int direction) {
 
 void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
+bool InjectWidgetStackGrid(HWND hWnd);
+void RemoveWidgetStackGrid();
 
 // Registers this mod's pointer-event handlers on `g_ui.root` and stores
 // each subscription's `event_token` in `UiState` so `UnwireNavigation`
@@ -1840,6 +1855,55 @@ FrameworkElement BuildLayoutTab() {
     panel.Margin({16, 16, 16, 16});
     panel.Spacing(16);
 
+    StackPanel positionGroup;
+    positionGroup.Orientation(Orientation::Vertical);
+    positionGroup.Spacing(4);
+
+    TextBlock positionLabel;
+    positionLabel.Text(L"Taskbar position");
+    positionGroup.Children().Append(positionLabel);
+
+    // Order must match kPositionValues below - index N in one is index N
+    // in the other. `static` so the SelectionChanged lambda below can
+    // index into them without capturing (a non-static local constexpr
+    // array indexed with a runtime value still ODR-uses the array
+    // object, which would otherwise require an explicit capture).
+    static constexpr const wchar_t* kPositionLabels[] = {L"Left edge",
+                                                           L"Center",
+                                                           L"Right edge"};
+    static constexpr const wchar_t* kPositionValues[] = {
+        L"left_edge", L"center_edge", L"right_edge"};
+    ComboBox positionCombo;
+    int selectedIndex = 0;
+    for (int i = 0; i < ARRAYSIZE(kPositionValues); i++) {
+        ComboBoxItem item;
+        item.Content(winrt::box_value(winrt::hstring(kPositionLabels[i])));
+        positionCombo.Items().Append(item);
+        if (g_settings.layoutPosition == kPositionValues[i]) {
+            selectedIndex = i;
+        }
+    }
+    positionCombo.SelectedIndex(selectedIndex);
+    positionCombo.SelectionChanged(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           SelectionChangedEventArgs const&) {
+            int index = sender.as<ComboBox>().SelectedIndex();
+            if (index < 0 || index >= ARRAYSIZE(kPositionValues)) {
+                return;
+            }
+            g_settings.layoutPosition = kPositionValues[index];
+            WritePrivateString(L"layout.position", g_settings.layoutPosition);
+            // Position is only applied at injection time (see
+            // Wh_ModSettingsChanged's comment) - remove and re-inject to
+            // apply it live from this control too.
+            if (g_ui.hWnd) {
+                RemoveWidgetStackGrid();
+                InjectWidgetStackGrid(g_taskbarWnd);
+            }
+        });
+    positionGroup.Children().Append(positionCombo);
+    panel.Children().Append(positionGroup);
+
     StackPanel maxWidthGroup;
     maxWidthGroup.Orientation(Orientation::Vertical);
     maxWidthGroup.Spacing(4);
@@ -2462,7 +2526,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
 // its right edge pushed the stack far off to the right, past the visible
 // taskbar bounds ("disappeared"). The true left edge needs no tracking
 // at all - it's RootGrid's own edge, which doesn't move.
-constexpr double kLeftEdgeGap = 6.0;
+constexpr double kEdgeGap = 6.0;
 
 // Builds the full widget-stack element (dots column + clipped, slidable
 // widget panes) and adds it as a floating child of the taskbar's
@@ -2498,8 +2562,40 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     try {
         Grid root;
         root.VerticalAlignment(VerticalAlignment::Stretch);
-        root.HorizontalAlignment(HorizontalAlignment::Left);
-        root.Margin({kLeftEdgeGap, 0, 0, 0});
+        // Edge placement (Incident 37, PLAN.md's "Design note: flexible
+        // taskbar placement") - static HorizontalAlignment + Margin only,
+        // no element tracking. Incidents 4-6 already tried tracking a
+        // specific taskbar element (the Start button, then the whole
+        // repeater) for positioning and abandoned both: a taskbar
+        // element's own bounds are easy to misjudge (the repeater also
+        // contains every pinned/running icon, not just the leading
+        // buttons), and this mod's own left-edge placement was always
+        // just RootGrid's own static edge anyway - not actually relative
+        // to anything that moves. Center/right reuse that same lesson:
+        // both are static relative to `taskbarRootGrid` itself, which
+        // doesn't move, rather than to another element inside it.
+        if (g_settings.layoutPosition == L"center_edge") {
+            root.HorizontalAlignment(HorizontalAlignment::Center);
+        } else if (g_settings.layoutPosition == L"right_edge") {
+            root.HorizontalAlignment(HorizontalAlignment::Right);
+            // Static, computed once here rather than tracked live -
+            // avoids overlapping the system tray/clock, which sits at
+            // the taskbar's actual right edge. If the tray's own width
+            // changes later (icons added/removed) this margin goes
+            // stale until the next injection (Explorer restart, display
+            // change, or toggling this setting) - a known limitation,
+            // consistent with every other edge position here being
+            // static rather than live-tracked.
+            double trayGap = kEdgeGap;
+            if (auto trayFrame = FindChildByName(taskbarRootGrid,
+                                                  L"SystemTrayFrameGrid")) {
+                trayGap += trayFrame.ActualWidth();
+            }
+            root.Margin({0, 0, trayGap, 0});
+        } else {
+            root.HorizontalAlignment(HorizontalAlignment::Left);
+            root.Margin({kEdgeGap, 0, 0, 0});
+        }
         // Placeholder width - RebuildStackContents (called below) applies
         // the real width immediately, once widgets have reported their
         // desired widths.
@@ -2697,6 +2793,15 @@ void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
     StartRetryInject();
 }
 
+std::wstring GetStringSetting(const wchar_t* name, const wchar_t* fallback) {
+    PCWSTR value = Wh_GetStringSetting(name);
+    std::wstring result = value ? value : fallback;
+    if (value) {
+        Wh_FreeStringSetting(value);
+    }
+    return result;
+}
+
 void LoadSettings() {
     g_settings.navWheel = Wh_GetIntSetting(L"nav.wheel");
     g_settings.navDots = Wh_GetIntSetting(L"nav.dots");
@@ -2711,6 +2816,7 @@ void LoadSettings() {
     g_settings.layoutIndicatorGap = gap >= 0 ? gap : 6;
     g_settings.layoutIndicatorOnRight =
         Wh_GetIntSetting(L"layout.indicator.onRight");
+    g_settings.layoutPosition = GetStringSetting(L"layout.position", L"left_edge");
 
     // Private store (Incident 26) overrides the above whenever a key
     // exists there - it's the real source of truth once the settings
@@ -2743,6 +2849,10 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"layout.indicator.onRight", v)) {
         g_settings.layoutIndicatorOnRight = v != 0;
+    }
+    std::wstring pos;
+    if (ReadPrivateString(L"layout.position", pos) && !pos.empty()) {
+        g_settings.layoutPosition = pos;
     }
 }
 
@@ -2845,7 +2955,24 @@ void Wh_ModAfterInit() {
 }
 
 void Wh_ModSettingsChanged() {
+    std::wstring previousPosition = g_settings.layoutPosition;
     LoadSettings();
+    // Unlike the other layout settings (gap/onRight/maxWidth/
+    // hideWhenSingle), which ApplyStackWidth already re-reads live on
+    // every RebuildStackContents, layout.position is only ever applied
+    // once, at InjectWidgetStackGrid time (it sets root's
+    // HorizontalAlignment/Margin, not something RebuildStackContents
+    // touches) - so a change made through Windhawk's own native settings
+    // UI (as opposed to this mod's private in-app settings window, whose
+    // controls call RebuildStackContents/remove-then-inject themselves)
+    // needs an explicit remove-then-inject here to actually take effect.
+    if (g_settings.layoutPosition != previousPosition && g_ui.hWnd) {
+        HWND hWnd = g_ui.hWnd;
+        RunFromWindowThread(hWnd, [] {
+            RemoveWidgetStackGrid();
+            InjectWidgetStackGrid(g_taskbarWnd);
+        });
+    }
 }
 
 void Wh_ModBeforeUninit() {
