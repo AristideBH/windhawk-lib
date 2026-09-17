@@ -2060,3 +2060,43 @@ slider actually resizes the stack down to the new content width if it's
 currently wider than the widest widget's desired width), and confirm
 values survive closing and reopening the window (private-store
 persistence, not just in-memory for this session).
+
+## Incident 29: jittery drag when nav.drag was on - a stray Incident-14 handler still active (2026-09-17)
+
+**Report**: with `nav.drag` off, dragging the stack "works perfectly"
+(meaning *something* still stepped it) - with `nav.drag` on, dragging
+was jittery.
+
+**Root cause**: Incident 14's `ManipulationDelta` handler - added as
+an early two-finger-touchpad-scroll attempt, confirmed dead for
+touchpad input at the time (never fired, which is exactly why
+Incidents 17-22 built the raw-HID mechanism that's now the sole
+working touchpad path) - was never removed, and was gated on
+`nav.wheel`, not `nav.drag`. A mouse press-and-drag on the stack can
+also be recognized by XAML's manipulation/gesture system as long as
+`ManipulationMode` is set on the element (which it was, for the
+touchpad attempt), so that stray handler fired *alongside* the manual
+`PointerPressed`/`PointerMoved` drag code above it - two independent
+paths, each calling `StepWidget` off the same physical drag with
+different thresholds and timing, competing. With `nav.drag` off, only
+the stray `ManipulationDelta` path remained active (gated on
+`nav.wheel`, which was on) - a single path, so it read as "works
+perfectly"; turning `nav.drag` on added the second, conflicting path
+and produced the jitter.
+
+**Fix**: removed the `ManipulationDelta` handler, `ManipulationMode`
+call, and the now-unused `manipulationToken`/`manipulationAccumY`
+`UiState` fields entirely - same cleanup precedent as removing the
+`WH_MOUSE_LL` hook once HID replaced it (Incident 21-adjacent
+cleanup): dead weight for its original purpose, and by this point
+actively harmful for mouse drag.
+
+**Next retest**: drag the stack with `nav.drag` on - confirm it's
+smooth now (matching how it felt with `nav.drag` off before this
+fix), and confirm wheel/dots/touchpad nav are all unaffected (none of
+them depended on this handler).
+
+**Also noted**: user can't meaningfully test `layout.maxWidth` yet -
+both placeholder widgets are narrower than any width worth adjusting
+to. Revisit once a real, wider widget (media player/AI quota) is
+ported through the SDK.

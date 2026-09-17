@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.36
+// @version         0.1.37
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -790,7 +790,6 @@ struct UiState {
     winrt::event_token movedToken;
     winrt::event_token releasedToken;
     winrt::event_token rightTappedToken;
-    winrt::event_token manipulationToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     // Resized at runtime by ApplyStackWidth() as widgets are
@@ -818,7 +817,6 @@ struct UiState {
     bool dragging = false;
     double dragStartY = 0;
     winrt::Windows::UI::Xaml::Input::Pointer dragPointer{nullptr};
-    double manipulationAccumY = 0;
     // Cached screen-coordinate bounds of `root`, refreshed by
     // UpdateStackScreenRect() from RebuildStackContents (a safe,
     // known-context call site) - see that function's comment for why
@@ -1110,33 +1108,21 @@ void WireUpNavigation() {
             args.Handled(true);
         });
 
-    // Two-finger trackpad scroll, separately from `PointerWheelChanged`
-    // (confirmed live, 2026-09-16, "Incident 14": a real mouse wheel
-    // reliably fires `PointerWheelChanged`/`WM_MOUSEWHEEL`, but a
-    // Precision Touchpad's two-finger pan over this element did not -
-    // plausibly because the taskbar's own native touchpad-gesture
-    // handling consumes it before the OS's generic "synthesize
-    // WM_MOUSEWHEEL from an unclaimed touchpad pan" fallback ever runs).
-    // `ManipulationDelta` is the WinRT-native channel for touch/touchpad
-    // pan gestures, independent of wheel synthesis - requires
-    // `ManipulationMode` to declare interest in vertical translation.
-    g_ui.root.ManipulationMode(wuxi::ManipulationModes::TranslateY);
-    g_ui.manipulationToken = g_ui.root.ManipulationDelta(
-        [](winrt::Windows::Foundation::IInspectable const&,
-           wuxi::ManipulationDeltaRoutedEventArgs const& args) {
-            if (!g_settings.navWheel) {
-                return;
-            }
-            double dy = args.Delta().Translation.Y;
-            g_ui.manipulationAccumY += dy;
-            double height = PaneHeight();
-            while (std::abs(g_ui.manipulationAccumY) > height / 2) {
-                StepWidget(g_ui.manipulationAccumY < 0 ? 1 : -1);
-                g_ui.manipulationAccumY +=
-                    g_ui.manipulationAccumY < 0 ? height / 2 : -(height / 2);
-            }
-            args.Handled(true);
-        });
+    // Incident 14's two-finger trackpad scroll attempt via
+    // `ManipulationDelta` used to live here - confirmed dead for
+    // touchpad input (never fired, which is why Incidents 17-22 built
+    // the raw-HID mechanism that's now the sole working touchpad path)
+    // but, per Incident 29, still very much alive for MOUSE drag,
+    // where it fired *alongside* the manual PointerPressed/Moved drag
+    // handling above off the same physical gesture - two independent
+    // paths calling StepWidget with different thresholds/timing,
+    // competing and producing the jitter reported when nav.drag was
+    // on (nav.drag off left only this stray path active, which read
+    // as "works perfectly" since the manual handler wasn't there to
+    // conflict with it). Removed entirely, same as the WH_MOUSE_LL
+    // hook's removal once HID replaced it as a touchpad mechanism -
+    // it was dead weight for its original purpose and actively harmful
+    // for mouse drag.
 }
 
 // Revokes everything `WireUpNavigation` registered. Must run before
@@ -1160,9 +1146,6 @@ void UnwireNavigation() {
         }
         if (g_ui.rightTappedToken) {
             g_ui.root.RightTapped(g_ui.rightTappedToken);
-        }
-        if (g_ui.manipulationToken) {
-            g_ui.root.ManipulationDelta(g_ui.manipulationToken);
         }
     } catch (...) {
     }
