@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.7
+// @version         0.1.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -759,6 +759,15 @@ bool g_remoteRegistered = false;
 HWND g_remoteHostHwnd = nullptr;
 WidgetStack_RegisterWidget_t g_hostRegisterFn = nullptr;
 WidgetStack_UnregisterWidget_t g_hostUnregisterFn = nullptr;
+// Set just before this mod calls the host's own unregisterFn itself
+// (Wh_ModSettingsChanged/Wh_ModBeforeUninit) so SystemUsage_Destroy can
+// tell that apart from the host calling Destroy() on its own - e.g.
+// taskbar-widget-stack getting disabled/unloaded mid-session, which
+// tears down every registered widget without this mod ever calling
+// unregisterFn itself. Only the latter case should fall back to
+// standalone (Incident 8, PLAN.md) - the former is mid-reregistration
+// and must not race a second StartRetryInject against it.
+bool g_expectingHostDestroy = false;
 // A stable, unique-to-this-mod context pointer handed to the host and
 // echoed back on every callback - not read as data, just used as an
 // identity token (see RemoteWidget::Context() in the host).
@@ -1210,6 +1219,12 @@ double __cdecl SystemUsage_OnSettingsChanged(void* /*context*/) {
     return (double)g_settings.minWidth;
 }
 
+// Defined further down; forward-declared so SystemUsage_Destroy can
+// fall back to standalone injection (Incident 8, PLAN.md) when it's
+// called on its own by the host, rather than as part of this mod's own
+// unregister-then-reregister flow.
+void StartRetryInject();
+
 void __cdecl SystemUsage_Destroy(void* /*context*/) {
     StopTimer();
     ClosePdh();
@@ -1225,6 +1240,26 @@ void __cdecl SystemUsage_Destroy(void* /*context*/) {
         Wh_Log(L"SystemUsage_Destroy: exception");
     }
     g_ui = {};
+
+    bool expected = g_expectingHostDestroy;
+    g_expectingHostDestroy = false;
+    if (!expected && !g_stopRequested.load(std::memory_order_acquire)) {
+        // The host called Destroy() on us without this mod ever calling
+        // its own unregisterFn first - taskbar-widget-stack getting
+        // disabled/unloaded mid-session is the main way this happens.
+        // g_remoteRegistered would otherwise stay true forever (nothing
+        // else clears it), leaving this mod silently believing it's
+        // still registered with a host that's gone - fall back to
+        // standalone via the same retry loop that already knows how to
+        // check for the host first and fall back if it's not there.
+        g_remoteRegistered = false;
+        g_remoteHostHwnd = nullptr;
+        g_hostRegisterFn = nullptr;
+        g_hostUnregisterFn = nullptr;
+        Wh_Log(L"SystemUsage_Destroy: host-initiated, falling back to "
+               L"standalone");
+        StartRetryInject();
+    }
 }
 
 void __cdecl SystemUsage_GetId(void* /*context*/,
@@ -1499,6 +1534,7 @@ void Wh_ModSettingsChanged() {
         auto unregisterFn = g_hostUnregisterFn;
         auto registerFn = g_hostRegisterFn;
         RunFromWindowThread(hWnd, [unregisterFn, registerFn] {
+            g_expectingHostDestroy = true;
             unregisterFn(kWidgetContext);
             g_remoteRegistered = false;
             WidgetStackWidgetAbiV1 abi;
@@ -1547,7 +1583,10 @@ void Wh_ModBeforeUninit() {
         // Calls back into SystemUsage_Destroy (unwinds the timer/PDH/root
         // element) before returning - see WidgetStack_UnregisterWidget in
         // taskbar-widget-stack.wh.cpp.
-        RunFromWindowThread(hWnd, [unregisterFn] { unregisterFn(kWidgetContext); });
+        RunFromWindowThread(hWnd, [unregisterFn] {
+            g_expectingHostDestroy = true;
+            unregisterFn(kWidgetContext);
+        });
         g_remoteRegistered = false;
     } else if (g_ui.root && g_ui.hWnd) {
         HWND hWnd = g_ui.hWnd;

@@ -448,3 +448,44 @@ removed there too).
 
 **Next retest**: confirm the bars sit centered in the pane again (equal
 space above and below), in both standalone and registered mode.
+
+## Incident 8: fallback to standalone when the host disappears mid-session (2026-09-17)
+
+**Gap being closed**: a known limitation flagged since Incident 2 - if
+`taskbar-widget-stack` gets disabled/unloaded *after* this mod has
+already registered with it, nothing noticed. The host's own
+`Wh_ModBeforeUninit` calls `Destroy()` on every widget it's still
+holding (including this one, via the ABI's `Destroy` function pointer -
+which is `SystemUsage_Destroy`, so it genuinely runs), but nothing told
+this mod its registration was now meaningless - `g_remoteRegistered`
+stayed `true` forever, since nothing else ever clears it, so this mod
+just silently believed it was still registered with a host that no
+longer existed, with no bars showing anywhere for the rest of that
+Explorer session.
+
+**Fix**: new `g_expectingHostDestroy` flag, set to `true` immediately
+before the two places this mod calls the host's `unregisterFn` itself
+(`Wh_ModSettingsChanged`'s reregister flow, `Wh_ModBeforeUninit`'s own
+teardown) - `SystemUsage_Destroy` checks and clears it. If it was
+`false` when `Destroy()` ran, nobody on this side asked for that call -
+the host did it unprompted, so this mod resets its registration state
+and calls `StartRetryInject()`, which already knows how to check for the
+host first and fall back to standalone injection if it's not there (the
+exact same logic Incident 3 built for the *first* registration attempt,
+now reused for recovering from losing one). Guarded by `g_stopRequested`
+too, so this can't fire during this mod's own shutdown.
+
+Needed the extra flag rather than just checking `g_remoteRegistered`
+itself, because both of this mod's own call sites set that to `false`
+*after* calling `unregisterFn` (which is what actually triggers
+`Destroy()`) - checking it directly would misread every ordinary
+reregister-on-settings-change as "the host tore me down unexpectedly"
+and kick off a second, racing retry thread right in the middle of the
+call that's about to re-register anyway.
+
+**Next retest**: with this mod registered, disable `taskbar-widget-stack`
+from Windhawk's mod list (or otherwise unload it) and confirm this mod's
+bars reappear standalone within a few seconds rather than staying gone
+for the rest of the session; separately confirm a normal settings change
+(font size, a show/hide toggle) still cleanly re-registers without
+spuriously also falling back to standalone.
