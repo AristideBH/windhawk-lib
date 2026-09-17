@@ -2246,3 +2246,42 @@ confirm "Back to widgets" returns to the normal list. Widen the stack
 (more/wider widgets enabled, or a higher `layout.maxWidth`) and
 confirm this widget's bars actually stretch to fill the extra width
 rather than staying a fixed size.
+
+## Incident 32: CPU row clipped - VerticalAlignment on the wrong element (2026-09-17)
+
+**Report**: bar thickness/spacing looked right, but CPU wasn't visible
+at all - clipped at the top of the pane, only RAM/GPU showing.
+
+**Root cause**: `root.VerticalAlignment(VerticalAlignment::Center)` was
+set on `root` itself (the Grid whose `Height` is fixed to
+`host.paneHeight`, required so every widget's pane matches the
+slider's `-widgetIndex * PaneHeight()` offset math). `VerticalAlignment`
+describes how an element sits within the space *its own parent* gives
+it - it says nothing about how *that element's children* sit within
+its own bounds. Since `root`'s height was already fixed by its own
+`Height` property (not by its parent), setting `VerticalAlignment` on
+`root` did nothing useful; the three rows just top-aligned within the
+76px box by default, leaving dead space at the bottom - which read as
+"CPU is clipped" once the visible block was shorter than 76px and
+sitting at the top rather than centered.
+
+**Fix**: `root` now holds a single child, `content` (a plain vertical
+`StackPanel`, sized `Auto` to its own rows) - and `content`'s
+`VerticalAlignment(Center)` is what actually centers it within
+`root`'s fixed 76px, since that property now correctly describes
+`content`'s position within *its* parent (`root`). `BuildRow` no
+longer takes a row index or uses `Grid::SetRow` (no longer a
+Grid-with-RowDefinitions layout at all - just appends each row's Grid
+into `content`'s children, letting the StackPanel handle vertical
+stacking).
+
+**Also this round**: the Media Player placeholder's desired width
+doubled (`kMinContentWidth * 2`) per user request - it's meant to
+stand in for a widget that will need real room (album art, controls),
+not a bare label.
+
+**Next retest**: confirm all three rows (or however many are enabled)
+show fully, vertically centered within the pane with no clipping at
+either edge, for various combinations of shown/hidden metrics via the
+gear settings. Also confirm the Media Player placeholder now visibly
+takes more width in the stack than AI Quota.

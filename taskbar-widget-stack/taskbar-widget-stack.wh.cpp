@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.39
+// @version         0.1.40
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1299,28 +1299,45 @@ class SystemUsageWidget : public IWidget {
     double Create(const WidgetHost& host) override {
         LoadSettingsFields();
 
+        // Incident 32: `root` must be exactly `host.paneHeight` tall
+        // (every widget's pane has to be, for the slider's
+        // `-widgetIndex * PaneHeight()` offset math to line up), but
+        // setting VerticalAlignment on `root` itself doesn't center
+        // its own children within that fixed height - VerticalAlignment
+        // describes how an element sits in the space *its parent*
+        // gives it, not how its own children sit within it. That was
+        // the actual bug behind the clipped CPU row (rows top-aligned
+        // within the full 76px box, so with the CPU/RAM/GPU block
+        // shorter than 76px, everything just sat at the top with dead
+        // space below - fine when nothing was hidden, but with CPU
+        // cut off it looked like the whole block was pushed up too
+        // far). Fix: `root` (fixed height) holds one child, `content`
+        // (a plain vertical StackPanel, natural/Auto height), and
+        // *that* child's own VerticalAlignment(Center) is what
+        // actually centers it within root's fixed height - one level
+        // removed from where it was set before.
         Grid root;
         root.Height(host.paneHeight);
-        root.VerticalAlignment(VerticalAlignment::Center);
-        root.Padding({4, 0, 4, 0});
 
-        int rowIndex = 0;
+        StackPanel content;
+        content.Orientation(Orientation::Vertical);
+        content.VerticalAlignment(VerticalAlignment::Center);
+        content.Padding({4, 0, 4, 0});
+
         if (showCpu_) {
-            AddRowDefinition(root);
-            BuildRow(root, rowIndex++, L"CPU", cpuFillCol_, cpuEmptyCol_,
+            BuildRow(content, L"CPU", cpuFillCol_, cpuEmptyCol_,
                      cpuPercentText_);
         }
         if (showRam_) {
-            AddRowDefinition(root);
-            BuildRow(root, rowIndex++, L"RAM", ramFillCol_, ramEmptyCol_,
+            BuildRow(content, L"RAM", ramFillCol_, ramEmptyCol_,
                      ramPercentText_);
         }
         if (showGpu_) {
-            AddRowDefinition(root);
-            BuildRow(root, rowIndex++, L"GPU", gpuFillCol_, gpuEmptyCol_,
+            BuildRow(content, L"GPU", gpuFillCol_, gpuEmptyCol_,
                      gpuPercentText_);
         }
 
+        root.Children().Append(content);
         host.parent.Children().Append(root);
         root_ = root;
         parent_ = host.parent;
@@ -1447,20 +1464,12 @@ class SystemUsageWidget : public IWidget {
     // the stack's width.
     static constexpr double kDesiredWidth = 130.0;
 
-    void AddRowDefinition(Grid& root) {
-        RowDefinition row;
-        row.Height({0, GridUnitType::Auto});
-        root.RowDefinitions().Append(row);
-    }
-
-    void BuildRow(Grid& root,
-                  int rowIndex,
+    void BuildRow(Panel& content,
                   const wchar_t* label,
                   ColumnDefinition& fillCol,
                   ColumnDefinition& emptyCol,
                   TextBlock& percentText) {
         Grid row;
-        Grid::SetRow(row, rowIndex);
         // Tight, content-sized columns (Incident 31 - the first pass's
         // 30/32px fixed columns were wider than "CPU"/"100%" need,
         // leaving visible dead space on both sides of the bar) plus a
@@ -1525,7 +1534,7 @@ class SystemUsageWidget : public IWidget {
         Grid::SetColumn(percentText, 2);
         row.Children().Append(percentText);
 
-        root.Children().Append(row);
+        content.Children().Append(row);
     }
 
     void ApplyBar(ColumnDefinition& fillCol,
@@ -2964,11 +2973,14 @@ void LoadSettings() {
 void InitPlaceholderWidgets() {
     g_widgets.clear();
 
+    // 2x kMinContentWidth (user request, 2026-09-17) - a placeholder
+    // stand-in for the real media player widget, which will need
+    // meaningfully more width than a plain label (album art, controls).
     WidgetEntry mediaPlayer;
     mediaPlayer.widget = std::make_unique<PlaceholderWidget>(
         L"placeholder-a", L"Media\nPlayer",
         winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 90, 160),
-        kMinContentWidth);
+        kMinContentWidth * 2);
     g_widgets.push_back(std::move(mediaPlayer));
 
     WidgetEntry aiQuota;
