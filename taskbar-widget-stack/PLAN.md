@@ -1214,3 +1214,33 @@ Un-registered cleanly in `Wh_ModBeforeUninit` via `RIDEV_REMOVE`.
   try from application code, and the feature would need to be
   considered genuinely not implementable within a Windhawk mod's
   reach, not merely unsolved yet.
+
+**Result (2026-09-17): real data arrives.** Confirmed live -
+`WM_INPUT HID` logs fired continuously during a two-finger scroll, with
+`sizeHid=40`, a stable Report ID byte (`0x04`), and 20 bytes of visible
+data whose bytes `[2:4]`/`[4:6]` (little-endian) trace a smooth,
+continuous X/Y path as the gesture progressed (e.g. `4C 0C 10 07` →
+X=3148,Y=1808 drifting to X=3149,Y=1823 over ~20 samples, then a second
+burst starting fresh around X=2117,Y=2728 - consistent with a "clutch"
+re-grip mid-scroll). One row also showed additional non-zero bytes past
+offset 8 (`... 17 00 13 AB 10 22 04 17 ...`), plausibly a second
+contact's data appearing when both fingers were briefly down together.
+This is real, structured touch data reaching this mod's process - the
+raw-HID route (Incident 16/17's option 1) is viable in principle.
+
+**Not done yet**: the diagnostic only dumped the first 20 of the
+report's 40 bytes, so the tail - where the Windows Precision Touchpad
+spec's Contact Count field and a second contact's full data are
+expected to live - was never captured. Widened the dump to the full
+report (up to 48 bytes) before attempting to identify the exact field
+layout (Report ID / per-contact Confidence+TipSwitch+ContactID / X / Y
+/ Scan Time / Contact Count / Button) - guessing the layout from a
+half-visible report risks exactly the silent-misinterpretation failure
+mode flagged as the core risk of this whole approach.
+
+**Next retest**: two-finger scroll again, capture the full 40-byte
+dump this time (especially bytes past offset 20), and share it - that's
+the ground truth needed to map real byte offsets to Report ID/contact
+fields/contact count, the same "diagnose from real data, not guesswork"
+approach that resolved the ARM64 `TaskbarHost::FrameHeight` pattern
+(Incident 3).

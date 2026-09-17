@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.18
+// @version         0.1.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -989,8 +989,14 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                 if (raw->header.dwType == RIM_TYPEHID) {
                     DWORD count = raw->data.hid.dwCount;
                     DWORD sizeHid = raw->data.hid.dwSizeHid;
-                    wchar_t hex[128] = {};
-                    DWORD bytesToShow = std::min<DWORD>(sizeHid, 20);
+                    // Widened from 20 to the full report (2026-09-17):
+                    // real data confirmed arriving, and the X/Y-looking
+                    // pattern in the first 20 bytes suggests a second
+                    // contact's data lives past that point - need the
+                    // whole report to find the contact-count field and
+                    // confirm the layout before writing any parser.
+                    wchar_t hex[256] = {};
+                    DWORD bytesToShow = std::min<DWORD>(sizeHid, 48);
                     for (DWORD i = 0; i < bytesToShow; i++) {
                         wchar_t b[4];
                         wsprintfW(b, L"%02X ", raw->data.hid.bRawData[i]);
