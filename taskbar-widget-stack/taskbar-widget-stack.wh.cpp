@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.17
+// @version         0.1.18
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -547,6 +547,7 @@ HWND g_taskbarWnd;
 HANDLE g_retryThread;
 HANDLE g_injectEvent;
 HHOOK g_mouseHook;
+bool g_rawInputRegistered;
 std::mutex g_retryThreadMutex;
 std::atomic<bool> g_stopRequested{false};
 
@@ -965,6 +966,42 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
+    if (msg == WM_INPUT) {
+        // Diagnostic (2026-09-17, "Incident 17"): raw HID input from the
+        // Precision Touchpad, registered via RegisterRawInputDevices
+        // (usage page 0x0D "Digitizer", usage 0x05 "Touch Pad") - the
+        // lowest level of touchpad data an application can see, below
+        // every OS-level gesture/wheel synthesis already confirmed dead
+        // for this gesture (Incidents 9, 14, 15, 16). Only dumping raw
+        // bytes for now, not parsing them - there's no reference
+        // implementation to port for this one (unlike everything else in
+        // this file so far), so confirming *any* data arrives at all
+        // comes first, before risking a first-principles HID Digitizer
+        // report parse silently misinterpreting it.
+        UINT size = 0;
+        GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &size,
+                         sizeof(RAWINPUTHEADER));
+        if (size > 0) {
+            std::vector<BYTE> buffer(size);
+            if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer.data(),
+                                 &size, sizeof(RAWINPUTHEADER)) == size) {
+                auto* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
+                if (raw->header.dwType == RIM_TYPEHID) {
+                    DWORD count = raw->data.hid.dwCount;
+                    DWORD sizeHid = raw->data.hid.dwSizeHid;
+                    wchar_t hex[128] = {};
+                    DWORD bytesToShow = std::min<DWORD>(sizeHid, 20);
+                    for (DWORD i = 0; i < bytesToShow; i++) {
+                        wchar_t b[4];
+                        wsprintfW(b, L"%02X ", raw->data.hid.bRawData[i]);
+                        wcscat_s(hex, b);
+                    }
+                    Wh_Log(L"WM_INPUT HID: count=%u sizeHid=%u bytes=%s",
+                           count, sizeHid, hex);
+                }
+            }
+        }
+    }
     if (msg == WM_NCDESTROY) {
         // The XAML tree is already dying - don't touch trayGrid's
         // children/columns (matches the approach in
@@ -1121,6 +1158,24 @@ bool InjectWidgetStackGrid(HWND hWnd) {
                                              GetModuleHandleW(nullptr), 0);
         }
 
+        if (!g_rawInputRegistered) {
+            // Raw HID input from the Precision Touchpad ("Incident 17") -
+            // see TaskbarWindowSubclassProc's WM_INPUT comment.
+            // RIDEV_INPUTSINK: receive input regardless of foreground
+            // focus, matching the fact real mouse wheel already works
+            // here without needing focus/click.
+            RAWINPUTDEVICE rid{};
+            rid.usUsagePage = 0x0D;  // Digitizer
+            rid.usUsage = 0x05;      // Touch Pad
+            rid.dwFlags = RIDEV_INPUTSINK;
+            rid.hwndTarget = hWnd;
+            if (RegisterRawInputDevices(&rid, 1, sizeof(rid))) {
+                g_rawInputRegistered = true;
+            } else {
+                Wh_Log(L"RegisterRawInputDevices failed: %lu", GetLastError());
+            }
+        }
+
         Wh_Log(L"Injected widget stack");
         return true;
     } catch (...) {
@@ -1253,6 +1308,15 @@ void Wh_ModBeforeUninit() {
     if (g_mouseHook) {
         UnhookWindowsHookEx(g_mouseHook);
         g_mouseHook = nullptr;
+    }
+    if (g_rawInputRegistered) {
+        RAWINPUTDEVICE rid{};
+        rid.usUsagePage = 0x0D;
+        rid.usUsage = 0x05;
+        rid.dwFlags = RIDEV_REMOVE;
+        rid.hwndTarget = nullptr;
+        RegisterRawInputDevices(&rid, 1, sizeof(rid));
+        g_rawInputRegistered = false;
     }
     {
         std::lock_guard<std::mutex> lk(g_retryThreadMutex);

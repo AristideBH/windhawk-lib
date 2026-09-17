@@ -1141,3 +1141,76 @@ data point. If it still doesn't appear, that further confirms Incident
 15's conclusion and makes the raw-HID route (option 1 above) the only
 remaining lever, at which point it's worth explicitly deciding whether
 that investment is still wanted.
+
+**Result (2026-09-17): confirmed, still nothing.** Real mouse wheel
+works without ever clicking/focusing the widget first (rules out a
+focus-routing explanation and confirms "scroll inactive windows" isn't
+the blocker). Two-finger touchpad scroll: no `WH_MOUSE_LL` log at all.
+Since this is a *system-wide* hook - it would catch a `WM_MOUSEWHEEL`
+synthesized anywhere on the desktop, for any window, not just this
+mod's - this is the strongest evidence yet that Windows genuinely
+synthesizes no wheel-equivalent message anywhere for this gesture at
+this screen location, not merely a delivery/routing problem to this
+specific element. Something (plausibly the taskbar's own native
+touch-gesture handling) is consuming the gesture before any
+message-based mechanism this mod can observe - Win32 message queue at
+every level checked, and XAML's own gesture recognizer - ever sees it.
+
+User asked to pursue a real fix despite this, explicitly accepting the
+risk that the remaining option might not work either.
+
+## Incident 17: raw HID digitizer input, diagnostic-only first pass (2026-09-17)
+
+**Approach**: `RegisterRawInputDevices` for the touchpad's HID usage
+(page `0x0D` "Digitizer", usage `0x05` "Touch Pad") with
+`RIDEV_INPUTSINK`, registered from `InjectWidgetStackGrid` alongside the
+`WH_MOUSE_LL` hook. This is the lowest level of touchpad data an
+application can observe - literally the hardware's own HID reports,
+delivered via `WM_INPUT` independent of any OS-level gesture/wheel
+synthesis, which is why it's the last remaining lever after Incidents 9,
+14, 15, and 16 all came up empty at every higher level.
+
+**Important caveat, stated explicitly because it changes the risk
+profile of this specific piece of code**: unlike every other
+"reverse-engineered" or "advanced Windows API" piece of this mod so
+far - the taskbar XAML access layer, the symbol hooks, the
+`RunFromWindowThread` marshaling - which were all ported from real,
+working reference source (`taskbar-ai-quota.wh.cpp`,
+`taskbar-fluent-media-player.wh.cpp`), **there is no reference
+implementation to port for HID Digitizer report parsing**. Precision
+Touchpad HID report layouts follow a Microsoft specification but vary
+per device/OEM, and this mod's author has no capture of a real report
+to develop against. Writing a full parser from spec knowledge alone,
+with no live device to verify against between iterations, carries real
+risk of silently misinterpreting data (wrong scaling, wrong offsets)
+in ways that wouldn't show up as a compile or runtime error - just
+wrong behavior that looks like "still doesn't work" without revealing
+why.
+
+**Mitigation - this first pass parses nothing.** `TaskbarWindowSubclassProc`'s
+`WM_INPUT` handler only calls `GetRawInputData`, confirms
+`RIM_TYPEHID`, and logs `dwCount`/`dwSizeHid` plus a hex dump of the
+report's first ~20 bytes. This answers the one question that has to be
+true before any parsing effort is worth attempting at all: does this
+mod's process (running inside Explorer, via a window it subclassed)
+receive *any* raw HID data for this device during a two-finger scroll
+gesture, given every higher-level mechanism already came up empty?
+Un-registered cleanly in `Wh_ModBeforeUninit` via `RIDEV_REMOVE`.
+
+**Next retest**: swipe two fingers over the widget and check for
+`WM_INPUT HID: count=... sizeHid=... bytes=...` in the log.
+- **If it appears**: real data is reaching this mod, and the actual hex
+  bytes are the ground truth needed to write a correct parser against -
+  same "diagnose from real data, not guesswork" approach that resolved
+  the ARM64 `TaskbarHost::FrameHeight` pattern (Incident 3). Next step
+  would be reading those bytes against the Windows Precision Touchpad
+  HID report spec to identify contact count/X/Y fields specifically for
+  this hardware.
+- **If it still doesn't appear**: this would mean even raw HID input is
+  being claimed exclusively by something else (plausibly Windows' own
+  Precision Touchpad class driver, which may register for this device
+  in a way that excludes other raw input consumers) before this mod's
+  process ever sees it - at which point there is no lower level left to
+  try from application code, and the feature would need to be
+  considered genuinely not implementable within a Windhawk mod's
+  reach, not merely unsolved yet.
