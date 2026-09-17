@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.5
+// @version         0.1.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -73,9 +73,6 @@ sizing, and color are configurable through this mod's settings.
   - barThickness: 4
     $name: Bar thickness
     $description: Height (px) of the bar track.
-  - barWidth: 60
-    $name: Bar width
-    $description: Width (px) of the bar track.
   - rowSpacing: 2
     $name: Row spacing
     $description: Vertical gap (px) between rows.
@@ -88,8 +85,9 @@ sizing, and color are configurable through this mod's settings.
   - minWidth: 80
     $name: Minimum width
     $description: >-
-      Minimum overall widget width (px) - the bars won't shrink narrower
-      than this even if labels/percentage are hidden.
+      Minimum overall widget width (px). The bar itself has no separate
+      width setting - it automatically fills whatever space is left in
+      this range once the label/percentage columns have their own room.
   - maxWidth: 200
     $name: Maximum width
     $description: Maximum overall widget width (px).
@@ -570,7 +568,6 @@ struct {
     bool showPercent = true;
     int fontSize = 9;
     int barThickness = 4;
-    int barWidth = 60;
     int rowSpacing = 2;
     int labelGap = 4;
     int percentGap = 4;
@@ -667,8 +664,6 @@ void LoadSettings() {
     g_settings.fontSize = fontSize > 0 ? fontSize : 9;
     int barThickness = Wh_GetIntSetting(L"layout.barThickness");
     g_settings.barThickness = barThickness > 0 ? barThickness : 4;
-    int barWidth = Wh_GetIntSetting(L"layout.barWidth");
-    g_settings.barWidth = barWidth > 0 ? barWidth : 60;
     int rowSpacing = Wh_GetIntSetting(L"layout.rowSpacing");
     g_settings.rowSpacing = rowSpacing >= 0 ? rowSpacing : 2;
     int labelGap = Wh_GetIntSetting(L"layout.labelGap");
@@ -728,7 +723,11 @@ struct UiState {
                                         // appended to remoteParentPanel
                                         // (registered mode only) - see
                                         // SystemUsage_Create's comment.
-    StackPanel root{nullptr};
+    // A single Grid with shared label/bar/percent columns across every
+    // metric's row (Incident 6, PLAN.md) - not a StackPanel of separate
+    // per-row Grids anymore, so columns actually line up like a table
+    // instead of each row measuring its own content independently.
+    Grid root{nullptr};
 
     RowRefs cpuRow;
     RowRefs ramRow;
@@ -776,43 +775,32 @@ PDH_HQUERY g_pdhQuery = nullptr;
 PDH_HCOUNTER g_pdhCounter = nullptr;
 bool g_pdhOk = false;
 
-// Builds one metric row from current settings (Incident 5, PLAN.md).
-// The label/percent columns are Auto (sized to their own text at the
-// configured font size) - only the bar track column is a fixed pixel
-// width (layout.barWidth). This is deliberate, not incidental: the fill/
-// empty Star-split inside the track (Incident 1's original bug) needs
-// SOME ancestor with a determinate width to proportion against, and the
-// track's own fixed-pixel column provides that regardless of how `root`
-// itself is sized (Auto + MinWidth/MaxWidth - see SystemUsage_Create/
-// InjectSystemUsageGrid) - unlike the old fixed `root.Width(130)`, which
-// was root's own determinate width incidentally solving the same
-// problem for the whole row, not just the track.
+// Builds one metric row's cells directly into the shared `table` Grid at
+// `rowIndex` (Incident 6, PLAN.md: "table, not flex" - label/bar/percent
+// columns are shared across every row via `table`'s own
+// ColumnDefinitions, set up once by BuildTable, rather than each row
+// being its own independent Grid measuring its own content - which is
+// what let CPU/RAM/GPU's columns drift out of alignment with each other
+// depending on each row's own text, e.g. "0%" vs "100%" being different
+// widths).
+//
+// The bar track's own column is Star-weighted when shown (Incident 6:
+// "bar size must be automatic to fill the widget") - it needs `table`
+// itself to have a real, determinate Width for that Star share to mean
+// anything (see FinalizeTableWidth, called once by the caller after this
+// and BuildTable are attached to their real parent).
 //
 // A hidden element (layout.show*) is Collapsed and its column's width
 // forced to 0, rather than the column simply being omitted - keeps
 // column indices fixed (0/1/2 always) so nothing here needs to track
-// which columns exist for a given row.
-void BuildRow(StackPanel& content, const wchar_t* label, RowRefs& refs) {
-    Grid row;
-    double halfSpacing = g_settings.rowSpacing / 2.0;
-    row.Margin({0, halfSpacing, 0, halfSpacing});
+// which columns exist.
+void BuildRow(Grid& table, int rowIndex, const wchar_t* label, RowRefs& refs) {
+    RowDefinition rowDef;
+    rowDef.Height({0, GridUnitType::Auto});
+    table.RowDefinitions().Append(rowDef);
 
-    ColumnDefinition labelCol;
-    labelCol.Width(g_settings.showLabel
-                       ? GridLength{0, GridUnitType::Auto}
-                       : GridLength{0, GridUnitType::Pixel});
-    ColumnDefinition trackCol;
-    trackCol.Width(
-        g_settings.showBar
-            ? GridLength{(double)g_settings.barWidth, GridUnitType::Pixel}
-            : GridLength{0, GridUnitType::Pixel});
-    ColumnDefinition percentCol;
-    percentCol.Width(g_settings.showPercent
-                          ? GridLength{0, GridUnitType::Auto}
-                          : GridLength{0, GridUnitType::Pixel});
-    row.ColumnDefinitions().Append(labelCol);
-    row.ColumnDefinitions().Append(trackCol);
-    row.ColumnDefinitions().Append(percentCol);
+    double halfSpacing = g_settings.rowSpacing / 2.0;
+    Thickness rowMargin{0, halfSpacing, 0, halfSpacing};
 
     SolidColorBrush textBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(255, 220, 220, 220)};
@@ -821,12 +809,14 @@ void BuildRow(StackPanel& content, const wchar_t* label, RowRefs& refs) {
     labelText.Text(winrt::hstring(label));
     labelText.FontSize(g_settings.fontSize);
     labelText.VerticalAlignment(VerticalAlignment::Center);
-    labelText.Margin({0, 0, (double)g_settings.labelGap, 0});
+    labelText.Margin({rowMargin.Left, rowMargin.Top,
+                       (double)g_settings.labelGap, rowMargin.Bottom});
     labelText.Foreground(textBrush);
     labelText.Visibility(g_settings.showLabel ? Visibility::Visible
                                                : Visibility::Collapsed);
+    Grid::SetRow(labelText, rowIndex);
     Grid::SetColumn(labelText, 0);
-    row.Children().Append(labelText);
+    table.Children().Append(labelText);
 
     Border track;
     track.Height(g_settings.barThickness);
@@ -835,8 +825,10 @@ void BuildRow(StackPanel& content, const wchar_t* label, RowRefs& refs) {
         winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 70, 70)};
     track.Background(trackBrush);
     track.VerticalAlignment(VerticalAlignment::Center);
+    track.Margin(rowMargin);
     track.Visibility(g_settings.showBar ? Visibility::Visible
                                          : Visibility::Collapsed);
+    Grid::SetRow(track, rowIndex);
     Grid::SetColumn(track, 1);
 
     refs.fillCol = ColumnDefinition();
@@ -853,22 +845,95 @@ void BuildRow(StackPanel& content, const wchar_t* label, RowRefs& refs) {
     Grid::SetColumn(fill, 0);
     fillGrid.Children().Append(fill);
     track.Child(fillGrid);
-    row.Children().Append(track);
+    table.Children().Append(track);
 
     refs.percentText = TextBlock();
     refs.percentText.Text(L"0%");
     refs.percentText.FontSize(g_settings.fontSize);
     refs.percentText.HorizontalAlignment(HorizontalAlignment::Left);
     refs.percentText.VerticalAlignment(VerticalAlignment::Center);
-    refs.percentText.Margin({(double)g_settings.percentGap, 0, 0, 0});
+    refs.percentText.Margin({(double)g_settings.percentGap, rowMargin.Top, 0,
+                              rowMargin.Bottom});
     refs.percentText.Foreground(textBrush);
     refs.percentText.Visibility(g_settings.showPercent
                                      ? Visibility::Visible
                                      : Visibility::Collapsed);
+    Grid::SetRow(refs.percentText, rowIndex);
     Grid::SetColumn(refs.percentText, 2);
-    row.Children().Append(refs.percentText);
+    table.Children().Append(refs.percentText);
+}
 
-    content.Children().Append(row);
+// Builds the shared label/bar/percent columns and every enabled metric's
+// row on top of them, but doesn't attach or size `table` yet - see
+// FinalizeTableWidth, which must run after the caller attaches the
+// returned Grid to its real parent (standalone: taskbarRootGrid;
+// registered: the paneHeight Border).
+Grid BuildTable() {
+    Grid table;
+    table.HorizontalAlignment(HorizontalAlignment::Left);
+
+    ColumnDefinition labelCol;
+    labelCol.Width(g_settings.showLabel
+                       ? GridLength{0, GridUnitType::Auto}
+                       : GridLength{0, GridUnitType::Pixel});
+    ColumnDefinition trackCol;
+    trackCol.Width(g_settings.showBar
+                       ? GridLength{1.0, GridUnitType::Star}
+                       : GridLength{0, GridUnitType::Pixel});
+    ColumnDefinition percentCol;
+    percentCol.Width(g_settings.showPercent
+                          ? GridLength{0, GridUnitType::Auto}
+                          : GridLength{0, GridUnitType::Pixel});
+    table.ColumnDefinitions().Append(labelCol);
+    table.ColumnDefinitions().Append(trackCol);
+    table.ColumnDefinitions().Append(percentCol);
+
+    int rowIndex = 0;
+    if (g_settings.showCpu) {
+        BuildRow(table, rowIndex++, L"CPU", g_ui.cpuRow);
+    }
+    if (g_settings.showRam) {
+        BuildRow(table, rowIndex++, L"RAM", g_ui.ramRow);
+    }
+    if (g_settings.showGpu) {
+        BuildRow(table, rowIndex, L"GPU", g_ui.gpuRow);
+    }
+    return table;
+}
+
+// Clamps `table`'s overall width to [minWidth, maxWidth] based on the
+// label/percent columns' real natural (Auto) size, then sets that as an
+// explicit Width - which is what lets the bar's Star column (BuildRow)
+// get real, non-zero space for "auto-fill the rest of the widget"
+// (Incident 6): a Star column needs SOME ancestor with a determinate
+// width to compute a proportion against, and an Auto-sized Grid can't
+// give it one (this is Incident 1's original bug, one level up - the
+// bar track itself no longer has that problem, since it's Star relative
+// to `table`, but `table` itself needs a real width from somewhere, and
+// "sum of the two Auto columns, clamped to what the user configured" is
+// that source now instead of a hardcoded constant).
+//
+// Must run after `table` is already attached to its real parent -
+// ActualWidth/ColumnDefinition.ActualWidth are stale (usually 0) until a
+// real layout pass has run against the actual visual tree, not a
+// detached element (same lesson as this repo's taskbar-widget-stack.wh.cpp
+// UpdateStackScreenRect, Incident 22 there).
+void FinalizeTableWidth(Grid& table) {
+    try {
+        table.UpdateLayout();
+        double labelWidth = table.ColumnDefinitions().GetAt(0).ActualWidth();
+        double percentWidth = table.ColumnDefinitions().GetAt(2).ActualWidth();
+        double natural = labelWidth + percentWidth;
+        double total = std::clamp(natural, (double)g_settings.minWidth,
+                                   (double)g_settings.maxWidth);
+        table.Width(total);
+        // Re-run so the bar's Star column picks up its real share before
+        // anything reads ActualWidth() off `table` again (the registered
+        // path does, right after this call, to report a desired width
+        // back to the host).
+        table.UpdateLayout();
+    } catch (...) {
+    }
 }
 
 void ApplyBar(RowRefs& refs, double percent) {
@@ -1080,54 +1145,33 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         Border container;
         container.Height(host->paneHeight);
 
-        StackPanel root;
-        root.Orientation(Orientation::Vertical);
-        root.VerticalAlignment(VerticalAlignment::Center);
-        root.HorizontalAlignment(HorizontalAlignment::Left);
-        // MinWidth/MaxWidth (Incident 5, PLAN.md), not a fixed Width() -
-        // the host still needs a single concrete number back from this
-        // function (its own layout can't understand "auto, with these
-        // bounds"), but that number is now measured from the actual
-        // laid-out content below rather than a hardcoded constant, and
-        // HorizontalAlignment::Left keeps this from awkwardly stretching
-        // past its own content if a sibling widget wants more room -
-        // matches IWidget::Create's contract ("should not set its own
-        // fixed Width()"): MinWidth/MaxWidth constrain, they don't fix.
-        root.MinWidth(g_settings.minWidth);
-        root.MaxWidth(g_settings.maxWidth);
-
-        if (g_settings.showCpu) {
-            BuildRow(root, L"CPU", g_ui.cpuRow);
-        }
-        if (g_settings.showRam) {
-            BuildRow(root, L"RAM", g_ui.ramRow);
-        }
-        if (g_settings.showGpu) {
-            BuildRow(root, L"GPU", g_ui.gpuRow);
-        }
-
-        container.Child(root);
+        // BuildTable/FinalizeTableWidth (Incident 6, PLAN.md) - `table`
+        // is a single Grid with columns shared by every enabled metric's
+        // row (real table alignment) and a Star-weighted bar track that
+        // auto-fills whatever space FinalizeTableWidth leaves it, rather
+        // than the old fixed root.Width()/per-row Grids.
+        Grid table = BuildTable();
+        container.Child(table);
         parent.Children().Append(container);
+        FinalizeTableWidth(table);
 
         g_ui.hWnd = (HWND)host->taskbarHwnd;
         g_ui.remoteParentPanel = parent;
         g_ui.remoteContainer = container;
-        g_ui.root = root;
+        g_ui.root = table;
 
         InitPdh();
         SampleCpu();  // primes the delta baseline, first return unused
         UpdateValues();
         StartTimer();
 
-        // Forces a synchronous measure+arrange (same reasoning as this
-        // repo's taskbar-widget-stack.wh.cpp's UpdateStackScreenRect,
-        // Incident 22 there: ActualWidth is stale/zero until a real
-        // layout pass has run) so the returned width reflects root's
-        // actual Auto-sized content - already MinWidth/MaxWidth-clamped
-        // by the properties set above, so no extra std::clamp needed
-        // here.
-        root.UpdateLayout();
-        double desiredWidth = root.ActualWidth();
+        // ActualWidth already reflects FinalizeTableWidth's clamp - the
+        // host still needs this one concrete number back (its own layout
+        // can't understand "auto, with these bounds"), matching
+        // IWidget::Create's contract ("should not set its own fixed
+        // Width()"): the width was derived from content + settings, not
+        // hardcoded, even though a plain double is what crosses the ABI.
+        double desiredWidth = table.ActualWidth();
         if (desiredWidth <= 0) {
             desiredWidth = g_settings.minWidth;
         }
@@ -1234,40 +1278,22 @@ bool InjectSystemUsageGrid(HWND hWnd) {
     try {
         LoadSettings();
 
-        StackPanel root;
-        root.Orientation(Orientation::Vertical);
-        root.VerticalAlignment(VerticalAlignment::Center);
-        root.HorizontalAlignment(HorizontalAlignment::Left);
-        root.Margin({kLeftEdgeGap, 0, 0, 0});
-        root.Padding({4, 0, 4, 0});
-        // MinWidth/MaxWidth, not a fixed Width() (Incident 5, PLAN.md -
-        // supersedes the old fixed `root.Width(130)` from Incident 1).
-        // `root` sizes Auto to its rows' content - each row's label/
-        // percent columns are Auto too, only the bar track itself has a
-        // fixed pixel width (layout.barWidth) - so the fill/empty Star-
-        // split that Incident 1 originally broke here computes against
-        // the track's own determinate column width regardless of how
-        // `root` itself is sized; MinWidth/MaxWidth just clamp the
-        // overall result to the user's configured bounds.
-        root.MinWidth(g_settings.minWidth);
-        root.MaxWidth(g_settings.maxWidth);
+        // BuildTable/FinalizeTableWidth (Incident 6, PLAN.md) - see
+        // SystemUsage_Create's matching comment; the standalone path
+        // differs only in where the table attaches (taskbarRootGrid
+        // directly) and its own Margin/Padding/Z-index.
+        Grid table = BuildTable();
+        table.VerticalAlignment(VerticalAlignment::Center);
+        table.Margin({kLeftEdgeGap, 0, 0, 0});
+        table.Padding({4, 0, 4, 0});
 
-        if (g_settings.showCpu) {
-            BuildRow(root, L"CPU", g_ui.cpuRow);
-        }
-        if (g_settings.showRam) {
-            BuildRow(root, L"RAM", g_ui.ramRow);
-        }
-        if (g_settings.showGpu) {
-            BuildRow(root, L"GPU", g_ui.gpuRow);
-        }
-
-        Canvas::SetZIndex(root, 1000);
-        taskbarRootGrid.Children().Append(root);
+        Canvas::SetZIndex(table, 1000);
+        taskbarRootGrid.Children().Append(table);
+        FinalizeTableWidth(table);
 
         g_ui.hWnd = hWnd;
         g_ui.injectionParent = taskbarRootGrid;
-        g_ui.root = root;
+        g_ui.root = table;
 
         if (!g_windowSubclassed) {
             g_windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(

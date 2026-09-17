@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.47
+// @version         0.1.48
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1157,6 +1157,14 @@ struct UiState {
     ColumnDefinition column2{nullptr};
     CompositeTransform sliderTransform{nullptr};
     int activeIndex = 0;
+    // Which widget activeIndex is supposed to point at, by Id() rather
+    // than raw position (Incident 40, PLAN.md) - g_widgets can be
+    // reordered/erased/pushed from under activeIndex's numeric value
+    // (a register/unregister round-trip, a manual move up/down) without
+    // this file's own navigation code doing it, so RebuildStackContents
+    // resolves activeIndex from this Id whenever possible instead of
+    // trusting the stale raw index across such a mutation.
+    std::wstring activeWidgetId;
     winrt::event_token renderingToken;
     bool animating = false;
     ULONGLONG animStartTick = 0;
@@ -1333,6 +1341,10 @@ void GoToWidget(int widgetIndex, bool animate = true) {
         return;
     }
     g_ui.activeIndex = widgetIndex;
+    try {
+        g_ui.activeWidgetId = g_widgets[widgetIndex].widget->Id();
+    } catch (...) {
+    }
     ApplySliderTarget(widgetIndex, animate);
     RefreshDots();
 }
@@ -1795,9 +1807,39 @@ void RebuildStackContents() {
     auto enabled = EnabledIndices();
     if (enabled.empty()) {
         g_ui.activeIndex = -1;
-    } else if (std::find(enabled.begin(), enabled.end(), g_ui.activeIndex) ==
-               enabled.end()) {
-        g_ui.activeIndex = enabled.front();
+        g_ui.activeWidgetId.clear();
+    } else {
+        // Resolve by Id() first (Incident 40) - g_widgets may have been
+        // reordered/erased/pushed since g_ui.activeIndex was last set
+        // (a remote widget's register/unregister round-trip, a manual
+        // move up/down), which can make the raw index point at a
+        // completely different widget even though it's still "valid"
+        // (in range and enabled). Falls back to the raw index only when
+        // no Id is tracked yet (first run) or the previously active
+        // widget itself is gone/disabled now.
+        int resolved = -1;
+        if (!g_ui.activeWidgetId.empty()) {
+            for (int idx : enabled) {
+                try {
+                    if (g_widgets[idx].widget->Id() == g_ui.activeWidgetId) {
+                        resolved = idx;
+                        break;
+                    }
+                } catch (...) {
+                }
+            }
+        }
+        if (resolved < 0) {
+            resolved = std::find(enabled.begin(), enabled.end(),
+                                  g_ui.activeIndex) != enabled.end()
+                           ? g_ui.activeIndex
+                           : enabled.front();
+        }
+        g_ui.activeIndex = resolved;
+        try {
+            g_ui.activeWidgetId = g_widgets[resolved].widget->Id();
+        } catch (...) {
+        }
     }
     if (g_ui.activeIndex >= 0) {
         ApplySliderTarget(g_ui.activeIndex, /*animate=*/false);
@@ -3223,6 +3265,17 @@ extern "C" bool __cdecl WidgetStack_RegisterWidget(
         WidgetEntry entry;
         entry.widget = std::make_unique<RemoteWidget>(*widget);
         g_widgets.push_back(std::move(entry));
+        // Incident 40 (PLAN.md): a remote widget's own settings changing
+        // makes its owning mod unregister then immediately re-register
+        // it here - without this, the freshly pushed_back entry always
+        // lands at the END of g_widgets, silently undoing any order the
+        // user set via move up/down before that settings change.
+        // LoadWidgetOrderState (already written for Wh_ModInit's initial
+        // load) re-sorts g_widgets to match the last-saved order by Id(),
+        // which is exactly what a re-registered widget needs too - it's
+        // a no-op for a widget that's never been reordered/saved before
+        // (falls through to its already-correct end-of-list position).
+        LoadWidgetOrderState();
         RebuildStackContents();
         Wh_Log(L"WidgetStack_RegisterWidget: registered a remote widget");
         return true;

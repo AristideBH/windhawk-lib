@@ -358,3 +358,62 @@ registered mode; confirm hiding all of label/bar/percent for a metric
 still leaves a sane (not zero-width, not overlapping) row; confirm an
 invalid hex value (typo, wrong length) falls back cleanly instead of
 crashing or rendering a garbled color.
+
+## Incident 6: table layout instead of per-row Grids; bar auto-fills instead of a fixed width (2026-09-17)
+
+**Feedback on Incident 5**: two problems with the shipped layout. (1)
+CPU/RAM/GPU's label/bar/percent columns didn't actually line up with
+each other - each row was its own independent `Grid`, so its `Auto`
+columns sized to that row's own content only ("0%" and "100%" are
+different widths, so the percent column drifted row to row) - the user
+wants real table-style column alignment, not each row measured
+independently ("pas 'flex'"). (2) `layout.barWidth` asked the user to
+pick the bar's pixel width by hand; they want it automatic - the bar
+should just fill whatever space is left in the widget.
+
+**What changed**: `BuildRow` no longer builds and returns its own
+`Grid` - it takes a shared `Grid& table` and a `rowIndex`, and places its
+label/track/percent cells directly into that table's own (row-agnostic)
+`ColumnDefinitions`, via `Grid::SetRow`/`Grid::SetColumn`. New
+`BuildTable()` creates that shared Grid once (columns: label `Auto`,
+bar track `Star`, percent `Auto`) and calls `BuildRow` once per enabled
+metric. Because all three rows now share the SAME `ColumnDefinition`
+objects, each column's `Auto` width is the max natural width across
+every row that uses it - genuine table alignment, not per-row
+measurement. `layout.barWidth` is gone entirely; the bar track's column
+is `Star`-weighted (when shown) instead of a fixed pixel width.
+
+A Star column needs the table's own overall `Width` to be a real,
+determinate number for its share to mean anything (the same fact
+Incident 1 ran into, one level up: previously the *table* had a fixed/
+clamped width and the *track* was fixed-pixel to route around it; now
+it's the reverse - the track is `Star`, so the *table* needs the
+determinate width instead). New `FinalizeTableWidth(Grid&)` supplies
+that: called once the table is actually attached to its real parent, it
+force-runs a layout pass, reads `ColumnDefinition.ActualWidth()` off the
+label and percent columns (their real natural size, now that they're
+correctly measured against each other via the shared table), sums them,
+clamps to `[layout.minWidth, layout.maxWidth]`, and sets that sum as the
+table's explicit `Width` - which is what finally lets the bar's `Star`
+column claim whatever's left. Runs a second layout pass afterward so
+`ActualWidth()` (read right after, in the registered path, to report a
+desired width back to the host) reflects the bar's real final size, not
+the pre-`Width()` measurement pass.
+
+`UiState::root` changes type from `StackPanel` to `Grid` to match (it
+now holds `BuildTable()`'s return value directly, in both standalone and
+registered mode - no more per-row `StackPanel` wrapper).
+
+**Genuinely unverified**: the two-pass `UpdateLayout()`/`ActualWidth()`
+sequence in `FinalizeTableWidth` (measure natural size before a `Width`
+is set, then re-measure after) is new, untested machinery - same
+category of risk as Incident 5's own `SystemUsage_Create` measurement,
+just one step more involved. If a `ColumnDefinition`'s `ActualWidth`
+doesn't update the way expected between those two layout passes, the bar
+could end up 0-width or the reported desired width could be stale.
+
+**Next retest**: confirm CPU/RAM/GPU's labels and percentages now
+visually align into real columns (not drifting per row); confirm the bar
+visibly fills the remaining width up to `layout.maxWidth` rather than
+sitting at some fixed size; confirm `layout.minWidth`/`maxWidth` still
+work as a sane clamp with labels/percentage shown, hidden, and mixed.

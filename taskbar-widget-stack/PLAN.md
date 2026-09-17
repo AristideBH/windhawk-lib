@@ -2658,3 +2658,63 @@ clip viewport live (not just the widgets' own content, which already
 worked), and that dots/snap-scroll math still lines up correctly at a
 few different heights (not just 56, the one value tested with real
 content so far).
+
+## Incident 40: registered widget's order and active dot reset on every settings change (2026-09-17)
+
+**Symptom**: whenever the user changed a `taskbar-widget-system-usage`
+Windhawk setting (font size, a show/hide toggle, anything), that widget
+snapped back to the end of the stack's order (undoing any move up/down
+the user had done), and the active dot reset to the first widget -
+whether or not the system-usage widget was the one that had been active.
+
+**Root cause, order**: `taskbar-widget-system-usage`'s own
+`Wh_ModSettingsChanged` reacts to ANY of its settings changing by calling
+the host's unregister-then-register functions again (necessary, since
+its width/content genuinely needs rebuilding for most of those settings -
+see that mod's Incident 5). On this side, `WidgetStack_UnregisterWidget`
+erases the old entry from `g_widgets`; `WidgetStack_RegisterWidget` then
+`push_back`s a brand-new entry - always at the end, with no idea where
+the old one used to sit. `LoadWidgetOrderState()` (which restores a
+saved "widgets.order" by matching `Id()`) already existed and already
+runs at `Wh_ModInit`, but nothing called it again after a later
+register - so a re-registered widget could never get back to a
+previously saved position, only ever land at the end.
+
+**Root cause, active dot**: `g_ui.activeIndex` is a raw index into
+`g_widgets`, not an identity. `WidgetStack_UnregisterWidget`'s
+`g_widgets.erase(it)` shifts every later entry's actual position down by
+one without adjusting `activeIndex` to compensate, and
+`WidgetStack_RegisterWidget`'s `push_back` changes the list's size again -
+between the two, `RebuildStackContents`'s existing "is `activeIndex`
+still in the enabled set" check almost always fails after this
+particular kind of mutation (not because the widget it used to point to
+is gone, but because the *numbers* shifted), falling back to
+`enabled.front()` - dot 0 - regardless of which widget was actually
+showing before.
+
+**Fix**: two independent changes, same underlying idea (track identity,
+not position) -
+
+1. `WidgetStack_RegisterWidget` now calls `LoadWidgetOrderState()` right
+   after `push_back`, before `RebuildStackContents()` - re-sorts
+   `g_widgets` to match the last-saved order by `Id()`, which puts a
+   re-registered widget back where the user left it (a no-op for a
+   widget that's never been explicitly reordered/saved, which still just
+   falls through to the end - matches the pre-existing first-registration
+   behavior).
+2. New `UiState::activeWidgetId` (a `std::wstring`, the active widget's
+   own `Id()`) tracked alongside `activeIndex` - set in `GoToWidget`
+   whenever the user actually navigates, and used by
+   `RebuildStackContents` to re-resolve `activeIndex` by identity first
+   (find the enabled widget whose `Id()` matches) before falling back to
+   the old raw-index check, which now only matters for the very first
+   call (before any `Id` has been tracked yet) or if the previously
+   active widget itself is gone/disabled.
+
+**Next retest**: with `taskbar-widget-system-usage` moved to a
+non-default position in the stack (move up/down) and NOT the currently
+active dot, change one of its Windhawk settings - confirm it stays in
+its moved position and the active dot doesn't jump. Then make it the
+active dot, change a setting again - confirm the active dot stays on it
+(not reset to the first widget) even though it just got destroyed and
+recreated under the hood.
