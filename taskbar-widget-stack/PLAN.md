@@ -2023,3 +2023,40 @@ segmented pill row rather than the old underline-tab style. Since
 theme-following isn't live yet, no need to test switching Windows'
 theme while the window is open - reopening it after a theme change is
 the only way it'd pick up a difference right now.
+
+## Incident 28: real Navigation and Layout tabs (2026-09-17)
+
+Both placeholder tabs replaced with working controls, now that the
+window itself and its dark/light theming (Incident 27) are confirmed.
+
+**Navigation tab**: five `ToggleSwitch`es, one per `nav.*` setting
+(wheel/dots/drag/wrap/overscroll) - `MakeSettingsToggle` builds a
+labeled switch and wires its `Toggled` handler to update `g_settings`
+and call `WritePrivateDword` directly. No further action needed for
+these - every `nav.*` check elsewhere in the file already reads
+`g_settings` live, so flipping a switch takes effect on the very next
+wheel/drag/touchpad event with nothing else to trigger.
+
+**Layout tab**: a `Slider` (100-1000, step 10) for `layout.maxWidth`
+with a live-updating label above it, and a `ToggleSwitch` (via the
+same `MakeSettingsToggle`) for `layout.indicator.hideWhenSingle`.
+Unlike nav settings, both of these need `RebuildStackContents()`
+called explicitly after the change, since the stack's width/indicator
+column are only recomputed there (not read live per-frame the way
+`g_settings.navWheel` etc. are) - both handlers call it.
+
+**Not done this pass**: live-updating the Widgets tab's list if the
+right-click menu changes something while the settings window is also
+open (or vice versa) - each surface refreshes itself after its own
+edits, but the two don't currently observe each other. Low priority
+prototype gap; flagging rather than fixing blind, since fixing it
+would mean either polling or a shared "widgets changed" event neither
+surface currently has.
+
+**Next retest**: open Navigation and Layout tabs, flip each toggle and
+confirm the corresponding live behavior changes immediately (e.g.
+turning off `nav.wheel` stops mouse-wheel stepping, moving the max-width
+slider actually resizes the stack down to the new content width if it's
+currently wider than the widest widget's desired width), and confirm
+values survive closing and reopening the window (private-store
+persistence, not just in-memory for this session).

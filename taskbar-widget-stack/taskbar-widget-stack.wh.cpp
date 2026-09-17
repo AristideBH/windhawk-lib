@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.35
+// @version         0.1.36
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1572,6 +1572,111 @@ TextBlock MakePlaceholderTab(std::wstring text) {
     return block;
 }
 
+// Shared by the Navigation and Layout tabs (Incident 28) - a labeled
+// ToggleSwitch whose Toggled handler both updates g_settings and
+// persists to the private store directly, since neither of these two
+// tabs needs a full rebuild-on-change like the Widgets tab does.
+// `onChanged` does whatever else that specific setting needs beyond
+// the g_settings/private-store write (e.g. layout settings also call
+// RebuildStackContents(); nav settings don't need anything further,
+// since every nav.* check already reads g_settings live).
+ToggleSwitch MakeSettingsToggle(std::wstring header,
+                                bool initial,
+                                std::function<void(bool)> onChanged) {
+    ToggleSwitch toggle;
+    toggle.Header(winrt::box_value(winrt::hstring(header)));
+    toggle.IsOn(initial);
+    toggle.Toggled(
+        [onChanged](winrt::Windows::Foundation::IInspectable const& sender,
+                     RoutedEventArgs const&) {
+            onChanged(sender.as<ToggleSwitch>().IsOn());
+        });
+    return toggle;
+}
+
+FrameworkElement BuildNavigationTab() {
+    StackPanel panel;
+    panel.Orientation(Orientation::Vertical);
+    panel.Margin({16, 16, 16, 16});
+    panel.Spacing(12);
+
+    panel.Children().Append(MakeSettingsToggle(
+        L"Mouse wheel navigation", g_settings.navWheel, [](bool on) {
+            g_settings.navWheel = on;
+            WritePrivateDword(L"nav.wheel", on ? 1 : 0);
+        }));
+    panel.Children().Append(MakeSettingsToggle(
+        L"Dot-click navigation", g_settings.navDots, [](bool on) {
+            g_settings.navDots = on;
+            WritePrivateDword(L"nav.dots", on ? 1 : 0);
+        }));
+    panel.Children().Append(MakeSettingsToggle(
+        L"Drag navigation", g_settings.navDrag, [](bool on) {
+            g_settings.navDrag = on;
+            WritePrivateDword(L"nav.drag", on ? 1 : 0);
+        }));
+    panel.Children().Append(MakeSettingsToggle(
+        L"Wrap around", g_settings.navWrap, [](bool on) {
+            g_settings.navWrap = on;
+            WritePrivateDword(L"nav.wrap", on ? 1 : 0);
+        }));
+    panel.Children().Append(MakeSettingsToggle(
+        L"Overscroll bounce", g_settings.navOverscroll, [](bool on) {
+            g_settings.navOverscroll = on;
+            WritePrivateDword(L"nav.overscroll", on ? 1 : 0);
+        }));
+
+    return panel;
+}
+
+FrameworkElement BuildLayoutTab() {
+    StackPanel panel;
+    panel.Orientation(Orientation::Vertical);
+    panel.Margin({16, 16, 16, 16});
+    panel.Spacing(16);
+
+    StackPanel maxWidthGroup;
+    maxWidthGroup.Orientation(Orientation::Vertical);
+    maxWidthGroup.Spacing(4);
+
+    TextBlock maxWidthLabel;
+    maxWidthLabel.Text(winrt::hstring(L"Maximum stack width: " +
+                                       std::to_wstring(g_settings.layoutMaxWidth) +
+                                       L"px"));
+    maxWidthGroup.Children().Append(maxWidthLabel);
+
+    Slider maxWidthSlider;
+    maxWidthSlider.Minimum(100);
+    maxWidthSlider.Maximum(1000);
+    maxWidthSlider.StepFrequency(10);
+    maxWidthSlider.Value(g_settings.layoutMaxWidth);
+    maxWidthSlider.ValueChanged(
+        [maxWidthLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutMaxWidth = value;
+            WritePrivateDword(L"layout.maxWidth", (DWORD)value);
+            maxWidthLabel.Text(winrt::hstring(
+                L"Maximum stack width: " + std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    maxWidthGroup.Children().Append(maxWidthSlider);
+    panel.Children().Append(maxWidthGroup);
+
+    panel.Children().Append(MakeSettingsToggle(
+        L"Hide indicator with one widget",
+        g_settings.layoutHideIndicatorWhenSingle, [](bool on) {
+            g_settings.layoutHideIndicatorWhenSingle = on;
+            WritePrivateDword(L"layout.indicator.hideWhenSingle",
+                               on ? 1 : 0);
+            RebuildStackContents();
+        }));
+
+    return panel;
+}
+
 // Rebuilt (not patched) on every toggle/move, same rebuild-on-change
 // idiom used everywhere else in this file - simpler than diffing, and
 // this list is short. Reuses ToggleWidgetEnabled/MoveWidget directly,
@@ -1723,12 +1828,8 @@ bool OpenSettingsWindow() {
         widgetsScroller.Content(BuildWidgetsTab());
         g_widgetsTabScroller = widgetsScroller;
 
-        auto navPlaceholder = MakePlaceholderTab(
-            L"Coming soon - for now, edit navigation settings through "
-            L"Windhawk's own settings editor for this mod.");
-        auto layoutPlaceholder = MakePlaceholderTab(
-            L"Coming soon - for now, edit layout settings through "
-            L"Windhawk's own settings editor for this mod.");
+        FrameworkElement navContent = BuildNavigationTab();
+        FrameworkElement layoutContent = BuildLayoutTab();
         auto aboutPlaceholder = MakePlaceholderTab(
             L"Taskbar Widget Stack - see this mod's README and PLAN.md "
             L"in the repo for status and roadmap.");
@@ -1754,7 +1855,7 @@ bool OpenSettingsWindow() {
         navView.MenuItems().Append(aboutNavItem);
 
         navView.SelectionChanged(
-            [contentHost, widgetsScroller, navPlaceholder, layoutPlaceholder,
+            [contentHost, widgetsScroller, navContent, layoutContent,
              aboutPlaceholder](
                 NavigationView const&,
                 NavigationViewSelectionChangedEventArgs const& args) {
@@ -1767,9 +1868,9 @@ bool OpenSettingsWindow() {
                 if (tag == L"widgets") {
                     contentHost.Content(widgetsScroller);
                 } else if (tag == L"navigation") {
-                    contentHost.Content(navPlaceholder);
+                    contentHost.Content(navContent);
                 } else if (tag == L"layout") {
-                    contentHost.Content(layoutPlaceholder);
+                    contentHost.Content(layoutContent);
                 } else if (tag == L"about") {
                     contentHost.Content(aboutPlaceholder);
                 }
