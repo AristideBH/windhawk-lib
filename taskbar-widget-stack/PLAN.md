@@ -1087,3 +1087,57 @@ documents in detail - the mod now does what the original prototype set
 out to do (see "Prototype scope" at the top of this file), modulo the
 two known, deprioritized gaps: two-finger trackpad scroll (Incident 15)
 and the still-unbuilt widget SDK (see "Next steps").
+
+## Incident 16: revisiting trackpad scroll, lighter approach first (2026-09-17)
+
+User asked for a real fix rather than leaving Incident 15's conclusion
+as final. Weighed the two remaining options:
+1. **Raw HID digitizer parsing** (`RegisterRawInputDevices` for the
+   touchpad's HID usage page, decoding multi-touch contact reports
+   directly, bypassing Windows' own Precision Touchpad gesture
+   synthesis entirely) - a real, used technique (some window managers
+   and browsers do this for custom touchpad gestures), but substantial:
+   effectively writing a small gesture recognizer from raw contact
+   data, untestable without live hardware between iterations.
+2. **A lighter diagnostic step first**: a system-wide, low-level mouse
+   hook (`WH_MOUSE_LL`) sees `WM_MOUSEWHEEL` messages before Windows
+   routes them to a specific window - unlike the earlier
+   `WM_MOUSEWHEEL`-on-the-taskbar-HWND check (Incidents 7/9), which
+   could only observe messages already targeted at this mod's own
+   window. This can distinguish "nothing is ever synthesized for this
+   gesture, anywhere" (Incident 15's working theory) from "something
+   *is* synthesized, just not delivered to this element" - a
+   meaningfully different, more actionable finding if true.
+
+Chose option 2 first, per explicit request to try something lighter
+before committing to the HID approach.
+
+**Implemented (2026-09-17, diagnostic only)**: `LowLevelMouseProc`,
+installed via `SetWindowsHookExW(WH_MOUSE_LL, ...)` from inside
+`InjectWidgetStackGrid` (already guaranteed to run on the taskbar's own
+message-pumping UI thread via `RunFromWindowThread` - required for
+`WH_MOUSE_LL` callback delivery, since low-level hooks are delivered to
+the thread that installed them and that thread must be pumping
+messages). Logs every `WM_MOUSEWHEEL` seen anywhere on the desktop,
+with its screen coordinates and delta. Removed in
+`Wh_ModBeforeUninit` via `UnhookWindowsHookEx`.
+
+**Also worth checking (free, no code)**: whether the earlier successful
+mouse-wheel test happened while the taskbar/widget had focus (e.g.
+right after a click) versus the touchpad test being tried without ever
+focusing it first - Windows' "scroll inactive windows when I hover over
+them" setting governs exactly this gap for a real mouse wheel, and while
+it's not expected to be the touchpad blocker (that gesture doesn't
+appear to produce a wheel message at all, focused or not, per the
+`WM_MOUSEWHEEL`-on-taskbar-HWND check already coming up empty in
+Incident 9), it costs nothing to rule out before spending more
+diagnostic rounds on it.
+
+**Next retest**: swipe two fingers over the widget and check whether
+`WH_MOUSE_LL: WM_MOUSEWHEEL at (...)` appears at all. If it does, its
+coordinates tell us where the OS actually routes this gesture (which
+may not be our widget's screen position) - a real, previously-unknown
+data point. If it still doesn't appear, that further confirms Incident
+15's conclusion and makes the raw-HID route (option 1 above) the only
+remaining lever, at which point it's worth explicitly deciding whether
+that investment is still wanted.

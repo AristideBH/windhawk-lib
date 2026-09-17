@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.16
+// @version         0.1.17
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -546,6 +546,7 @@ UiState g_ui;
 HWND g_taskbarWnd;
 HANDLE g_retryThread;
 HANDLE g_injectEvent;
+HHOOK g_mouseHook;
 std::mutex g_retryThreadMutex;
 std::atomic<bool> g_stopRequested{false};
 
@@ -1005,6 +1006,25 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
 // at all - it's RootGrid's own edge, which doesn't move.
 constexpr double kLeftEdgeGap = 6.0;
 
+// Diagnostic (2026-09-17, "Incident 16"): a system-wide, low-level mouse
+// hook sees `WM_MOUSEWHEEL` before Windows dispatches it to a specific
+// window - unlike this mod's earlier `WM_MOUSEWHEEL`-on-the-taskbar-HWND
+// check (see Incident 7/9), which could only observe messages already
+// targeted at this mod's own window. If a Precision Touchpad's
+// two-finger scroll produces a wheel message anywhere on the desktop
+// during the gesture, even one not routed to this element, this should
+// see it - narrowing "nothing is ever synthesized for this gesture" from
+// "something is synthesized, but not delivered here."
+LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION && wParam == WM_MOUSEWHEEL) {
+        auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
+        short delta = HIWORD(info->mouseData);
+        Wh_Log(L"WH_MOUSE_LL: WM_MOUSEWHEEL at (%d,%d) delta=%d", info->pt.x,
+               info->pt.y, delta);
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
 // Builds the full widget-stack element (dots column + clipped, slidable
 // widget panes) and adds it as a floating child of the taskbar's
 // RootGrid, flush against its left edge. Must run on the taskbar's own
@@ -1090,6 +1110,15 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         if (!g_ui.windowSubclassed) {
             g_ui.windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
                 hWnd, TaskbarWindowSubclassProc, 0);
+        }
+
+        if (!g_mouseHook) {
+            // Installed here rather than in Wh_ModInit: this runs on the
+            // taskbar's own message-pumping UI thread already (guaranteed
+            // by RunFromWindowThread), which WH_MOUSE_LL's callback
+            // delivery requires - see LowLevelMouseProc's comment.
+            g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc,
+                                             GetModuleHandleW(nullptr), 0);
         }
 
         Wh_Log(L"Injected widget stack");
@@ -1220,6 +1249,10 @@ void Wh_ModBeforeUninit() {
     g_stopRequested = true;
     if (g_injectEvent) {
         SetEvent(g_injectEvent);
+    }
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = nullptr;
     }
     {
         std::lock_guard<std::mutex> lk(g_retryThreadMutex);
