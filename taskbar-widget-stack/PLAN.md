@@ -2285,3 +2285,17 @@ show fully, vertically centered within the pane with no clipping at
 either edge, for various combinations of shown/hidden metrics via the
 gear settings. Also confirm the Media Player placeholder now visibly
 takes more width in the stack than AI Quota.
+
+## Incident 33: fix compile error from Incident 32's Panel& parameter (2026-09-17)
+
+`BuildRow(Panel& content, ...)` didn't compile: C++/WinRT's projected
+classes (`StackPanel`, `Panel`, etc.) aren't related by real public
+C++ inheritance the way their WinRT metadata hierarchy suggests -
+that relationship is implemented via converting constructors instead,
+which is why passing a `StackPanel` to initialize a `Panel`-typed
+*value* (as done elsewhere in this file, e.g. `WidgetHost::parent`)
+compiles fine, but binding a non-const `Panel&` *reference* to a
+`StackPanel` argument does not ("unrelated type", per the compiler).
+Fixed by changing `BuildRow`'s parameter to `StackPanel&` directly,
+since `content` in `Create()` is always a `StackPanel` - no need for
+`Panel&`'s generality here.

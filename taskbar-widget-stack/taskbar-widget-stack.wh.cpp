@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.40
+// @version         0.1.41
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1464,7 +1464,7 @@ class SystemUsageWidget : public IWidget {
     // the stack's width.
     static constexpr double kDesiredWidth = 130.0;
 
-    void BuildRow(Panel& content,
+    void BuildRow(StackPanel& content,
                   const wchar_t* label,
                   ColumnDefinition& fillCol,
                   ColumnDefinition& emptyCol,
