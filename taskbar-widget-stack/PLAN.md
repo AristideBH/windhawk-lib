@@ -1305,3 +1305,55 @@ active widget actually changes, not just whether logs appear. This is
 genuinely unverified code with no way to test it outside real hardware,
 consistent with the risk flagged when this HID route was approved.
 Direction/sensitivity may need a follow-up correction, same as drag did.
+
+## Incident 18: HID scroll fired on one finger anywhere on the taskbar, wrong direction, junky (2026-09-17)
+
+**Live test result of Incident 17's implementation**: it did step
+widgets, so the raw-HID route works end to end, but with three
+problems:
+1. Direction was backwards.
+2. It fired with a single finger, not just a two-finger scroll.
+3. It fired while the cursor wasn't even over the widget stack.
+4. Motion felt "junky" (erratic/stuttery), a direct consequence of (2)
+   and (3): every ordinary one-finger cursor move anywhere on the
+   taskbar was being read as a scroll gesture, on top of any genuine
+   two-finger scroll.
+
+**Root cause**: two things the first pass never scoped correctly.
+- `RegisterRawInputDevices` subscribes to the whole touchpad *device*,
+  not to any particular window or on-screen region - `WM_INPUT`
+  arrives for every touch on the pad, cursor movement included,
+  regardless of where the cursor is. Nothing in Incident 17's handler
+  restricted it to (a) actually being a two-finger touch or (b) the
+  cursor being over the stack, so it was reading normal one-finger
+  pointer movement as scroll input.
+- The Y-delta sign was just guessed as "same convention as drag"
+  without live verification, and guessed wrong.
+
+**Fix**:
+- Added `IsCursorOverWidgetStack(HWND)`: reads the live cursor
+  position (`GetCursorPos` + `ScreenToClient`), converts it from
+  physical pixels to DIPs via `GetDpiForWindow`, and hit-tests it
+  against `g_ui.root`'s actual on-screen bounds via
+  `root.TransformToVisual(nullptr)` - the same coordinate space
+  pointer-routed XAML events use. The `WM_INPUT` handler now only
+  tracks a touch when this returns true.
+- Added a contact-count gate using `bRawData[38]` (Contact Count,
+  confirmed in Incident 17) - now requires `contactCount >= 2`, so a
+  single finger (cursor movement, or the button click that shows up as
+  one contact) never triggers a step.
+- Flipped the step direction (`g_hidAccumY < 0 ? 1 : -1` instead of
+  `-1 : 1`).
+
+Both gates reset `g_hidContactActive` the same way a lifted finger
+already did, so dropping to one finger or moving the cursor off the
+stack mid-scroll cleanly stops tracking instead of producing a jump
+when a qualifying touch resumes.
+
+**Next retest**: two-finger scroll while hovering the widget stack -
+confirm direction now feels natural, confirm a single finger or
+scrolling elsewhere on the taskbar no longer does anything, and report
+whether the motion is smooth or still needs a sensitivity/threshold
+adjustment (the `height / 2` step threshold, shared with drag, hasn't
+been tuned specifically for HID's raw sensor units, which may not be
+1:1 with the pointer-event coordinates drag was tuned against).

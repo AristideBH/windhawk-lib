@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.20
+// @version         0.1.21
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -970,6 +970,37 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
     RebuildStackContents();
 }
 
+// Hit-tests the live cursor position against the widget stack's own
+// bounds (Incident 18: raw HID input is registered against the whole
+// touchpad device, not scoped to any window/element, so WM_INPUT fires
+// no matter where the cursor is - gating on this is what makes the
+// touchpad-scroll handler below only react while actually over the
+// stack, instead of hijacking every touchpad touch anywhere on the
+// taskbar).
+bool IsCursorOverWidgetStack(HWND hWnd) {
+    if (!g_ui.root) {
+        return false;
+    }
+    POINT pt;
+    if (!GetCursorPos(&pt) || !ScreenToClient(hWnd, &pt)) {
+        return false;
+    }
+    try {
+        UINT dpi = GetDpiForWindow(hWnd);
+        double scale = dpi > 0 ? dpi / 96.0 : 1.0;
+        double clientX = pt.x / scale;
+        double clientY = pt.y / scale;
+        auto transform = g_ui.root.TransformToVisual(nullptr);
+        auto topLeft = transform.TransformPoint({0, 0});
+        auto bottomRight = transform.TransformPoint(
+            {(float)g_ui.root.ActualWidth(), (float)g_ui.root.ActualHeight()});
+        return clientX >= topLeft.X && clientX <= bottomRight.X &&
+               clientY >= topLeft.Y && clientY <= bottomRight.Y;
+    } catch (...) {
+        return false;
+    }
+}
+
 // Named (not an inline lambda) because SetWindowSubclass/RemoveWindowSubclass
 // match subclasses by exact function pointer - installing with one lambda
 // and removing with a different one (even with identical bodies) silently
@@ -996,6 +1027,14 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
         // which is enough to see the vertical motion of a two-finger
         // scroll (both fingers move together) without risking a
         // misparsed slot layout.
+        //
+        // Incident 18 fixes, from live feedback on the first pass:
+        // (1) it fired on a single finger and anywhere on the taskbar,
+        // because raw input isn't scoped to a window/element at all -
+        // now gated on byte[38] (contact count) >= 2 AND the cursor
+        // actually being over the stack (IsCursorOverWidgetStack), so a
+        // plain one-finger cursor move never steps a widget; (2) the
+        // stepped direction was backwards - flipped below.
         UINT size = 0;
         GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &size,
                          sizeof(RAWINPUTHEADER));
@@ -1005,21 +1044,26 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                  &size, sizeof(RAWINPUTHEADER)) == size) {
                 auto* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
                 if (raw->header.dwType == RIM_TYPEHID &&
-                    raw->data.hid.dwSizeHid >= 6) {
+                    raw->data.hid.dwSizeHid >= 39) {
                     const BYTE* bytes = raw->data.hid.bRawData;
                     BYTE status = bytes[1];
-                    bool touching = (status & 0x03) != 0;
+                    BYTE contactCount = bytes[38];
+                    bool touching =
+                        (status & 0x03) != 0 && contactCount >= 2 &&
+                        IsCursorOverWidgetStack(hWnd);
                     LONG y = (LONG)(WORD)(bytes[4] | (bytes[5] << 8));
 
                     if (!touching) {
-                        // Contact lifted - drop tracking so the next
-                        // touch-down doesn't see a bogus jump from
-                        // whatever Y the finger happened to lift at.
+                        // Contact lifted, dropped below two fingers, or
+                        // cursor left the stack - drop tracking so the
+                        // next qualifying touch doesn't see a bogus jump
+                        // from whatever Y/state applied before.
                         g_hidContactActive = false;
                     } else if (!g_hidContactActive) {
-                        // Fresh touch-down (or the "clutch" re-grip seen
-                        // in captures): start tracking from here instead
-                        // of diffing against a stale previous position.
+                        // Fresh qualifying touch (or the "clutch"
+                        // re-grip seen in captures): start tracking from
+                        // here instead of diffing against a stale
+                        // previous position.
                         g_hidContactActive = true;
                         g_hidPrevY = y;
                     } else {
@@ -1028,7 +1072,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                         g_hidAccumY += dy;
                         double height = PaneHeight();
                         while (std::abs(g_hidAccumY) > height / 2) {
-                            StepWidget(g_hidAccumY < 0 ? -1 : 1);
+                            StepWidget(g_hidAccumY < 0 ? 1 : -1);
                             g_hidAccumY +=
                                 g_hidAccumY < 0 ? height / 2 : -(height / 2);
                         }
