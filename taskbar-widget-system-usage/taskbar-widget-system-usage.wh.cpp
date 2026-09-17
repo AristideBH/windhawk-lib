@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.3
+// @version         0.1.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -506,6 +506,10 @@ struct UiState {
     Panel remoteParentPanel{nullptr};  // taskbar-widget-stack's widgetsPanel
                                         // (registered mode) - mutually
                                         // exclusive with injectionParent.
+    Border remoteContainer{nullptr};   // paneHeight-tall wrapper actually
+                                        // appended to remoteParentPanel
+                                        // (registered mode only) - see
+                                        // SystemUsage_Create's comment.
     StackPanel root{nullptr};
 
     ColumnDefinition cpuFillCol{nullptr};
@@ -822,8 +826,21 @@ double __cdecl SystemUsage_Create(void* /*context*/,
 
         LoadSettings();
 
+        // Wrapped in a Border pinned to exactly host->paneHeight, matching
+        // PlaceholderWidget::Create()'s own `border.Height(host.paneHeight)`
+        // in taskbar-widget-stack.wh.cpp - every widget slot in the stack's
+        // vertical StackPanel must be exactly paneHeight tall for the
+        // snap-scroll slide (CompositeTransform over widgetsPanel) to land
+        // on slot boundaries correctly. Without this, the bars' own
+        // content height (sized to just its 1-3 rows) is shorter than a
+        // slot, and every widget after this one in the stack ends up
+        // misaligned.
+        Border container;
+        container.Height(host->paneHeight);
+
         StackPanel root;
         root.Orientation(Orientation::Vertical);
+        root.VerticalAlignment(VerticalAlignment::Center);
         // No fixed Width() here, unlike the standalone path - the host
         // sizes this to the widest enabled widget's desired width (see
         // IWidget::Create's contract in taskbar-widget-stack.wh.cpp) and
@@ -842,10 +859,12 @@ double __cdecl SystemUsage_Create(void* /*context*/,
                      g_ui.gpuPercentText);
         }
 
-        parent.Children().Append(root);
+        container.Child(root);
+        parent.Children().Append(container);
 
         g_ui.hWnd = (HWND)host->taskbarHwnd;
         g_ui.remoteParentPanel = parent;
+        g_ui.remoteContainer = container;
         g_ui.root = root;
 
         InitPdh();
@@ -883,9 +902,10 @@ void __cdecl SystemUsage_Destroy(void* /*context*/) {
     StopTimer();
     ClosePdh();
     try {
-        if (g_ui.remoteParentPanel && g_ui.root) {
+        if (g_ui.remoteParentPanel && g_ui.remoteContainer) {
             uint32_t index;
-            if (g_ui.remoteParentPanel.Children().IndexOf(g_ui.root, index)) {
+            if (g_ui.remoteParentPanel.Children().IndexOf(g_ui.remoteContainer,
+                                                            index)) {
                 g_ui.remoteParentPanel.Children().RemoveAt(index);
             }
         }

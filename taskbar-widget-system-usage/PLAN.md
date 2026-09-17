@@ -241,3 +241,33 @@ registration to succeed even under Explorer-startup timing (not just in
 principle) - confirm the bars end up inside the stack's pane, confirm the
 widget shows in the stack's settings window, and confirm no duplicate/
 overlapping element remains on the taskbar.
+
+## Incident 4: registration confirmed working; fixed height mismatch inside the stack (2026-09-17)
+
+**Result**: Incident 3's fix worked - registration now succeeds live
+(screenshot confirmed: CPU/RAM bars rendering inside
+`taskbar-widget-stack`'s pane, Media Player placeholder correctly wider).
+One visual regression from before extraction: this widget's own pane no
+longer fills the full stack height, throwing off dot/pane alignment for
+the widget(s) after it.
+
+**Root cause**: `taskbar-widget-stack.wh.cpp`'s `PlaceholderWidget::Create()`
+wraps its content in a `Border` with `border.Height(host.paneHeight)` -
+every widget's root element must be exactly `paneHeight` tall, since
+`widgetsPanel` stacks all widgets' root elements vertically and slides
+between them with a `CompositeTransform`; each widget occupies exactly
+one `paneHeight`-tall slot in that stack for the slide to land on slot
+boundaries. `SystemUsage_Create` (Incident 2) built its `StackPanel root`
+with no explicit height at all - it sized to its own content (1-3 rows,
+shorter than `paneHeight`), so it under-filled its slot.
+
+**Fix**: wrap the bars in a `Border` sized to `host->paneHeight`, same as
+`PlaceholderWidget`, and center `root` vertically within it. Added a
+`remoteContainer` field to `UiState` for this (the standalone path is
+unaffected - it doesn't use the multi-widget slot mechanism, so its
+`root.Width(130)`-based sizing stays as-is). `SystemUsage_Destroy` now
+removes `remoteContainer` from `remoteParentPanel`, not `root` directly.
+
+**Next retest**: confirm the bars now occupy the full pane height like
+the placeholders, and that switching to/from another widget in the stack
+(dots, scroll, drag) snaps cleanly with no partial-pane artifacts.

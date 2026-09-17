@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.43
+// @version         0.1.44
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -87,6 +87,14 @@ prototype - not yet verified live, see `PLAN.md`.
       $description: >-
         Don't show the dot indicator column when there's only one enabled
         widget - it has nothing to indicate.
+    - gap: 6
+      $name: Gap to widgets (px)
+      $description: Space between the dot indicator column and the widgets.
+    - onRight: false
+      $name: Indicator on the right
+      $description: >-
+        Show the dot indicator to the right of the widgets instead of the
+        left (the default).
     $name: Indicator
     $description: >-
       Dot indicator appearance and behavior. More visual options
@@ -410,6 +418,8 @@ struct {
     bool navOverscroll = true;
     int layoutMaxWidth = 520;
     bool layoutHideIndicatorWhenSingle = true;
+    int layoutIndicatorGap = 6;
+    bool layoutIndicatorOnRight = false;
 } g_settings;
 
 // ---------------------------------------------------------------------
@@ -975,10 +985,20 @@ struct UiState {
     // enabled/disabled/ported - see PLAN.md's "Widget SDK design".
     Border clipHost{nullptr};
     RectangleGeometry clipGeom{nullptr};
-    // Collapsed to 0 width by ApplyStackWidth() when
+    // root's three columns, always in this fixed left-to-right order in
+    // Grid.ColumnDefinitions() (column0/column1/column2) - which one is
+    // currently playing the "dots" vs. "content" role is decided live in
+    // ApplyStackWidth() from layout.indicator.onRight, by writing the
+    // Pixel/Star widths into whichever slot needs them and re-pointing
+    // dotsPanel/clipHost's Grid::SetColumn to match (Incident 36) -
+    // rather than physically moving elements or ColumnDefinition objects
+    // between indices, which C++/WinRT's Grid API doesn't support
+    // anyway. column0/column2 collapse to 0 together with gapColumn when
     // layout.indicator.hideWhenSingle is on and only one widget is
-    // enabled - see Incident 25.
-    ColumnDefinition dotsColumn{nullptr};
+    // enabled (Incident 25 predates the 3-column split; same idea).
+    ColumnDefinition column0{nullptr};
+    ColumnDefinition gapColumn{nullptr};
+    ColumnDefinition column2{nullptr};
     CompositeTransform sliderTransform{nullptr};
     int activeIndex = 0;
     winrt::event_token renderingToken;
@@ -1467,15 +1487,32 @@ void RefreshDots() {
 // ported widgets are wider than the two placeholders' original fixed
 // 30px pane).
 void ApplyStackWidth(double contentWidth) {
-    if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom || !g_ui.dotsColumn) {
+    if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom || !g_ui.column0 ||
+        !g_ui.gapColumn || !g_ui.column2 || !g_ui.dotsPanel) {
         return;
     }
     try {
         bool hideIndicator = g_settings.layoutHideIndicatorWhenSingle &&
                               EnabledIndices().size() <= 1;
         double dotsWidth = hideIndicator ? 0.0 : kDotsColumnWidth;
-        g_ui.dotsColumn.Width({dotsWidth, GridUnitType::Pixel});
-        g_ui.root.Width(contentWidth + dotsWidth);
+        double gapWidth =
+            hideIndicator ? 0.0 : (double)g_settings.layoutIndicatorGap;
+
+        // Which physical column (0 or 2) currently plays the "dots" role
+        // vs. the "content" role - see UiState::column0's comment
+        // (Incident 36). Re-decided on every call so toggling
+        // layout.indicator.onRight moves the indicator immediately, with
+        // no re-injection needed.
+        bool onRight = g_settings.layoutIndicatorOnRight;
+        GridLength dotsLength{dotsWidth, GridUnitType::Pixel};
+        GridLength starLength{1.0, GridUnitType::Star};
+        g_ui.column0.Width(onRight ? starLength : dotsLength);
+        g_ui.column2.Width(onRight ? dotsLength : starLength);
+        g_ui.gapColumn.Width({gapWidth, GridUnitType::Pixel});
+        Grid::SetColumn(g_ui.dotsPanel, onRight ? 2 : 0);
+        Grid::SetColumn(g_ui.clipHost, onRight ? 0 : 2);
+
+        g_ui.root.Width(contentWidth + dotsWidth + gapWidth);
         g_ui.clipHost.Width(contentWidth);
         auto rect = g_ui.clipGeom.Rect();
         rect.Width = (float)contentWidth;
@@ -1839,6 +1876,43 @@ FrameworkElement BuildLayoutTab() {
             g_settings.layoutHideIndicatorWhenSingle = on;
             WritePrivateDword(L"layout.indicator.hideWhenSingle",
                                on ? 1 : 0);
+            RebuildStackContents();
+        }));
+
+    StackPanel gapGroup;
+    gapGroup.Orientation(Orientation::Vertical);
+    gapGroup.Spacing(4);
+
+    TextBlock gapLabel;
+    gapLabel.Text(winrt::hstring(L"Indicator-to-widgets gap: " +
+                                  std::to_wstring(g_settings.layoutIndicatorGap) +
+                                  L"px"));
+    gapGroup.Children().Append(gapLabel);
+
+    Slider gapSlider;
+    gapSlider.Minimum(0);
+    gapSlider.Maximum(24);
+    gapSlider.StepFrequency(1);
+    gapSlider.Value(g_settings.layoutIndicatorGap);
+    gapSlider.ValueChanged(
+        [gapLabel](winrt::Windows::Foundation::IInspectable const&,
+                    winrt::Windows::UI::Xaml::Controls::Primitives::
+                        RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutIndicatorGap = value;
+            WritePrivateDword(L"layout.indicator.gap", (DWORD)value);
+            gapLabel.Text(winrt::hstring(L"Indicator-to-widgets gap: " +
+                                          std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    gapGroup.Children().Append(gapSlider);
+    panel.Children().Append(gapGroup);
+
+    panel.Children().Append(MakeSettingsToggle(
+        L"Indicator on the right", g_settings.layoutIndicatorOnRight,
+        [](bool on) {
+            g_settings.layoutIndicatorOnRight = on;
+            WritePrivateDword(L"layout.indicator.onRight", on ? 1 : 0);
             RebuildStackContents();
         }));
 
@@ -2429,18 +2503,29 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         // Placeholder width - RebuildStackContents (called below) applies
         // the real width immediately, once widgets have reported their
         // desired widths.
-        root.Width(kMinContentWidth + kDotsColumnWidth);
-        ColumnDefinition dotsCol;
-        dotsCol.Width({kDotsColumnWidth, GridUnitType::Pixel});
-        ColumnDefinition contentCol;
-        contentCol.Width({1.0, GridUnitType::Star});
-        root.ColumnDefinitions().Append(dotsCol);
-        root.ColumnDefinitions().Append(contentCol);
+        root.Width(kMinContentWidth + kDotsColumnWidth +
+                   g_settings.layoutIndicatorGap);
+        // Three columns, always in this order (0/1/2) - which of 0/2
+        // plays the "dots" vs. "content" role, and column1's gap width,
+        // are decided live in ApplyStackWidth() from the current
+        // settings (see UiState::column0's comment) rather than fixed
+        // here; the initial widths just need to be non-degenerate before
+        // that first call.
+        ColumnDefinition column0;
+        column0.Width({kDotsColumnWidth, GridUnitType::Pixel});
+        ColumnDefinition gapCol;
+        gapCol.Width({(double)g_settings.layoutIndicatorGap,
+                       GridUnitType::Pixel});
+        ColumnDefinition column2;
+        column2.Width({1.0, GridUnitType::Star});
+        root.ColumnDefinitions().Append(column0);
+        root.ColumnDefinitions().Append(gapCol);
+        root.ColumnDefinitions().Append(column2);
 
         StackPanel dotsPanel;
         dotsPanel.VerticalAlignment(VerticalAlignment::Center);
         dotsPanel.HorizontalAlignment(HorizontalAlignment::Center);
-        Grid::SetColumn(dotsPanel, 0);
+        Grid::SetColumn(dotsPanel, g_settings.layoutIndicatorOnRight ? 2 : 0);
         root.Children().Append(dotsPanel);
 
         Border clipHost;
@@ -2451,7 +2536,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         clipGeom.Rect(
             {0, 0, (float)kMinContentWidth, (float)PaneHeight()});
         clipHost.Clip(clipGeom);
-        Grid::SetColumn(clipHost, 1);
+        Grid::SetColumn(clipHost, g_settings.layoutIndicatorOnRight ? 0 : 2);
 
         StackPanel widgetsPanel;
         widgetsPanel.Orientation(Orientation::Vertical);
@@ -2470,7 +2555,9 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.root = root;
         g_ui.widgetsPanel = widgetsPanel;
         g_ui.dotsPanel = dotsPanel;
-        g_ui.dotsColumn = dotsCol;
+        g_ui.column0 = column0;
+        g_ui.gapColumn = gapCol;
+        g_ui.column2 = column2;
         g_ui.clipHost = clipHost;
         g_ui.clipGeom = clipGeom;
         g_ui.sliderTransform = transform;
@@ -2620,6 +2707,10 @@ void LoadSettings() {
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
     g_settings.layoutHideIndicatorWhenSingle =
         Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
+    int gap = Wh_GetIntSetting(L"layout.indicator.gap");
+    g_settings.layoutIndicatorGap = gap >= 0 ? gap : 6;
+    g_settings.layoutIndicatorOnRight =
+        Wh_GetIntSetting(L"layout.indicator.onRight");
 
     // Private store (Incident 26) overrides the above whenever a key
     // exists there - it's the real source of truth once the settings
@@ -2646,6 +2737,12 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"layout.indicator.hideWhenSingle", v)) {
         g_settings.layoutHideIndicatorWhenSingle = v != 0;
+    }
+    if (ReadPrivateDword(L"layout.indicator.gap", v)) {
+        g_settings.layoutIndicatorGap = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.indicator.onRight", v)) {
+        g_settings.layoutIndicatorOnRight = v != 0;
     }
 }
 

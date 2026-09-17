@@ -2418,3 +2418,82 @@ right-click menu) rather than as a separate taskbar element; confirm
 disabling `taskbar-widget-stack` still leaves `taskbar-widget-system-usage`
 working standalone (its fallback path, unverified after this round's
 retry-loop changes).
+
+## Incident 36: registration confirmed working live; indicator gap + left/right setting added (2026-09-17)
+
+**Result**: Incident 35's registration ABI works end to end once the
+retry-loop race from `taskbar-widget-system-usage`'s own Incident 3 was
+fixed - the system-usage bars now show up inside this mod's pane
+(screenshot confirmed). Two follow-up requests from that same test round:
+more breathing room between the dot indicator and the widgets, and the
+ability to put the indicator on either side.
+
+**What changed**: `root`'s Grid gained a third column - previously
+`[dots (fixed) | content (Star)]`, now `[column0 | gap (fixed) |
+column2]`. Which of `column0`/`column2` plays the "dots" role vs. the
+"content" role, and the gap column's width, are decided every
+`ApplyStackWidth()` call from two new settings
+(`layout.indicator.gap`, `layout.indicator.onRight`) rather than fixed at
+injection time - toggling either in the settings window takes effect
+immediately via the existing `RebuildStackContents()` path, no
+re-injection needed. `UiState::dotsColumn` is gone; `column0`/`gapColumn`/
+`column2` replace it (see that struct's updated comment for why
+ColumnDefinition objects can't just be moved between grid indices, so the
+"swap sides" has to happen by writing different widths into fixed slots
+and re-pointing `dotsPanel`/`clipHost`'s `Grid::SetColumn` instead).
+
+**Next retest**: confirm the gap slider and "indicator on the right"
+toggle both apply live and look right with the registered
+`taskbar-widget-system-usage` widget in the mix (not just the
+placeholders), and that toggling `onRight` while the dots are mid-animation
+doesn't leave anything visually stuck.
+
+## Design note: flexible taskbar placement (not yet implemented)
+
+**Request**: replicate `taskbar-fluent-media-player`'s `PlayerSetting.position`
+setting (e.g. `taskbar_after_taskview_right`) so the widget stack can be
+anchored anywhere in the taskbar, not just flush left of `RootGrid`.
+
+**How the reference mod does it** (read directly from
+github.com/Salyts/Taskbar-Fluent-Media-Player, not just skimmed): a single
+`position` string setting with ~17 options split into two families:
+
+- **Edge positions** (`taskbar_left_edge`/`_center_edge`/`_right_edge`):
+  the player element is `HorizontalAlignment`ed Left/Center/Right within
+  the taskbar's root grid and given a static `Margin` - no live tracking,
+  cheapest option.
+- **Tracking positions** (`taskbar_left_start`/`_right_start`,
+  `_after_search_left/right`, `_after_taskview_left/right`,
+  `_after_widgets_left/right`, and tray equivalents): the player finds a
+  real taskbar element (Start button, search box, task view button,
+  widgets button, clock, tray icons - each via `FindChildByName`/
+  `FindElementByClassName` on `TaskbarFrameRepeater`'s children) and
+  *tracks* it live: a `LayoutUpdated` handler on the parent grid re-reads
+  the anchor's `TransformToVisual` position on every layout pass and
+  updates the player's own `Margin.Left` to sit flush against it, while
+  also pushing the anchor element's *own* margin aside by the player's
+  width so the two don't overlap. This is what makes "left of the Start
+  button" keep working as the taskbar's own icons reflow (pinned apps
+  added/removed, window count changing, etc.) - a static margin computed
+  once at injection would drift out of sync.
+- A third, simpler family (not used for the widget stack's use case) does
+  a real `ColumnDefinition` insertion into a Grid at a specific index for
+  tray-icon-row placements, shifting sibling columns - more invasive,
+  only needed for the tray's own grid layout, not applicable here since
+  this mod only ever lives in the taskbar's main area.
+
+**Proposed scope for this mod**: same two-family design, but only the
+taskbar-side (not tray) anchors - `left_edge`/`center_edge`/`right_edge`
+plus `left`/`right` of Start, Search, Task View, and Widgets button - own
+`kAnchorClassNames`/`kAnchorButtonNames` table ported from the reference
+mod's `FindElementByClassName`/`FindNthElementByClassName`/
+`FindElementInRepeater` helpers (this file already has `FindStartButton`
+covering the Start-button lookup half). This mod's own root is already a
+Z-indexed floating overlay appended directly to `taskbarRootGrid`
+(`Canvas::SetZIndex(root, 1000)`), which is exactly the shape the
+reference mod's tracking-position branch expects - no structural change
+needed there, just the anchor-lookup + `LayoutUpdated` tracking logic
+layered on top of the existing injection. Deferred pending a scope
+decision with the user (a live-tracked multi-anchor system is
+meaningfully more code and testing surface than everything else in this
+incident) - see chat for the options put to them.
