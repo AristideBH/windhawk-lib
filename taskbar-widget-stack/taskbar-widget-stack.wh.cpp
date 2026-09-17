@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.38
+// @version         0.1.39
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -206,6 +206,23 @@ class IWidget {
     // to call even if Create() was never called or threw partway
     // through.
     virtual void Destroy() = 0;
+
+    // Per-widget settings (Incident 31) - optional, default "none", so
+    // existing/simple widgets (the placeholders) don't need to
+    // implement anything. A widget that wants its own configuration
+    // (which stats to show, refresh rate, color thresholds, etc. -
+    // things that don't belong in the stack-wide Navigation/Layout
+    // tabs) overrides both: HasSettings() to opt in, and
+    // BuildSettingsPanel() to build that config UI on demand. The
+    // settings window's Widgets tab shows a gear button next to any
+    // widget entry where HasSettings() is true, and swaps the visible
+    // content to BuildSettingsPanel()'s result when clicked - the
+    // panel is responsible for its own persistence (its own private
+    // registry values) and for calling back into the host
+    // (RebuildStackContents()) if a change needs to take visible
+    // effect immediately.
+    virtual bool HasSettings() const { return false; }
+    virtual FrameworkElement BuildSettingsPanel() { return nullptr; }
 };
 
 struct WidgetEntry {
@@ -1005,6 +1022,13 @@ void StepWidget(int direction) {
 
 void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
+// Shared by the settings window's Navigation/Layout tabs and any
+// widget's own BuildSettingsPanel() (Incident 31) - forward-declared
+// here since SystemUsageWidget, defined before the settings window
+// section, needs it too.
+ToggleSwitch MakeSettingsToggle(std::wstring header,
+                                 bool initial,
+                                 std::function<void(bool)> onChanged);
 
 // Registers this mod's pointer-event handlers on `g_ui.root` and stores
 // each subscription's `event_token` in `UiState` so `UnwireNavigation`
@@ -1273,18 +1297,29 @@ class SystemUsageWidget : public IWidget {
     std::wstring DisplayName() const override { return L"System\nUsage"; }
 
     double Create(const WidgetHost& host) override {
+        LoadSettingsFields();
+
         Grid root;
         root.Height(host.paneHeight);
-        root.Padding({4, 3, 4, 3});
-        for (int i = 0; i < 3; i++) {
-            RowDefinition row;
-            row.Height({1.0, GridUnitType::Star});
-            root.RowDefinitions().Append(row);
-        }
+        root.VerticalAlignment(VerticalAlignment::Center);
+        root.Padding({4, 0, 4, 0});
 
-        BuildRow(root, 0, L"CPU", cpuFillCol_, cpuEmptyCol_, cpuPercentText_);
-        BuildRow(root, 1, L"RAM", ramFillCol_, ramEmptyCol_, ramPercentText_);
-        BuildRow(root, 2, L"GPU", gpuFillCol_, gpuEmptyCol_, gpuPercentText_);
+        int rowIndex = 0;
+        if (showCpu_) {
+            AddRowDefinition(root);
+            BuildRow(root, rowIndex++, L"CPU", cpuFillCol_, cpuEmptyCol_,
+                     cpuPercentText_);
+        }
+        if (showRam_) {
+            AddRowDefinition(root);
+            BuildRow(root, rowIndex++, L"RAM", ramFillCol_, ramEmptyCol_,
+                     ramPercentText_);
+        }
+        if (showGpu_) {
+            AddRowDefinition(root);
+            BuildRow(root, rowIndex++, L"GPU", gpuFillCol_, gpuEmptyCol_,
+                     gpuPercentText_);
+        }
 
         host.parent.Children().Append(root);
         root_ = root;
@@ -1300,6 +1335,92 @@ class SystemUsageWidget : public IWidget {
     void Tick() override {}
 
     double OnSettingsChanged() override { return kDesiredWidth; }
+
+    bool HasSettings() const override { return true; }
+
+    // Built on demand (Incident 31) - shown when the settings window's
+    // Widgets tab gear button for this entry is clicked. Each control
+    // persists directly to this widget's own private-store keys (under
+    // "widget.system-usage.*", separate from the stack-wide nav/layout
+    // keys) and calls RebuildStackContents() to take effect
+    // immediately - the same pattern ToggleWidgetEnabled/MoveWidget
+    // already use, rather than inventing a second apply path.
+    FrameworkElement BuildSettingsPanel() override {
+        StackPanel panel;
+        panel.Orientation(Orientation::Vertical);
+        panel.Margin({16, 16, 16, 16});
+        panel.Spacing(12);
+
+        TextBlock heading;
+        heading.Text(L"System Usage");
+        heading.FontSize(14);
+        panel.Children().Append(heading);
+
+        panel.Children().Append(MakeSettingsToggle(
+            L"Show CPU", showCpu_, [](bool on) {
+                WritePrivateDword(L"widget.system-usage.showCpu",
+                                   on ? 1 : 0);
+                RebuildStackContents();
+            }));
+        panel.Children().Append(MakeSettingsToggle(
+            L"Show RAM", showRam_, [](bool on) {
+                WritePrivateDword(L"widget.system-usage.showRam",
+                                   on ? 1 : 0);
+                RebuildStackContents();
+            }));
+        panel.Children().Append(MakeSettingsToggle(
+            L"Show GPU", showGpu_, [](bool on) {
+                WritePrivateDword(L"widget.system-usage.showGpu",
+                                   on ? 1 : 0);
+                RebuildStackContents();
+            }));
+
+        StackPanel refreshGroup;
+        refreshGroup.Orientation(Orientation::Vertical);
+        refreshGroup.Spacing(4);
+        TextBlock refreshLabel;
+        refreshLabel.Text(winrt::hstring(
+            L"Refresh every " + std::to_wstring(refreshSeconds_) + L"s"));
+        refreshGroup.Children().Append(refreshLabel);
+        Slider refreshSlider;
+        refreshSlider.Minimum(1);
+        refreshSlider.Maximum(5);
+        refreshSlider.StepFrequency(1);
+        refreshSlider.Value(refreshSeconds_);
+        refreshSlider.ValueChanged(
+            [refreshLabel](
+                winrt::Windows::Foundation::IInspectable const&,
+                winrt::Windows::UI::Xaml::Controls::Primitives::
+                    RangeBaseValueChangedEventArgs const& args) {
+                int seconds = (int)args.NewValue();
+                WritePrivateDword(L"widget.system-usage.refreshSeconds",
+                                   (DWORD)seconds);
+                refreshLabel.Text(winrt::hstring(
+                    L"Refresh every " + std::to_wstring(seconds) + L"s"));
+                // Takes effect on the next toggle/reorder-triggered
+                // rebuild rather than immediately - this widget's own
+                // timer interval isn't re-read live, and restarting it
+                // here (without a full Destroy()/Create()) would be a
+                // second, redundant apply path. Simple and honest
+                // about the limitation rather than half-implementing
+                // "live" for one setting and not others.
+            });
+        refreshGroup.Children().Append(refreshSlider);
+        panel.Children().Append(refreshGroup);
+
+        TextBlock note;
+        note.Text(
+            L"Refresh rate applies next time the stack rebuilds "
+            L"(e.g. after toggling or reordering a widget).");
+        note.FontSize(11);
+        note.TextWrapping(TextWrapping::Wrap);
+        SolidColorBrush noteBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(255, 160, 160, 160)};
+        note.Foreground(noteBrush);
+        panel.Children().Append(note);
+
+        return panel;
+    }
 
     void Destroy() override {
         StopTimer();
@@ -1318,7 +1439,19 @@ class SystemUsageWidget : public IWidget {
     }
 
    private:
-    static constexpr double kDesiredWidth = 170.0;
+    // Reduced from 170 (Incident 31): the internal layout already
+    // uses Star-weighted columns for the bar track, so it stretches to
+    // fill whatever width the stack ends up at (driven by
+    // layout.maxWidth or a wider sibling widget) - this only needs to
+    // be wide enough to read comfortably on its own, not to dictate
+    // the stack's width.
+    static constexpr double kDesiredWidth = 130.0;
+
+    void AddRowDefinition(Grid& root) {
+        RowDefinition row;
+        row.Height({0, GridUnitType::Auto});
+        root.RowDefinitions().Append(row);
+    }
 
     void BuildRow(Grid& root,
                   int rowIndex,
@@ -1328,12 +1461,19 @@ class SystemUsageWidget : public IWidget {
                   TextBlock& percentText) {
         Grid row;
         Grid::SetRow(row, rowIndex);
+        // Tight, content-sized columns (Incident 31 - the first pass's
+        // 30/32px fixed columns were wider than "CPU"/"100%" need,
+        // leaving visible dead space on both sides of the bar) plus a
+        // small margin between rows instead of relying on Star-height
+        // rows to space them (which left uneven whitespace above/below
+        // each row's actual content).
+        row.Margin({0, 1, 0, 1});
         ColumnDefinition labelCol;
-        labelCol.Width({30, GridUnitType::Pixel});
+        labelCol.Width({22, GridUnitType::Pixel});
         ColumnDefinition trackCol;
         trackCol.Width({1.0, GridUnitType::Star});
         ColumnDefinition percentCol;
-        percentCol.Width({32, GridUnitType::Pixel});
+        percentCol.Width({26, GridUnitType::Pixel});
         row.ColumnDefinitions().Append(labelCol);
         row.ColumnDefinitions().Append(trackCol);
         row.ColumnDefinitions().Append(percentCol);
@@ -1348,9 +1488,11 @@ class SystemUsageWidget : public IWidget {
         Grid::SetColumn(labelText, 0);
         row.Children().Append(labelText);
 
+        // Halved from 8 to 4 (user request, 2026-09-17).
         Border track;
-        track.Height(8);
-        track.CornerRadius({4, 4, 4, 4});
+        track.Height(4);
+        track.Margin({4, 0, 4, 0});
+        track.CornerRadius({2, 2, 2, 2});
         SolidColorBrush trackBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 70, 70)};
         track.Background(trackBrush);
@@ -1368,7 +1510,7 @@ class SystemUsageWidget : public IWidget {
         SolidColorBrush fillBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 170, 230)};
         fill.Background(fillBrush);
-        fill.CornerRadius({4, 4, 4, 4});
+        fill.CornerRadius({2, 2, 2, 2});
         Grid::SetColumn(fill, 0);
         fillGrid.Children().Append(fill);
         track.Child(fillGrid);
@@ -1377,7 +1519,7 @@ class SystemUsageWidget : public IWidget {
         percentText = TextBlock();
         percentText.Text(L"0%");
         percentText.FontSize(9);
-        percentText.HorizontalAlignment(HorizontalAlignment::Right);
+        percentText.HorizontalAlignment(HorizontalAlignment::Left);
         percentText.VerticalAlignment(VerticalAlignment::Center);
         percentText.Foreground(textBrush);
         Grid::SetColumn(percentText, 2);
@@ -1402,21 +1544,27 @@ class SystemUsageWidget : public IWidget {
     }
 
     void UpdateValues() {
-        double cpu = SampleCpu();
-        double ram = SampleRam();
-        ApplyBar(cpuFillCol_, cpuEmptyCol_, cpuPercentText_, cpu);
-        ApplyBar(ramFillCol_, ramEmptyCol_, ramPercentText_, ram);
-        if (pdhOk_) {
-            double gpu = SampleGpu();
+        // Only touches the rows actually built (Incident 31 - a
+        // hidden metric's ColumnDefinition/TextBlock members stay
+        // null, so calling ApplyBar on them would throw - caught, but
+        // wasteful - skipping is simpler than relying on the catch).
+        if (showCpu_) {
+            ApplyBar(cpuFillCol_, cpuEmptyCol_, cpuPercentText_, SampleCpu());
+        }
+        if (showRam_) {
+            ApplyBar(ramFillCol_, ramEmptyCol_, ramPercentText_, SampleRam());
+        }
+        if (showGpu_) {
+            double gpu = pdhOk_ ? SampleGpu() : -1.0;
             if (gpu >= 0.0) {
                 ApplyBar(gpuFillCol_, gpuEmptyCol_, gpuPercentText_, gpu);
-                return;
+            } else {
+                ApplyBar(gpuFillCol_, gpuEmptyCol_, gpuPercentText_, 0.0);
+                try {
+                    gpuPercentText_.Text(L"N/A");
+                } catch (...) {
+                }
             }
-        }
-        ApplyBar(gpuFillCol_, gpuEmptyCol_, gpuPercentText_, 0.0);
-        try {
-            gpuPercentText_.Text(L"N/A");
-        } catch (...) {
         }
     }
 
@@ -1518,7 +1666,7 @@ class SystemUsageWidget : public IWidget {
 
     void StartTimer() {
         timer_ = DispatcherTimer();
-        timer_.Interval(std::chrono::seconds(1));
+        timer_.Interval(std::chrono::seconds(std::max(1, refreshSeconds_)));
         timerToken_ = timer_.Tick(
             [this](winrt::Windows::Foundation::IInspectable const&,
                    winrt::Windows::Foundation::IInspectable const&) {
@@ -1537,6 +1685,25 @@ class SystemUsageWidget : public IWidget {
             } catch (...) {
             }
             timer_ = nullptr;
+        }
+    }
+
+    // Own settings (Incident 31) - separate keys from the stack-wide
+    // nav/layout ones, under "widget.system-usage.*". Loaded fresh at
+    // the start of every Create() (i.e. every rebuild), matching how
+    // g_settings itself is loaded - simpler than trying to patch
+    // already-built XAML in place when a value changes.
+    void LoadSettingsFields() {
+        DWORD v;
+        showCpu_ = !ReadPrivateDword(L"widget.system-usage.showCpu", v) ||
+                   v != 0;
+        showRam_ = !ReadPrivateDword(L"widget.system-usage.showRam", v) ||
+                   v != 0;
+        showGpu_ = !ReadPrivateDword(L"widget.system-usage.showGpu", v) ||
+                   v != 0;
+        if (ReadPrivateDword(L"widget.system-usage.refreshSeconds", v) &&
+            v >= 1 && v <= 5) {
+            refreshSeconds_ = (int)v;
         }
     }
 
@@ -1567,6 +1734,11 @@ class SystemUsageWidget : public IWidget {
     PDH_HQUERY pdhQuery_ = nullptr;
     PDH_HCOUNTER pdhCounter_ = nullptr;
     bool pdhOk_ = false;
+
+    bool showCpu_ = true;
+    bool showRam_ = true;
+    bool showGpu_ = true;
+    int refreshSeconds_ = 1;
 };
 
 void RefreshDots() {
@@ -2008,6 +2180,43 @@ FrameworkElement BuildLayoutTab() {
 // stay in sync through the one SaveWidgetOrderState() path.
 ScrollViewer g_widgetsTabScroller{nullptr};
 
+FrameworkElement BuildWidgetsTab();
+
+// Shown in place of the widget list (Incident 31) when a widget's own
+// gear button is clicked - a "back" button plus that widget's
+// IWidget::BuildSettingsPanel() output. Swapping g_widgetsTabScroller's
+// own Content back and forth between this and BuildWidgetsTab() is
+// simpler than a real nested-navigation stack for what's currently
+// just one level deep.
+FrameworkElement BuildWidgetSettingsView(int idx) {
+    StackPanel panel;
+    panel.Orientation(Orientation::Vertical);
+
+    Button backButton;
+    backButton.Content(winrt::box_value(winrt::hstring(L"< Back to widgets")));
+    backButton.Margin({16, 16, 16, 0});
+    backButton.Click(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           RoutedEventArgs const&) {
+            if (g_widgetsTabScroller) {
+                g_widgetsTabScroller.Content(BuildWidgetsTab());
+            }
+        });
+    panel.Children().Append(backButton);
+
+    if (idx >= 0 && idx < (int)g_widgets.size()) {
+        try {
+            auto settingsPanel = g_widgets[idx].widget->BuildSettingsPanel();
+            if (settingsPanel) {
+                panel.Children().Append(settingsPanel);
+            }
+        } catch (...) {
+        }
+    }
+
+    return panel;
+}
+
 FrameworkElement BuildWidgetsTab() {
     StackPanel panel;
     panel.Orientation(Orientation::Vertical);
@@ -2061,6 +2270,25 @@ FrameworkElement BuildWidgetsTab() {
             }
         });
         row.Children().Append(downButton);
+
+        if (g_widgets[i].widget->HasSettings()) {
+            Button gearButton;
+            // Plain Unicode glyph rather than a Segoe MDL2 FontIcon
+            // codepoint - Incident 31's Move up/down icons showed
+            // those codepoints aren't reliably guessable against this
+            // SDK (Symbol::Down didn't even exist), so a literal
+            // character is the lower-risk choice here.
+            gearButton.Content(winrt::box_value(winrt::hstring(L"⚙")));
+            gearButton.Click(
+                [i](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+                    if (g_widgetsTabScroller) {
+                        g_widgetsTabScroller.Content(
+                            BuildWidgetSettingsView(i));
+                    }
+                });
+            row.Children().Append(gearButton);
+        }
 
         panel.Children().Append(row);
     }

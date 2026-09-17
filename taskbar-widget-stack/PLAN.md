@@ -2173,3 +2173,76 @@ on/off a few times while this one is enabled, to exercise the
 Destroy()-then-Create() cycle (timer/PDH query torn down and rebuilt)
 without a leak or crash - and confirm Explorer restarts/mod reloads
 cleanly now that a widget actually holds a timer.
+
+## Incident 31: SystemUsageWidget visual polish, per-widget settings, IWidget gets an optional settings hook (2026-09-17)
+
+**Visual feedback from the first live screenshot**: bars too thick,
+too much dead space both between rows and between label/bar/percent
+within a row.
+
+**Fixes**:
+- Bar `track`/`fill` height halved, 8px -> 4px, corner radius halved
+  to match (2px).
+- Root's `RowDefinition`s switched from `Star` (always splits the
+  full 76px pane evenly across however many rows exist, regardless of
+  how much space their actual content needs - the real source of the
+  "too much gap" feeling) to `Auto` (each row sized to its own
+  content), with `root.VerticalAlignment(Center)` so the resulting
+  compact block centers within the pane instead of stretching, plus a
+  small explicit `Margin` between rows for *controlled* spacing
+  instead of leftover Star whitespace.
+- `labelCol`/`percentCol` shrunk from 30/32px to 22/26px (closer to
+  what "CPU"/"100%" actually need at 9pt), and the percent `TextBlock`
+  switched from right- to left-aligned within its column so it hugs
+  the bar's end instead of being pushed to the column's far edge.
+
+**"Can the widget just fill the stack's width?"** Yes, and it mostly
+already did - the bar track already uses `Star`-weighted
+`ColumnDefinition`s (not a fixed pixel width), so it stretches to
+whatever width it's given automatically. The only thing actually
+tying it to a specific width was its *reported desired width*
+(`kDesiredWidth`, which sets the *stack's* width when this is the
+widest enabled widget) - dropped from the untested 170px guess to
+130px (just enough to read on its own), so this widget no longer
+tries to dictate a wide stack; `layout.maxWidth` or a wider sibling
+widget decides that now, and this one just fills whatever space
+results.
+
+**Per-widget settings ("configure via a cog/gear when applicable")**:
+extended `IWidget` with two new methods, both with default
+implementations so existing/simple widgets need no changes:
+`HasSettings() const` (default `false`) and `BuildSettingsPanel()`
+(default returns null). The settings window's Widgets tab now shows a
+gear button (a literal `⚙` Unicode character, not a Segoe MDL2
+`FontIcon` codepoint - the Move up/down icon saga earlier this session
+already showed those aren't reliably guessable against this SDK)
+next to any widget entry where `HasSettings()` is true; clicking it
+swaps `g_widgetsTabScroller`'s content to a new
+`BuildWidgetSettingsView(idx)` (a "back" button plus that widget's own
+`BuildSettingsPanel()`), and the back button swaps it back to
+`BuildWidgetsTab()`. `SystemUsageWidget` is the first (and so far
+only) widget to use this: three `ToggleSwitch`es (show/hide each
+metric, persisted under `widget.system-usage.show{Cpu,Ram,Gpu}`) and
+a refresh-rate `Slider` (1-5s, `widget.system-usage.refreshSeconds`) -
+the show/hide toggles call `RebuildStackContents()` immediately (same
+pattern as everything else that edits `g_widgets`); the refresh-rate
+slider persists but only takes effect on the *next* rebuild, since
+this widget's timer interval isn't re-read live and restarting it
+without a full `Destroy()`/`Create()` would be a second, redundant
+apply path - documented as a known limitation rather than
+half-implementing "live" for one setting and not the others.
+
+**Not attempted this pass**: bar color thresholds (e.g. green/yellow/
+red bands by usage level) - user mentioned it as one example of
+"etc." among future per-widget settings, not a specific ask yet.
+
+**Next retest**: enable System Usage, confirm the bars are visibly
+thinner and the whole block reads tighter (rows closer together,
+label/bar/percent closer together) without looking cramped. Open its
+settings via the new gear button in the settings window's Widgets tab
+- toggle each Show switch off/on and confirm the corresponding row
+disappears/reappears immediately in the live taskbar stack, and
+confirm "Back to widgets" returns to the normal list. Widen the stack
+(more/wider widgets enabled, or a higher `layout.maxWidth`) and
+confirm this widget's bars actually stretch to fill the extra width
+rather than staying a fixed size.
