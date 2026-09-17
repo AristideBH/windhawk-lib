@@ -2842,3 +2842,22 @@ gap does.
 before the dots and after its content in `left_edge` (the position most
 likely to be in everyday use); confirm both new sliders apply correctly
 in the in-app settings window and via Windhawk's native settings UI.
+
+## Incident 44: settings window needs scrolling once a tab overflows (2026-09-17)
+
+**Request**: the Layout tab has grown enough controls (position,
+edge gap, trailing padding, max width, pane height, indicator gap/
+position toggle, hide-when-single) that it overflows the settings
+window's fixed height, with no way to reach the controls below the fold.
+
+**Fix**: `BuildNavigationTab()`/`BuildLayoutTab()`'s returned panels are
+now each wrapped in their own `ScrollViewer` (`navScroller`/
+`layoutScroller`) before being handed to `contentHost`, matching the
+Widgets tab's own existing `widgetsScroller` pattern (already wrapped
+since that tab's own inception - Layout/Navigation just hadn't needed it
+until this round's additions). Default `ScrollViewer` behavior (auto
+vertical scrollbar) is enough; no extra properties set.
+
+**Next retest**: confirm the Layout tab scrolls to reach every control
+when the settings window is shorter than its content, and that Navigation
+(short enough that it probably never needed this) didn't regress.

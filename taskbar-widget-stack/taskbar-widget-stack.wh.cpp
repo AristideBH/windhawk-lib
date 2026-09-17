@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.51
+// @version         0.1.52
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -2563,8 +2563,16 @@ bool OpenSettingsWindow() {
         widgetsScroller.Content(BuildWidgetsTab());
         g_widgetsTabScroller = widgetsScroller;
 
-        FrameworkElement navContent = BuildNavigationTab();
-        FrameworkElement layoutContent = BuildLayoutTab();
+        // Navigation/Layout wrapped in their own ScrollViewer too
+        // (Incident 44) - Layout in particular has grown enough sliders/
+        // combo boxes (position, edge gap, trailing padding, max width,
+        // pane height, indicator gap, ...) to overflow the settings
+        // window's fixed height without one; matches the Widgets tab's
+        // own existing pattern above rather than introducing a new one.
+        ScrollViewer navScroller;
+        navScroller.Content(BuildNavigationTab());
+        ScrollViewer layoutScroller;
+        layoutScroller.Content(BuildLayoutTab());
         auto aboutPlaceholder = MakePlaceholderTab(
             L"Taskbar Widget Stack - see this mod's README and PLAN.md "
             L"in the repo for status and roadmap.");
@@ -2590,7 +2598,7 @@ bool OpenSettingsWindow() {
         navView.MenuItems().Append(aboutNavItem);
 
         navView.SelectionChanged(
-            [contentHost, widgetsScroller, navContent, layoutContent,
+            [contentHost, widgetsScroller, navScroller, layoutScroller,
              aboutPlaceholder](
                 NavigationView const&,
                 NavigationViewSelectionChangedEventArgs const& args) {
@@ -2603,9 +2611,9 @@ bool OpenSettingsWindow() {
                 if (tag == L"widgets") {
                     contentHost.Content(widgetsScroller);
                 } else if (tag == L"navigation") {
-                    contentHost.Content(navContent);
+                    contentHost.Content(navScroller);
                 } else if (tag == L"layout") {
-                    contentHost.Content(layoutContent);
+                    contentHost.Content(layoutScroller);
                 } else if (tag == L"about") {
                     contentHost.Content(aboutPlaceholder);
                 }
