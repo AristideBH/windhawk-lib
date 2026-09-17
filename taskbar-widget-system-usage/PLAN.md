@@ -99,3 +99,35 @@ not yet designed in detail or implemented:
 
 This section will get its own "Incident" log once integration work
 actually starts, matching `taskbar-widget-stack/PLAN.md`'s convention.
+
+## Incident 1: first compile/install confirmed - bars rendered at 0 width (2026-09-17)
+
+**Result**: this mod's own injection/removal glue (the untested part
+per the note above) worked on the first try - it compiles, injects, and
+the bars appear and update. One visual bug: every bar rendered at 0
+width (label and percent text visible, no visible fill/track).
+
+**Root cause**: the bar track's fill/empty split is done with two
+`Star`-weighted `ColumnDefinition`s (`fillCol`/`emptyCol`), which only
+works when some ancestor in the tree has a *determinate* width for
+those Star columns to proportion against. Inside `taskbar-widget-stack`,
+that determinate width came from the host - `ApplyStackWidth` set an
+explicit `Width` on the equivalent top-level element, sized to fit the
+widest enabled widget (capped at `layout.maxWidth`). Extracting the
+widget kept the bar-building code verbatim but dropped that part of the
+host's job - `root` here had no explicit `Width` (just
+`HorizontalAlignment::Left` + a `Margin`), so it sized `Auto` to
+content, and a `Star` column inside an `Auto`-sized ancestor has no
+space to proportion against - it collapses to 0. The user's own guess
+("probablement un bug dû à la gestion de la largeur par le stack") was
+exactly right.
+
+**Fix**: `root.Width(130)` - a fixed pixel width, matching the desired
+width this widget used to report to `taskbar-widget-stack`'s host
+before extraction. Simple and sufficient for a single, self-contained
+element with no sibling widgets to share space with, unlike the
+original multi-widget-stack context this sizing logic was designed for.
+
+**Next retest**: confirm all enabled bars now render with a real fill
+proportional to their reported percentage, not just label/percent text
+with an invisible track.

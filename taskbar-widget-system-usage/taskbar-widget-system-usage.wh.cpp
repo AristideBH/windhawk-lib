@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.0
+// @version         0.1.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -771,6 +771,18 @@ bool InjectSystemUsageGrid(HWND hWnd) {
         root.HorizontalAlignment(HorizontalAlignment::Left);
         root.Margin({kLeftEdgeGap, 0, 0, 0});
         root.Padding({4, 0, 4, 0});
+        // Explicit width (Incident 1, live-tested): without it, `root`
+        // sizes Auto (to content), and a Star-weighted column inside an
+        // Auto-sized ancestor has no determinate space to proportion
+        // against - it collapses to 0, which is exactly what happened
+        // to the bar track's fill/empty columns (both Star-weighted)
+        // when this widget was extracted out of taskbar-widget-stack.
+        // There, the host (ApplyStackWidth) gave the equivalent element
+        // a real Width, which is what made the Star columns work at
+        // all - that's now this mod's own job. 130px matches the
+        // desired width this widget reported to that host before
+        // extraction.
+        root.Width(130);
 
         if (g_settings.showCpu) {
             BuildRow(root, L"CPU", g_ui.cpuFillCol, g_ui.cpuEmptyCol,
