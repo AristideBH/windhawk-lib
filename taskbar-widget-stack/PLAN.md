@@ -2861,3 +2861,15 @@ vertical scrollbar) is enough; no extra properties set.
 **Next retest**: confirm the Layout tab scrolls to reach every control
 when the settings window is shorter than its content, and that Navigation
 (short enough that it probably never needed this) didn't regress.
+
+## Incident 45: a third widget mod - taskbar-widget-media-player (2026-09-17)
+
+A second real widget now registers through the cross-mod ABI, alongside
+`taskbar-widget-system-usage`: `../taskbar-widget-media-player/`, a
+minimal fork of Salyts' Taskbar Fluent Media Player. Nothing changed on
+this file's side - the whole point of the ABI (Incident 35) was that a
+new widget-owning mod doesn't need this file to know about it in
+advance, and that held. See the new mod's own `PLAN.md` for its design
+and known risks (it's a much bigger, less-audited port than
+`taskbar-widget-system-usage` was, given the size and feature scope of
+the mod it forks). Not yet compiled/tested.

@@ -13,6 +13,7 @@ A collection of [Windhawk](https://windhawk.net/) mods for Windows.
 | [Windows 11 Start Button Tinter](windows-11-start-menu-button/README.md) | Recolor (with system accent color, gradient shading, and click shimmer) for the Windows 11 taskbar Start button, animation-preserving. |
 | [Taskbar Widget Stack](taskbar-widget-stack/README.md) | Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style. Prototype, live-tested. |
 | [Taskbar System Usage](taskbar-widget-system-usage/README.md) | CPU/RAM/GPU usage bars in the taskbar. Standalone mod, live-tested; registers itself into Taskbar Widget Stack's pane when that mod is also installed. |
+| [Taskbar Widget Media Player](taskbar-widget-media-player/README.md) | Minimal fork of Salyts' Taskbar Fluent Media Player, adding registration into Taskbar Widget Stack's pane - falls back to the original standalone behavior otherwise. Not yet compiled/tested. |
 
 ## License
 
