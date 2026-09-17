@@ -2549,3 +2549,79 @@ right sitting flush before the tray, not overlapping the clock); confirm
 switching between them via both the in-app settings window and
 Windhawk's own settings UI actually moves the stack without needing an
 Explorer restart.
+
+## Incident 38: tracking positions implemented - left/right of Start, Search, Task View, Widgets (2026-09-17)
+
+**Feedback on Incident 37**: `left_edge` works, but `center_edge` and
+`right_edge` both land on top of real taskbar content (icons or the
+tray) - only usable for the user's own setup because they'd hidden the
+native Widgets button, leaving `left_edge`'s spot genuinely empty. Their
+call: bring in the reference mod's live element-tracking after all, for
+real flexibility - the risk the design note flagged as the reason to
+defer it is real, but a static-only "center"/"right" that overlaps
+content isn't actually usable either.
+
+**What changed**: `layout.position` gained 8 more options -
+`left_of_start`/`right_of_start`/`left_of_search`/`right_of_search`/
+`left_of_taskview`/`right_of_taskview`/`left_of_widgets`/
+`right_of_widgets`. New `ResolveTrackingAnchor()` maps a position value
+to the real element to anchor next to: `FindStartButton` (already
+existed) for Start, and three new class-name-based lookups ported (with
+attribution) from `taskbar-fluent-media-player.wh.cpp` -
+`FindElementByClassName`/`FindNthElementByClassName`/
+`FindChildByClassName` - for Search (`Taskbar.TaskbarExtensionElement`),
+Task View (the 2nd, 0-indexed `Taskbar.ExperienceToggleButton` in the
+repeater), and the Widgets button (`AugmentedEntryPointButton` by name,
+falling back to its `Taskbar.AugmentedEntryPointButton` class). A missing
+anchor (hidden search box, no widgets button on this build) falls back
+to `left_edge` rather than injecting anchored to nothing - logged once
+via `Wh_Log` for diagnosability.
+
+Once resolved, `InjectWidgetStackGrid` wires a `LayoutUpdated` handler on
+`taskbarRootGrid` (`UpdateTrackedPosition`, simplified from the
+reference's version - no `far_left` variant, no Start-button-mod width
+adjustment) that runs on every layout pass: pushes the tracked element's
+own `Margin` (Left or Right, per side) out by `root`'s current width so
+the two don't overlap, and sets `root.Margin.Left` from the tracked
+element's live `TransformToVisual` position so it follows as the
+taskbar reflows (icons added/removed, DPI change, etc.) - every write
+gated on a >1px delta from the previous value to avoid a layout feedback
+loop, matching the reference mod's own guard.
+
+**Why this can succeed where Incidents 4-6 didn't**: those two earlier
+attempts (this same file, back before the edge-only fallback existed)
+anchored to the Start button alone, then to the *entire*
+`TaskbarFrameRepeater` - both misjudged what the anchor's own bounds
+actually meant, and the second one anchors to a container that also
+holds every pinned/running app icon, not a fixed-position button. This
+round anchors to one specific button element each time (Start, or one of
+the three new class-name lookups), the same granularity the reference
+mod itself uses successfully in production - not the whole repeater.
+
+**Teardown**: `UnwireTracking(bool restoreMargin)` revokes the
+`LayoutUpdated` token and (when `restoreMargin` is true) puts the tracked
+element's `Margin` back to what it was before this mod pushed it aside.
+Called from `RemoveWidgetStackGrid`, `InjectWidgetStackGrid`'s catch
+block, and `TaskbarWindowSubclassProc`'s `WM_DISPLAYCHANGE` handler (all
+`restoreMargin=true` - safe to write back, the tree isn't going away) and
+its `WM_NCDESTROY` handler (`restoreMargin=false` - the whole tree,
+including the tracked element, is being torn down anyway, matching this
+handler's existing "don't touch trayGrid's children/columns" restraint
+for the same reason).
+
+**Genuinely unverified**: none of this has been compiled or tested live
+yet. The class names ported from the reference mod
+(`Taskbar.TaskbarExtensionElement`, `Taskbar.ExperienceToggleButton`,
+`Taskbar.AugmentedEntryPointButton`) are trusted from that mod's own
+confirmed-working source, not independently re-derived - if a Windows
+build uses different internal names, the affected tracking positions
+will just fail to find their anchor and fall back to `left_edge` (logged),
+not crash.
+
+**Next retest**: for each of the 8 tracking positions, confirm the stack
+lands next to the right button with no overlap, and that it visibly
+follows if the taskbar's icon layout changes while running (e.g. pinning/
+unpinning an app). Confirm the pushed-aside button's own margin is
+restored correctly when switching away from a tracking position (to
+another tracking position, an edge position, or on mod disable) - this
+is the part with no precedent elsewhere in this file to lean on.

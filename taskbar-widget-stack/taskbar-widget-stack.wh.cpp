@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.45
+// @version         0.1.46
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -80,10 +80,22 @@ prototype - not yet verified live, see `PLAN.md`.
     $description: >-
       Where the widget stack sits in the taskbar. "Left edge" is this mod's
       original/default placement, flush against the taskbar's own left edge.
+      The "Left/right of ..." options track that button live (icons moving
+      as the taskbar reflows) rather than sitting at a fixed spot; they fall
+      back to "Left edge" if the target button isn't found (hidden, or not
+      present on this Windows build).
     $options:
     - left_edge: "Left edge"
     - center_edge: "Center"
     - right_edge: "Right edge (before the system tray)"
+    - left_of_start: "Left of Start button"
+    - right_of_start: "Right of Start button"
+    - left_of_search: "Left of Search"
+    - right_of_search: "Right of Search"
+    - left_of_taskview: "Left of Task View"
+    - right_of_taskview: "Right of Task View"
+    - left_of_widgets: "Left of Widgets button"
+    - right_of_widgets: "Right of Widgets button"
   - maxWidth: 520
     $name: Maximum stack width
     $description: >-
@@ -862,6 +874,112 @@ FrameworkElement FindStartButton(FrameworkElement const& repeater) {
     return nullptr;
 }
 
+// Class-name-based lookups for the other taskbar anchor buttons
+// (Incident 38's tracking positions) - unlike the Start button, these
+// don't have a stable Name (or none was found), so they're found by
+// their internal class instead. Ported (with attribution) from
+// taskbar-fluent-media-player.wh.cpp (Salyts): FindElementByClassName/
+// FindNthElementByClassName/FindChildByClassName.
+FrameworkElement FindElementByClassName(FrameworkElement const& parent,
+                                         const wchar_t* className) {
+    if (!parent) {
+        return nullptr;
+    }
+    int childCount = VisualTreeHelper::GetChildrenCount(parent);
+    for (int i = 0; i < childCount; i++) {
+        auto child =
+            VisualTreeHelper::GetChild(parent, i).try_as<FrameworkElement>();
+        if (child && winrt::get_class_name(child) == className) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+// `index` is 0-based among matches, direct children only - e.g. the
+// Task View toggle is the second (index 1) of two
+// Taskbar.ExperienceToggleButton children in the repeater on builds
+// that also show the Widgets toggle button there.
+FrameworkElement FindNthElementByClassName(FrameworkElement const& parent,
+                                            const wchar_t* className,
+                                            int index) {
+    if (!parent) {
+        return nullptr;
+    }
+    int found = 0;
+    int childCount = VisualTreeHelper::GetChildrenCount(parent);
+    for (int i = 0; i < childCount; i++) {
+        auto child =
+            VisualTreeHelper::GetChild(parent, i).try_as<FrameworkElement>();
+        if (child && winrt::get_class_name(child) == className) {
+            if (found == index) {
+                return child;
+            }
+            found++;
+        }
+    }
+    return nullptr;
+}
+
+FrameworkElement FindChildByClassName(FrameworkElement const& parent,
+                                       const wchar_t* className,
+                                       int depth = 32) {
+    if (!parent || depth <= 0) {
+        return nullptr;
+    }
+    int childCount = VisualTreeHelper::GetChildrenCount(parent);
+    for (int i = 0; i < childCount; i++) {
+        auto child =
+            VisualTreeHelper::GetChild(parent, i).try_as<FrameworkElement>();
+        if (!child) {
+            continue;
+        }
+        if (winrt::get_class_name(child) == className) {
+            return child;
+        }
+        if (auto found = FindChildByClassName(child, className, depth - 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// Resolves a `layout.position` tracking value (e.g. "left_of_taskview")
+// to the real taskbar element to anchor next to, and which side of it
+// `side` should track. Returns null (with `side` untouched) for a
+// non-tracking position, or if the target element isn't found in this
+// taskbar's current layout (e.g. the search box hidden, no widgets
+// button on this Windows build) - callers fall back to left_edge in
+// that case rather than injecting anchored to nothing.
+FrameworkElement ResolveTrackingAnchor(FrameworkElement const& repeater,
+                                        const std::wstring& position,
+                                        std::wstring& side) {
+    if (position == L"left_of_start" || position == L"right_of_start") {
+        side = position == L"left_of_start" ? L"left" : L"right";
+        return FindStartButton(repeater);
+    }
+    if (position == L"left_of_search" || position == L"right_of_search") {
+        side = position == L"left_of_search" ? L"left" : L"right";
+        return FindElementByClassName(repeater,
+                                       L"Taskbar.TaskbarExtensionElement");
+    }
+    if (position == L"left_of_taskview" || position == L"right_of_taskview") {
+        side = position == L"left_of_taskview" ? L"left" : L"right";
+        return FindNthElementByClassName(
+            repeater, L"Taskbar.ExperienceToggleButton", 1);
+    }
+    if (position == L"left_of_widgets" || position == L"right_of_widgets") {
+        side = position == L"left_of_widgets" ? L"left" : L"right";
+        auto el = FindChildByName(repeater, L"AugmentedEntryPointButton");
+        if (!el) {
+            el = FindChildByClassName(repeater,
+                                       L"Taskbar.AugmentedEntryPointButton");
+        }
+        return el;
+    }
+    return nullptr;
+}
+
 // Defined further down (it calls into the widget-stack functions declared
 // later in this file); forward-declared so HookTaskbarDllSymbols can wire
 // it up as the TrayUI::StartTaskbar hook target.
@@ -985,6 +1103,15 @@ struct UiState {
     bool windowSubclassed = false;
     Grid injectionParent{nullptr};  // The taskbar's RootGrid (not the tray).
     Grid root{nullptr};
+    // Tracking positions only (Incident 38) - the real taskbar element
+    // `root` is anchored next to, live, via a LayoutUpdated handler on
+    // injectionParent. Null/false for the static "edge" positions.
+    FrameworkElement trackedElement{nullptr};
+    Thickness trackedElementOriginalMargin{};
+    bool hasTrackedElementOriginalMargin = false;
+    std::wstring trackSide;  // "left" or "right" of trackedElement.
+    winrt::event_token layoutUpdatedToken;
+    bool layoutUpdatedWired = false;
     // Pointer-event subscription tokens on `root` - see WireUpNavigation's
     // comment for why these must be captured and explicitly revoked.
     winrt::event_token wheelToken;
@@ -1216,6 +1343,7 @@ void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
 bool InjectWidgetStackGrid(HWND hWnd);
 void RemoveWidgetStackGrid();
+void UnwireTracking(bool restoreMargin);
 
 // Registers this mod's pointer-event handlers on `g_ui.root` and stores
 // each subscription's `event_token` in `UiState` so `UnwireNavigation`
@@ -1868,11 +1996,16 @@ FrameworkElement BuildLayoutTab() {
     // index into them without capturing (a non-static local constexpr
     // array indexed with a runtime value still ODR-uses the array
     // object, which would otherwise require an explicit capture).
-    static constexpr const wchar_t* kPositionLabels[] = {L"Left edge",
-                                                           L"Center",
-                                                           L"Right edge"};
+    static constexpr const wchar_t* kPositionLabels[] = {
+        L"Left edge",         L"Center",             L"Right edge",
+        L"Left of Start",     L"Right of Start",      L"Left of Search",
+        L"Right of Search",   L"Left of Task View",   L"Right of Task View",
+        L"Left of Widgets",   L"Right of Widgets"};
     static constexpr const wchar_t* kPositionValues[] = {
-        L"left_edge", L"center_edge", L"right_edge"};
+        L"left_edge",       L"center_edge",       L"right_edge",
+        L"left_of_start",   L"right_of_start",    L"left_of_search",
+        L"right_of_search", L"left_of_taskview",  L"right_of_taskview",
+        L"left_of_widgets", L"right_of_widgets"};
     ComboBox positionCombo;
     int selectedIndex = 0;
     for (int i = 0; i < ARRAYSIZE(kPositionValues); i++) {
@@ -2500,10 +2633,18 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
         // section).
         StopSnapAnimation();
         UnwireNavigation();
+        // Tree is dying - unhook the LayoutUpdated token (a live
+        // per-element subscription, same orphaned-callback class as
+        // CompositionTarget::Rendering above) but don't try to write
+        // trackedElement's Margin back; it's part of the same dying
+        // tree, matching this handler's existing "don't touch trayGrid's
+        // children/columns" restraint.
+        UnwireTracking(/*restoreMargin=*/false);
         g_ui = {};
     } else if (msg == WM_DISPLAYCHANGE && !g_stopRequested) {
         StopSnapAnimation();
         UnwireNavigation();
+        UnwireTracking(/*restoreMargin=*/true);
         g_ui = {};
         // Re-poll for the (possibly recreated) taskbar and
         // SystemTrayFrameGrid rather than assuming this exact HWND
@@ -2515,22 +2656,100 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
     return DefSubclassProc(hWnd, msg, wParam, lParam);
 }
 
-// Flush against the taskbar's left edge, where the native Widgets
-// button (weather/stocks) normally sits - the user hides that button and
-// uses this exact space for taskbar-area mods, confirmed against their
-// live setup (see PLAN.md's "Context"). Not tracking any other element's
-// position: two rounds of trying that (Start button alone, then the
-// whole TaskbarFrameRepeater) both put the stack somewhere wrong -
-// TaskbarFrameRepeater in particular turned out to also contain every
-// pinned/running app icon, not just the leading buttons, so anchoring to
-// its right edge pushed the stack far off to the right, past the visible
-// taskbar bounds ("disappeared"). The true left edge needs no tracking
-// at all - it's RootGrid's own edge, which doesn't move.
+// Edge positions (Incident 6/37): flush against one of the taskbar's own
+// static edges, no element tracking - two earlier attempts at anchoring
+// to a specific element instead (the Start button alone, then the whole
+// TaskbarFrameRepeater) both put the stack somewhere wrong, since
+// TaskbarFrameRepeater in particular also contains every pinned/running
+// app icon, not just the leading buttons. Tracking positions (Incident
+// 38, below) anchor to a *specific* button element instead of the whole
+// repeater, which is what makes tracking actually work this time.
 constexpr double kEdgeGap = 6.0;
+
+// Unhooks the tracking-position LayoutUpdated subscription (if wired) and
+// optionally restores trackedElement's margin to what it was before this
+// mod pushed it aside - see UiState's tracking fields and
+// UpdateTrackedPosition below. Safe to call unconditionally (no-op if no
+// tracking position is/was active). `restoreMargin` is false only when
+// the taskbar's own XAML tree is being torn down anyway (WM_NCDESTROY) -
+// see that call site's comment.
+void UnwireTracking(bool restoreMargin) {
+    if (g_ui.layoutUpdatedWired && g_ui.injectionParent) {
+        try {
+            g_ui.injectionParent.LayoutUpdated(g_ui.layoutUpdatedToken);
+        } catch (...) {
+        }
+        g_ui.layoutUpdatedWired = false;
+    }
+    if (restoreMargin && g_ui.trackedElement &&
+        g_ui.hasTrackedElementOriginalMargin) {
+        try {
+            g_ui.trackedElement.Margin(g_ui.trackedElementOriginalMargin);
+        } catch (...) {
+        }
+    }
+    g_ui.trackedElement = nullptr;
+    g_ui.hasTrackedElementOriginalMargin = false;
+}
+
+// Live LayoutUpdated handler body for a tracking position (Incident 38).
+// Ported (with attribution, simplified - no far_left variant, no
+// Start-button-mod width adjustment) from taskbar-fluent-media-player.wh.cpp
+// (Salyts). Runs on every layout pass of injectionParent once wired -
+// two things it keeps in sync:
+//  1. Pushes trackedElement's own Margin (Left or Right, matching
+//     trackSide) out by root's current width + a gap, so the two don't
+//     overlap - recomputed from trackedElementOriginalMargin each time
+//     (not incrementally adjusted) so repeated calls can't drift.
+//  2. Reads trackedElement's live on-screen position via
+//     TransformToVisual and sets root's own Margin.Left to sit flush
+//     against it (left of it, or right of it, per trackSide).
+// Every write is gated on a >1px change from the previous value - two
+// XAML elements' LayoutUpdated handlers both writing Margin on every
+// single pass, even when nothing actually moved, risks a layout
+// feedback loop; the threshold breaks it, matching the reference mod's
+// own guard.
+void UpdateTrackedPosition() {
+    if (!g_ui.root || !g_ui.trackedElement || !g_ui.injectionParent) {
+        return;
+    }
+    try {
+        double desiredGap = g_ui.root.ActualWidth() + kEdgeGap;
+
+        auto margin = g_ui.hasTrackedElementOriginalMargin
+                          ? g_ui.trackedElementOriginalMargin
+                          : g_ui.trackedElement.Margin();
+        if (g_ui.trackSide == L"left") {
+            margin.Left = desiredGap;
+        } else {
+            margin.Right = desiredGap;
+        }
+        auto currentMargin = g_ui.trackedElement.Margin();
+        if (std::abs(currentMargin.Left - margin.Left) > 1.0 ||
+            std::abs(currentMargin.Right - margin.Right) > 1.0) {
+            g_ui.trackedElement.Margin(margin);
+        }
+
+        auto transform =
+            g_ui.trackedElement.TransformToVisual(g_ui.injectionParent);
+        auto point = transform.TransformPoint({0, 0});
+        double leftPos = g_ui.trackSide == L"left"
+                              ? point.X - desiredGap + kEdgeGap
+                              : point.X + g_ui.trackedElement.ActualWidth() +
+                                    kEdgeGap;
+        auto rootMargin = g_ui.root.Margin();
+        if (std::abs(rootMargin.Left - leftPos) > 1.0) {
+            g_ui.root.Margin({leftPos, 0, 0, 0});
+        }
+    } catch (...) {
+    }
+}
 
 // Builds the full widget-stack element (dots column + clipped, slidable
 // widget panes) and adds it as a floating child of the taskbar's
-// RootGrid, flush against its left edge. Must run on the taskbar's own
+// RootGrid, positioned per layout.position (an edge, or tracking a
+// specific taskbar button - see the comments above kEdgeGap and
+// UpdateTrackedPosition). Must run on the taskbar's own
 // UI thread (same requirement as touching any XAML element - see
 // PLAN.md's "Incident" section).
 bool InjectWidgetStackGrid(HWND hWnd) {
@@ -2559,22 +2778,41 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         return false;
     }
 
+    // Tracking positions (Incident 38) anchor to one specific element
+    // found by ResolveTrackingAnchor - resolved before the try block so
+    // a not-found anchor (element missing on this Windows build/taskbar
+    // config) falls back to left_edge's static placement below rather
+    // than injecting anchored to nothing.
+    std::wstring trackSide;
+    FrameworkElement trackAnchor =
+        ResolveTrackingAnchor(repeater, g_settings.layoutPosition, trackSide);
+    if (!trackSide.empty() && !trackAnchor) {
+        Wh_Log(L"ResolveTrackingAnchor: target not found for %s, falling "
+               L"back to left_edge",
+               g_settings.layoutPosition.c_str());
+    }
+
     try {
         Grid root;
         root.VerticalAlignment(VerticalAlignment::Stretch);
-        // Edge placement (Incident 37, PLAN.md's "Design note: flexible
-        // taskbar placement") - static HorizontalAlignment + Margin only,
-        // no element tracking. Incidents 4-6 already tried tracking a
-        // specific taskbar element (the Start button, then the whole
-        // repeater) for positioning and abandoned both: a taskbar
-        // element's own bounds are easy to misjudge (the repeater also
-        // contains every pinned/running icon, not just the leading
-        // buttons), and this mod's own left-edge placement was always
-        // just RootGrid's own static edge anyway - not actually relative
-        // to anything that moves. Center/right reuse that same lesson:
-        // both are static relative to `taskbarRootGrid` itself, which
-        // doesn't move, rather than to another element inside it.
-        if (g_settings.layoutPosition == L"center_edge") {
+        // Edge placement (Incident 37) - static HorizontalAlignment +
+        // Margin only, computed once here. Tracking placement (Incident
+        // 38, below, after root is added to the tree) anchors instead to
+        // a specific element (Start/Search/Task View/Widgets button),
+        // live, via UpdateTrackedPosition on every layout pass -
+        // possible now because it targets one specific button rather
+        // than an entire container the way Incidents 4-6's earlier,
+        // abandoned tracking attempts did (TaskbarFrameRepeater as a
+        // whole also contains every pinned/running icon, not just the
+        // leading buttons, which is what actually went wrong then).
+        if (trackAnchor) {
+            // Left-aligned with Margin.Left computed by
+            // UpdateTrackedPosition once this is in the tree and a
+            // first layout pass has run; kEdgeGap here is just a
+            // placeholder until then.
+            root.HorizontalAlignment(HorizontalAlignment::Left);
+            root.Margin({kEdgeGap, 0, 0, 0});
+        } else if (g_settings.layoutPosition == L"center_edge") {
             root.HorizontalAlignment(HorizontalAlignment::Center);
         } else if (g_settings.layoutPosition == L"right_edge") {
             root.HorizontalAlignment(HorizontalAlignment::Right);
@@ -2658,8 +2896,28 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.clipGeom = clipGeom;
         g_ui.sliderTransform = transform;
 
+        if (trackAnchor) {
+            g_ui.trackedElement = trackAnchor;
+            g_ui.trackedElementOriginalMargin = trackAnchor.Margin();
+            g_ui.hasTrackedElementOriginalMargin = true;
+            g_ui.trackSide = trackSide;
+            g_ui.layoutUpdatedToken = taskbarRootGrid.LayoutUpdated(
+                [](winrt::Windows::Foundation::IInspectable const&,
+                   winrt::Windows::Foundation::IInspectable const&) {
+                    UpdateTrackedPosition();
+                });
+            g_ui.layoutUpdatedWired = true;
+        }
+
         WireUpNavigation();
         RebuildStackContents();
+        if (trackAnchor) {
+            // Applies an initial position immediately rather than
+            // waiting for the next natural layout pass to fire
+            // LayoutUpdated - avoids a one-frame flash at the
+            // placeholder Margin set above.
+            UpdateTrackedPosition();
+        }
 
         if (!g_ui.windowSubclassed) {
             g_ui.windowSubclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
@@ -2699,6 +2957,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         return true;
     } catch (...) {
         Wh_Log(L"InjectWidgetStackGrid: exception");
+        UnwireTracking(/*restoreMargin=*/true);
         g_ui = {};
         return false;
     }
@@ -2724,6 +2983,8 @@ void RemoveWidgetStackGrid() {
         RemovePropW(g_ui.hWnd, kRegisterWidgetPropName);
         RemovePropW(g_ui.hWnd, kUnregisterWidgetPropName);
     }
+
+    UnwireTracking(/*restoreMargin=*/true);
 
     if (!g_ui.root || !g_ui.injectionParent) {
         g_ui = {};
