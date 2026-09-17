@@ -160,15 +160,100 @@ format.
    failure), not step-by-step traces, and are left in place.
 3. ~~Investigate two-finger trackpad scroll~~ - **done, 2026-09-17**:
    confirmed working via raw HID digitizer input, see Incidents 17-19.
-4. Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to design
-   the real widget SDK contract (paint callback signature, size negotiation,
-   input forwarding, versioning/ABI-stability story).
-5. Port one real widget (likely AI quota, simpler) through the new SDK as
+4. ~~Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to
+   design the real widget SDK contract~~ - **done, 2026-09-17**, see
+   "Widget SDK design (draft)" below.
+5. Implement the `IWidget` interface and host-side lifecycle/crash
+   isolation described below, keeping the current two placeholders as
+   the first two `IWidget` implementations (proves the interface works
+   before porting anything real).
+6. Port one real widget (likely AI quota, simpler) through the new SDK as
    the SDK's first real consumer, before attempting the media player.
-6. Revisit config UI: replace the native popup menu with a custom-drawn
+7. Revisit config UI: replace the native popup menu with a custom-drawn
    drag-and-drop reorder panel, per the original request.
-7. Write a versioned SDK doc once the ABI stabilizes, ahead of any public
+8. Write a versioned SDK doc once the ABI stabilizes, ahead of any public
    windhawk.net listing.
+
+## Widget SDK design (draft, 2026-09-17)
+
+Based on reading `taskbar-ai-quota.wh.cpp` and
+`taskbar-fluent-media-player.wh.cpp` (both ~9-10k lines). Common
+pattern in both, independent of each other: a single named root `Grid`
+rebuilt from scratch on settings changes (not patched in place),
+injected into a taskbar container found by walking the cached
+`XamlRoot`; `DispatcherTimer` as the tick primitive (1min for AI
+quota's pace recompute, 16ms/~60fps for the media player's marquee/
+visualizer animation) with explicit `event_token` revocation, plus
+optional background `CreateThread` workers for slow polling (login,
+media session, theme) that marshal back to the UI thread; input
+handlers (`Click`/`Tapped`/`Pointer*`) attached directly to owned
+elements, tokens tracked and revoked on teardown; neither negotiates
+size with a host - each just sets its own explicit pixel
+widths/heights; both wrap injection/removal/token-revocation in
+pervasive `try{}catch(...){}` so one failure doesn't abort the whole
+teardown/rebuild.
+
+This is a same-file, in-process plugin pattern (not a cross-mod/DLL
+ABI - out of scope per this file's own "Out of scope" section above),
+so the "SDK" is a C++ interface every widget implementation compiles
+into this one `.wh.cpp`, not a loadable third-party plugin format yet.
+
+```cpp
+struct WidgetHost {
+    HWND taskbarHwnd;
+    winrt::Windows::UI::Xaml::Controls::Grid parent;  // widget's root attaches here
+    double paneHeight;                                 // fixed - see PaneHeight()
+};
+
+struct IWidget {
+    virtual ~IWidget() = default;
+    virtual std::wstring Id() const = 0;
+    // Builds and attaches the widget's own root element under
+    // host.parent. Returns the widget's desired width in DIPs (see
+    // stack-width behavior below) - a widget sizes its own height to
+    // host.paneHeight but reports the width it wants.
+    virtual double Create(const WidgetHost& host) = 0;
+    // Called on the stack's shared tick. A widget needing a different
+    // cadence (e.g. a 16ms visualizer) owns its own DispatcherTimer
+    // internally, same as the reference mods do - Tick() is just the
+    // host's "something may have changed, redraw if needed" signal.
+    virtual void Tick() = 0;
+    // Widget re-reads its own settings sub-namespace and rebuilds
+    // internally (matches both reference mods' Remove+Inject-on-change
+    // pattern) - may also change the widget's desired width, so the
+    // host re-queries it after this call.
+    virtual double OnSettingsChanged() = 0;
+    // Revokes every owned event token/timer, then removes its root
+    // element from host.parent. Must be safe to call even if Create()
+    // partially failed.
+    virtual void Destroy() = 0;
+};
+```
+
+Host-side lifecycle rules (in `taskbar-widget-stack.wh.cpp` itself,
+not in each widget): every `IWidget` call (`Create`/`Tick`/
+`OnSettingsChanged`/`Destroy`) is wrapped in `try/catch` by the host,
+matching the "host catches and disables" decision already made for
+this mod and the pervasive try/catch idiom both reference mods use
+internally - a widget that throws gets its existing `crashed` flag set
+and is skipped for the rest of the session, same as today's stub logic
+already anticipates. Each widget gets its own settings sub-namespace
+(e.g. `widget.aiQuota.*`, `widget.mediaPlayer.*`) so a ported widget's
+existing settings schema can carry over largely unchanged.
+
+**Stack width (per user decision, 2026-09-17)**: `kStackWidth` becomes
+dynamic instead of the current fixed `40.0` - the stack sizes itself to
+the widest currently-enabled widget's desired width (the `double`
+`Create`/`OnSettingsChanged` return), capped at a new setting
+`layout.maxWidth` (int, default `520`, user-configurable). Any widget
+narrower than the resulting stack width stretches to fill it
+(`HorizontalAlignment::Stretch` on its root, full width available).
+Recomputing the stack's width only needs to happen when the set of
+enabled widgets or their settings change (widget add/remove/reorder/
+settings-changed), not per-tick - so `RebuildStackContents` computes
+`max(enabledWidgetWidths) capped at layout.maxWidth` once and applies
+it to `root.Width()`/`kDotsColumnWidth`-adjusted content width, same
+place it already rebuilds `dotsPanel`/`widgetsPanel`.
 
 ## Verification
 - **2026-09-16, confirmed live**: `InjectWidgetStackGrid` logs "Injected
