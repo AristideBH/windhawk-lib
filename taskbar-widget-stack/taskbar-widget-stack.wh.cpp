@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.50
+// @version         0.1.51
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -98,6 +98,17 @@ prototype - not yet verified live, see `PLAN.md`.
     - right_of_widgets: "Right of Widgets button"
     - left_of_tray: "Left of the system tray"
     - right_of_tray: "Right of the system tray"
+  - edgeGap: 6
+    $name: Edge gap
+    $description: >-
+      Gap (px) between the anchor (the taskbar edge, or a tracked button)
+      and the stack's dots.
+  - rightPadding: 6
+    $name: Trailing padding
+    $description: >-
+      Empty space (px) reserved past the stack's own content, so it isn't
+      flush against whatever comes next - matches "Edge gap" by default so
+      the stack has the same breathing room on both sides.
   - maxWidth: 520
     $name: Maximum stack width
     $description: >-
@@ -463,6 +474,18 @@ struct {
     // this mod's original/only behavior), "center_edge", or "right_edge"
     // - see InjectWidgetStackGrid's placement comment (Incident 37).
     std::wstring layoutPosition = L"left_edge";
+    // Gap (px) from the anchor (the taskbar's edge, or a tracked
+    // element) to the stack's own dots column - was a hardcoded
+    // constexpr (kEdgeGap) until Incident 43. Also reused as the gap
+    // between the stack and a tracked anchor element (UpdateTrackedPosition)
+    // - conceptually the same "how far from the anchor" quantity either
+    // way.
+    int layoutEdgeGap = 6;
+    // Extra empty space (px) reserved at the stack's own trailing edge,
+    // past its content - Incident 43: symmetric to layoutEdgeGap, so the
+    // whole stack has the same breathing room on both sides instead of
+    // ending flush against its content on one side.
+    int layoutRightPadding = 6;
 } g_settings;
 
 // ---------------------------------------------------------------------
@@ -1190,6 +1213,19 @@ struct UiState {
     ColumnDefinition column0{nullptr};
     ColumnDefinition gapColumn{nullptr};
     ColumnDefinition column2{nullptr};
+    // Trailing 4th column, empty (no content placed in it) - pure
+    // reserved space at root's own trailing edge (Incident 43,
+    // layout.rightPadding), symmetric to layout.edgeGap's leading gap.
+    // A dedicated column rather than just adding to root's own Width()
+    // deliberately avoids growing column2 (content) itself: column2 is
+    // Star-weighted, so any extra width added to root without a
+    // dedicated column would get absorbed there instead, and clipHost's
+    // own explicit Width (already fixed at contentWidth) would then
+    // center within that now-wider column rather than staying flush
+    // left - a real, easy-to-hit XAML gotcha (explicit Width + default
+    // Stretch alignment centers within extra space), not a hypothetical
+    // one.
+    ColumnDefinition paddingColumn{nullptr};
     CompositeTransform sliderTransform{nullptr};
     int activeIndex = 0;
     // Which widget activeIndex is supposed to point at, by Id() rather
@@ -1698,7 +1734,8 @@ void RefreshDots() {
 // 30px pane).
 void ApplyStackWidth(double contentWidth) {
     if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom || !g_ui.column0 ||
-        !g_ui.gapColumn || !g_ui.column2 || !g_ui.dotsPanel) {
+        !g_ui.gapColumn || !g_ui.column2 || !g_ui.paddingColumn ||
+        !g_ui.dotsPanel) {
         return;
     }
     try {
@@ -1707,6 +1744,7 @@ void ApplyStackWidth(double contentWidth) {
         double dotsWidth = hideIndicator ? 0.0 : kDotsColumnWidth;
         double gapWidth =
             hideIndicator ? 0.0 : (double)g_settings.layoutIndicatorGap;
+        double rightPadding = (double)g_settings.layoutRightPadding;
 
         // Which physical column (0 or 2) currently plays the "dots" role
         // vs. the "content" role - see UiState::column0's comment
@@ -1719,10 +1757,11 @@ void ApplyStackWidth(double contentWidth) {
         g_ui.column0.Width(onRight ? starLength : dotsLength);
         g_ui.column2.Width(onRight ? dotsLength : starLength);
         g_ui.gapColumn.Width({gapWidth, GridUnitType::Pixel});
+        g_ui.paddingColumn.Width({rightPadding, GridUnitType::Pixel});
         Grid::SetColumn(g_ui.dotsPanel, onRight ? 2 : 0);
         Grid::SetColumn(g_ui.clipHost, onRight ? 0 : 2);
 
-        g_ui.root.Width(contentWidth + dotsWidth + gapWidth);
+        g_ui.root.Width(contentWidth + dotsWidth + gapWidth + rightPadding);
         g_ui.clipHost.Width(contentWidth);
         // Height follows PaneHeight() live too (Incident 39) - unlike
         // width, this isn't re-derived from widgets' own reported sizes,
@@ -2143,6 +2182,70 @@ FrameworkElement BuildLayoutTab() {
         });
     positionGroup.Children().Append(positionCombo);
     panel.Children().Append(positionGroup);
+
+    StackPanel edgeGapGroup;
+    edgeGapGroup.Orientation(Orientation::Vertical);
+    edgeGapGroup.Spacing(4);
+
+    TextBlock edgeGapLabel;
+    edgeGapLabel.Text(winrt::hstring(
+        L"Edge gap: " + std::to_wstring(g_settings.layoutEdgeGap) + L"px"));
+    edgeGapGroup.Children().Append(edgeGapLabel);
+
+    Slider edgeGapSlider;
+    edgeGapSlider.Minimum(0);
+    edgeGapSlider.Maximum(48);
+    edgeGapSlider.StepFrequency(1);
+    edgeGapSlider.Value(g_settings.layoutEdgeGap);
+    edgeGapSlider.ValueChanged(
+        [edgeGapLabel](winrt::Windows::Foundation::IInspectable const&,
+                        winrt::Windows::UI::Xaml::Controls::Primitives::
+                            RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutEdgeGap = value;
+            WritePrivateDword(L"layout.edgeGap", (DWORD)value);
+            edgeGapLabel.Text(
+                winrt::hstring(L"Edge gap: " + std::to_wstring(value) + L"px"));
+            // Static edge positions only apply this at injection time
+            // (see Wh_ModSettingsChanged's comment) - tracking positions
+            // pick it up live on their own via UpdateTrackedPosition.
+            if (g_ui.hWnd) {
+                RemoveWidgetStackGrid();
+                InjectWidgetStackGrid(g_taskbarWnd);
+            }
+        });
+    edgeGapGroup.Children().Append(edgeGapSlider);
+    panel.Children().Append(edgeGapGroup);
+
+    StackPanel rightPaddingGroup;
+    rightPaddingGroup.Orientation(Orientation::Vertical);
+    rightPaddingGroup.Spacing(4);
+
+    TextBlock rightPaddingLabel;
+    rightPaddingLabel.Text(
+        winrt::hstring(L"Trailing padding: " +
+                       std::to_wstring(g_settings.layoutRightPadding) + L"px"));
+    rightPaddingGroup.Children().Append(rightPaddingLabel);
+
+    Slider rightPaddingSlider;
+    rightPaddingSlider.Minimum(0);
+    rightPaddingSlider.Maximum(48);
+    rightPaddingSlider.StepFrequency(1);
+    rightPaddingSlider.Value(g_settings.layoutRightPadding);
+    rightPaddingSlider.ValueChanged(
+        [rightPaddingLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutRightPadding = value;
+            WritePrivateDword(L"layout.rightPadding", (DWORD)value);
+            rightPaddingLabel.Text(winrt::hstring(
+                L"Trailing padding: " + std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    rightPaddingGroup.Children().Append(rightPaddingSlider);
+    panel.Children().Append(rightPaddingGroup);
 
     StackPanel maxWidthGroup;
     maxWidthGroup.Orientation(Orientation::Vertical);
@@ -2800,8 +2903,14 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
 // TaskbarFrameRepeater in particular also contains every pinned/running
 // app icon, not just the leading buttons. Tracking positions (Incident
 // 38, below) anchor to a *specific* button element instead of the whole
-// repeater, which is what makes tracking actually work this time.
-constexpr double kEdgeGap = 6.0;
+// repeater, which is what makes tracking actually work this time. The
+// gap itself used to be a hardcoded constexpr (kEdgeGap) - now
+// layout.edgeGap (Incident 43). UpdateTrackedPosition reads it fresh on
+// every layout pass, so a tracking position picks up a change live; the
+// two static edge positions (left_edge/right_edge) only set their
+// Margin once, at injection, so Wh_ModSettingsChanged treats an
+// edgeGap/rightPadding change the same as a layoutPosition change - an
+// explicit remove-then-inject to actually apply it for those.
 
 // Unhooks the tracking-position LayoutUpdated subscription (if wired) and
 // optionally restores trackedElement's margin to what it was before this
@@ -2851,7 +2960,8 @@ void UpdateTrackedPosition() {
         return;
     }
     try {
-        double desiredGap = g_ui.root.ActualWidth() + kEdgeGap;
+        double edgeGap = (double)g_settings.layoutEdgeGap;
+        double desiredGap = g_ui.root.ActualWidth() + edgeGap;
 
         auto margin = g_ui.hasTrackedElementOriginalMargin
                           ? g_ui.trackedElementOriginalMargin
@@ -2871,9 +2981,9 @@ void UpdateTrackedPosition() {
             g_ui.trackedElement.TransformToVisual(g_ui.injectionParent);
         auto point = transform.TransformPoint({0, 0});
         double leftPos = g_ui.trackSide == L"left"
-                              ? point.X - desiredGap + kEdgeGap
+                              ? point.X - desiredGap + edgeGap
                               : point.X + g_ui.trackedElement.ActualWidth() +
-                                    kEdgeGap;
+                                    edgeGap;
         auto rootMargin = g_ui.root.Margin();
         if (std::abs(rootMargin.Left - leftPos) > 1.0) {
             g_ui.root.Margin({leftPos, 0, 0, 0});
@@ -2942,13 +3052,14 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         // abandoned tracking attempts did (TaskbarFrameRepeater as a
         // whole also contains every pinned/running icon, not just the
         // leading buttons, which is what actually went wrong then).
+        double edgeGap = (double)g_settings.layoutEdgeGap;
         if (trackAnchor) {
             // Left-aligned with Margin.Left computed by
             // UpdateTrackedPosition once this is in the tree and a
-            // first layout pass has run; kEdgeGap here is just a
+            // first layout pass has run; edgeGap here is just a
             // placeholder until then.
             root.HorizontalAlignment(HorizontalAlignment::Left);
-            root.Margin({kEdgeGap, 0, 0, 0});
+            root.Margin({edgeGap, 0, 0, 0});
         } else if (g_settings.layoutPosition == L"center_edge") {
             root.HorizontalAlignment(HorizontalAlignment::Center);
         } else if (g_settings.layoutPosition == L"right_edge") {
@@ -2961,31 +3072,33 @@ bool InjectWidgetStackGrid(HWND hWnd) {
             // change, or toggling this setting) - a known limitation,
             // consistent with every other edge position here being
             // static rather than live-tracked.
-            double trayGap = kEdgeGap;
+            double trayGap = edgeGap;
             // Incident 41's fix: SystemTrayFrameGrid isn't a descendant
             // of taskbarRootGrid (this lookup used to search there and
             // silently never find it - see FindSystemTrayFrameGrid's
-            // comment), so this gap was actually always just kEdgeGap in
-            // practice, not kEdgeGap + the tray's width as intended.
+            // comment), so this gap was actually always just edgeGap in
+            // practice, not edgeGap + the tray's width as intended.
             if (auto trayFrame = FindSystemTrayFrameGrid(rootElement)) {
                 trayGap += trayFrame.ActualWidth();
             }
             root.Margin({0, 0, trayGap, 0});
         } else {
             root.HorizontalAlignment(HorizontalAlignment::Left);
-            root.Margin({kEdgeGap, 0, 0, 0});
+            root.Margin({edgeGap, 0, 0, 0});
         }
         // Placeholder width - RebuildStackContents (called below) applies
         // the real width immediately, once widgets have reported their
         // desired widths.
         root.Width(kMinContentWidth + kDotsColumnWidth +
-                   g_settings.layoutIndicatorGap);
-        // Three columns, always in this order (0/1/2) - which of 0/2
+                   g_settings.layoutIndicatorGap +
+                   g_settings.layoutRightPadding);
+        // Four columns, always in this order (0/1/2/3) - which of 0/2
         // plays the "dots" vs. "content" role, and column1's gap width,
         // are decided live in ApplyStackWidth() from the current
         // settings (see UiState::column0's comment) rather than fixed
         // here; the initial widths just need to be non-degenerate before
-        // that first call.
+        // that first call. Column 3 is the empty trailing padding column
+        // (see UiState::paddingColumn's comment).
         ColumnDefinition column0;
         column0.Width({kDotsColumnWidth, GridUnitType::Pixel});
         ColumnDefinition gapCol;
@@ -2993,9 +3106,13 @@ bool InjectWidgetStackGrid(HWND hWnd) {
                        GridUnitType::Pixel});
         ColumnDefinition column2;
         column2.Width({1.0, GridUnitType::Star});
+        ColumnDefinition paddingCol;
+        paddingCol.Width({(double)g_settings.layoutRightPadding,
+                           GridUnitType::Pixel});
         root.ColumnDefinitions().Append(column0);
         root.ColumnDefinitions().Append(gapCol);
         root.ColumnDefinitions().Append(column2);
+        root.ColumnDefinitions().Append(paddingCol);
 
         StackPanel dotsPanel;
         dotsPanel.VerticalAlignment(VerticalAlignment::Center);
@@ -3033,6 +3150,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.column0 = column0;
         g_ui.gapColumn = gapCol;
         g_ui.column2 = column2;
+        g_ui.paddingColumn = paddingCol;
         g_ui.clipHost = clipHost;
         g_ui.clipGeom = clipGeom;
         g_ui.sliderTransform = transform;
@@ -3221,6 +3339,10 @@ void LoadSettings() {
     g_settings.layoutIndicatorOnRight =
         Wh_GetIntSetting(L"layout.indicator.onRight");
     g_settings.layoutPosition = GetStringSetting(L"layout.position", L"left_edge");
+    int edgeGap = Wh_GetIntSetting(L"layout.edgeGap");
+    g_settings.layoutEdgeGap = edgeGap >= 0 ? edgeGap : 6;
+    int rightPadding = Wh_GetIntSetting(L"layout.rightPadding");
+    g_settings.layoutRightPadding = rightPadding >= 0 ? rightPadding : 6;
 
     // Private store (Incident 26) overrides the above whenever a key
     // exists there - it's the real source of truth once the settings
@@ -3260,6 +3382,12 @@ void LoadSettings() {
     std::wstring pos;
     if (ReadPrivateString(L"layout.position", pos) && !pos.empty()) {
         g_settings.layoutPosition = pos;
+    }
+    if (ReadPrivateDword(L"layout.edgeGap", v)) {
+        g_settings.layoutEdgeGap = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.rightPadding", v)) {
+        g_settings.layoutRightPadding = (int)v;
     }
 }
 
@@ -3374,17 +3502,23 @@ void Wh_ModAfterInit() {
 
 void Wh_ModSettingsChanged() {
     std::wstring previousPosition = g_settings.layoutPosition;
+    int previousEdgeGap = g_settings.layoutEdgeGap;
     LoadSettings();
-    // Unlike the other layout settings (gap/onRight/maxWidth/
-    // hideWhenSingle), which ApplyStackWidth already re-reads live on
-    // every RebuildStackContents, layout.position is only ever applied
-    // once, at InjectWidgetStackGrid time (it sets root's
+    // Unlike the other layout settings (indicator gap/onRight/maxWidth/
+    // hideWhenSingle/rightPadding), which ApplyStackWidth already
+    // re-reads live on every RebuildStackContents, layout.position and
+    // the static edge positions' use of layout.edgeGap are only ever
+    // applied once, at InjectWidgetStackGrid time (root's
     // HorizontalAlignment/Margin, not something RebuildStackContents
-    // touches) - so a change made through Windhawk's own native settings
-    // UI (as opposed to this mod's private in-app settings window, whose
+    // touches - edgeGap DOES apply live for the tracking positions,
+    // via UpdateTrackedPosition, but not for left_edge/right_edge) - so
+    // a change made through Windhawk's own native settings UI (as
+    // opposed to this mod's private in-app settings window, whose
     // controls call RebuildStackContents/remove-then-inject themselves)
     // needs an explicit remove-then-inject here to actually take effect.
-    if (g_settings.layoutPosition != previousPosition && g_ui.hWnd) {
+    if ((g_settings.layoutPosition != previousPosition ||
+         g_settings.layoutEdgeGap != previousEdgeGap) &&
+        g_ui.hWnd) {
         HWND hWnd = g_ui.hWnd;
         RunFromWindowThread(hWnd, [] {
             RemoveWidgetStackGrid();

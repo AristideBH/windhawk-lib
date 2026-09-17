@@ -2803,3 +2803,42 @@ re-check `right_edge` specifically for whether it now visibly sits
 further from the tray than before (if it looked fine already, the gap
 was probably small enough not to matter visually, but worth a second
 look now that the intended tray-width offset should actually apply).
+
+## Incident 43: edge gap and trailing padding exposed as settings (2026-09-17)
+
+**Request**: the stack should have the same breathing room after its
+content (before whatever comes next) as it does before its dots -
+that leading gap (`kEdgeGap`, hardcoded at 6px) had no trailing
+equivalent at all, and wasn't itself user-adjustable.
+
+**What changed**: `kEdgeGap`'s hardcoded `6.0` is gone - it's now
+`layout.edgeGap` (same default), read live everywhere the constant used
+to be read directly (the two static edge positions' `Margin`, and every
+tracking position's anchor-avoidance gap in `UpdateTrackedPosition`,
+which already re-reads it on every layout pass with no extra work
+needed). New `layout.rightPadding` (default 6, matching `edgeGap`) adds
+empty space at the stack's own trailing edge.
+
+That trailing space is a genuine 4th `ColumnDefinition`
+(`UiState::paddingColumn`), not just extra width tacked onto `root`
+itself - deliberately, to dodge a real XAML gotcha: `column2` (the
+content column) is `Star`-weighted, so extra width added to `root`
+without a dedicated column would get absorbed there instead of staying
+empty, and `clipHost`'s own explicit `Width` (already fixed at
+`contentWidth`) would then *center* within that now-wider column rather
+than staying flush against the dots - Stretch alignment + an explicit
+Width centers within leftover space by default. A dedicated empty
+column sidesteps that entirely. `ApplyStackWidth` sizes it and adds it
+to `root.Width()` on every rebuild, same as the other columns.
+
+`edgeGap` needed the same treatment as `layout.position` in
+`Wh_ModSettingsChanged` (an explicit remove-then-inject) for the two
+static edge positions, whose `Margin` is only ever set once, at
+injection - `rightPadding` didn't, since `ApplyStackWidth` already
+re-reads it live on every `RebuildStackContents` the way the indicator
+gap does.
+
+**Next retest**: confirm the stack now has visible, equal-looking space
+before the dots and after its content in `left_edge` (the position most
+likely to be in everyday use); confirm both new sliders apply correctly
+in the in-app settings window and via Windhawk's native settings UI.
