@@ -144,15 +144,22 @@ format.
    menu all confirmed live. Drag (press-and-hold-and-move) not yet
    specifically confirmed; two-finger trackpad scroll confirmed *not*
    working (see "Known open item" above) - lower priority, not blocking.
-2. Trim the diagnostic `Wh_Log` calls added across Incidents 7-13 (wheel
-   handler's step trace, `StepWidget`/`GoToWidget`/`ApplySliderTarget`/
-   `OnRenderingTick`, dots' `Tapped`, `WM_MOUSEWHEEL` on the taskbar
-   subclass) now that the mechanics they were diagnosing are confirmed
-   working - keep only what's useful for future troubleshooting, not a
-   full step-by-step trace of every interaction.
-3. Investigate two-finger trackpad scroll not triggering navigation
-   (mouse wheel and dot-click both work) - not yet root-caused, see
-   "Known open item" above.
+2. ~~Trim the diagnostic `Wh_Log` calls~~ - **done, 2026-09-17**: the
+   per-step traces from Incidents 7-13 were already stripped as each
+   root cause was found (see those incidents' own entries). What
+   remained after touchpad scroll was confirmed working (Incident 19)
+   was the `WH_MOUSE_LL` system-wide low-level mouse hook added in
+   Incident 16 purely to rule out a routing theory - it had already
+   done its job (confirmed the touchpad gesture never produces
+   `WM_MOUSEWHEEL` anywhere on the desktop) and was dead weight once
+   the HID route replaced it, plus a real cost (a low-level hook runs
+   for every mouse event system-wide). Removed `LowLevelMouseProc`,
+   `g_mouseHook`, and its install/teardown entirely. The remaining
+   `Wh_Log` calls are all lifecycle/error logs (injection
+   success/failure, symbol hook failure, raw-input registration
+   failure), not step-by-step traces, and are left in place.
+3. ~~Investigate two-finger trackpad scroll~~ - **done, 2026-09-17**:
+   confirmed working via raw HID digitizer input, see Incidents 17-19.
 4. Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to design
    the real widget SDK contract (paint callback signature, size negotiation,
    input forwarding, versioning/ABI-stability story).
