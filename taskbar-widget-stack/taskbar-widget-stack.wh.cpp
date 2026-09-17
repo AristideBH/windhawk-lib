@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.23
+// @version         0.1.24
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -20,10 +20,12 @@
 > tested manually by the author, without a full independent code audit. Use
 > at your own judgment, and please report anything odd via GitHub Issues.
 
-> **Prototype status:** this version stacks two **placeholder** panes to
-> validate the injection/scroll/snap/indicator mechanics. It does not yet
+> **Prototype status:** this version stacks two **placeholder** panes,
+> built against a real internal `IWidget` interface (Create/Tick/
+> OnSettingsChanged/Destroy), to validate the injection/scroll/snap/
+> indicator mechanics and the widget SDK contract itself. It does not yet
 > host real widget content (media player, AI quota, ...) - see this mod's
-> `PLAN.md` in the repo for the roadmap toward a real widget SDK.
+> `PLAN.md` in the repo for the roadmap toward porting one.
 
 Adds a single area next to the taskbar's system tray that holds multiple
 widgets stacked vertically, one visible at a time, switchable like an iOS
@@ -62,6 +64,15 @@ prototype - not yet verified live, see `PLAN.md`.
       the nearest one on release.
   $name: Navigation
   $description: Which ways of switching between stacked widgets are active.
+- layout:
+  - maxWidth: 520
+    $name: Maximum stack width
+    $description: >-
+      Upper bound, in pixels, for how wide the widget stack can grow to fit
+      its widest enabled widget. Widgets narrower than this stretch to fill
+      it.
+  $name: Layout
+  $description: Sizing behavior for the widget stack.
 */
 // ==/WindhawkModSettings==
 
@@ -102,7 +113,12 @@ namespace wuxs = winrt::Windows::UI::Xaml::Shapes;
 
 namespace {
 
-constexpr double kStackWidth = 40.0;
+// Floor for the stack's content width (excluding the dots column) so it
+// never collapses to ~0 if every widget is disabled/crashed. Also what
+// the two placeholder widgets report as their own desired width, so
+// wiring up the dynamic-width machinery below doesn't change today's
+// visuals at all - see PLAN.md's "Widget SDK design".
+constexpr double kMinContentWidth = 30.0;
 constexpr double kDotsColumnWidth = 10.0;
 constexpr int kSnapAnimMs = 180;
 
@@ -112,30 +128,87 @@ enum class WidgetMenuCmd : UINT {
     kMoveDownBase = 3000,
 };
 
-// Prototype placeholder widget. The real SDK will replace this with a
-// pointer to externally-registered build/update/click callbacks (see
-// PLAN.md).
-struct Widget {
-    std::wstring id;
-    std::wstring label;
-    winrt::Windows::UI::Color color;
-    bool enabled = true;
-
-    // Crash isolation: a widget that throws while its pane is built gets
-    // latched here and is skipped (no pane, no dot) on the next rebuild,
-    // per the "host catches and disables" decision in PLAN.md. Placeholder
-    // widgets can't realistically throw, but the wrapper/flag exist now so
-    // the pattern is already in place for real (less-trusted) widget code
-    // later.
-    bool crashed = false;
+// Passed to a widget's Create()/OnSettingsChanged() so it can attach its
+// own root element and size itself to the pane height without reaching
+// into this mod's globals directly.
+struct WidgetHost {
+    HWND taskbarHwnd;
+    Panel parent;  // widgetsPanel - a widget appends its own root here.
+    double paneHeight;
 };
 
-std::vector<Widget> g_widgets;
+// Widget SDK contract (design in PLAN.md's "Widget SDK design"). A
+// same-file, in-process interface - not a cross-mod/DLL ABI - every
+// widget implementation (placeholder or, eventually, a ported real
+// mod like AI quota/media player) compiles into this one .wh.cpp
+// against. Modeled on the common pattern found in both
+// taskbar-ai-quota.wh.cpp and taskbar-fluent-media-player.wh.cpp: a
+// single owned root element rebuilt from scratch rather than patched
+// in place, self-sizing (no host size negotiation beyond reporting a
+// desired width), and full responsibility for revoking its own event
+// tokens/timers on Destroy().
+class IWidget {
+   public:
+    virtual ~IWidget() = default;
+
+    virtual std::wstring Id() const = 0;
+    virtual std::wstring DisplayName() const = 0;
+
+    // Builds this widget's own root element, attaches it under
+    // host.parent, and returns the width (DIPs) it wants. The host
+    // sizes the stack to the widest enabled widget's returned width
+    // (capped at the user's layout.maxWidth setting) - a widget
+    // narrower than that gets stretched to fill it via the default
+    // HorizontalAlignment::Stretch, so it should not set its own fixed
+    // Width().
+    virtual double Create(const WidgetHost& host) = 0;
+
+    // Called on the stack's shared tick signal. No host-side timer
+    // drives this yet - deferred until a real ported widget actually
+    // needs periodic redraw, rather than running an idle DispatcherTimer
+    // with no consumer. A widget needing its own cadence (e.g. a 16ms
+    // visualizer, matching taskbar-fluent-media-player) owns that timer
+    // internally instead, same as both reference mods already do.
+    virtual void Tick() = 0;
+
+    // Re-reads this widget's own settings sub-namespace and rebuilds
+    // internally, returning its (possibly new) desired width. The host
+    // calls Destroy() then Create() again rather than this directly,
+    // matching both reference mods' full Remove-then-Inject-on-change
+    // pattern - kept here as part of the contract for a widget that
+    // wants to react without a full host-driven rebuild later.
+    virtual double OnSettingsChanged() = 0;
+
+    // Revokes every owned event token/timer, then removes its root
+    // element from the parent it was given in Create(). Must be safe
+    // to call even if Create() was never called or threw partway
+    // through.
+    virtual void Destroy() = 0;
+};
+
+struct WidgetEntry {
+    std::unique_ptr<IWidget> widget;
+    bool enabled = true;
+
+    // Crash isolation: a widget whose Create()/Tick()/OnSettingsChanged()
+    // throws gets latched here and is skipped (no pane, no dot) on this
+    // and future rebuilds, per the "host catches and disables" decision
+    // in PLAN.md. Every IWidget call from host code is wrapped in
+    // try/catch for this reason.
+    bool crashed = false;
+
+    // Cached return value of the widget's last Create()/
+    // OnSettingsChanged() call, used to compute the stack's width.
+    double desiredWidth = 0.0;
+};
+
+std::vector<WidgetEntry> g_widgets;
 
 struct {
     bool navWheel = true;
     bool navDots = true;
     bool navDrag = true;
+    int layoutMaxWidth = 520;
 } g_settings;
 
 // ---------------------------------------------------------------------
@@ -529,6 +602,10 @@ struct UiState {
     winrt::event_token manipulationToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
+    // Resized at runtime by ApplyStackWidth() as widgets are
+    // enabled/disabled/ported - see PLAN.md's "Widget SDK design".
+    Border clipHost{nullptr};
+    RectangleGeometry clipGeom{nullptr};
     CompositeTransform sliderTransform{nullptr};
     int activeIndex = 0;
     winrt::event_token renderingToken;
@@ -845,25 +922,82 @@ void UnwireNavigation() {
     }
 }
 
-Border BuildWidgetPane(Widget& widget) {
-    Border border;
-    border.Height(PaneHeight());
-    border.Width(kStackWidth - kDotsColumnWidth);
-    SolidColorBrush brush{widget.color};
-    border.Background(brush);
+// Prototype IWidget implementation - a solid-color pane with a centered
+// label. Exists to prove the interface end to end before porting a real
+// widget onto it (see PLAN.md's "Widget SDK design"): it exercises
+// Create()'s host-attach-and-report-width contract and Destroy()'s
+// self-removal contract, even though it has no event tokens/timers of
+// its own to revoke.
+class PlaceholderWidget : public IWidget {
+   public:
+    PlaceholderWidget(std::wstring id,
+                       std::wstring displayName,
+                       winrt::Windows::UI::Color color,
+                       double desiredWidth)
+        : id_(std::move(id)),
+          displayName_(std::move(displayName)),
+          color_(color),
+          desiredWidth_(desiredWidth) {}
 
-    TextBlock text;
-    text.Text(winrt::hstring(widget.label));
-    text.HorizontalAlignment(HorizontalAlignment::Center);
-    text.VerticalAlignment(VerticalAlignment::Center);
-    text.TextAlignment(TextAlignment::Center);
-    text.FontSize(9);
-    SolidColorBrush fg{winrt::Windows::UI::ColorHelper::FromArgb(255, 255, 255, 255)};
-    text.Foreground(fg);
-    border.Child(text);
+    std::wstring Id() const override { return id_; }
+    std::wstring DisplayName() const override { return displayName_; }
 
-    return border;
-}
+    double Create(const WidgetHost& host) override {
+        Border border;
+        border.Height(host.paneHeight);
+        SolidColorBrush brush{color_};
+        border.Background(brush);
+
+        TextBlock text;
+        text.Text(winrt::hstring(displayName_));
+        text.HorizontalAlignment(HorizontalAlignment::Center);
+        text.VerticalAlignment(VerticalAlignment::Center);
+        text.TextAlignment(TextAlignment::Center);
+        text.FontSize(9);
+        SolidColorBrush fg{
+            winrt::Windows::UI::ColorHelper::FromArgb(255, 255, 255, 255)};
+        text.Foreground(fg);
+        border.Child(text);
+
+        // Intentionally no border.Width(): it stretches to fill
+        // whatever content width the host settles on (see IWidget's
+        // Create() comment).
+        host.parent.Children().Append(border);
+        root_ = border;
+        parent_ = host.parent;
+        return desiredWidth_;
+    }
+
+    void Tick() override {}
+
+    double OnSettingsChanged() override {
+        // No per-widget settings exist for placeholders - nothing to
+        // re-read, size stays the same.
+        return desiredWidth_;
+    }
+
+    void Destroy() override {
+        if (root_ && parent_) {
+            try {
+                uint32_t index;
+                if (parent_.Children().IndexOf(root_, index)) {
+                    parent_.Children().RemoveAt(index);
+                }
+            } catch (...) {
+            }
+        }
+        root_ = nullptr;
+        parent_ = nullptr;
+    }
+
+   private:
+    std::wstring id_;
+    std::wstring displayName_;
+    winrt::Windows::UI::Color color_;
+    double desiredWidth_;
+    Border root_{nullptr};
+    Panel parent_{nullptr};
+};
 
 void RefreshDots() {
     if (!g_ui.dotsPanel) {
@@ -899,28 +1033,71 @@ void RefreshDots() {
     }
 }
 
+// Resizes the stack's content column (root/clipHost/clipGeom) to
+// `contentWidth` DIPs (excluding the dots column) - called from
+// RebuildStackContents whenever the set of enabled/crashed widgets or
+// their reported desired widths might have changed. See PLAN.md's
+// "Widget SDK design" for why this exists (real ported widgets are
+// wider than the two placeholders' original fixed 30px pane).
+void ApplyStackWidth(double contentWidth) {
+    if (!g_ui.root || !g_ui.clipHost || !g_ui.clipGeom) {
+        return;
+    }
+    try {
+        g_ui.root.Width(contentWidth + kDotsColumnWidth);
+        g_ui.clipHost.Width(contentWidth);
+        auto rect = g_ui.clipGeom.Rect();
+        rect.Width = (float)contentWidth;
+        g_ui.clipGeom.Rect(rect);
+    } catch (...) {
+    }
+}
+
 // (Re)builds the widget panes and dots from the current g_widgets list.
-// Crash isolation: each widget's pane is built inside its own try/catch -
-// a widget that throws is flagged crashed and gets neither a pane nor a
-// dot on this and future rebuilds (matches the "host catches and
+// Every widget is torn down (Destroy()) and rebuilt (Create()) on every
+// call - toggle/reorder/settings-change all funnel through here - rather
+// than patching the existing tree in place, matching both reference
+// mods' own Remove-then-Inject-on-change pattern; this is also what lets
+// a widget revoke its own event tokens/timers via Destroy() before
+// Create() runs again instead of leaking them across a rebuild. Crash
+// isolation: each widget's Create() call is wrapped in its own try/catch
+// - a widget that throws is flagged crashed and gets neither a pane nor
+// a dot on this and future rebuilds (matches the "host catches and
 // disables" decision in PLAN.md).
 void RebuildStackContents() {
     if (!g_ui.widgetsPanel) {
         return;
     }
     StopSnapAnimation();
-    g_ui.widgetsPanel.Children().Clear();
 
-    for (auto& widget : g_widgets) {
-        if (widget.crashed) {
+    WidgetHost host{g_ui.hWnd, g_ui.widgetsPanel, PaneHeight()};
+
+    for (auto& entry : g_widgets) {
+        try {
+            entry.widget->Destroy();
+        } catch (...) {
+        }
+    }
+
+    for (auto& entry : g_widgets) {
+        if (entry.crashed) {
             continue;
         }
         try {
-            g_ui.widgetsPanel.Children().Append(BuildWidgetPane(widget));
+            entry.desiredWidth = entry.widget->Create(host);
         } catch (...) {
-            widget.crashed = true;
+            entry.crashed = true;
         }
     }
+
+    double contentWidth = kMinContentWidth;
+    for (auto& entry : g_widgets) {
+        if (entry.enabled && !entry.crashed) {
+            contentWidth = std::max(contentWidth, entry.desiredWidth);
+        }
+    }
+    contentWidth = std::min(contentWidth, (double)g_settings.layoutMaxWidth);
+    ApplyStackWidth(contentWidth);
 
     auto enabled = EnabledIndices();
     if (enabled.empty()) {
@@ -939,16 +1116,18 @@ void ShowContextMenu(HWND hWnd, POINT screenPt) {
     HMENU menu = CreatePopupMenu();
     for (int i = 0; i < (int)g_widgets.size(); i++) {
         UINT flags = MF_STRING | (g_widgets[i].enabled ? MF_CHECKED : 0);
-        AppendMenuW(menu, flags, (UINT_PTR)WidgetMenuCmd::kToggleBase + i,
-                    (g_widgets[i].label + L" (toggle)").c_str());
+        AppendMenuW(
+            menu, flags, (UINT_PTR)WidgetMenuCmd::kToggleBase + i,
+            (g_widgets[i].widget->DisplayName() + L" (toggle)").c_str());
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     for (int i = 0; i < (int)g_widgets.size(); i++) {
-        AppendMenuW(menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveUpBase + i,
-                    (L"Move up: " + g_widgets[i].label).c_str());
-        AppendMenuW(menu, MF_STRING,
-                    (UINT_PTR)WidgetMenuCmd::kMoveDownBase + i,
-                    (L"Move down: " + g_widgets[i].label).c_str());
+        AppendMenuW(
+            menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveUpBase + i,
+            (L"Move up: " + g_widgets[i].widget->DisplayName()).c_str());
+        AppendMenuW(
+            menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveDownBase + i,
+            (L"Move down: " + g_widgets[i].widget->DisplayName()).c_str());
     }
 
     SetForegroundWindow(hWnd);
@@ -1193,7 +1372,10 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         root.VerticalAlignment(VerticalAlignment::Stretch);
         root.HorizontalAlignment(HorizontalAlignment::Left);
         root.Margin({kLeftEdgeGap, 0, 0, 0});
-        root.Width(kStackWidth);
+        // Placeholder width - RebuildStackContents (called below) applies
+        // the real width immediately, once widgets have reported their
+        // desired widths.
+        root.Width(kMinContentWidth + kDotsColumnWidth);
         ColumnDefinition dotsCol;
         dotsCol.Width({kDotsColumnWidth, GridUnitType::Pixel});
         ColumnDefinition contentCol;
@@ -1209,11 +1391,11 @@ bool InjectWidgetStackGrid(HWND hWnd) {
 
         Border clipHost;
         clipHost.Height(PaneHeight());
-        clipHost.Width(kStackWidth - kDotsColumnWidth);
+        clipHost.Width(kMinContentWidth);
         clipHost.VerticalAlignment(VerticalAlignment::Center);
         RectangleGeometry clipGeom;
-        clipGeom.Rect({0, 0, (float)(kStackWidth - kDotsColumnWidth),
-                       (float)PaneHeight()});
+        clipGeom.Rect(
+            {0, 0, (float)kMinContentWidth, (float)PaneHeight()});
         clipHost.Clip(clipGeom);
         Grid::SetColumn(clipHost, 1);
 
@@ -1234,6 +1416,8 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         g_ui.root = root;
         g_ui.widgetsPanel = widgetsPanel;
         g_ui.dotsPanel = dotsPanel;
+        g_ui.clipHost = clipHost;
+        g_ui.clipGeom = clipGeom;
         g_ui.sliderTransform = transform;
 
         WireUpNavigation();
@@ -1344,16 +1528,26 @@ void LoadSettings() {
     g_settings.navWheel = Wh_GetIntSetting(L"nav.wheel");
     g_settings.navDots = Wh_GetIntSetting(L"nav.dots");
     g_settings.navDrag = Wh_GetIntSetting(L"nav.drag");
+    int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
+    g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
 }
 
 void InitPlaceholderWidgets() {
     g_widgets.clear();
-    g_widgets.push_back({L"placeholder-a", L"Media\nPlayer",
-                          winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 90, 160),
-                          true});
-    g_widgets.push_back({L"placeholder-b", L"AI\nQuota",
-                          winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 150, 90),
-                          true});
+
+    WidgetEntry mediaPlayer;
+    mediaPlayer.widget = std::make_unique<PlaceholderWidget>(
+        L"placeholder-a", L"Media\nPlayer",
+        winrt::Windows::UI::ColorHelper::FromArgb(255, 70, 90, 160),
+        kMinContentWidth);
+    g_widgets.push_back(std::move(mediaPlayer));
+
+    WidgetEntry aiQuota;
+    aiQuota.widget = std::make_unique<PlaceholderWidget>(
+        L"placeholder-b", L"AI\nQuota",
+        winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 150, 90),
+        kMinContentWidth);
+    g_widgets.push_back(std::move(aiQuota));
 }
 
 }  // namespace

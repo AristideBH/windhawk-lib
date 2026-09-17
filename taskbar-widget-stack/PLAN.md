@@ -163,10 +163,19 @@ format.
 4. ~~Read `Taskbar-Fluent-Media-Player` and `taskbar-ai-quota` source to
    design the real widget SDK contract~~ - **done, 2026-09-17**, see
    "Widget SDK design (draft)" below.
-5. Implement the `IWidget` interface and host-side lifecycle/crash
-   isolation described below, keeping the current two placeholders as
-   the first two `IWidget` implementations (proves the interface works
-   before porting anything real).
+5. ~~Implement the `IWidget` interface and host-side lifecycle/crash
+   isolation~~ - **done, 2026-09-17**: `WidgetHost`/`IWidget`/
+   `WidgetEntry` added, both placeholders ported onto `PlaceholderWidget
+   : IWidget`. `RebuildStackContents` now calls `Destroy()` then
+   `Create()` on every widget on every rebuild (toggle/reorder/settings
+   change), matching the reference mods' Remove-then-Inject pattern, and
+   computes the stack's content width as
+   `min(max(enabled widget desired widths), layout.maxWidth)` via the
+   new `ApplyStackWidth`. Not yet live-tested - not expected to change
+   anything visually (both placeholders still report the same
+   `kMinContentWidth` they were fixed at before), but this is the first
+   real exercise of the new machinery end to end and should be
+   confirmed live before porting a real widget onto it.
 6. Port one real widget (likely AI quota, simpler) through the new SDK as
    the SDK's first real consumer, before attempting the media player.
 7. Revisit config UI: replace the native popup menu with a custom-drawn
