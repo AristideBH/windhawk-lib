@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.29
+// @version         0.1.30
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1277,6 +1277,14 @@ void MoveWidget(int idx, int delta) {
 // in this file, with no nested Win32 message loop at all. Prior art:
 // user pointed at `taskbar-icon-separators` (windhawk.net) as a mod that
 // already does WinUI-style taskbar context menus this way.
+//
+// Structure (Incident 24, 2026-09-17, per user-supplied mockup): one
+// row per widget, each a submenu (`MenuFlyoutSubItem`) holding "Show
+// widget" (a checkable toggle) and "Move up"/"Move down", followed by
+// a separator and a "Stack settings" row - matching the native
+// Windows 11 taskbar's own per-icon right-click menu style. Replaces
+// the flat toggle-then-separator-then-all-moves layout from the first
+// MenuFlyout pass.
 void ShowContextMenu(HWND, POINT) {
     if (!g_ui.root) {
         return;
@@ -1284,33 +1292,55 @@ void ShowContextMenu(HWND, POINT) {
     try {
         MenuFlyout flyout;
         for (int i = 0; i < (int)g_widgets.size(); i++) {
-            ToggleMenuFlyoutItem item;
-            item.Text(winrt::hstring(g_widgets[i].widget->DisplayName() +
-                                      L" (toggle)"));
-            item.IsChecked(g_widgets[i].enabled);
-            item.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                            RoutedEventArgs const&) {
+            // The pane's own label uses an embedded newline for a
+            // two-line fit (e.g. "Media\nPlayer") - not appropriate for
+            // a single-line menu row.
+            std::wstring label = g_widgets[i].widget->DisplayName();
+            std::replace(label.begin(), label.end(), L'\n', L' ');
+
+            MenuFlyoutSubItem widgetItem;
+            widgetItem.Text(winrt::hstring(label));
+
+            ToggleMenuFlyoutItem showItem;
+            showItem.Text(L"Show widget");
+            showItem.IsChecked(g_widgets[i].enabled);
+            showItem.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                                RoutedEventArgs const&) {
                 ToggleWidgetEnabled(i);
             });
-            flyout.Items().Append(item);
-        }
-        MenuFlyoutSeparator separator;
-        flyout.Items().Append(separator);
-        for (int i = 0; i < (int)g_widgets.size(); i++) {
+            widgetItem.Items().Append(showItem);
+
+            MenuFlyoutSeparator innerSeparator;
+            widgetItem.Items().Append(innerSeparator);
+
             MenuFlyoutItem up;
-            up.Text(winrt::hstring(L"Move up: " +
-                                    g_widgets[i].widget->DisplayName()));
+            up.Text(L"Move up");
+            up.Icon(SymbolIcon(Symbol::Up));
             up.Click([i](winrt::Windows::Foundation::IInspectable const&,
                           RoutedEventArgs const&) { MoveWidget(i, -1); });
-            flyout.Items().Append(up);
+            widgetItem.Items().Append(up);
 
             MenuFlyoutItem down;
-            down.Text(winrt::hstring(L"Move down: " +
-                                      g_widgets[i].widget->DisplayName()));
+            down.Text(L"Move down");
+            down.Icon(SymbolIcon(Symbol::Down));
             down.Click([i](winrt::Windows::Foundation::IInspectable const&,
                             RoutedEventArgs const&) { MoveWidget(i, 1); });
-            flyout.Items().Append(down);
+            widgetItem.Items().Append(down);
+
+            flyout.Items().Append(widgetItem);
         }
+
+        MenuFlyoutSeparator separator;
+        flyout.Items().Append(separator);
+
+        // TODO(config UI milestone): no custom settings surface exists
+        // yet (see PLAN.md "Next steps") - this row is a placeholder
+        // for where it'll open one; currently a no-op click.
+        MenuFlyoutItem settings;
+        settings.Text(L"Stack settings");
+        settings.Icon(SymbolIcon(Symbol::Setting));
+        flyout.Items().Append(settings);
+
         flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
                           winrt::Windows::Foundation::IInspectable const&) {
             g_contextMenuOpen = false;

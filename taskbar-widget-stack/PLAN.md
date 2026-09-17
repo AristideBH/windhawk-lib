@@ -1790,3 +1790,39 @@ interface with both placeholders are all confirmed working live.
 specifically retested. Still open: the "touchpad scroll only reacts
 after first clicking the taskbar to focus it" characteristic noted
 alongside Incident 22 - not investigated.
+
+## Incident 24: right-click menu restructured to match native taskbar style (2026-09-17)
+
+**Request**: user supplied a mockup of the native Windows 11 taskbar's
+own per-icon right-click menu style - one row per item, each opening a
+submenu with a checkable "Show widget" toggle plus "Move up"/"Move
+down" (with chevron icons), and a "Stack settings" row (with a
+layered/stack icon) below a separator at the top level. Incident 23's
+first MenuFlyout pass was flatter: a toggle item per widget, one
+separator, then a move-up/move-down pair per widget, all at the same
+level.
+
+**Change**: `ShowContextMenu` now builds, per widget, a
+`MenuFlyoutSubItem` (renders with the ">" chevron that opens a
+submenu, matching the mockup) whose own `Items()` holds a
+`ToggleMenuFlyoutItem` ("Show widget", checkable exactly as
+before - `IsChecked`/`Click` unchanged, just moved into the submenu),
+a separator, then "Move up"/"Move down" as `MenuFlyoutItem`s with
+`SymbolIcon(Symbol::Up)`/`SymbolIcon(Symbol::Down)`. The widget's own
+`DisplayName()` (which embeds a `\n` for the pane's own two-line
+label, e.g. "Media\nPlayer") is used as the submenu's row text with
+the newline replaced by a space, since a menu row is single-line.
+Below all the per-widget submenus: a separator, then a "Stack
+settings" `MenuFlyoutItem` with `SymbolIcon(Symbol::Setting)` (a gear
+- the mockup's own layered-stack icon wasn't matched to an exact
+Segoe Fluent glyph here; revisit if the user wants that specific
+icon) - currently a no-op click, since there's no custom settings
+surface yet (`ToggleWidgetEnabled`/`MoveWidget` handlers, `Closed`
+cleanup, and the overall `flyout.ShowAt` mechanism are all unchanged
+from Incident 23).
+
+**Next retest**: right-click, confirm each widget shows as its own
+submenu row with the chevron, opening to reveal "Show widget"
+(checked when enabled)/"Move up"/"Move down", and confirm "Stack
+settings" appears below a separator (even though it doesn't do
+anything yet).
