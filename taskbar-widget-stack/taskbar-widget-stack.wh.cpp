@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.27
+// @version         0.1.28
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -131,12 +131,6 @@ namespace {
 constexpr double kMinContentWidth = 30.0;
 constexpr double kDotsColumnWidth = 10.0;
 constexpr int kSnapAnimMs = 180;
-
-enum class WidgetMenuCmd : UINT {
-    kToggleBase = 1000,
-    kMoveUpBase = 2000,
-    kMoveDownBase = 3000,
-};
 
 // Passed to a widget's Create()/OnSettingsChanged() so it can attach its
 // own root element and size itself to the pane height without reaching
@@ -905,49 +899,24 @@ void WireUpNavigation() {
     g_ui.rightTappedToken = g_ui.root.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::RightTappedRoutedEventArgs const& args) {
-            // Diagnostic (Incident 22, 2026-09-17): two targeted fixes
-            // (Incidents 20 and 21) both failed to stop this crash, and
-            // it reproduces with an identical signature both times
-            // (0xC0000005, faulting module "unknown", offset 0x0) - at
-            // this point guessing further from the code alone isn't
-            // productive. These Wh_Log calls exist to find exactly
-            // which line runs last before the crash, the same
-            // diagnose-before-fixing approach that resolved Incident
-            // 9's wheel/dot bug and the HID byte layout - remove once
-            // the actual crash site is found.
-            Wh_Log(L"RightTapped: fired");
             POINT pt;
             GetCursorPos(&pt);
             HWND hWnd = g_ui.hWnd;
-            // Deferred via the dispatcher rather than called directly:
-            // TrackPopupMenu (inside ShowContextMenu) pumps its own
-            // nested Win32 message loop. Calling it synchronously from
-            // inside a XAML routed-event callback re-enters the XAML
-            // dispatcher's own call stack with a blocking modal loop -
-            // confirmed live (2026-09-16, "Incident 10") as the trigger
-            // for an Explorer crash right after this handler fires (the
-            // Incident 8 dangling-delegate fix was real but didn't
-            // account for this separate hazard). Queuing the call
-            // instead lets this event handler return and the XAML
-            // dispatch fully unwind before the popup menu's own message
-            // loop ever starts.
+            // Still deferred via the dispatcher, though ShowContextMenu
+            // no longer pumps a nested Win32 message loop (Incident 23
+            // replaced TrackPopupMenu with a XAML MenuFlyout) - harmless
+            // to keep, and there's no reason left to call it
+            // synchronously from inside this routed-event handler.
             try {
                 auto dispatcher = sender.as<UIElement>().Dispatcher();
-                Wh_Log(L"RightTapped: got dispatcher=%d",
-                       dispatcher ? 1 : 0);
                 if (dispatcher) {
                     dispatcher.RunAsync(
                         winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                        [hWnd, pt] {
-                            Wh_Log(L"RightTapped: deferred callback running");
-                            ShowContextMenu(hWnd, pt);
-                            Wh_Log(L"RightTapped: ShowContextMenu returned");
-                        });
+                        [hWnd, pt] { ShowContextMenu(hWnd, pt); });
                 } else {
                     ShowContextMenu(hWnd, pt);
                 }
             } catch (...) {
-                Wh_Log(L"RightTapped: exception scheduling ShowContextMenu");
             }
             args.Handled(true);
         });
@@ -1095,15 +1064,21 @@ void RefreshDots() {
     auto enabled = EnabledIndices();
     for (int idx : enabled) {
         bool active = idx == g_ui.activeIndex;
-        double r = active ? 3.0 : 2.0;
+        // Same size regardless of active state (2026-09-17) - only the
+        // color (white vs. gray) marks the active dot for now. Sizing
+        // the active dot bigger too was reverted per user request;
+        // more elaborate indicator styling (color/size/shape options)
+        // is likely to become its own settings group later rather than
+        // hardcoded here - see PLAN.md.
+        double r = 2.0;
 
-        // Back to the original small dot with no enlarged hit target
-        // (2026-09-16): the earlier "unclickable dots" symptom turned out
-        // to be the broken WindhawkModSettings closing marker (see
-        // "Incident 12"), not the dot's own hit-test size - now that
-        // clicks are confirmed working, the oversized 10x14 transparent
-        // hit box isn't needed and was just making the indicators look
-        // bulkier than intended.
+        // Small dot with no enlarged hit target (2026-09-16): the
+        // earlier "unclickable dots" symptom turned out to be the
+        // broken WindhawkModSettings closing marker (see "Incident
+        // 12"), not the dot's own hit-test size - now that clicks are
+        // confirmed working, an oversized transparent hit box isn't
+        // needed and was just making the indicators look bulkier than
+        // intended.
         wuxs::Ellipse dot;
         dot.Width(r * 2);
         dot.Height(r * 2);
@@ -1255,74 +1230,98 @@ void RebuildStackContents() {
     UpdateStackScreenRect();
 }
 
-// Set for the duration of ShowContextMenu's TrackPopupMenu call - see
-// that function's comment on why the touchpad WM_INPUT handler checks
-// it (Incident 20).
+// Set while a context menu is open (from just before ShowAt to the
+// flyout's Closed event) - stops touchpad nav from stepping widgets
+// while the menu is up.
 bool g_contextMenuOpen = false;
 
-void ShowContextMenu(HWND hWnd, POINT screenPt) {
-    Wh_Log(L"ShowContextMenu: start, %zu widgets", g_widgets.size());
-    HMENU menu = CreatePopupMenu();
-    for (int i = 0; i < (int)g_widgets.size(); i++) {
-        UINT flags = MF_STRING | (g_widgets[i].enabled ? MF_CHECKED : 0);
-        AppendMenuW(
-            menu, flags, (UINT_PTR)WidgetMenuCmd::kToggleBase + i,
-            (g_widgets[i].widget->DisplayName() + L" (toggle)").c_str());
-    }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    for (int i = 0; i < (int)g_widgets.size(); i++) {
-        AppendMenuW(
-            menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveUpBase + i,
-            (L"Move up: " + g_widgets[i].widget->DisplayName()).c_str());
-        AppendMenuW(
-            menu, MF_STRING, (UINT_PTR)WidgetMenuCmd::kMoveDownBase + i,
-            (L"Move down: " + g_widgets[i].widget->DisplayName()).c_str());
-    }
-    Wh_Log(L"ShowContextMenu: menu built");
+// Keeps the open MenuFlyout alive - the local variable that creates it
+// in ShowContextMenu goes out of scope as soon as that function
+// returns, but showing a flyout adds it to XAML's own open-popup
+// bookkeeping, which is expected to keep it alive on its own; this is
+// pure extra insurance given this file's history with WinRT object
+// lifetime bugs (Incident 8). Cleared in the Closed handler.
+MenuFlyout g_contextMenuFlyout{nullptr};
 
-    SetForegroundWindow(hWnd);
-    Wh_Log(L"ShowContextMenu: foreground set, calling TrackPopupMenu");
-    // TrackPopupMenu pumps its own nested Win32 message loop on this
-    // thread. g_contextMenuOpen (Incident 20) originally guarded against
-    // WM_INPUT reaching into XAML while this loop has control -
-    // Incident 21 removed that XAML call from the WM_INPUT path
-    // entirely, so this flag is no longer load-bearing for that hazard,
-    // but is left in place since it's still a reasonable "don't step
-    // widgets while the menu is open" guard.
-    g_contextMenuOpen = true;
-    UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                               screenPt.x, screenPt.y, 0, hWnd, nullptr);
-    g_contextMenuOpen = false;
-    Wh_Log(L"ShowContextMenu: TrackPopupMenu returned cmd=%u", cmd);
-    DestroyMenu(menu);
-    if (cmd == 0) {
+void ToggleWidgetEnabled(int idx) {
+    if (idx >= 0 && idx < (int)g_widgets.size()) {
+        g_widgets[idx].enabled = !g_widgets[idx].enabled;
+    }
+    // TODO(SDK milestone): persist toggled/reordered state back to
+    // Windhawk settings so it survives Explorer restarts. Not
+    // implemented in this prototype. See PLAN.md "Next steps".
+    RebuildStackContents();
+}
+
+void MoveWidget(int idx, int delta) {
+    int other = idx + delta;
+    if (idx >= 0 && idx < (int)g_widgets.size() && other >= 0 &&
+        other < (int)g_widgets.size()) {
+        std::swap(g_widgets[idx], g_widgets[other]);
+    }
+    RebuildStackContents();
+}
+
+// Right-click menu, as a XAML MenuFlyout rather than a native
+// TrackPopupMenu (Incident 23 - see PLAN.md). TrackPopupMenu pumps its
+// own nested Win32 message loop, and right-click kept crashing Explorer
+// (0xC0000005, faulting module "unknown", offset 0x0) with the crash
+// site logging added in Incident 22 pointing at "inside TrackPopupMenu
+// itself, before it returns" - after two unrelated hypotheses (Incidents
+// 20, 21) had already been fixed and ruled out as the cause. Rather than
+// keep guessing at what specifically collides with a XAML-island-hosting
+// window's native modal popup loop, this replaces the mechanism
+// entirely with a MenuFlyout - a real XAML control, shown and dismissed
+// through the same Composition/dispatcher machinery as everything else
+// in this file, with no nested Win32 message loop at all. Prior art:
+// user pointed at `taskbar-icon-separators` (windhawk.net) as a mod that
+// already does WinUI-style taskbar context menus this way.
+void ShowContextMenu(HWND, POINT) {
+    if (!g_ui.root) {
         return;
     }
+    try {
+        MenuFlyout flyout;
+        for (int i = 0; i < (int)g_widgets.size(); i++) {
+            ToggleMenuFlyoutItem item;
+            item.Text(winrt::hstring(g_widgets[i].widget->DisplayName() +
+                                      L" (toggle)"));
+            item.IsChecked(g_widgets[i].enabled);
+            item.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                            RoutedEventArgs const&) {
+                ToggleWidgetEnabled(i);
+            });
+            flyout.Items().Append(item);
+        }
+        MenuFlyoutSeparator separator;
+        flyout.Items().Append(separator);
+        for (int i = 0; i < (int)g_widgets.size(); i++) {
+            MenuFlyoutItem up;
+            up.Text(winrt::hstring(L"Move up: " +
+                                    g_widgets[i].widget->DisplayName()));
+            up.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                          RoutedEventArgs const&) { MoveWidget(i, -1); });
+            flyout.Items().Append(up);
 
-    if (cmd >= (UINT)WidgetMenuCmd::kToggleBase &&
-        cmd < (UINT)WidgetMenuCmd::kMoveUpBase) {
-        int idx = cmd - (UINT)WidgetMenuCmd::kToggleBase;
-        if (idx >= 0 && idx < (int)g_widgets.size()) {
-            g_widgets[idx].enabled = !g_widgets[idx].enabled;
+            MenuFlyoutItem down;
+            down.Text(winrt::hstring(L"Move down: " +
+                                      g_widgets[i].widget->DisplayName()));
+            down.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                            RoutedEventArgs const&) { MoveWidget(i, 1); });
+            flyout.Items().Append(down);
         }
-    } else if (cmd >= (UINT)WidgetMenuCmd::kMoveUpBase &&
-               cmd < (UINT)WidgetMenuCmd::kMoveDownBase) {
-        int idx = cmd - (UINT)WidgetMenuCmd::kMoveUpBase;
-        if (idx > 0) {
-            std::swap(g_widgets[idx], g_widgets[idx - 1]);
-        }
-    } else if (cmd >= (UINT)WidgetMenuCmd::kMoveDownBase) {
-        int idx = cmd - (UINT)WidgetMenuCmd::kMoveDownBase;
-        if (idx >= 0 && idx + 1 < (int)g_widgets.size()) {
-            std::swap(g_widgets[idx], g_widgets[idx + 1]);
-        }
+        flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
+                          winrt::Windows::Foundation::IInspectable const&) {
+            g_contextMenuOpen = false;
+            g_contextMenuFlyout = nullptr;
+        });
+        g_contextMenuFlyout = flyout;
+        g_contextMenuOpen = true;
+        flyout.ShowAt(g_ui.root);
+    } catch (...) {
+        g_contextMenuOpen = false;
+        g_contextMenuFlyout = nullptr;
     }
-
-    // TODO(SDK milestone): persist reordered/toggled state back to
-    // Windhawk settings so it survives Explorer restarts. Not implemented
-    // in this prototype. See PLAN.md "Next steps".
-
-    RebuildStackContents();
 }
 
 // Hit-tests the live cursor position against the widget stack's own

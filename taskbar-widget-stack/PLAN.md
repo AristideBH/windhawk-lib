@@ -1698,3 +1698,79 @@ confirm wrap-around can be turned off and the stack then stops at the
 first/last widget instead of cycling, and confirm the overscroll bump
 feels like a quick bounce rather than a stutter or an unwanted extra
 step.
+
+**Result: touchpad scroll confirmed fixed.** Right-click crash
+confirmed still present, identical signature, and this time with the
+Incident 22 logging captured on the actual crash run:
+
+```
+RightTapped: fired
+RightTapped: got dispatcher=1
+RightTapped: deferred callback running
+ShowContextMenu: start, 2 widgets
+ShowContextMenu: menu built
+ShowContextMenu: foreground set, calling TrackPopupMenu
+[[ Explorer restarts here - new PID in the next "Injected widget stack" line ]]
+```
+
+The crash site is now pinned down precisely: after `SetForegroundWindow`
+succeeds, inside the `TrackPopupMenu` call itself, before it can return
+(`ShowContextMenu: TrackPopupMenu returned cmd=...` never printed). See
+Incident 23.
+
+## Incident 23: replaced TrackPopupMenu with a XAML MenuFlyout entirely (2026-09-17)
+
+**Given the crash site**: purely native code (`CreatePopupMenu`/
+`AppendMenuW`, no XAML) runs fine beforehand; the fault is specifically
+inside `TrackPopupMenu`'s own nested Win32 message loop, on a window
+that hosts a live XAML island. Both prior targeted fixes (Incidents 20,
+21) addressed real, plausible hazards from this file's OWN code
+touching XAML reentrant with that loop - and both were confirmed
+ineffective, meaning whatever collides with `TrackPopupMenu` here isn't
+something this mod's code can obviously see or guard around from the
+outside. Rather than attempt a third guess, switched to the fix already
+flagged as the long-term plan in "Next steps" item 7: stop using
+`TrackPopupMenu` at all.
+
+**Fix**: `ShowContextMenu` now builds and shows a
+`winrt::Windows::UI::Xaml::Controls::MenuFlyout` instead of a native
+popup menu - `ToggleMenuFlyoutItem` per widget (using its own
+`IsChecked` property instead of `MF_CHECKED`) for enable/disable, a
+`MenuFlyoutSeparator`, then a `MenuFlyoutItem` pair per widget for move
+up/down. `flyout.ShowAt(g_ui.root)` shows it near the stack with no
+explicit position (default placement) - no nested Win32 message loop
+at all, the whole thing runs through the same Composition/dispatcher
+machinery as everything else in this file. Each item's `Click` handler
+does its own toggle/move + `RebuildStackContents()` immediately
+(`ToggleWidgetEnabled`/`MoveWidget`), replacing the old single
+post-`TrackPopupMenu`-return switch statement, since showing a flyout
+is fire-and-forget rather than blocking. `g_contextMenuFlyout` (a global
+holding the shown flyout) and `g_contextMenuOpen` (still gates the
+touchpad `WM_INPUT` handler while the menu is up, though the specific
+hazard it originally guarded no longer applies here) are both cleared
+from the flyout's `Closed` event. Removed `WidgetMenuCmd`,
+`TrackPopupMenu`/`CreatePopupMenu`/`AppendMenuW`/`DestroyMenu`/
+`SetForegroundWindow`, and the Incident 22 diagnostic `Wh_Log` calls
+(no longer needed - the crash site they were added to find is now
+moot, since the code that crashed is gone).
+
+**Prior art**: user pointed at `taskbar-icon-separators` (windhawk.net)
+as a mod that already builds WinUI-style taskbar context menus this
+way - matches the approach taken here, though its source wasn't read
+before making this change (the API shape - MenuFlyout/
+ToggleMenuFlyoutItem/ShowAt - is standard WinRT, not something specific
+to that mod).
+
+**Not fully investigated**: *why* `TrackPopupMenu` specifically crashed
+on a XAML-island-hosting window in this environment remains unknown -
+this fix works around it rather than explains it. If a future feature
+genuinely needs a native modal loop again, that question would need
+revisiting.
+
+**Next retest**: right-click the stack - confirm the menu appears (as
+a XAML flyout, so it'll likely look different from the native menu:
+no checkmark glyph, just `ToggleMenuFlyoutItem`'s own checked visual),
+confirm toggling a widget and moving up/down all work and immediately
+update the stack, and confirm no crash. Also worth checking the
+flyout's default placement looks reasonable next to the narrow stack -
+`ShowAt` positioning can be tuned with `FlyoutShowOptions` if not.
