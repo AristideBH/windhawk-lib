@@ -2,14 +2,14 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.33
+// @version         0.1.34
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
 // @license         MIT
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32 -lcomctl32 -ladvapi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -113,9 +113,11 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Shapes.h>
+#include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 
 #include <algorithm>
 #include <atomic>
@@ -131,6 +133,7 @@ using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Media;
 namespace wuxi = winrt::Windows::UI::Xaml::Input;
 namespace wuxs = winrt::Windows::UI::Xaml::Shapes;
+namespace wuxh = winrt::Windows::UI::Xaml::Hosting;
 
 namespace {
 
@@ -228,6 +231,175 @@ struct {
     int layoutMaxWidth = 520;
     bool layoutHideIndicatorWhenSingle = true;
 } g_settings;
+
+// ---------------------------------------------------------------------
+// Private settings store (Incident 26)
+//
+// Windhawk mods can only READ settings (Wh_GetIntSetting/
+// Wh_GetStringSetting) - confirmed by checking both reference mods in
+// this repo's own source (taskbar-ai-quota.wh.cpp,
+// taskbar-fluent-media-player.wh.cpp): neither writes a setting back,
+// only reacts to Wh_ModSettingsChanged() when the user edits one
+// through Windhawk's own settings UI. There's no supported way for
+// this mod's own settings window (see PLAN.md's "Settings window"
+// design) to persist a change into Windhawk's settings.json.
+//
+// Instead, everything the settings window can edit - nav/layout
+// toggles and the widget list's order/enabled state - is persisted in
+// this mod's own registry key, which becomes the actual source of
+// truth once anything has been saved through it. Windhawk's own
+// ==WindhawkModSettings== values are only the seed/default used until
+// then; editing them through Windhawk's native settings UI after the
+// private store has values will have no visible effect, since
+// LoadSettings() below prefers the private store whenever a key
+// exists there. This is a real, known inconsistency - flagged rather
+// than hidden - accepted as the only way to have a real read/write
+// settings surface given the read-only mod-settings API.
+// ---------------------------------------------------------------------
+
+constexpr wchar_t kPrivateSettingsKeyPath[] =
+    L"Software\\WindhawkMods\\taskbar-widget-stack";
+
+HKEY OpenPrivateSettingsKey(bool writable) {
+    HKEY key = nullptr;
+    if (writable) {
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, kPrivateSettingsKeyPath, 0,
+                             nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &key,
+                             nullptr) != ERROR_SUCCESS) {
+            return nullptr;
+        }
+    } else if (RegOpenKeyExW(HKEY_CURRENT_USER, kPrivateSettingsKeyPath, 0,
+                              KEY_READ, &key) != ERROR_SUCCESS) {
+        return nullptr;
+    }
+    return key;
+}
+
+bool ReadPrivateDword(const wchar_t* name, DWORD& outValue) {
+    HKEY key = OpenPrivateSettingsKey(/*writable=*/false);
+    if (!key) {
+        return false;
+    }
+    DWORD value = 0, size = sizeof(value), type = 0;
+    LSTATUS status =
+        RegQueryValueExW(key, name, nullptr, &type, (BYTE*)&value, &size);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS || type != REG_DWORD) {
+        return false;
+    }
+    outValue = value;
+    return true;
+}
+
+void WritePrivateDword(const wchar_t* name, DWORD value) {
+    HKEY key = OpenPrivateSettingsKey(/*writable=*/true);
+    if (!key) {
+        return;
+    }
+    RegSetValueExW(key, name, 0, REG_DWORD, (const BYTE*)&value,
+                   sizeof(value));
+    RegCloseKey(key);
+}
+
+bool ReadPrivateString(const wchar_t* name, std::wstring& outValue) {
+    HKEY key = OpenPrivateSettingsKey(/*writable=*/false);
+    if (!key) {
+        return false;
+    }
+    DWORD size = 0, type = 0;
+    if (RegQueryValueExW(key, name, nullptr, &type, nullptr, &size) !=
+            ERROR_SUCCESS ||
+        type != REG_SZ || size == 0) {
+        RegCloseKey(key);
+        return false;
+    }
+    std::wstring buffer(size / sizeof(wchar_t), L'\0');
+    LSTATUS status = RegQueryValueExW(key, name, nullptr, &type,
+                                       (BYTE*)buffer.data(), &size);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+    while (!buffer.empty() && buffer.back() == L'\0') {
+        buffer.pop_back();
+    }
+    outValue = buffer;
+    return true;
+}
+
+void WritePrivateString(const wchar_t* name, const std::wstring& value) {
+    HKEY key = OpenPrivateSettingsKey(/*writable=*/true);
+    if (!key) {
+        return;
+    }
+    RegSetValueExW(key, name, 0, REG_SZ, (const BYTE*)value.c_str(),
+                   (DWORD)((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+}
+
+// Saves the widget list's current order and enabled state as
+// "id:0or1;id:0or1;..." - called after every toggle/move, from
+// whichever UI triggered it (right-click menu or the settings
+// window's Widgets tab).
+void SaveWidgetOrderState() {
+    std::wstring value;
+    for (auto& entry : g_widgets) {
+        if (!value.empty()) {
+            value += L';';
+        }
+        value += entry.widget->Id();
+        value += L':';
+        value += entry.enabled ? L'1' : L'0';
+    }
+    WritePrivateString(L"widgets.order", value);
+}
+
+// Reorders/re-toggles g_widgets to match a previously saved
+// "widgets.order" string, matching by id. Anything not mentioned
+// (e.g. a widget added to InitPlaceholderWidgets since the last save)
+// keeps its default position, appended after the restored ones - so
+// an old save never silently drops a newer widget.
+void LoadWidgetOrderState() {
+    std::wstring raw;
+    if (!ReadPrivateString(L"widgets.order", raw) || raw.empty()) {
+        return;
+    }
+    std::vector<std::pair<std::wstring, bool>> parsed;
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t sep = raw.find(L';', pos);
+        std::wstring token = raw.substr(
+            pos, sep == std::wstring::npos ? std::wstring::npos : sep - pos);
+        size_t colon = token.find(L':');
+        if (colon != std::wstring::npos) {
+            parsed.emplace_back(token.substr(0, colon),
+                                 token.substr(colon + 1) == L"1");
+        }
+        if (sep == std::wstring::npos) {
+            break;
+        }
+        pos = sep + 1;
+    }
+    if (parsed.empty()) {
+        return;
+    }
+
+    std::vector<WidgetEntry> reordered;
+    for (auto& [id, enabled] : parsed) {
+        auto it = std::find_if(
+            g_widgets.begin(), g_widgets.end(),
+            [&](WidgetEntry& e) { return e.widget->Id() == id; });
+        if (it != g_widgets.end()) {
+            it->enabled = enabled;
+            reordered.push_back(std::move(*it));
+            g_widgets.erase(it);
+        }
+    }
+    for (auto& entry : g_widgets) {
+        reordered.push_back(std::move(entry));
+    }
+    g_widgets = std::move(reordered);
+}
 
 // ---------------------------------------------------------------------
 // Taskbar XAML Access
@@ -1274,9 +1446,7 @@ void ToggleWidgetEnabled(int idx) {
     if (idx >= 0 && idx < (int)g_widgets.size()) {
         g_widgets[idx].enabled = !g_widgets[idx].enabled;
     }
-    // TODO(SDK milestone): persist toggled/reordered state back to
-    // Windhawk settings so it survives Explorer restarts. Not
-    // implemented in this prototype. See PLAN.md "Next steps".
+    SaveWidgetOrderState();
     RebuildStackContents();
 }
 
@@ -1286,7 +1456,265 @@ void MoveWidget(int idx, int delta) {
         other < (int)g_widgets.size()) {
         std::swap(g_widgets[idx], g_widgets[other]);
     }
+    SaveWidgetOrderState();
     RebuildStackContents();
+}
+
+// ---------------------------------------------------------------------
+// Settings window (Incident 26)
+//
+// A separate top-level Win32 window hosting its own XAML island
+// (DesktopWindowXamlSource) - a genuinely different technique from
+// everything else in this file, which only ever attaches content
+// into Explorer's OWN pre-existing XAML island (the taskbar's). This
+// creates a brand new one from scratch on the same thread (Explorer's
+// taskbar UI thread already pumps messages for windows it owns, so no
+// separate message loop is needed here). Neither reference mod in
+// this repo (taskbar-ai-quota.wh.cpp, taskbar-fluent-media-player.wh.cpp)
+// hosts a separate window at all, so there's no prior art to port -
+// this is first-principles, based on the publicly documented XAML
+// Islands hosting API (WindowsXamlManager/DesktopWindowXamlSource/
+// IDesktopWindowXamlSourceNative), never exercised inside an
+// explorer.exe-hosted Windhawk mod before in this codebase. Real risk
+// this doesn't work on the first try - flagged per the user's own
+// "grill me" request before building it, see PLAN.md's "Settings
+// window" design for the fuller reasoning and the persistence-layer
+// decision above.
+// ---------------------------------------------------------------------
+
+struct SettingsWindowState {
+    HWND hWnd{nullptr};
+    HWND xamlIslandHwnd{nullptr};
+    wuxh::WindowsXamlManager manager{nullptr};
+    wuxh::DesktopWindowXamlSource source{nullptr};
+    winrt::com_ptr<IDesktopWindowXamlSourceNative> sourceNative;
+};
+
+SettingsWindowState g_settingsWindow;
+
+constexpr wchar_t kSettingsWindowClassName[] =
+    L"TaskbarWidgetStackSettingsWindow";
+
+void CloseSettingsWindow();
+
+LRESULT CALLBACK SettingsWindowProc(HWND hWnd, UINT msg, WPARAM wParam,
+                                     LPARAM lParam) {
+    switch (msg) {
+        case WM_SIZE: {
+            if (g_settingsWindow.xamlIslandHwnd) {
+                RECT rc;
+                GetClientRect(hWnd, &rc);
+                SetWindowPos(g_settingsWindow.xamlIslandHwnd, nullptr, 0, 0,
+                             rc.right - rc.left, rc.bottom - rc.top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return 0;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hWnd);
+            return 0;
+        case WM_DESTROY:
+            g_settingsWindow.sourceNative = nullptr;
+            try {
+                if (g_settingsWindow.source) {
+                    g_settingsWindow.source.Close();
+                }
+            } catch (...) {
+            }
+            g_settingsWindow.source = nullptr;
+            g_settingsWindow.manager = nullptr;
+            g_settingsWindow.xamlIslandHwnd = nullptr;
+            g_settingsWindow.hWnd = nullptr;
+            return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+TextBlock MakePlaceholderTab(std::wstring text) {
+    TextBlock block;
+    block.Text(winrt::hstring(text));
+    block.Margin({16, 16, 16, 16});
+    block.TextWrapping(TextWrapping::Wrap);
+    return block;
+}
+
+// Rebuilt (not patched) on every toggle/move, same rebuild-on-change
+// idiom used everywhere else in this file - simpler than diffing, and
+// this list is short. Reuses ToggleWidgetEnabled/MoveWidget directly,
+// the same functions the right-click menu calls, so both surfaces
+// stay in sync through the one SaveWidgetOrderState() path.
+ScrollViewer g_widgetsTabScroller{nullptr};
+
+FrameworkElement BuildWidgetsTab() {
+    StackPanel panel;
+    panel.Orientation(Orientation::Vertical);
+    panel.Margin({16, 16, 16, 16});
+    panel.Spacing(6);
+
+    for (int i = 0; i < (int)g_widgets.size(); i++) {
+        std::wstring label = g_widgets[i].widget->DisplayName();
+        std::replace(label.begin(), label.end(), L'\n', L' ');
+
+        StackPanel row;
+        row.Orientation(Orientation::Horizontal);
+        row.Spacing(8);
+
+        CheckBox enabledBox;
+        enabledBox.Content(winrt::box_value(winrt::hstring(label)));
+        enabledBox.IsChecked(g_widgets[i].enabled);
+        enabledBox.MinWidth(160);
+        auto toggleHandler =
+            [i](winrt::Windows::Foundation::IInspectable const&,
+                RoutedEventArgs const&) {
+                ToggleWidgetEnabled(i);
+                if (g_widgetsTabScroller) {
+                    g_widgetsTabScroller.Content(BuildWidgetsTab());
+                }
+            };
+        enabledBox.Checked(toggleHandler);
+        enabledBox.Unchecked(toggleHandler);
+        row.Children().Append(enabledBox);
+
+        Button upButton;
+        upButton.Content(winrt::box_value(winrt::hstring(L"Up")));
+        upButton.IsEnabled(i > 0);
+        upButton.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                            RoutedEventArgs const&) {
+            MoveWidget(i, -1);
+            if (g_widgetsTabScroller) {
+                g_widgetsTabScroller.Content(BuildWidgetsTab());
+            }
+        });
+        row.Children().Append(upButton);
+
+        Button downButton;
+        downButton.Content(winrt::box_value(winrt::hstring(L"Down")));
+        downButton.IsEnabled(i < (int)g_widgets.size() - 1);
+        downButton.Click([i](winrt::Windows::Foundation::IInspectable const&,
+                              RoutedEventArgs const&) {
+            MoveWidget(i, 1);
+            if (g_widgetsTabScroller) {
+                g_widgetsTabScroller.Content(BuildWidgetsTab());
+            }
+        });
+        row.Children().Append(downButton);
+
+        panel.Children().Append(row);
+    }
+
+    // Add/remove: stubbed disabled (user decision, 2026-09-17) - no
+    // widget catalog exists yet to add from. See PLAN.md "Next steps".
+    Button addButton;
+    addButton.Content(winrt::box_value(winrt::hstring(L"Add widget...")));
+    addButton.IsEnabled(false);
+    addButton.Margin({0, 8, 0, 0});
+    panel.Children().Append(addButton);
+
+    return panel;
+}
+
+bool OpenSettingsWindow() {
+    if (g_settingsWindow.hWnd) {
+        SetForegroundWindow(g_settingsWindow.hWnd);
+        return true;
+    }
+
+    try {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = SettingsWindowProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kSettingsWindowClassName;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        // Fails harmlessly with ERROR_CLASS_ALREADY_EXISTS on a second
+        // open after a first close - ignored.
+        RegisterClassW(&wc);
+
+        HWND hWnd = CreateWindowExW(
+            WS_EX_DLGMODALFRAME, kSettingsWindowClassName,
+            L"Taskbar Widget Stack Settings", WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT, 480, 420, nullptr, nullptr,
+            GetModuleHandleW(nullptr), nullptr);
+        if (!hWnd) {
+            Wh_Log(L"OpenSettingsWindow: CreateWindowExW failed");
+            return false;
+        }
+        // Stored immediately - if anything below throws, the catch
+        // block's CloseSettingsWindow() needs this to already be set,
+        // or it wouldn't know to destroy this HWND at all.
+        g_settingsWindow.hWnd = hWnd;
+
+        auto manager = wuxh::WindowsXamlManager::InitializeForCurrentThread();
+        wuxh::DesktopWindowXamlSource source;
+        auto sourceNative = source.as<IDesktopWindowXamlSourceNative>();
+        winrt::check_hresult(sourceNative->AttachToWindow(hWnd));
+        HWND xamlIslandHwnd = nullptr;
+        sourceNative->get_WindowHandle(&xamlIslandHwnd);
+        if (!xamlIslandHwnd) {
+            Wh_Log(L"OpenSettingsWindow: no XAML island HWND");
+            DestroyWindow(hWnd);
+            return false;
+        }
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        SetWindowPos(xamlIslandHwnd, nullptr, 0, 0, rc.right - rc.left,
+                     rc.bottom - rc.top, SWP_SHOWWINDOW);
+
+        Pivot pivot;
+
+        PivotItem widgetsItem;
+        widgetsItem.Header(winrt::box_value(winrt::hstring(L"Widgets")));
+        ScrollViewer widgetsScroller;
+        widgetsScroller.Content(BuildWidgetsTab());
+        widgetsItem.Content(widgetsScroller);
+        g_widgetsTabScroller = widgetsScroller;
+        pivot.Items().Append(widgetsItem);
+
+        PivotItem navItem;
+        navItem.Header(winrt::box_value(winrt::hstring(L"Navigation")));
+        navItem.Content(MakePlaceholderTab(
+            L"Coming soon - for now, edit navigation settings through "
+            L"Windhawk's own settings editor for this mod."));
+        pivot.Items().Append(navItem);
+
+        PivotItem layoutItem;
+        layoutItem.Header(winrt::box_value(winrt::hstring(L"Layout")));
+        layoutItem.Content(MakePlaceholderTab(
+            L"Coming soon - for now, edit layout settings through "
+            L"Windhawk's own settings editor for this mod."));
+        pivot.Items().Append(layoutItem);
+
+        PivotItem aboutItem;
+        aboutItem.Header(winrt::box_value(winrt::hstring(L"Help/About")));
+        aboutItem.Content(MakePlaceholderTab(
+            L"Taskbar Widget Stack - see this mod's README and PLAN.md "
+            L"in the repo for status and roadmap."));
+        pivot.Items().Append(aboutItem);
+
+        source.Content(pivot);
+
+        g_settingsWindow.hWnd = hWnd;
+        g_settingsWindow.xamlIslandHwnd = xamlIslandHwnd;
+        g_settingsWindow.manager = manager;
+        g_settingsWindow.source = source;
+        g_settingsWindow.sourceNative = sourceNative;
+
+        ShowWindow(hWnd, SW_SHOW);
+        SetForegroundWindow(hWnd);
+        Wh_Log(L"OpenSettingsWindow: opened");
+        return true;
+    } catch (...) {
+        Wh_Log(L"OpenSettingsWindow: exception");
+        CloseSettingsWindow();
+        return false;
+    }
+}
+
+void CloseSettingsWindow() {
+    if (g_settingsWindow.hWnd) {
+        DestroyWindow(g_settingsWindow.hWnd);
+    }
+    g_settingsWindow = {};
 }
 
 // Right-click menu, as a XAML MenuFlyout rather than a native
@@ -1364,15 +1792,16 @@ void ShowContextMenu(HWND, POINT) {
         MenuFlyoutSeparator separator;
         flyout.Items().Append(separator);
 
-        // TODO(config UI milestone): no custom settings surface exists
-        // yet (see PLAN.md "Next steps") - this row is a placeholder
-        // for where it'll open one; currently a no-op click.
+        // Opens the settings window (Incident 26) - was a no-op stub
+        // before that existed.
         MenuFlyoutItem settings;
         settings.Text(L"Stack settings");
         FontIcon settingsIcon;
         settingsIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-        settingsIcon.Glyph(L"");  // gear/settings glyph
+        settingsIcon.Glyph(L"\uE713");  // gear/settings glyph
         settings.Icon(settingsIcon);
+        settings.Click([](winrt::Windows::Foundation::IInspectable const&,
+                           RoutedEventArgs const&) { OpenSettingsWindow(); });
         flyout.Items().Append(settings);
 
         flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
@@ -1747,6 +2176,33 @@ void LoadSettings() {
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
     g_settings.layoutHideIndicatorWhenSingle =
         Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
+
+    // Private store (Incident 26) overrides the above whenever a key
+    // exists there - it's the real source of truth once the settings
+    // window has saved anything, since Windhawk's own settings.json
+    // can only be read, never written, from mod code.
+    DWORD v;
+    if (ReadPrivateDword(L"nav.wheel", v)) {
+        g_settings.navWheel = v != 0;
+    }
+    if (ReadPrivateDword(L"nav.dots", v)) {
+        g_settings.navDots = v != 0;
+    }
+    if (ReadPrivateDword(L"nav.drag", v)) {
+        g_settings.navDrag = v != 0;
+    }
+    if (ReadPrivateDword(L"nav.wrap", v)) {
+        g_settings.navWrap = v != 0;
+    }
+    if (ReadPrivateDword(L"nav.overscroll", v)) {
+        g_settings.navOverscroll = v != 0;
+    }
+    if (ReadPrivateDword(L"layout.maxWidth", v) && v > 0) {
+        g_settings.layoutMaxWidth = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.indicator.hideWhenSingle", v)) {
+        g_settings.layoutHideIndicatorWhenSingle = v != 0;
+    }
 }
 
 void InitPlaceholderWidgets() {
@@ -1765,6 +2221,8 @@ void InitPlaceholderWidgets() {
         winrt::Windows::UI::ColorHelper::FromArgb(255, 90, 150, 90),
         kMinContentWidth);
     g_widgets.push_back(std::move(aiQuota));
+
+    LoadWidgetOrderState();
 }
 
 }  // namespace
@@ -1799,6 +2257,12 @@ void Wh_ModSettingsChanged() {
 
 void Wh_ModBeforeUninit() {
     g_stopRequested = true;
+    // Closed explicitly rather than left for the DLL unload to sort
+    // out - matches this file's established discipline (see the
+    // widget stack's own teardown below) of never leaving a XAML-
+    // hosting HWND or WinRT object referencing this DLL's code alive
+    // across a Windhawk reload.
+    CloseSettingsWindow();
     if (g_injectEvent) {
         SetEvent(g_injectEvent);
     }

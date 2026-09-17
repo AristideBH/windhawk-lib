@@ -1873,3 +1873,107 @@ grayed out for the first widget's submenu and "Move down" for the
 second's. Disable one widget so only one remains enabled and confirm
 the dot column disappears entirely (stack narrows, no empty gap) -
 then re-enable the second and confirm the dot column comes back.
+
+## Settings window design (2026-09-17, per user-supplied mockup and "grill me" answers)
+
+User wants the right-click menu's "Stack settings" stub (Incident 24)
+to open a real settings window, WinUI-style, with tabs: **Widgets**
+(activate/deactivate, show/hide, reorder, add/remove), **Navigation**
+(port the `nav.*` mod settings here, plus more later), **Layout**
+(same, for `layout.*`), **Help/About**. Before building, four
+decisions were needed (asked directly rather than guessed):
+
+1. **Persistence**: confirmed (by grepping both reference mods in this
+   repo) that Windhawk mods can only *read* settings
+   (`Wh_GetIntSetting`/`Wh_GetStringSetting`) - neither mod writes one
+   back, both only react to `Wh_ModSettingsChanged()` when the user
+   edits through Windhawk's own UI. **Decision: private storage for
+   everything** (widgets AND nav/layout) - this mod's own registry key
+   becomes the real source of truth once anything is saved through the
+   settings window; Windhawk's `==WindhawkModSettings==` values become
+   just the first-run seed/default. Known trade-off: editing a value
+   through Windhawk's *native* settings UI after the private store has
+   values will silently have no effect, since `LoadSettings()` prefers
+   the private store. Accepted as the only way to have a real
+   read/write settings surface at all.
+2. **Framework**: **"WinUI3" means the Fluent look, not literally
+   Microsoft.UI.Xaml/WindowsAppSDK** - built with the same
+   `Windows.UI.Xaml` (UWP) toolkit already used everywhere in this
+   file, no new runtime dependency.
+3. **Window type**: **a separate top-level Win32 window**, not a
+   dialog hosted in the taskbar's existing XAML tree - its own HWND,
+   resizable, proper tabs.
+4. **Add/remove widgets**: **stubbed disabled** for now (a visible but
+   non-interactive "Add widget..." button) - no widget catalog exists
+   yet to add from (see "Next steps" - the SDK/porting milestone).
+
+## Incident 26: private settings store + first-pass settings window (2026-09-17)
+
+**Persistence layer**: added a private registry key,
+`HKCU\Software\WindhawkMods\taskbar-widget-stack`
+(`kPrivateSettingsKeyPath`), with `ReadPrivateDword`/`WritePrivateDword`/
+`ReadPrivateString`/`WritePrivateString` helpers (plain
+`RegOpenKeyExW`/`RegCreateKeyExW`/`RegQueryValueExW`/`RegSetValueExW` -
+added `-ladvapi32` to `@compilerOptions` for these). `LoadSettings()`
+now reads the Windhawk-settings values as before, then overrides with
+whatever's in the private store (per-key, so an unset private value
+falls back to the Windhawk one). Widget order/enabled state is stored
+as one string value, `widgets.order` (`"id:0or1;id:0or1;..."`),
+written by `SaveWidgetOrderState()` and applied by
+`LoadWidgetOrderState()` (called right after `InitPlaceholderWidgets()`)
+- matching by id, so a widget not mentioned (e.g. one added to
+`InitPlaceholderWidgets` after the last save) keeps its default
+position instead of being dropped. `ToggleWidgetEnabled`/`MoveWidget`
+(already shared by the right-click menu) now call
+`SaveWidgetOrderState()` after every change, so both the menu and the
+new settings window's Widgets tab stay in sync through the same path.
+
+**Settings window**: a genuinely new technique for this file - every
+prior XAML element in this mod attaches into Explorer's own
+*pre-existing* XAML island (the taskbar's); this creates a *brand
+new* one, in a brand new top-level window, from scratch. Neither
+reference mod in this repo does this at all, so there was no prior
+art to port from (unlike the taskbar-injection code, ported
+near-verbatim from `taskbar-ai-quota.wh.cpp`) - this is first-
+principles, based on the publicly documented XAML Islands hosting API
+(`WindowsXamlManager::InitializeForCurrentThread()`,
+`DesktopWindowXamlSource`, `IDesktopWindowXamlSourceNative::
+AttachToWindow`/`get_WindowHandle`), the same pattern used in
+Microsoft's own XAML Islands samples for hosting UWP XAML controls in
+a plain Win32 desktop window. **Never exercised inside an
+explorer.exe-hosted Windhawk mod before** - real risk this doesn't
+work on the first try, most plausibly around whether
+`WindowsXamlManager::InitializeForCurrentThread()` is safe to call on
+a thread where Explorer has *already* brought up its own XAML
+environment through a different, private path (to host the taskbar
+itself) - unknown until tested live.
+
+No separate message loop was added - the new window is created on the
+taskbar's own UI thread (reached via the same dispatcher-deferred
+right-click path as `ShowContextMenu`), which already pumps messages
+for every window it owns via Explorer's existing loop.
+
+**Structure**: `OpenSettingsWindow()` creates the window (once;
+re-opening just calls `SetForegroundWindow` on the existing one),
+attaches a `DesktopWindowXamlSource`, and sets its `Content` to a
+`Pivot` with four `PivotItem`s. **Widgets tab** is fully functional:
+one row per widget (a `CheckBox` for enabled + "Up"/"Down" `Button`s,
+bounds-disabled same as the right-click menu's items, all three
+calling the exact same `ToggleWidgetEnabled`/`MoveWidget` functions),
+plus a disabled "Add widget..." stub. **Navigation**, **Layout**, and
+**Help/About** are plain `TextBlock` placeholders for this pass -
+real controls for `nav.*`/`layout.*` are next once the window itself
+is confirmed working. `Wh_ModBeforeUninit` now calls
+`CloseSettingsWindow()` explicitly, matching this file's established
+discipline of never leaving a XAML-hosting HWND alive across a
+Windhawk DLL reload (the exact hazard class from Incidents 8/20/21).
+
+**Next retest**: open "Stack settings" from the right-click menu -
+confirm a real window appears (not just a crash or nothing), showing
+four tabs, with the Widgets tab listing both placeholders and its
+toggle/move controls working (and reflected live in the taskbar
+stack, and in the right-click menu's own state if reopened). If the
+window fails to open or Explorer crashes, capture whatever Windhawk
+log line appears last (`OpenSettingsWindow: ...`) and, if it's a
+crash, the Event Viewer exception details - this is the least-tested
+piece of this whole mod so far.
