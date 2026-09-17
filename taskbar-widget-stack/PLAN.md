@@ -2757,3 +2757,49 @@ overlapping the "show desktop" sliver at the taskbar's true right edge
 (this one's practical usefulness is genuinely unclear - included for
 parity with the reference mod's own `tray_right`, but expect it to be
 the least useful of the tracking positions).
+
+## Incident 42: neither tray position worked - wrong search root for SystemTrayFrameGrid (2026-09-17)
+
+**Symptom**: both `left_of_tray` and `right_of_tray` fell back to
+`left_edge` - confirmed via the `ResolveTrackingAnchor: target not
+found` log line pattern, meaning the anchor lookup itself was failing,
+not the tracking math.
+
+**Root cause**: `FindChildByName(taskbarRootGrid, L"SystemTrayFrameGrid")`
+searches inside `RootGrid` - but `SystemTrayFrameGrid` isn't a
+descendant of `RootGrid` at all. Confirmed by reading
+`taskbar-fluent-media-player.wh.cpp`'s own discovery code again, more
+carefully this time: it finds `SystemTrayFrameGrid` via a *two-step*
+lookup - `FindChildByClassName(xamlRootContent, L"SystemTray.SystemTrayFrame")`
+first (searching from the taskbar's full XAML content, one level above
+`RootGrid`), then `FindChildByName(...)` for `SystemTrayFrameGrid`
+*inside that class-named container*. Incident 41 copied only the second
+half of that lookup and pointed it at the wrong root
+(`taskbarRootGrid`/`RootGrid` instead of the taskbar's full content),
+so it silently never matched.
+
+This bug predates Incident 41: `right_edge`'s own tray-avoidance gap
+(Incident 37) used the exact same wrong lookup, so it was likely never
+actually adding the tray's width to its margin either - `right_edge` has
+probably always just been "flush against the taskbar's right edge plus
+a small constant gap," not "right edge, clear of the tray," the whole
+time. Not something the user had specifically flagged as broken,
+because a small, constant overlap-adjacent gap still looks approximately
+right at a glance.
+
+**Fix**: new `FindSystemTrayFrameGrid(FrameworkElement const& rootElement)`
+helper does the correct two-step lookup, rooted at `rootElement` (the
+taskbar's full XamlRoot content - what `InjectWidgetStackGrid` already
+calls `rootElement`, one level above `taskbarRootGrid`). Both
+`ResolveTrackingAnchor`'s tray branch and `right_edge`'s own trayGap
+calculation now call it - `ResolveTrackingAnchor`'s first parameter is
+renamed from `taskbarRootGrid` to `rootElement` to match what it's
+actually given now.
+
+**Next retest**: `left_of_tray`/`right_of_tray` should now resolve a
+real anchor instead of falling back - watch for the `ResolveTrackingAnchor:
+target not found` log line to confirm it's gone for these two. Also
+re-check `right_edge` specifically for whether it now visibly sits
+further from the tray than before (if it looked fine already, the gap
+was probably small enough not to matter visually, but worth a second
+look now that the intended tray-width offset should actually apply).

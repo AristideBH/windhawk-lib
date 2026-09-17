@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.49
+// @version         0.1.50
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -962,6 +962,23 @@ FrameworkElement FindChildByClassName(FrameworkElement const& parent,
     return nullptr;
 }
 
+// `SystemTrayFrameGrid` is NOT a descendant of RootGrid the way
+// TaskbarFrameRepeater is (Incident 41's original bug: it was searched
+// for as if it were) - confirmed against taskbar-fluent-media-player.wh.cpp's
+// own two-step lookup, which finds "SystemTray.SystemTrayFrame" by class
+// name from the taskbar's full XamlRoot content first, then
+// "SystemTrayFrameGrid" by name inside THAT. `rootElement` here is that
+// full content (what InjectWidgetStackGrid calls `rootElement`, one
+// level above RootGrid/`taskbarRootGrid`), not RootGrid itself.
+FrameworkElement FindSystemTrayFrameGrid(FrameworkElement const& rootElement) {
+    auto trayFrame =
+        FindChildByClassName(rootElement, L"SystemTray.SystemTrayFrame");
+    if (!trayFrame) {
+        return nullptr;
+    }
+    return FindChildByName(trayFrame, L"SystemTrayFrameGrid");
+}
+
 // Resolves a `layout.position` tracking value (e.g. "left_of_taskview")
 // to the real taskbar element to anchor next to, and which side of it
 // `side` should track. Returns null (with `side` untouched) for a
@@ -970,12 +987,12 @@ FrameworkElement FindChildByClassName(FrameworkElement const& parent,
 // button on this Windows build) - callers fall back to left_edge in
 // that case rather than injecting anchored to nothing.
 //
-// `taskbarRootGrid` is only needed for the tray anchors -
-// SystemTrayFrameGrid is a sibling of `repeater` (both direct children
-// of RootGrid, per FindTaskbarRootGrid's own comment), not something
-// findable by searching inside `repeater` the way the taskbar-side
-// anchors are.
-FrameworkElement ResolveTrackingAnchor(FrameworkElement const& taskbarRootGrid,
+// `rootElement` (the taskbar's full XamlRoot content, one level above
+// RootGrid) is only needed for the tray anchors - SystemTrayFrameGrid
+// isn't a descendant of RootGrid at all (see FindSystemTrayFrameGrid's
+// comment), so it can't be found by searching inside `repeater` (or
+// even inside RootGrid) the way the taskbar-side anchors are.
+FrameworkElement ResolveTrackingAnchor(FrameworkElement const& rootElement,
                                         FrameworkElement const& repeater,
                                         const std::wstring& position,
                                         std::wstring& side) {
@@ -1009,7 +1026,7 @@ FrameworkElement ResolveTrackingAnchor(FrameworkElement const& taskbarRootGrid,
         // gap: the tray's own width changing later (icons appearing/
         // disappearing) moves the widget stack with it instead of
         // leaving a stale margin.
-        return FindChildByName(taskbarRootGrid, L"SystemTrayFrameGrid");
+        return FindSystemTrayFrameGrid(rootElement);
     }
     return nullptr;
 }
@@ -2905,7 +2922,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     // than injecting anchored to nothing.
     std::wstring trackSide;
     FrameworkElement trackAnchor = ResolveTrackingAnchor(
-        taskbarRootGrid, repeater, g_settings.layoutPosition, trackSide);
+        rootElement, repeater, g_settings.layoutPosition, trackSide);
     if (!trackSide.empty() && !trackAnchor) {
         Wh_Log(L"ResolveTrackingAnchor: target not found for %s, falling "
                L"back to left_edge",
@@ -2945,8 +2962,12 @@ bool InjectWidgetStackGrid(HWND hWnd) {
             // consistent with every other edge position here being
             // static rather than live-tracked.
             double trayGap = kEdgeGap;
-            if (auto trayFrame = FindChildByName(taskbarRootGrid,
-                                                  L"SystemTrayFrameGrid")) {
+            // Incident 41's fix: SystemTrayFrameGrid isn't a descendant
+            // of taskbarRootGrid (this lookup used to search there and
+            // silently never find it - see FindSystemTrayFrameGrid's
+            // comment), so this gap was actually always just kEdgeGap in
+            // practice, not kEdgeGap + the tray's width as intended.
+            if (auto trayFrame = FindSystemTrayFrameGrid(rootElement)) {
                 trayGap += trayFrame.ActualWidth();
             }
             root.Margin({0, 0, trayGap, 0});
