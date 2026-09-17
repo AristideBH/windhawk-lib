@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.46
+// @version         0.1.47
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -102,6 +102,13 @@ prototype - not yet verified live, see `PLAN.md`.
       Upper bound, in pixels, for how wide the widget stack can grow to fit
       its widest enabled widget. Widgets narrower than this stretch to fill
       it.
+  - paneHeight: 56
+    $name: Pane height
+    $description: >-
+      Height, in pixels, of a single widget's pane in the stack - every
+      widget shares this one height. Increase it for a widget with more
+      content (e.g. taskbar-widget-system-usage's CPU/RAM/GPU bars need
+      more room than a plain label).
   - indicator:
     - hideWhenSingle: true
       $name: Hide when only one widget
@@ -438,6 +445,15 @@ struct {
     bool navWrap = true;
     bool navOverscroll = true;
     int layoutMaxWidth = 520;
+    // Default matches this mod's own history: 32 for plain-text
+    // placeholders (Incident 34's revert), 76 while SystemUsageWidget
+    // lived in-process (Incident 30) - 56 here is a middle ground picked
+    // for a registered widget like taskbar-widget-system-usage's 3 bar
+    // rows via the cross-mod ABI (Incident 35), not a value derived from
+    // any specific widget's content the way those two were; the whole
+    // point of Incident 39 is that this no longer needs to be guessed
+    // once in code, the user can just set it.
+    int layoutPaneHeight = 56;
     bool layoutHideIndicatorWhenSingle = true;
     int layoutIndicatorGap = 6;
     bool layoutIndicatorOnRight = false;
@@ -1207,14 +1223,18 @@ std::vector<int> EnabledIndices() {
     return result;
 }
 
-// Reverted to 32 (Incident 34): was bumped to 76 for SystemUsageWidget's
-// three bar rows (Incident 30), but that widget has since been extracted
-// into its own standalone mod (taskbar-widget-system-usage) rather than
-// living in-process here - see PLAN.md. Every pane shares this one height
-// (the slider offset math is `-widgetIndex * PaneHeight()`), so with no
-// tall content left in this file, there's no reason for it to stay tall.
+// User-adjustable (Incident 39, `layout.paneHeight`) rather than the
+// fixed 32/76 values earlier Incidents hardcoded and reverted between -
+// how tall a single pane needs to be genuinely depends on which widgets
+// are enabled (a placeholder's one line of text vs. a registered
+// cross-mod widget like taskbar-widget-system-usage's three bar rows),
+// and now that widgets can be registered from an entirely different mod
+// (Incident 35), this file can't know that in advance the way it could
+// when every widget was a local, known-in-advance class. Every pane
+// shares this one height (the slider offset math is
+// `-widgetIndex * PaneHeight()`).
 double PaneHeight() {
-    return 32.0;
+    return (double)g_settings.layoutPaneHeight;
 }
 
 void StopSnapAnimation() {
@@ -1657,8 +1677,16 @@ void ApplyStackWidth(double contentWidth) {
 
         g_ui.root.Width(contentWidth + dotsWidth + gapWidth);
         g_ui.clipHost.Width(contentWidth);
+        // Height follows PaneHeight() live too (Incident 39) - unlike
+        // width, this isn't re-derived from widgets' own reported sizes,
+        // it's a direct read of the layout.paneHeight setting, but it
+        // belongs here rather than a separate function since clipHost/
+        // clipGeom are exactly the two elements this function already
+        // owns updating on every settings-driven rebuild.
+        g_ui.clipHost.Height(PaneHeight());
         auto rect = g_ui.clipGeom.Rect();
         rect.Width = (float)contentWidth;
+        rect.Height = (float)PaneHeight();
         g_ui.clipGeom.Rect(rect);
     } catch (...) {
     }
@@ -2066,6 +2094,36 @@ FrameworkElement BuildLayoutTab() {
         });
     maxWidthGroup.Children().Append(maxWidthSlider);
     panel.Children().Append(maxWidthGroup);
+
+    StackPanel paneHeightGroup;
+    paneHeightGroup.Orientation(Orientation::Vertical);
+    paneHeightGroup.Spacing(4);
+
+    TextBlock paneHeightLabel;
+    paneHeightLabel.Text(winrt::hstring(
+        L"Pane height: " + std::to_wstring(g_settings.layoutPaneHeight) +
+        L"px"));
+    paneHeightGroup.Children().Append(paneHeightLabel);
+
+    Slider paneHeightSlider;
+    paneHeightSlider.Minimum(20);
+    paneHeightSlider.Maximum(120);
+    paneHeightSlider.StepFrequency(2);
+    paneHeightSlider.Value(g_settings.layoutPaneHeight);
+    paneHeightSlider.ValueChanged(
+        [paneHeightLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutPaneHeight = value;
+            WritePrivateDword(L"layout.paneHeight", (DWORD)value);
+            paneHeightLabel.Text(winrt::hstring(
+                L"Pane height: " + std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    paneHeightGroup.Children().Append(paneHeightSlider);
+    panel.Children().Append(paneHeightGroup);
 
     panel.Children().Append(MakeSettingsToggle(
         L"Hide indicator with one widget",
@@ -3071,6 +3129,8 @@ void LoadSettings() {
     g_settings.navOverscroll = Wh_GetIntSetting(L"nav.overscroll");
     int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
+    int paneHeight = Wh_GetIntSetting(L"layout.paneHeight");
+    g_settings.layoutPaneHeight = paneHeight > 0 ? paneHeight : 56;
     g_settings.layoutHideIndicatorWhenSingle =
         Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
     int gap = Wh_GetIntSetting(L"layout.indicator.gap");
@@ -3101,6 +3161,9 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"layout.maxWidth", v) && v > 0) {
         g_settings.layoutMaxWidth = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.paneHeight", v) && v > 0) {
+        g_settings.layoutPaneHeight = (int)v;
     }
     if (ReadPrivateDword(L"layout.indicator.hideWhenSingle", v)) {
         g_settings.layoutHideIndicatorWhenSingle = v != 0;

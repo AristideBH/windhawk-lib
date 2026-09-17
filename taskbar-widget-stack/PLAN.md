@@ -2625,3 +2625,36 @@ unpinning an app). Confirm the pushed-aside button's own margin is
 restored correctly when switching away from a tracking position (to
 another tracking position, an edge position, or on mod disable) - this
 is the part with no precedent elsewhere in this file to lean on.
+
+## Incident 39: pane height made a setting (`layout.paneHeight`) (2026-09-17)
+
+**Context**: the user had been running a local build with `PaneHeight()`
+hand-edited to return `56.0` instead of the `32.0` Incident 34 left it
+at - their own tuning to fit `taskbar-widget-system-usage`'s registered
+bars properly since Incident 35/38, done outside this repo's own commits.
+Asked for this to become a real setting instead of a hardcoded literal
+someone has to go edit and recompile for.
+
+**What changed**: new `layout.paneHeight` setting (default 56, matching
+the value already in use rather than reintroducing the old 32 default and
+silently undoing that tuning), read the same way as every other layout
+setting (native `Wh_GetIntSetting`, private-store override, a slider in
+the in-app settings window next to the max-width one). `PaneHeight()`
+now returns `g_settings.layoutPaneHeight` instead of a literal.
+
+Every *widget's own* content already re-reads `PaneHeight()` fresh on
+each `RebuildStackContents()` call (it's passed into `WidgetHost`, and
+the slider/drag-threshold math already called it live too) - the one
+place that wasn't already live was `clipHost`/`clipGeom`, the
+stack's own clip viewport, which were only ever sized once at injection.
+`ApplyStackWidth` (already the function responsible for live-updating
+`clipHost`/`clipGeom` on every settings-driven rebuild, for width) now
+also sets `clipHost.Height(PaneHeight())` and `clipGeom`'s rect height
+there, so the pane-height slider applies immediately without needing a
+full re-inject the way `layout.position` does.
+
+**Next retest**: confirm the pane-height slider resizes the visible
+clip viewport live (not just the widgets' own content, which already
+worked), and that dots/snap-scroll math still lines up correctly at a
+few different heights (not just 56, the one value tested with real
+content so far).
