@@ -130,6 +130,7 @@ key required. See PLAN.md for the design.
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Media;
+using namespace winrt::Windows::UI::Xaml::Media::Animation;
 namespace wuxs = winrt::Windows::UI::Xaml::Shapes;
 
 enum class ClickAction { None, OpenPanel, Refresh, ToggleMode };
@@ -915,4 +916,172 @@ void WireUpClickActions(FrameworkElement wrapper) {
             ExecuteClickAction(g_settings.wheelClick,
                                 sender.try_as<FrameworkElement>());
         });
+}
+
+Grid BuildWeatherHeaderAndDetails() {
+    WeatherState snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        snapshot = g_weather;
+    }
+
+    Grid card;
+    card.CornerRadius({6, 6, 6, 6});
+    card.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)});
+    card.Padding({16, 16, 16, 16});
+    card.RowDefinitions().Append(RowDefinition{});
+    card.RowDefinitions().Append(RowDefinition{});
+
+    // Header row: icon + temp/condition/feels-like
+    Grid header;
+    header.ColumnDefinitions().Append(ColumnDefinition{});
+    header.ColumnDefinitions().Append(ColumnDefinition{});
+    Grid::SetRow(header, 0);
+
+    TextBlock headerIcon;
+    headerIcon.FontSize(36);
+    headerIcon.VerticalAlignment(VerticalAlignment::Center);
+    headerIcon.Margin({0, 0, 12, 0});
+    headerIcon.Text(winrt::hstring(
+        snapshot.hasData ? GetWeatherIcon(snapshot.wmoCode, snapshot.isDay).glyph
+                          : L"☁️"));
+    Grid::SetColumn(headerIcon, 0);
+    header.Children().Append(headerIcon);
+
+    StackPanel headerText;
+    headerText.Orientation(Orientation::Vertical);
+    Grid::SetColumn(headerText, 1);
+
+    TextBlock tempText;
+    tempText.FontSize(16);
+    tempText.Text(winrt::hstring(
+        snapshot.hasData
+            ? FormatTemperature(snapshot.currentTemp, g_settings.useFahrenheit) +
+                  L" - " + ConditionName(snapshot.wmoCode)
+            : L"Loading..."));
+    headerText.Children().Append(tempText);
+
+    TextBlock feelsLikeText;
+    feelsLikeText.FontSize(13);
+    feelsLikeText.Opacity(0.7);
+    feelsLikeText.Text(winrt::hstring(
+        snapshot.hasData
+            ? L"Feels like " +
+                  FormatTemperature(snapshot.feelsLike, g_settings.useFahrenheit)
+            : L""));
+    headerText.Children().Append(feelsLikeText);
+
+    header.Children().Append(headerText);
+    card.Children().Append(header);
+
+    // Details row: humidity / wind / pressure
+    Grid details;
+    details.Margin({0, 12, 0, 0});
+    details.ColumnDefinitions().Append(ColumnDefinition{});
+    details.ColumnDefinitions().Append(ColumnDefinition{});
+    details.ColumnDefinitions().Append(ColumnDefinition{});
+    Grid::SetRow(details, 1);
+
+    auto makeDetailCell = [](const std::wstring& label, const std::wstring& value,
+                              int column) {
+        StackPanel cell;
+        cell.Orientation(Orientation::Vertical);
+        cell.HorizontalAlignment(HorizontalAlignment::Center);
+        Grid::SetColumn(cell, column);
+
+        TextBlock valueText;
+        valueText.FontSize(13);
+        valueText.HorizontalAlignment(HorizontalAlignment::Center);
+        valueText.Text(winrt::hstring(value));
+        cell.Children().Append(valueText);
+
+        TextBlock labelText;
+        labelText.FontSize(11);
+        labelText.Opacity(0.7);
+        labelText.HorizontalAlignment(HorizontalAlignment::Center);
+        labelText.Text(winrt::hstring(label));
+        cell.Children().Append(labelText);
+
+        return cell;
+    };
+
+    details.Children().Append(makeDetailCell(
+        L"Humidity",
+        snapshot.hasData ? std::to_wstring((int)snapshot.humidityPercent) + L"%"
+                          : L"-",
+        0));
+    details.Children().Append(makeDetailCell(
+        L"Wind",
+        snapshot.hasData
+            ? FormatWindSpeed(snapshot.windSpeed, g_settings.windSpeedUnit) + L" " +
+                  CompassDirection(snapshot.windDirectionDeg)
+            : L"-",
+        1));
+    details.Children().Append(makeDetailCell(
+        L"Pressure",
+        snapshot.hasData ? std::to_wstring((int)snapshot.pressureHpa) + L" hPa"
+                          : L"-",
+        2));
+
+    card.Children().Append(details);
+    return card;
+}
+
+Flyout g_weatherFlyout{nullptr};
+bool g_weatherFlyoutOpen = false;
+
+StackPanel BuildWeatherFlyoutContent();  // Task 11 fills this in fully;
+                                          // this task calls it as-is.
+
+void ShowWeatherPanel(FrameworkElement anchor) {
+    if (!anchor) {
+        return;
+    }
+    if (g_weatherFlyoutOpen && g_weatherFlyout) {
+        g_weatherFlyout.Hide();
+        return;
+    }
+
+    Flyout flyout;
+    auto content = BuildWeatherFlyoutContent();
+    flyout.Content(content);
+
+    FlyoutPresenterStyle style{
+        winrt::Windows::UI::Xaml::Interop::TypeName{winrt::hstring(L"Windows.UI.Xaml.Controls.FlyoutPresenter"),
+                                                      winrt::Windows::UI::Xaml::Interop::TypeKind::Metadata}};
+    style.Setters().Append(Setter{Control::BackgroundProperty(),
+                                   winrt::box_value(SolidColorBrush{
+                                       winrt::Windows::UI::Colors::Transparent()})});
+    style.Setters().Append(Setter{Control::BorderThicknessProperty(),
+                                   winrt::box_value(Thickness{0, 0, 0, 0})});
+    style.Setters().Append(Setter{Control::PaddingProperty(),
+                                   winrt::box_value(Thickness{0, 0, 0, 0})});
+    flyout.FlyoutPresenterStyle(style);
+
+    flyout.Opened([content](winrt::Windows::Foundation::IInspectable const&,
+                             winrt::Windows::Foundation::IInspectable const&) {
+        g_weatherFlyoutOpen = true;
+        CompositeTransform transform;
+        content.RenderTransform(transform);
+        content.Opacity(0.0);
+        transform.TranslateY(8);
+        DoubleAnimation opacityAnim;
+        opacityAnim.To(1.0);
+        opacityAnim.Duration(winrt::Windows::Foundation::TimeSpan{
+            std::chrono::milliseconds(150)});
+        Storyboard::SetTarget(opacityAnim, content);
+        Storyboard::SetTargetProperty(opacityAnim, L"Opacity");
+        Storyboard sb;
+        sb.Children().Append(opacityAnim);
+        sb.Begin();
+    });
+    flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
+                      winrt::Windows::Foundation::IInspectable const&) {
+        g_weatherFlyoutOpen = false;
+        g_weatherFlyout = nullptr;
+    });
+
+    g_weatherFlyout = flyout;
+    flyout.ShowAt(anchor);
 }
