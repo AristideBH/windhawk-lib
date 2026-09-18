@@ -1908,6 +1908,35 @@ void RebuildStackContents() {
         }
     }
 
+    // Create() runs for every non-crashed widget above regardless of
+    // entry.enabled, not just an oversight - ApplySliderTarget's offset
+    // math is a flat `-widgetIndex * PaneHeight()` against the *raw*
+    // g_widgets index (see PaneHeight()'s comment), so a disabled
+    // widget's pane has to keep occupying its slot in widgetsPanel or
+    // every later widget's slot would shift and the offset math would
+    // point at the wrong pane. What was missing: nothing then hid that
+    // pane again, so a disabled widget only dropped out of
+    // EnabledIndices() (dots, navigation target) while its own visual
+    // stayed fully opaque and interactive right where it was. Widgets
+    // append their root as the Nth child of widgetsPanel in the same
+    // order as this loop, one child per non-crashed entry - walk both in
+    // lockstep and hide (without removing) whichever ones are disabled.
+    {
+        auto children = g_ui.widgetsPanel.Children();
+        uint32_t childIdx = 0;
+        for (auto& entry : g_widgets) {
+            if (entry.crashed) {
+                continue;
+            }
+            if (childIdx < children.Size()) {
+                auto child = children.GetAt(childIdx);
+                child.Opacity(entry.enabled ? 1.0 : 0.0);
+                child.IsHitTestVisible(entry.enabled);
+            }
+            childIdx++;
+        }
+    }
+
     double contentWidth = kMinContentWidth;
     for (auto& entry : g_widgets) {
         if (entry.enabled && !entry.crashed) {
@@ -3089,6 +3118,20 @@ bool InjectWidgetStackGrid(HWND hWnd) {
     try {
         Grid root;
         root.VerticalAlignment(VerticalAlignment::Stretch);
+        // Full-bounds invisible hit area (Incident 47; same reasoning as
+        // Incident 4's dot-wrapper fix, applied at the root level): a
+        // Grid with no Background at all isn't hit-testable in its own
+        // right - only already-hit-testable
+        // descendants (a widget's own painted Border/bar) are. That left
+        // the gaps between bars, the space around the dots, and the
+        // padding columns as dead zones where wheel-scroll/right-click
+        // silently did nothing, even though the cursor was still well
+        // within the stack's bounds. An alpha-0 Background makes the
+        // entire root rectangle hit-testable without changing how it
+        // looks, the same trick taskbar-widget-media-player's own
+        // "Full-height invisible hit area" setting uses.
+        root.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
         // Edge placement (Incident 37) - static HorizontalAlignment +
         // Margin only, computed once here. Tracking placement (Incident
         // 38, below, after root is added to the tree) anchors instead to
