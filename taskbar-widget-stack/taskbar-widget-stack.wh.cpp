@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.52
+// @version         0.1.53
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1679,6 +1679,17 @@ class PlaceholderWidget : public IWidget {
     Panel parent_{nullptr};
 };
 
+// Incident 46 (PLAN.md): with more than a handful of widgets registered
+// (e.g. taskbar-widget-stack plus two remote widgets plus placeholders),
+// one dot per widget in this fixed-width kDotsColumnWidth column just
+// got squished together illegibly - a StackPanel doesn't wrap or
+// scroll. Caps the number of dots actually drawn at kMaxVisibleDots,
+// sliding a window of that size to keep the active widget's dot inside
+// it (centered where the widget list is long enough to allow it,
+// clamped at either end) - iOS-style paginated dots, not a hard limit
+// on how many widgets can be stacked.
+constexpr size_t kMaxVisibleDots = 3;
+
 void RefreshDots() {
     if (!g_ui.dotsPanel) {
         return;
@@ -1690,7 +1701,28 @@ void RefreshDots() {
         // ApplyStackWidth in this case - nothing to build.
         return;
     }
-    for (int idx : enabled) {
+
+    size_t total = enabled.size();
+    size_t windowStart = 0;
+    if (total > kMaxVisibleDots) {
+        int activePos = 0;
+        for (size_t i = 0; i < total; i++) {
+            if (enabled[i] == g_ui.activeIndex) {
+                activePos = (int)i;
+                break;
+            }
+        }
+        int start = activePos - (int)(kMaxVisibleDots / 2);
+        int maxStart = (int)total - (int)kMaxVisibleDots;
+        start = std::max(0, std::min(start, maxStart));
+        windowStart = (size_t)start;
+    }
+    size_t windowEnd = std::min(total, windowStart + kMaxVisibleDots);
+    bool moreBefore = windowStart > 0;
+    bool moreAfter = windowEnd < total;
+
+    for (size_t i = windowStart; i < windowEnd; i++) {
+        int idx = enabled[i];
         bool active = idx == g_ui.activeIndex;
         // Same size regardless of active state (2026-09-17) - only the
         // color (white vs. gray) marks the active dot for now. Sizing
@@ -1698,7 +1730,14 @@ void RefreshDots() {
         // more elaborate indicator styling (color/size/shape options)
         // is likely to become its own settings group later rather than
         // hardcoded here - see PLAN.md.
-        double r = 2.0;
+        //
+        // Exception (Incident 46): the dot at either end of the visible
+        // window is drawn smaller when there are more widgets beyond it
+        // in that direction - a lightweight "more this way" cue, same
+        // idea as edge dots shrinking in a carousel/page indicator.
+        bool edgeCue = (i == windowStart && moreBefore) ||
+                       (i == windowEnd - 1 && moreAfter);
+        double r = edgeCue ? 1.0 : 2.0;
 
         // Small dot with no enlarged hit target (2026-09-16): the
         // earlier "unclickable dots" symptom turned out to be the
@@ -3439,6 +3478,27 @@ extern "C" bool __cdecl WidgetStack_RegisterWidget(
         return false;
     }
     try {
+        // Incident 46 (PLAN.md): register a context that's already present
+        // used to always push_back a second WidgetEntry for it - visible
+        // as a duplicated widget that WidgetStack_UnregisterWidget's
+        // find_if (stops at the first match) could only ever remove ONE
+        // copy of, so it kept reappearing even after disabling it. Treat
+        // a re-registration of an already-known context as "refresh the
+        // ABI in place", not "add another one".
+        auto existing = std::find_if(
+            g_widgets.begin(), g_widgets.end(), [&](const WidgetEntry& e) {
+                auto* remote = dynamic_cast<RemoteWidget*>(e.widget.get());
+                return remote && remote->Context() == widget->context;
+            });
+        if (existing != g_widgets.end()) {
+            existing->widget = std::make_unique<RemoteWidget>(*widget);
+            existing->crashed = false;
+            RebuildStackContents();
+            Wh_Log(L"WidgetStack_RegisterWidget: context already registered, "
+                   L"refreshed instead of duplicating");
+            return true;
+        }
+
         WidgetEntry entry;
         entry.widget = std::make_unique<RemoteWidget>(*widget);
         g_widgets.push_back(std::move(entry));

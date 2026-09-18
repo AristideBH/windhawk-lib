@@ -2873,3 +2873,57 @@ advance, and that held. See the new mod's own `PLAN.md` for its design
 and known risks (it's a much bigger, less-audited port than
 `taskbar-widget-system-usage` was, given the size and feature scope of
 the mod it forks). Not yet compiled/tested.
+
+## Incident 46: duplicate widget entry survives disabling it; dots need a visible cap (2026-09-18)
+
+**Symptom** (live test, user report): with all three widget mods active
+together, the system-usage widget appeared duplicated at the bottom of
+the stack. Disabling any widget didn't clear the duplicate - it (or
+something that looked like it) reappeared. Separately requested: once
+more than a few widgets are stacked, the dots indicator needs a visible
+cap (e.g. 3 at a time) with the window sliding as you move further,
+rather than every widget getting its own dot squeezed into the fixed-
+width dots column.
+
+**Root cause (duplicate widget)**: `WidgetStack_RegisterWidget` always
+did an unconditional `g_widgets.push_back(...)` for whatever context it
+was given, with no check for whether that context was already
+registered. If the same widget-owning mod's registration path ever runs
+twice for the same context in close succession (e.g. two independent
+retry/recovery triggers - a taskbar restart hook and a settings-change
+re-registration - racing each other), the result was two separate
+`WidgetEntry` objects carrying the same `context`. `WidgetStack_
+UnregisterWidget`'s lookup is a `std::find_if`, which stops at the FIRST
+match - so unregistering (including "disable this widget" from the
+Windhawk mod list) only ever removed one of the two duplicates, leaving the
+other one behind and looking like the duplicate "came back" on the next
+rebuild.
+
+**Fix (duplicate widget)**: `WidgetStack_RegisterWidget` now looks for
+an existing entry with the same `context` first. If found, it replaces
+that entry's `RemoteWidget` in place (refreshing the ABI pointers/clearing
+`crashed`) and rebuilds, instead of pushing a second entry - registering
+the same context twice is now a no-op refresh, never a duplicate. This
+is a defensive fix at the one place that actually creates entries,
+regardless of which exact caller ends up invoking it twice - didn't
+chase down which of the two mods' retry paths was the culprit, since
+this closes the gap either way.
+
+**Fix (dots cap)**: `RefreshDots()` now only draws up to
+`kMaxVisibleDots` (3) dots at a time, in a window that slides to keep
+the active widget's dot inside it (centered when there's room, clamped
+at either end of the widget list). The dot at whichever edge of the
+window still has more widgets beyond it in that direction is drawn
+smaller, as a lightweight "more this way" cue - same idea as a
+carousel/page indicator's edge dots. The window is recomputed on every
+call, so it slides live as navigation (wheel/drag/dot tap - anything
+that calls `GoToWidget`) moves `g_ui.activeIndex`, not just on a
+widget-list rebuild.
+
+**Next retest**: with all three widget mods (plus the two built-in
+placeholders) active, confirm only one system-usage entry ever appears
+and that disabling/re-enabling any widget doesn't produce a duplicate.
+Separately confirm the dots indicator caps at 3 visible dots once more
+than 3 widgets are enabled, that the window slides as you navigate
+through widgets (wheel/drag/tap), and that the edge dot shrinks
+correctly to hint at more widgets in that direction.
