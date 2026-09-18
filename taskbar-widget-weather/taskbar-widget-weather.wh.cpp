@@ -716,3 +716,62 @@ void OnWeatherStateUpdated() {
 // Forward declaration of RunFromWindowThread (defined in Task 14)
 using WindowThreadProc = void(*)(void*);
 static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param);
+
+// Step 4: BuildForecastView - compact strip showing 3-7 days forecast
+Grid BuildForecastView() {
+    WeatherState snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        snapshot = g_weather;
+    }
+
+    Grid root;
+    root.VerticalAlignment(VerticalAlignment::Center);
+    root.ColumnSpacing(8);
+
+    int days = std::min((int)snapshot.daily.size(), g_settings.forecastDaysInline);
+    if (days == 0) {
+        TextBlock placeholder;
+        placeholder.FontSize(kTempFontSize);
+        placeholder.Text(L"…");
+        root.Children().Append(placeholder);
+        return root;
+    }
+
+    for (int i = 0; i < days; i++) {
+        root.ColumnDefinitions().Append(ColumnDefinition{});
+        const auto& day = snapshot.daily[i];
+
+        StackPanel cell;
+        cell.Orientation(Orientation::Vertical);
+        cell.HorizontalAlignment(HorizontalAlignment::Center);
+        Grid::SetColumn(cell, i);
+
+        TextBlock icon;
+        icon.FontSize(kIconFontSize * 0.7);
+        icon.HorizontalAlignment(HorizontalAlignment::Center);
+        icon.Text(winrt::hstring(GetWeatherIcon(day.wmoCode, day.isDay).glyph));
+        cell.Children().Append(icon);
+
+        TextBlock temp;
+        temp.FontSize(kConditionFontSize);
+        temp.HorizontalAlignment(HorizontalAlignment::Center);
+        temp.Text(winrt::hstring(FormatTemperature(day.tempMax, g_settings.useFahrenheit)));
+        cell.Children().Append(temp);
+
+        root.Children().Append(cell);
+    }
+    return root;
+}
+
+// Step 5: ToggleDisplayMode - switch between now and forecast views
+void ToggleDisplayMode() {
+    g_settings.displayMode =
+        g_settings.displayMode == L"now" ? L"forecast" : L"now";
+    Wh_SetStringValue(L"DisplaySettings.displayMode", g_settings.displayMode.c_str());
+    if (g_weatherTaskbarWnd) {
+        RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+            RebuildCompactViewInPlace();
+        }, nullptr);
+    }
+}
