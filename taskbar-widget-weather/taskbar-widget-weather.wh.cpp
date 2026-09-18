@@ -573,7 +573,22 @@ void StopWeatherThread() {
         SetEvent(g_weatherStopEvent);
     }
     if (g_weatherThread) {
-        WaitForSingleObject(g_weatherThread, 5000);
+        DWORD waitResult = WaitForSingleObject(g_weatherThread, 5000);
+        if (waitResult != WAIT_OBJECT_0) {
+            // Thread is still running (likely blocked in a fetch with no
+            // timeout). Do NOT close the thread or event handles here -
+            // the still-running thread may pass g_weatherStopEvent /
+            // g_weatherRefreshEvent to WaitForMultipleObjects again, and
+            // closing them out from under it would turn that call into
+            // an immediate WAIT_FAILED, which the loop treats like a
+            // timeout - spinning forever with no way to signal it again.
+            // Leaking these handles until the thread eventually exits (or
+            // Explorer restarts) is the safer failure mode.
+            Wh_Log(L"StopWeatherThread: thread did not exit within 5000ms; "
+                   L"leaving thread/event handles open rather than risk "
+                   L"closing handles still in use");
+            return;
+        }
         CloseHandle(g_weatherThread);
         g_weatherThread = nullptr;
     }
