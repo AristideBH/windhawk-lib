@@ -775,3 +775,80 @@ void ToggleDisplayMode() {
         }, nullptr);
     }
 }
+
+// Task 8: Hover/pressed visual state helpers
+SolidColorBrush g_weatherHoverBrush{nullptr};
+SolidColorBrush g_weatherPressedBrush{nullptr};
+
+// Subtle white overlay, same alpha range as media-player's own hover
+// brushes (0x0F-0x2C over white) - not a full system-hover-color read
+// like media-player's EnsureHoverBrushes does (that reads live
+// Fluent Reveal colors via a Windows API media-player already hooks;
+// duplicating that hook here for a first version isn't worth the
+// risk of getting the undocumented call wrong - a fixed subtle
+// overlay reads correctly in both light and dark taskbars, which is
+// what actually matters here. Revisit if it looks visually off against
+// media-player's own hover in a live side-by-side).
+void EnsureHoverBrushes() {
+    if (!g_weatherHoverBrush) {
+        g_weatherHoverBrush = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x14, 0xFF, 0xFF, 0xFF)};
+    }
+    if (!g_weatherPressedBrush) {
+        g_weatherPressedBrush = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
+    }
+}
+
+void ApplyWeatherHoverState(Border background, bool hovered, bool pressed) {
+    EnsureHoverBrushes();
+    if (pressed) {
+        background.Background(g_weatherPressedBrush);
+    } else if (hovered) {
+        background.Background(g_weatherHoverBrush);
+    } else {
+        background.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+    }
+}
+
+// `background` is a full-bounds Border sitting behind the compact
+// view's content (built by the caller - Task 12/14 - specifically so
+// this function never needs to know whether it's wiring a stack-hosted
+// or standalone wrapper). `wrapper` is the outer interactive element
+// pointer events are attached to.
+void WireUpHover(FrameworkElement wrapper, Border background) {
+    auto hovered = std::make_shared<bool>(false);
+    auto pressed = std::make_shared<bool>(false);
+
+    wrapper.PointerEntered(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *hovered = true;
+            ApplyWeatherHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerExited(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *hovered = false;
+            *pressed = false;
+            ApplyWeatherHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerPressed(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *pressed = true;
+            ApplyWeatherHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerReleased(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *pressed = false;
+            ApplyWeatherHoverState(background, *hovered, *pressed);
+        });
+    ApplyWeatherHoverState(background, false, false);
+}
