@@ -1283,3 +1283,154 @@ void FillWeatherWidgetAbi(WidgetStackWidgetAbiV1& abi) {
     abi.GetId = &WeatherWidget_GetId;
     abi.GetDisplayName = &WeatherWidget_GetDisplayName;
 }
+
+void* CTaskBand_ITaskListWndSite_vftable = nullptr;
+using CTaskBand_GetTaskbarHost_t = void*(WINAPI*)(void*, void*);
+CTaskBand_GetTaskbarHost_t CTaskBand_GetTaskbarHost_Original = nullptr;
+using TaskbarHost_FrameHeight_t = int(WINAPI*)(void*);
+TaskbarHost_FrameHeight_t TaskbarHost_FrameHeight_Original = nullptr;
+using Std_Ref_Decref_t = void(WINAPI*)(void*);
+Std_Ref_Decref_t Std_Ref_Decref_Original = nullptr;
+
+HRESULT TryGetTaskbarElementAbi(HWND hTaskbarWnd, void** result) {
+    *result = nullptr;
+    void* taskbarHostSharedPtr[2]{};
+
+    auto cleanup = [&]() {
+        if (taskbarHostSharedPtr[1] && Std_Ref_Decref_Original) {
+            Std_Ref_Decref_Original(taskbarHostSharedPtr[1]);
+        }
+    };
+
+    HWND hTaskSwWnd = (HWND)GetPropW(hTaskbarWnd, L"TaskbandHWND");
+    if (!hTaskSwWnd) {
+        return E_HANDLE;
+    }
+
+    void* taskBand = (void*)GetWindowLongPtrW(hTaskSwWnd, 0);
+    if (!taskBand) {
+        return E_POINTER;
+    }
+
+    if (!CTaskBand_ITaskListWndSite_vftable || !CTaskBand_GetTaskbarHost_Original) {
+        return E_NOINTERFACE;
+    }
+
+    void* taskBandForTaskListWndSite = taskBand;
+    for (int i = 0; *(void**)taskBandForTaskListWndSite !=
+                    CTaskBand_ITaskListWndSite_vftable;
+         i++) {
+        if (i == 20) {
+            return E_NOINTERFACE;
+        }
+        taskBandForTaskListWndSite = (void**)taskBandForTaskListWndSite + 1;
+        if (!taskBandForTaskListWndSite) {
+            return E_POINTER;
+        }
+    }
+
+    CTaskBand_GetTaskbarHost_Original(taskBandForTaskListWndSite,
+                                       taskbarHostSharedPtr);
+    if (!taskbarHostSharedPtr[0]) {
+        cleanup();
+        return E_POINTER;
+    }
+
+    // TaskbarHost::FrameHeight's prologue moves `this + offset` into
+    // rcx/x0 to reach the taskbar element pointer; the offset isn't a
+    // stable, documented constant, so it's recovered by matching the
+    // compiled function's own machine code. Checks both x64 and ARM64
+    // prologue shapes at *runtime*, unconditionally - Explorer can run
+    // as an ARM64EC process where x64-compiled code (this mod) and
+    // native ARM64 system DLL code (taskbar.dll) coexist, so this
+    // mod's own compile-time target says nothing about the target
+    // function's architecture.
+    size_t taskbarElementIUnknownOffset;
+    {
+        const BYTE* b = (const BYTE*)TaskbarHost_FrameHeight_Original;
+        const DWORD* p = (const DWORD*)TaskbarHost_FrameHeight_Original;
+
+        if (b[0] == 0x48 && b[1] == 0x83 && b[2] == 0xEC && b[4] == 0x48 &&
+            b[5] == 0x83 && b[6] == 0xC1 && b[7] <= 0x7F) {
+            taskbarElementIUnknownOffset = b[7];
+        } else if (p[0] == 0xD503237F && (p[1] & 0xFFC07FFF) == 0xA9807BFD &&
+                   p[2] == 0x910003FD &&
+                   (p[3] & 0xFFF00FE0) == 0xF8400C00) {
+            taskbarElementIUnknownOffset = (p[3] >> 12) & 0xFF;
+        } else {
+            wchar_t hex[64] = {};
+            for (int i = 0; i < 16; i++) {
+                wchar_t byteStr[4];
+                wsprintfW(byteStr, L"%02X ", b[i]);
+                wcscat_s(hex, byteStr);
+            }
+            Wh_Log(L"Unsupported TaskbarHost::FrameHeight, bytes: %s", hex);
+            cleanup();
+            return E_NOINTERFACE;
+        }
+    }
+
+    auto* taskbarElementIUnknown = *(IUnknown**)(
+        (BYTE*)taskbarHostSharedPtr[0] + taskbarElementIUnknownOffset);
+    if (!taskbarElementIUnknown) {
+        cleanup();
+        return E_POINTER;
+    }
+
+    HRESULT hr = taskbarElementIUnknown->QueryInterface(
+        winrt::guid_of<winrt::Windows::Foundation::IInspectable>(), result);
+    cleanup();
+    return hr;
+}
+
+XamlRoot GetTaskbarXamlRoot(HWND hTaskbarWnd) {
+    if (!CTaskBand_ITaskListWndSite_vftable || !CTaskBand_GetTaskbarHost_Original ||
+        !TaskbarHost_FrameHeight_Original) {
+        return nullptr;
+    }
+
+    void* taskbarElementAbi = nullptr;
+    if (FAILED(TryGetTaskbarElementAbi(hTaskbarWnd, &taskbarElementAbi)) ||
+        !taskbarElementAbi) {
+        return nullptr;
+    }
+
+    FrameworkElement taskbarElement{nullptr};
+    winrt::attach_abi(taskbarElement, taskbarElementAbi);
+    return taskbarElement ? taskbarElement.XamlRoot() : nullptr;
+}
+
+FrameworkElement FindChildByName(FrameworkElement const& root,
+                                  std::wstring_view name, int depth = 32) {
+    if (!root || depth == 0) {
+        return nullptr;
+    }
+    int n = VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < n; ++i) {
+        auto child = VisualTreeHelper::GetChild(root, i).try_as<FrameworkElement>();
+        if (!child) {
+            continue;
+        }
+        if (child.Name() == name) {
+            return child;
+        }
+        if (auto found = FindChildByName(child, name, depth - 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// The taskbar's root Grid (parent of both TaskbarFrameRepeater - pinned/
+// running app icons and the Start button - and SystemTrayFrameGrid).
+Grid FindTaskbarRootGrid(FrameworkElement const& root) {
+    int count = VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < count; i++) {
+        auto c = VisualTreeHelper::GetChild(root, i).try_as<FrameworkElement>();
+        if (c && winrt::get_class_name(c) == L"Taskbar.TaskbarFrame") {
+            auto rootGrid = FindChildByName(c, L"RootGrid");
+            return rootGrid ? rootGrid.try_as<Grid>() : nullptr;
+        }
+    }
+    return nullptr;
+}
