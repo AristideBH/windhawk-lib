@@ -399,3 +399,196 @@ bool ResolveLocation() {
     std::lock_guard<std::mutex> lock(g_locationMutex);
     return g_location.valid;  // keep whatever we had, per design doc
 }
+
+bool ParseForecastResponse(const std::wstring& body, WeatherState& out) {
+    try {
+        auto json = winrt::Windows::Data::Json::JsonObject::Parse(body);
+        if (!json.HasKey(L"current") || !json.HasKey(L"daily")) {
+            return false;
+        }
+        auto current = json.GetNamedObject(L"current");
+        out.currentTemp = current.GetNamedNumber(L"temperature_2m");
+        out.feelsLike = current.GetNamedNumber(L"apparent_temperature");
+        out.wmoCode = (int)current.GetNamedNumber(L"weather_code");
+        out.isDay = current.GetNamedNumber(L"is_day") != 0.0;
+        out.humidityPercent = current.GetNamedNumber(L"relative_humidity_2m");
+        out.windSpeed = current.GetNamedNumber(L"wind_speed_10m");
+        out.windDirectionDeg = current.GetNamedNumber(L"wind_direction_10m");
+        out.pressureHpa = current.GetNamedNumber(L"surface_pressure");
+
+        auto daily = json.GetNamedObject(L"daily");
+        auto dates = daily.GetNamedArray(L"time");
+        auto codes = daily.GetNamedArray(L"weather_code");
+        auto tempsMax = daily.GetNamedArray(L"temperature_2m_max");
+        auto tempsMin = daily.GetNamedArray(L"temperature_2m_min");
+
+        out.daily.clear();
+        uint32_t count = dates.Size();
+        for (uint32_t i = 0; i < count; i++) {
+            DailyForecast day;
+            day.date = dates.GetStringAt(i).c_str();
+            day.wmoCode = (int)codes.GetNumberAt(i);
+            day.isDay = true;  // daily entries have no is_day - always render the day glyph
+            day.tempMax = tempsMax.GetNumberAt(i);
+            day.tempMin = tempsMin.GetNumberAt(i);
+            out.daily.push_back(day);
+        }
+        out.hasData = true;
+        return true;
+    } catch (...) {
+        Wh_Log(L"ParseForecastResponse: exception parsing response body");
+        return false;
+    }
+}
+
+// Blocking - call only from a background thread.
+bool FetchWeather(double lat, double lon, int days, WeatherState& out) {
+    try {
+        winrt::Windows::Web::Http::HttpClient client;
+        wchar_t urlBuf[512];
+        swprintf_s(urlBuf,
+            L"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+            L"&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
+            L"weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,is_day"
+            L"&daily=weather_code,temperature_2m_max,temperature_2m_min"
+            L"&timezone=auto&forecast_days=%d&wind_speed_unit=kmh",
+            lat, lon, days);
+        auto response =
+            client.GetAsync(winrt::Windows::Foundation::Uri(urlBuf)).get();
+        response.EnsureSuccessStatusCode();
+        auto body = response.Content().ReadAsStringAsync().get();
+        return ParseForecastResponse(body.c_str(), out);
+    } catch (...) {
+        Wh_Log(L"FetchWeather: exception during fetch");
+        return false;
+    }
+}
+
+// Note: `wind_speed_unit=kmh` is always requested regardless of
+// `g_settings.windSpeedUnit` - conversion to the display unit happens at
+// render time via ConvertWindSpeedFromKmh/FormatWindSpeed, so a unit-setting
+// change never needs a re-fetch, only a UI rebuild.
+
+// Compact single-line cache: "temp|feelsLike|wmoCode|isDay|humidity|wind|windDir|pressure"
+// - just enough for an instant non-blank display on reload, not the
+// full forecast (re-fetched on the next thread wake instead of also
+// serializing the whole `daily` vector).
+void SaveWeatherCache(const WeatherState& state) {
+    wchar_t buf[256];
+    swprintf_s(buf, L"%.1f|%.1f|%d|%d|%.0f|%.1f|%.0f|%.0f", state.currentTemp,
+               state.feelsLike, state.wmoCode, state.isDay ? 1 : 0,
+               state.humidityPercent, state.windSpeed, state.windDirectionDeg,
+               state.pressureHpa);
+    Wh_SetStringValue(L"weatherCache", buf);
+}
+
+bool LoadWeatherCache(WeatherState& out) {
+    auto* raw = Wh_GetStringValue(L"weatherCache");
+    if (!raw) {
+        return false;
+    }
+    std::wstring cached = raw;
+    Wh_FreeStringValue(raw);
+    swscanf_s(cached.c_str(), L"%lf|%lf|%d|%d|%lf|%lf|%lf|%lf", &out.currentTemp,
+              &out.feelsLike, &out.wmoCode, (int*)&out.isDay,
+              &out.humidityPercent, &out.windSpeed, &out.windDirectionDeg,
+              &out.pressureHpa);
+    out.hasData = true;
+    out.daily.clear();  // forecast list re-populates on the first real fetch
+    return true;
+}
+
+HANDLE g_weatherStopEvent = nullptr;
+HANDLE g_weatherRefreshEvent = nullptr;
+HANDLE g_weatherThread = nullptr;
+
+void OnWeatherStateUpdated();  // implemented in Task 6
+
+DWORD WINAPI WeatherThreadProc(LPVOID) {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+
+    {
+        WeatherState cached;
+        if (LoadWeatherCache(cached)) {
+            std::lock_guard<std::mutex> lock(g_weatherMutex);
+            g_weather = cached;
+        }
+    }
+
+    bool locationEverResolved = false;
+    HANDLE waitHandles[2] = {g_weatherStopEvent, g_weatherRefreshEvent};
+
+    while (true) {
+        if (!locationEverResolved) {
+            locationEverResolved = ResolveLocation();
+        }
+
+        if (locationEverResolved) {
+            ResolvedLocation loc;
+            {
+                std::lock_guard<std::mutex> lock(g_locationMutex);
+                loc = g_location;
+            }
+            if (loc.valid) {
+                int days = std::max(g_settings.forecastDaysInline,
+                                     g_settings.forecastDaysPanel);
+                WeatherState fetched;
+                if (FetchWeather(loc.lat, loc.lon, days, fetched)) {
+                    {
+                        std::lock_guard<std::mutex> lock(g_weatherMutex);
+                        g_weather = fetched;
+                    }
+                    SaveWeatherCache(fetched);
+                    OnWeatherStateUpdated();
+                }
+                // On failure: g_weather is left untouched (stale data
+                // stays visible), per design doc's error handling.
+            }
+        }
+
+        DWORD waitMs = (DWORD)g_settings.refreshIntervalMinutes * 60 * 1000;
+        DWORD result = WaitForMultipleObjects(2, waitHandles, FALSE, waitMs);
+        if (result == WAIT_OBJECT_0) {
+            break;  // stop event
+        }
+        // WAIT_OBJECT_0 + 1 (refresh event) or WAIT_TIMEOUT: loop again
+        if (result == WAIT_OBJECT_0 + 1) {
+            ResetEvent(g_weatherRefreshEvent);
+        }
+    }
+
+    winrt::uninit_apartment();
+    return 0;
+}
+
+void StartWeatherThread() {
+    g_weatherStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_weatherRefreshEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_weatherThread =
+        CreateThread(nullptr, 0, WeatherThreadProc, nullptr, 0, nullptr);
+}
+
+void StopWeatherThread() {
+    if (g_weatherStopEvent) {
+        SetEvent(g_weatherStopEvent);
+    }
+    if (g_weatherThread) {
+        WaitForSingleObject(g_weatherThread, 5000);
+        CloseHandle(g_weatherThread);
+        g_weatherThread = nullptr;
+    }
+    if (g_weatherStopEvent) {
+        CloseHandle(g_weatherStopEvent);
+        g_weatherStopEvent = nullptr;
+    }
+    if (g_weatherRefreshEvent) {
+        CloseHandle(g_weatherRefreshEvent);
+        g_weatherRefreshEvent = nullptr;
+    }
+}
+
+void RequestWeatherRefresh() {
+    if (g_weatherRefreshEvent) {
+        SetEvent(g_weatherRefreshEvent);
+    }
+}
