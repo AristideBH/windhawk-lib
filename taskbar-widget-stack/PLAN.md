@@ -2927,3 +2927,121 @@ Separately confirm the dots indicator caps at 3 visible dots once more
 than 3 widgets are enabled, that the window slides as you navigate
 through widgets (wheel/drag/tap), and that the edge dot shrinks
 correctly to hint at more widgets in that direction.
+
+## Incident 47: wheel/right-click don't trigger over the stack's own empty space (2026-09-18)
+
+**Symptom** (user report): right-click and wheel-scroll only respond
+when the cursor is directly over a visible child element (a widget's
+own painted bar/Border, a dot). Aiming anywhere else that's still
+visually within the stack's bounds - between two of system-usage's bar
+rows, or in the space around the dots indicator - does nothing.
+
+**Root cause**: `g_ui.root` (the top-level `Grid` everything is built
+into, and the element `WireUpNavigation` attaches
+`PointerWheelChanged`/`PointerPressed`/`PointerMoved`/`PointerReleased`/
+`RightTapped` to) never had a `Background` set. This is the exact same
+WinUI hit-testing gap Incident 4 already diagnosed for the dot
+indicators - a panel with no `Background` at all isn't hit-testable in
+its own right, only its already-hit-testable descendants are - just
+never fixed at the root level, only locally around each dot. Any point
+inside `root`'s bounds that wasn't directly over a descendant with its
+own real `Background`/`Fill` (a bar segment, a dot's wrapper `Grid`, a
+widget pane's `Border`) hit-tested straight through to whatever's
+behind the XAML tree, so `root`'s event handlers never fired for it -
+matching `taskbar-widget-media-player`'s own "Full-height invisible hit
+area" setting, which solves the identical problem for its own root
+element by giving it a transparent `Background` instead of leaving it
+unset.
+
+**Fix**: gave `root` an alpha-0 `SolidColorBrush` `Background`
+immediately after it's constructed. This makes `root`'s entire
+rectangle hit-testable - including the gaps between bars, the dots
+column's own empty margins, and the trailing padding column - without
+changing anything visually, so pointer events now route to `root`'s
+handlers no matter where within the stack's bounds the cursor lands.
+
+**Next retest**: with the stack showing at least two widgets (so there's
+visible empty space between rows), confirm wheel-scroll and right-click
+both work when aimed at a gap between bar rows, at the empty space
+around the dots indicator, and at the trailing padding area - not just
+directly on a bar or a dot.
+
+## Incident 48: disabling a widget updates the dots but leaves its pane visible (2026-09-18)
+
+**Symptom** (user report): unchecking a widget (e.g. a placeholder) from
+either the right-click menu or the settings window correctly updates
+the dots indicator (it drops out) and navigation correctly skips it -
+but the widget's own pane is still there, still visible, still taking
+up a slot in the stack.
+
+**Root cause**: `RebuildStackContents()`'s `Create()` loop only skips
+`entry.crashed` widgets, deliberately calling `Create()` (and so
+appending a real, fully opaque root element to `widgetsPanel`) for
+every disabled-but-not-crashed widget too - this part is intentional,
+not the bug: `ApplySliderTarget`'s offset math is a flat `-widgetIndex *
+PaneHeight()` against each widget's *raw* `g_widgets` index (see
+`PaneHeight()`'s own comment), so every non-crashed widget needs to keep
+occupying its slot in `widgetsPanel` or every later widget's slot would
+shift and the offset math would land on the wrong pane. What was
+actually missing: nothing ever hid that pane again once its widget was
+disabled - `entry.enabled` was only ever consulted by `EnabledIndices()`
+(dots, navigation target) and the `contentWidth` calculation, never
+applied to the pane's own visual state.
+
+**Fix**: after the `Create()` loop, walk `g_widgets` and
+`widgetsPanel.Children()` in lockstep (both skip `crashed` entries the
+same way, in the same order, so they line up 1:1) and set each pane's
+`Opacity`/`IsHitTestVisible` from `entry.enabled` - `0`/`false` when
+disabled, `1`/`true` when enabled. The pane keeps its slot (so the
+offset math stays correct) but is invisible and non-interactive, rather
+than adding a new "don't include this one" contract to `IWidget`/the
+cross-mod ABI just to avoid reserving its space.
+
+**Next retest**: with 3+ widgets enabled, disable one from either the
+right-click menu or the settings window and confirm its pane
+disappears immediately (not just its dot) while the remaining widgets'
+positions/navigation stay correct; re-enable it and confirm the pane
+reappears in the same slot.
+
+## Known follow-ups: hardening the cross-mod widget ABI (not yet implemented)
+
+User-flagged (2026-09-18), not yet implemented - three ideas for making
+`WidgetStackWidgetAbiV1`/`WidgetStackHostAbiV1` (the "Cross-mod widget
+ABI" section near the top of this file, Incident 35) more robust as
+more third-party widget mods start implementing it:
+
+1. **Incomplete crash isolation.** The `catch (...)` documented as
+   "crash isolation" (`WidgetEntry::crashed`, set from
+   `RebuildStackContents`'s `Create()`/`Destroy()` calls) only catches
+   C++ exceptions, not Windows structured exceptions (an invalid memory
+   access, etc.) that a bug in a third-party widget DLL's
+   `Create`/`Tick`/`OnSettingsChanged`/`Destroy` could raise. Fix would
+   isolate each of those four calls in its own dedicated function
+   wrapped in `__try`/`__except(EXCEPTION_EXECUTE_HANDLER)` - SEH can't
+   coexist with C++ objects that have destructors in the same scope, so
+   this needs its own small wrapper functions rather than wrapping the
+   existing call sites in place.
+2. **No version/size field in the ABI.** Neither
+   `WidgetStackWidgetAbiV1` nor `WidgetStackHostAbiV1` has a leading
+   `size`/`version` field, even though the struct is hand-duplicated
+   across three separate `.wh.cpp` files (this one,
+   `taskbar-widget-system-usage.wh.cpp`,
+   `taskbar-widget-media-player.wh.cpp`) and has to be kept in sync by
+   hand. Adding a `cbSize` field (the classic Win32/COM pattern, e.g.
+   `WNDCLASSEX`) would let `WidgetStack_RegisterWidget` detect and
+   reject/log a widget compiled against a desynced copy of the struct,
+   instead of silently reading memory at the wrong offset.
+3. **No caller-thread check.** The contract documents "must run on the
+   tray's own thread" but nothing actually verifies it on the
+   `WidgetStack_RegisterWidget` side - an accidental call from a
+   background thread would silently corrupt the XAML/WinRT tree. Fix
+   would add a `GetCurrentThreadId() ==
+   GetWindowThreadProcessId(tray, ...)` check with a `Wh_Log` on
+   mismatch.
+
+Any of these three is a breaking-ish change to a struct three separate
+mods already implement (this file, system-usage, and now
+`taskbar-widget-weather` per
+[docs/superpowers/plans/2026-09-18-taskbar-widget-weather.md](../docs/superpowers/plans/2026-09-18-taskbar-widget-weather.md)'s
+Task 12) - implementing #2 in particular means updating all three
+`WidgetStackWidgetAbiV1` copies in lockstep, not just this one.
