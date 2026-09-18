@@ -182,6 +182,50 @@ Separately re-check whether the widget now correctly shows up inside
 the stack (rather than its own standalone position) once the crash loop
 is gone - if it still doesn't, that's a distinct bug to diagnose fresh.
 
+## Incident 3: registration with the host flaky, needs Explorer restart / mod toggling (2026-09-18)
+
+**Symptom** (user report, local live testing): whether this mod ends up
+registered into `taskbar-widget-stack`'s pane or falls back to its own
+standalone placement varies from one Explorer session to the next, with
+no code change in between - getting it to register sometimes needs an
+Explorer restart, sometimes toggling the mod off/on in Windhawk, and
+it's hard to reproduce on demand.
+
+**Root cause**: `TryRegisterOrApplySettings` (the `GetPropW` discovery
+on `Shell_TrayWnd` documented at its call site) only ever ran as a
+single, one-shot attempt - once from `Wh_ModAfterInit`, once from
+`Wh_ModSettingsChanged`, and once from `TrayUI_StartTaskbar_Hook` (via
+`ApplySettingsWithRetry`, which only retries waiting for
+`SystemTray.SystemTrayFrame` to exist in the XAML tree, not for the
+host's property to be published). Windhawk gives no load-order
+guarantee between mods, so whether `taskbar-widget-stack` has already
+run far enough to call `SetPropW(hWnd, kRegisterWidgetPropName, ...)`
+by the exact moment one of those three call sites runs is essentially a
+coin flip each session. Landing on the wrong side of that flip meant
+falling back to standalone permanently, since nothing re-tried
+afterward. `taskbar-widget-system-usage.wh.cpp` hit the identical race
+(its own Incident 3) and already solved it with a background retry
+thread (`RetryInjectThreadProc`/`StartRetryInject`) - that fix was never
+ported over when this mod was forked in.
+
+**Fix**: ported the same pattern over, prefixed `mp` to avoid clashing
+with this file's existing globals - `g_mpRetryThread`, `g_mpRetryEvent`,
+`g_mpRetryThreadMutex`, `g_mpRetryStopRequested`,
+`MPRetryRegisterThreadProc` (polls `FindWindowW(Shell_TrayWnd)` +
+`TryRegisterOrApplySettings` every 500ms, up to 600 attempts/~5
+minutes, stopping early once registered), and `StartMPRetryRegister`.
+Wired in: `Wh_ModInit` creates the event; `Wh_ModAfterInit` starts the
+thread right after its existing one-shot attempt as a safety net;
+`TrayUI_StartTaskbar_Hook` restarts it for each new taskbar instance
+(Explorer restarts get a fresh polling window); `Wh_ModUninit` signals
+stop and joins the thread before tearing anything else down.
+
+**Next retest**: enable this mod alongside `taskbar-widget-stack`
+across several consecutive Explorer restarts (and mod
+disable/re-enable cycles) without touching any other setting, and
+confirm it lands registered into the stack every time within a few
+seconds, with no manual nudging needed.
+
 ## Next retest
 
 Install and enable this mod alongside `taskbar-widget-stack` (with the

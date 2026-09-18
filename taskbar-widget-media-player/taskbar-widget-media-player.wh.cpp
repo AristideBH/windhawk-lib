@@ -7616,6 +7616,24 @@ Border g_mpRemoteContainer{nullptr};
 int g_mpWidgetContextTag = 0;
 void* const kMPWidgetContext = &g_mpWidgetContextTag;
 
+// Background retry loop for the host registration handshake - mirrors
+// taskbar-widget-system-usage.wh.cpp's own g_retryThread/g_injectEvent/
+// StartRetryInject/RetryInjectThreadProc (Incident 3) exactly, prefixed
+// `mp`. Without this, TryRegisterOrApplySettings only ever runs from
+// Wh_ModAfterInit/Wh_ModSettingsChanged/TrayUI_StartTaskbar_Hook, each a
+// single attempt - if taskbar-widget-stack hasn't published its
+// Shell_TrayWnd property yet at that exact moment (no load-order
+// guarantee between mods), this mod falls back to standalone and never
+// retries again until one of those events happens to fire a second time
+// (a settings change, an Explorer restart). This thread keeps polling
+// every 500ms for up to 5 minutes so a host that appears later still
+// gets picked up without any manual nudge.
+HANDLE g_mpRetryThread = nullptr;
+HANDLE g_mpRetryEvent = nullptr;
+std::mutex g_mpRetryThreadMutex;
+std::atomic<bool> g_mpRetryStopRequested{false};
+void StartMPRetryRegister();
+
 void FillMPWidgetAbi(WidgetStackWidgetAbiV1& abi);
 void TryRegisterOrApplySettings(HWND hWnd);
 static Grid BuildPlayerGrid();
@@ -7816,6 +7834,53 @@ void TryRegisterOrApplySettings(HWND hWnd) {
 
     if (!g_playerGrid) {
         ApplySettings();
+    }
+}
+
+DWORD WINAPI MPRetryRegisterThreadProc(LPVOID) {
+    for (int attempt = 0; attempt < 600; attempt++) {
+        if (g_mpRetryStopRequested.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        if (tray) {
+            g_taskbarWnd = tray;
+            RunFromWindowThread(tray, [](void*) {
+                TryRegisterOrApplySettings(g_taskbarWnd);
+            }, nullptr);
+            if (g_mpRemoteRegistered) {
+                return 0;  // Fully done - host owns the widget's lifecycle.
+            }
+            // Not registered yet (host not found, or its call failed).
+            // Keep looping even if the standalone fallback is already
+            // active for this taskbar instance, so a taskbar-widget-stack
+            // that appears later still gets picked up.
+        }
+        WaitForSingleObject(g_mpRetryEvent, 500);
+        ResetEvent(g_mpRetryEvent);
+    }
+    if (!g_mpRemoteRegistered) {
+        Wh_Log(L"Giving up on taskbar-widget-stack registration retries, "
+               L"staying standalone");
+    }
+    return 0;
+}
+
+void StartMPRetryRegister() {
+    std::lock_guard<std::mutex> lk(g_mpRetryThreadMutex);
+    if (g_mpRetryStopRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (g_mpRetryThread &&
+        WaitForSingleObject(g_mpRetryThread, 0) == WAIT_OBJECT_0) {
+        CloseHandle(g_mpRetryThread);
+        g_mpRetryThread = nullptr;
+    }
+    if (!g_mpRetryThread) {
+        g_mpRetryThread =
+            CreateThread(nullptr, 0, MPRetryRegisterThreadProc, nullptr, 0, nullptr);
+    } else if (g_mpRetryEvent) {
+        SetEvent(g_mpRetryEvent);
     }
 }
 
@@ -10383,6 +10448,11 @@ static void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
     g_mpHostRegisterFn = nullptr;
     g_mpHostUnregisterFn = nullptr;
     g_taskbarWnd = hWnd;
+    // Restart the background retry loop for this new taskbar instance -
+    // taskbar-widget-stack's own StartTaskbar hook races this one with no
+    // ordering guarantee, so its property may not be republished yet by
+    // the time ApplySettingsWithRetry below runs its one-shot attempt.
+    StartMPRetryRegister();
     g_cachedAlbumTitle.clear();
     g_cachedAlbumArtist.clear();
     g_cachedThumbnailBytes.clear();
@@ -10455,8 +10525,16 @@ BOOL Wh_ModInit() {
     g_taskbarWnd = nullptr;
     g_needsUiUpdate = false;
     LoadSettings();
+    g_mpRetryStopRequested = false;
+    g_mpRetryEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_mpRetryEvent) {
+        Wh_Log(L"Wh_ModInit: CreateEventW for retry registration failed");
+        return FALSE;
+    }
     if (!HookTaskbarDllSymbols()) {
         Wh_Log(L"Wh_ModInit: HookTaskbarDllSymbols failed");
+        CloseHandle(g_mpRetryEvent);
+        g_mpRetryEvent = nullptr;
         return FALSE;
     }
     return TRUE;
@@ -10485,9 +10563,29 @@ void Wh_ModAfterInit() {
             }
         }, nullptr);
     }
+    // Safety net for the immediate attempt above: if taskbar-widget-stack
+    // hasn't published its property yet at this exact moment, keep
+    // polling in the background instead of staying standalone forever.
+    StartMPRetryRegister();
 }
 void Wh_ModUninit() {
     g_unloading = true;
+    g_mpRetryStopRequested = true;
+    if (g_mpRetryEvent) {
+        SetEvent(g_mpRetryEvent);
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_mpRetryThreadMutex);
+        if (g_mpRetryThread) {
+            WaitForSingleObject(g_mpRetryThread, 3000);
+            CloseHandle(g_mpRetryThread);
+            g_mpRetryThread = nullptr;
+        }
+    }
+    if (g_mpRetryEvent) {
+        CloseHandle(g_mpRetryEvent);
+        g_mpRetryEvent = nullptr;
+    }
     StopTimerThread();
     StopMediaThread();
     WaitForTrackedWorkers();
