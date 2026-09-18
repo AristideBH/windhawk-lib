@@ -852,3 +852,67 @@ void WireUpHover(FrameworkElement wrapper, Border background) {
         });
     ApplyWeatherHoverState(background, false, false);
 }
+
+void ShowWeatherPanel(FrameworkElement anchor);  // Task 10
+
+void ExecuteClickAction(ClickAction action, FrameworkElement anchor) {
+    switch (action) {
+        case ClickAction::OpenPanel:
+            ShowWeatherPanel(anchor);
+            break;
+        case ClickAction::Refresh:
+            RequestWeatherRefresh();
+            break;
+        case ClickAction::ToggleMode:
+            ToggleDisplayMode();
+            break;
+        case ClickAction::None:
+        default:
+            break;
+    }
+}
+
+// Right click defaults to ClickAction::None specifically so
+// taskbar-widget-stack's own stack-wide RightTapped (wired on its
+// root, covering every widget's bounds - see that mod's Incident 47)
+// keeps being the right-click behavior here by default. If the user
+// explicitly assigns a non-None action to right-click, this handler
+// marks the event Handled so it does NOT also bubble into the stack's
+// context menu - see the design doc's "Click actions" section for the
+// full reasoning. This is the one interaction in this file that
+// crosses into another mod's event-handling assumptions; don't remove
+// the Handled() call without re-reading that section.
+void WireUpClickActions(FrameworkElement wrapper) {
+    wrapper.Tapped(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
+            ExecuteClickAction(g_settings.leftClick,
+                                sender.try_as<FrameworkElement>());
+        });
+    wrapper.DoubleTapped(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           winrt::Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs const&) {
+            ExecuteClickAction(g_settings.doubleClick,
+                                sender.try_as<FrameworkElement>());
+        });
+    wrapper.RightTapped(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           winrt::Windows::UI::Xaml::Input::RightTappedRoutedEventArgs const& args) {
+            if (g_settings.rightClick == ClickAction::None) {
+                return;  // let it bubble to the stack's own menu
+            }
+            args.Handled(true);
+            ExecuteClickAction(g_settings.rightClick,
+                                sender.try_as<FrameworkElement>());
+        });
+    wrapper.PointerWheelChanged(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const& args) {
+            if (g_settings.wheelClick == ClickAction::None) {
+                return;
+            }
+            args.Handled(true);
+            ExecuteClickAction(g_settings.wheelClick,
+                                sender.try_as<FrameworkElement>());
+        });
+}
