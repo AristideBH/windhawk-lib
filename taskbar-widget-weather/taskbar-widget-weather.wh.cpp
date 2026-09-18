@@ -121,6 +121,7 @@ key required. See PLAN.md for the design.
 #include <winrt/Windows.Data.Json.h>
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -265,3 +266,37 @@ struct WeatherState {
 
 WeatherState g_weather;
 std::mutex g_weatherMutex;
+
+double CelsiusToFahrenheit(double c) {
+    return c * 9.0 / 5.0 + 32.0;
+}
+
+std::wstring FormatTemperature(double celsius, bool useFahrenheit) {
+    double value = useFahrenheit ? CelsiusToFahrenheit(celsius) : celsius;
+    return std::to_wstring((long long)std::lround(value)) + L"°";
+}
+
+double ConvertWindSpeedFromKmh(double kmh, const std::wstring& unit) {
+    if (unit == L"mph") return kmh * 0.621371;
+    if (unit == L"ms") return kmh / 3.6;
+    if (unit == L"knots") return kmh * 0.539957;
+    return kmh;  // kmh, or unrecognized -> pass through unchanged
+}
+
+std::wstring FormatWindSpeed(double kmh, const std::wstring& unit) {
+    double converted = ConvertWindSpeedFromKmh(kmh, unit);
+    std::wstring suffix = L"km/h";
+    if (unit == L"mph") suffix = L"mph";
+    else if (unit == L"ms") suffix = L"m/s";
+    else if (unit == L"knots") suffix = L"kn";
+    return std::to_wstring((long long)std::lround(converted)) + L" " + suffix;
+}
+
+std::wstring CompassDirection(double degrees) {
+    static const wchar_t* kLabels[8] = {
+        L"N", L"NE", L"E", L"SE", L"S", L"SW", L"W", L"NW"};
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0) normalized += 360.0;
+    int index = (int)std::lround(normalized / 45.0) % 8;
+    return kLabels[index];
+}
