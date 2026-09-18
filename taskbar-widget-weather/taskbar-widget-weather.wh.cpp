@@ -1434,3 +1434,168 @@ Grid FindTaskbarRootGrid(FrameworkElement const& root) {
     }
     return nullptr;
 }
+
+// ---------------------------------------------------------------------
+// Standalone injection fallback + retry thread. When taskbar-widget-stack
+// isn't installed (or hasn't registered yet), this mod injects its own
+// widget directly into the taskbar's RootGrid, then keeps retrying
+// registration with the stack host in the background so it can switch
+// over cleanly once the host becomes available.
+// ---------------------------------------------------------------------
+
+static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param) {
+    static const UINT kMsg = RegisterWindowMessage(L"Windhawk_RunFromWindowThread_" WH_MOD_ID);
+    struct Payload { WindowThreadProc proc; void* param; };
+    DWORD tid = GetWindowThreadProcessId(hWnd, nullptr);
+    if (!tid) return false;
+    if (tid == GetCurrentThreadId()) {
+        proc(param);
+        return true;
+    }
+    HHOOK hook = SetWindowsHookExW(WH_CALLWNDPROC,
+        [](int code, WPARAM w, LPARAM l) CALLBACK -> LRESULT {
+            if (code == HC_ACTION) {
+                auto* cwp = reinterpret_cast<const CWPSTRUCT*>(l);
+                static const UINT kM = RegisterWindowMessage(L"Windhawk_RunFromWindowThread_" WH_MOD_ID);
+                if (cwp->message == kM) {
+                    auto* p = reinterpret_cast<Payload*>(cwp->lParam);
+                    p->proc(p->param);
+                }
+            }
+            return CallNextHookEx(nullptr, code, w, l);
+        }, nullptr, tid);
+    if (!hook) return false;
+    Payload pay{proc, param};
+    SendMessageW(hWnd, kMsg, 0, reinterpret_cast<LPARAM>(&pay));
+    UnhookWindowsHookEx(hook);
+    return true;
+}
+
+HWND g_weatherStandaloneParentWnd = nullptr;
+
+// v1 standalone placement: appends at the end of the taskbar's own
+// RootGrid (Task 13's FindTaskbarRootGrid), i.e. the trailing edge,
+// with no tracked-anchor positioning (Start/Search/Task View button
+// tracking, configurable left/right edge, etc.) - that richer
+// positioning system is `taskbar-widget-stack`'s and
+// `taskbar-widget-system-usage`'s own ~150-line
+// ResolveTrackingAnchor/UpdateTrackedPosition machinery, explicitly
+// out of scope for this mod's first version per the design doc's
+// non-goals (kept minimal since the stack-registered path - the
+// common case once taskbar-widget-stack is installed - already gets
+// full positioning for free from the host). Revisit as a fast-follow
+// if standalone placement needs to be configurable.
+void InjectWeatherStandalone(HWND hWnd) {
+    auto xamlRoot = GetTaskbarXamlRoot(hWnd);
+    if (!xamlRoot) {
+        Wh_Log(L"InjectWeatherStandalone: could not get taskbar XAML root");
+        return;
+    }
+    auto rootElement = xamlRoot.Content().try_as<FrameworkElement>();
+    if (!rootElement) {
+        Wh_Log(L"InjectWeatherStandalone: XAML root has no content");
+        return;
+    }
+    Grid rootGrid = FindTaskbarRootGrid(rootElement);
+    if (!rootGrid) {
+        Wh_Log(L"InjectWeatherStandalone: RootGrid not found");
+        return;
+    }
+
+    Button wrapper;
+    wrapper.HorizontalAlignment(HorizontalAlignment::Left);
+    wrapper.Padding({0, 0, 0, 0});
+    wrapper.BorderThickness({0, 0, 0, 0});
+
+    Border background;
+    background.CornerRadius({4, 4, 4, 4});
+    auto compact = BuildCompactView();
+    background.Child(compact);
+    wrapper.Content(background);
+
+    WireUpHover(wrapper, background);
+    WireUpClickActions(wrapper);
+
+    rootGrid.Children().Append(wrapper);
+    g_weatherRoot = compact;
+    g_weatherRootParent = rootGrid;
+    g_weatherTaskbarWnd = hWnd;
+    g_weatherStandaloneParentWnd = hWnd;
+}
+
+bool g_weatherRemoteRegistered = false;
+HWND g_weatherRemoteHostHwnd = nullptr;
+WidgetStack_RegisterWidget_t g_weatherHostRegisterFn = nullptr;
+WidgetStack_UnregisterWidget_t g_weatherHostUnregisterFn = nullptr;
+
+void TryRegisterOrShowStandalone(HWND hWnd) {
+    if (g_weatherRemoteRegistered) {
+        return;
+    }
+    auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
+        hWnd, kRegisterWidgetPropName);
+    if (registerFn) {
+        if (g_weatherRootParent) {
+            WeatherWidget_Destroy(nullptr);  // tear down standalone first
+        }
+        WidgetStackWidgetAbiV1 abi;
+        FillWeatherWidgetAbi(abi);
+        if (registerFn(&abi)) {
+            g_weatherRemoteRegistered = true;
+            g_weatherRemoteHostHwnd = hWnd;
+            g_weatherHostRegisterFn = registerFn;
+            g_weatherHostUnregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+                hWnd, kUnregisterWidgetPropName);
+            Wh_Log(L"Registered with taskbar-widget-stack");
+            return;
+        }
+        Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
+    }
+    if (!g_weatherRootParent) {
+        InjectWeatherStandalone(hWnd);
+    }
+}
+
+HANDLE g_weatherRetryThread = nullptr;
+HANDLE g_weatherRetryEvent = nullptr;
+std::mutex g_weatherRetryThreadMutex;
+std::atomic<bool> g_weatherRetryStopRequested{false};
+
+DWORD WINAPI WeatherRetryRegisterThreadProc(LPVOID) {
+    for (int attempt = 0; attempt < 600; attempt++) {
+        if (g_weatherRetryStopRequested.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        if (tray) {
+            RunFromWindowThread(tray, [](void* p) {
+                TryRegisterOrShowStandalone((HWND)p);
+            }, tray);
+            if (g_weatherRemoteRegistered) {
+                return 0;
+            }
+        }
+        WaitForSingleObject(g_weatherRetryEvent, 500);
+        ResetEvent(g_weatherRetryEvent);
+    }
+    Wh_Log(L"Giving up on taskbar-widget-stack registration retries, staying standalone");
+    return 0;
+}
+
+void StartWeatherRetryRegister() {
+    std::lock_guard<std::mutex> lock(g_weatherRetryThreadMutex);
+    if (g_weatherRetryStopRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (g_weatherRetryThread &&
+        WaitForSingleObject(g_weatherRetryThread, 0) == WAIT_OBJECT_0) {
+        CloseHandle(g_weatherRetryThread);
+        g_weatherRetryThread = nullptr;
+    }
+    if (!g_weatherRetryThread) {
+        g_weatherRetryThread = CreateThread(
+            nullptr, 0, WeatherRetryRegisterThreadProc, nullptr, 0, nullptr);
+    } else if (g_weatherRetryEvent) {
+        SetEvent(g_weatherRetryEvent);
+    }
+}
