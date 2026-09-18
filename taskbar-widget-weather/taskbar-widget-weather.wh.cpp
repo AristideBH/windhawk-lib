@@ -1599,3 +1599,121 @@ void StartWeatherRetryRegister() {
         SetEvent(g_weatherRetryEvent);
     }
 }
+
+// ---------------------------------------------------------------------
+// Mod entry points: TrayUI::StartTaskbar hook + Wh_Mod*
+// ---------------------------------------------------------------------
+
+using TrayUI_StartTaskbar_t = void(WINAPI*)(void*);
+static TrayUI_StartTaskbar_t TrayUI_StartTaskbar_Original = nullptr;
+static void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
+    TrayUI_StartTaskbar_Original(pThis);
+    HWND hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!hWnd) {
+        return;
+    }
+    g_weatherRoot = nullptr;
+    g_weatherRootParent = nullptr;
+    g_weatherRemoteRegistered = false;
+    g_weatherRemoteHostHwnd = nullptr;
+    g_weatherHostRegisterFn = nullptr;
+    g_weatherHostUnregisterFn = nullptr;
+    g_weatherTaskbarWnd = hWnd;
+    StartWeatherRetryRegister();
+}
+
+static bool HookTaskbarDllSymbols() {
+    HMODULE h = LoadLibraryExW(L"taskbar.dll", nullptr,
+                                LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!h) {
+        return false;
+    }
+    WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {
+        {{LR"(public: virtual void __cdecl TrayUI::StartTaskbar(void))"},
+         &TrayUI_StartTaskbar_Original,
+         TrayUI_StartTaskbar_Hook},
+        // The four below feed Task 13's GetTaskbarXamlRoot/
+        // TryGetTaskbarElementAbi - no hook function, just resolving
+        // each symbol's address into the matching Task 13 global.
+        {{LR"(const CTaskBand::`vftable'{for `ITaskListWndSite'})"},
+         &CTaskBand_ITaskListWndSite_vftable},
+        {{LR"(public: virtual class std::shared_ptr<class TaskbarHost> __cdecl CTaskBand::GetTaskbarHost(void)const )"},
+         &CTaskBand_GetTaskbarHost_Original},
+        {{LR"(public: int __cdecl TaskbarHost::FrameHeight(void)const )"},
+         &TaskbarHost_FrameHeight_Original},
+        {{LR"(public: void __cdecl std::_Ref_count_base::_Decref(void))"},
+         &Std_Ref_Decref_Original},
+    };
+    return WindhawkUtils::HookSymbols(h, taskbarDllHooks,
+                                       ARRAYSIZE(taskbarDllHooks));
+}
+
+BOOL Wh_ModInit() {
+    LoadSettings();
+    g_weatherRetryStopRequested = false;
+    g_weatherRetryEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_weatherRetryEvent) {
+        return FALSE;
+    }
+    if (!HookTaskbarDllSymbols()) {
+        Wh_Log(L"Wh_ModInit: HookTaskbarDllSymbols failed");
+        CloseHandle(g_weatherRetryEvent);
+        g_weatherRetryEvent = nullptr;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+void Wh_ModAfterInit() {
+    StartWeatherThread();
+    HWND hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (hWnd) {
+        g_weatherTaskbarWnd = hWnd;
+    }
+    StartWeatherRetryRegister();
+}
+
+void Wh_ModUninit() {
+    g_weatherRetryStopRequested = true;
+    if (g_weatherRetryEvent) {
+        SetEvent(g_weatherRetryEvent);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_weatherRetryThreadMutex);
+        if (g_weatherRetryThread) {
+            WaitForSingleObject(g_weatherRetryThread, 3000);
+            CloseHandle(g_weatherRetryThread);
+            g_weatherRetryThread = nullptr;
+        }
+    }
+    if (g_weatherRetryEvent) {
+        CloseHandle(g_weatherRetryEvent);
+        g_weatherRetryEvent = nullptr;
+    }
+    StopWeatherThread();
+
+    if (g_weatherTaskbarWnd) {
+        RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+            if (g_weatherRemoteRegistered && g_weatherHostUnregisterFn) {
+                g_weatherHostUnregisterFn(kWeatherWidgetContext);
+                g_weatherRemoteRegistered = false;
+            } else {
+                WeatherWidget_Destroy(nullptr);
+                uint32_t index;
+                if (g_weatherRootParent && g_weatherRoot &&
+                    g_weatherRootParent.Children().IndexOf(g_weatherRoot, index)) {
+                    g_weatherRootParent.Children().RemoveAt(index);
+                }
+            }
+        }, nullptr);
+    }
+}
+
+void Wh_ModSettingsChanged() {
+    LoadSettings();
+    if (g_weatherTaskbarWnd) {
+        RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+            RebuildCompactViewInPlace();
+        }, nullptr);
+    }
+}
