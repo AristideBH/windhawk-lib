@@ -2,7 +2,7 @@
 // @id              taskbar-widget-media-player
 // @name            Taskbar Widget Media Player
 // @description     Fork of Salyts' Taskbar Fluent Media Player, integrated with taskbar-widget-stack's cross-mod widget ABI - registers as a widget in that mod's stack if it's installed and enabled, falls back to this mod's own original standalone injection otherwise.
-// @version         0.1.2
+// @version         0.1.3
 // @author          AristideBH (fork), Salyts (original)
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
