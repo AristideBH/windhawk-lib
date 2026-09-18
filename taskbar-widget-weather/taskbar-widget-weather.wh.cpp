@@ -178,8 +178,18 @@ void LoadSettings() {
     g_settings.locationAuto =
         GetStringSetting(L"LocationSettings.mode", L"auto") == L"auto";
     g_settings.manualCity = GetStringSetting(L"LocationSettings.manualCity", L"");
-    g_settings.manualLat = Wh_GetIntSetting(L"LocationSettings.manualLat");
-    g_settings.manualLon = Wh_GetIntSetting(L"LocationSettings.manualLon");
+    {
+        auto* latStr = Wh_GetStringSetting(L"LocationSettings.manualLat");
+        g_settings.manualLat = latStr ? wcstod(latStr, nullptr) : 0.0;
+        if (latStr) {
+            Wh_FreeStringSetting(latStr);
+        }
+        auto* lonStr = Wh_GetStringSetting(L"LocationSettings.manualLon");
+        g_settings.manualLon = lonStr ? wcstod(lonStr, nullptr) : 0.0;
+        if (lonStr) {
+            Wh_FreeStringSetting(lonStr);
+        }
+    }
     g_settings.useFahrenheit =
         GetStringSetting(L"UnitSettings.temperature", L"celsius") == L"fahrenheit";
     g_settings.windSpeedUnit = GetStringSetting(L"UnitSettings.windSpeed", L"kmh");
@@ -299,4 +309,93 @@ std::wstring CompassDirection(double degrees) {
     if (normalized < 0) normalized += 360.0;
     int index = (int)std::lround(normalized / 45.0) % 8;
     return kLabels[index];
+}
+
+struct ResolvedLocation {
+    double lat = 0.0;
+    double lon = 0.0;
+    bool valid = false;
+};
+
+ResolvedLocation g_location;
+std::mutex g_locationMutex;
+
+// Blocking - call only from a background thread. Returns false without
+// touching `out` if the city can't be resolved (network error, no
+// match) so callers can keep the previous known-good location instead
+// of blanking it (design doc: "Manual city fails to geocode").
+bool GeocodeCity(const std::wstring& city, ResolvedLocation& out) {
+    if (city.empty()) {
+        return false;
+    }
+    try {
+        winrt::Windows::Web::Http::HttpClient client;
+        std::wstring url =
+            L"https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" +
+            city;
+        auto response =
+            client.GetAsync(winrt::Windows::Foundation::Uri(url)).get();
+        response.EnsureSuccessStatusCode();
+        auto body = response.Content().ReadAsStringAsync().get();
+        auto json = winrt::Windows::Data::Json::JsonObject::Parse(body);
+        if (!json.HasKey(L"results")) {
+            return false;
+        }
+        auto results = json.GetNamedArray(L"results");
+        if (results.Size() == 0) {
+            return false;
+        }
+        auto first = results.GetObjectAt(0);
+        out.lat = first.GetNamedNumber(L"latitude");
+        out.lon = first.GetNamedNumber(L"longitude");
+        out.valid = true;
+        return true;
+    } catch (...) {
+        Wh_Log(L"GeocodeCity: exception resolving '%s'", city.c_str());
+        return false;
+    }
+}
+
+// Blocking - call only from a background thread.
+bool GeolocateAuto(ResolvedLocation& out) {
+    try {
+        winrt::Windows::Devices::Geolocation::Geolocator geolocator;
+        auto position = geolocator.GetGeopositionAsync().get();
+        auto coord = position.Coordinate();
+        out.lat = coord.Point().Position().Latitude;
+        out.lon = coord.Point().Position().Longitude;
+        out.valid = true;
+        return true;
+    } catch (...) {
+        Wh_Log(L"GeolocateAuto: exception (denied, disabled, or timed out)");
+        return false;
+    }
+}
+
+// Resolves g_location once, per the design doc's "resolve once at
+// startup / mode switch / explicit relocate, never on every weather
+// fetch" rule. Returns true if g_location now holds a valid position
+// (either freshly resolved, or already valid from a previous call).
+bool ResolveLocation() {
+    ResolvedLocation resolved;
+    bool ok = false;
+    if (g_settings.locationAuto) {
+        ok = GeolocateAuto(resolved);
+    }
+    if (!ok && g_settings.manualLat != 0.0 && g_settings.manualLon != 0.0) {
+        resolved.lat = g_settings.manualLat;
+        resolved.lon = g_settings.manualLon;
+        resolved.valid = true;
+        ok = true;
+    }
+    if (!ok && !g_settings.manualCity.empty()) {
+        ok = GeocodeCity(g_settings.manualCity, resolved);
+    }
+    if (ok) {
+        std::lock_guard<std::mutex> lock(g_locationMutex);
+        g_location = resolved;
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(g_locationMutex);
+    return g_location.valid;  // keep whatever we had, per design doc
 }
