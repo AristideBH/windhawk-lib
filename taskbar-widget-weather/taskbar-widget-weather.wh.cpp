@@ -1155,3 +1155,131 @@ void ShowWeatherPanel(FrameworkElement anchor) {
     g_weatherFlyout = flyout;
     flyout.ShowAt(anchor);
 }
+
+// ---------------------------------------------------------------------
+// Cross-mod widget ABI: lets taskbar-widget-stack host this widget
+// inside its shared pane instead of standalone. The struct layout
+// below must stay byte-identical (field order and types) to the copy
+// in taskbar-widget-stack.wh.cpp - there's no shared header across
+// these two DLLs, so this is a hand-synced ABI.
+// ---------------------------------------------------------------------
+
+constexpr wchar_t kRegisterWidgetPropName[] =
+    L"TaskbarWidgetStack_RegisterWidgetFn_v1";
+constexpr wchar_t kUnregisterWidgetPropName[] =
+    L"TaskbarWidgetStack_UnregisterWidgetFn_v1";
+
+extern "C" {
+
+struct WidgetStackHostAbiV1 {
+    void* taskbarHwnd;
+    void* parentPanelAbi;
+    double paneHeight;
+};
+
+struct WidgetStackWidgetAbiV1 {
+    void* context;
+    double(__cdecl* Create)(void* context, const WidgetStackHostAbiV1* host);
+    void(__cdecl* Tick)(void* context);
+    double(__cdecl* OnSettingsChanged)(void* context);
+    void(__cdecl* Destroy)(void* context);
+    void(__cdecl* GetId)(void* context, wchar_t* buffer, int bufferSize);
+    void(__cdecl* GetDisplayName)(void* context,
+                                   wchar_t* buffer,
+                                   int bufferSize);
+};
+
+using WidgetStack_RegisterWidget_t =
+    bool(__cdecl*)(const WidgetStackWidgetAbiV1* widget);
+using WidgetStack_UnregisterWidget_t = void(__cdecl*)(void* context);
+
+}  // extern "C"
+
+int g_weatherWidgetContextTag = 0;
+void* const kWeatherWidgetContext = &g_weatherWidgetContextTag;
+
+extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
+                                                const WidgetStackHostAbiV1* host) {
+    if (!host) {
+        return 0.0;
+    }
+    try {
+        Panel parent{nullptr};
+        winrt::copy_from_abi(parent, host->parentPanelAbi);
+        if (!parent) {
+            return 0.0;
+        }
+
+        Button wrapper;
+        wrapper.HorizontalAlignment(HorizontalAlignment::Left);
+        wrapper.Height(host->paneHeight);
+        wrapper.Padding({0, 0, 0, 0});
+        wrapper.BorderThickness({0, 0, 0, 0});
+
+        Border background;
+        background.CornerRadius({4, 4, 4, 4});
+
+        auto compact = BuildCompactView();
+        background.Child(compact);
+        wrapper.Content(background);
+
+        WireUpHover(wrapper, background);
+        WireUpClickActions(wrapper);
+
+        parent.Children().Append(wrapper);
+        g_weatherRoot = compact;
+        g_weatherRootParent = parent;
+        g_weatherTaskbarWnd = (HWND)host->taskbarHwnd;
+
+        wrapper.UpdateLayout();
+        double desiredWidth = wrapper.ActualWidth();
+        return desiredWidth > 0 ? desiredWidth : 80.0;
+    } catch (...) {
+        Wh_Log(L"WeatherWidget_Create: exception");
+        return 0.0;
+    }
+}
+
+extern "C" void __cdecl WeatherWidget_Tick(void* /*context*/) {
+    // No-op: this mod drives its own refresh cadence via
+    // WeatherThreadProc, independent of the host's shared tick signal
+    // - same reasoning as media-player/system-usage.
+}
+
+extern "C" double __cdecl WeatherWidget_OnSettingsChanged(void* /*context*/) {
+    return g_weatherRoot ? g_weatherRoot.ActualWidth() : 0.0;
+}
+
+extern "C" void __cdecl WeatherWidget_Destroy(void* /*context*/) {
+    if (g_weatherFlyoutOpen && g_weatherFlyout) {
+        try {
+            g_weatherFlyout.Hide();
+        } catch (...) {
+        }
+    }
+    g_weatherRoot = nullptr;
+    g_weatherRootParent = nullptr;
+}
+
+extern "C" void __cdecl WeatherWidget_GetId(void* /*context*/,
+                                             wchar_t* buffer,
+                                             int bufferSize) {
+    wcsncpy_s(buffer, bufferSize, L"weather", _TRUNCATE);
+}
+
+extern "C" void __cdecl WeatherWidget_GetDisplayName(void* /*context*/,
+                                                       wchar_t* buffer,
+                                                       int bufferSize) {
+    wcsncpy_s(buffer, bufferSize, L"Weather", _TRUNCATE);
+}
+
+void FillWeatherWidgetAbi(WidgetStackWidgetAbiV1& abi) {
+    abi = {};
+    abi.context = kWeatherWidgetContext;
+    abi.Create = &WeatherWidget_Create;
+    abi.Tick = &WeatherWidget_Tick;
+    abi.OnSettingsChanged = &WeatherWidget_OnSettingsChanged;
+    abi.Destroy = &WeatherWidget_Destroy;
+    abi.GetId = &WeatherWidget_GetId;
+    abi.GetDisplayName = &WeatherWidget_GetDisplayName;
+}
