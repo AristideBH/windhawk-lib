@@ -607,3 +607,112 @@ void RequestWeatherRefresh() {
         SetEvent(g_weatherRefreshEvent);
     }
 }
+
+// Step 1: ConditionName - human-readable label for WMO code
+std::wstring ConditionName(int wmoCode) {
+    if (wmoCode == 0) return L"Clear";
+    if (wmoCode == 1) return L"Mainly clear";
+    if (wmoCode == 2) return L"Partly cloudy";
+    if (wmoCode == 3) return L"Overcast";
+    if (wmoCode == 45 || wmoCode == 48) return L"Fog";
+    if (wmoCode >= 51 && wmoCode <= 57) return L"Drizzle";
+    if (wmoCode >= 61 && wmoCode <= 67) return L"Rain";
+    if (wmoCode >= 71 && wmoCode <= 77) return L"Snow";
+    if (wmoCode >= 80 && wmoCode <= 82) return L"Rain showers";
+    if (wmoCode == 85 || wmoCode == 86) return L"Snow showers";
+    if (wmoCode == 95 || wmoCode == 96 || wmoCode == 99) return L"Thunderstorm";
+    return L"Unknown";
+}
+
+// Step 2: BuildNowView - compact view showing icon + temperature + condition
+constexpr double kIconFontSize = 20;
+constexpr double kTempFontSize = 12;    // matches media-player's title font size
+constexpr double kConditionFontSize = 11;  // matches media-player's artist font size
+
+Grid BuildNowView() {
+    WeatherState snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        snapshot = g_weather;
+    }
+
+    Grid root;
+    root.ColumnDefinitions().Append(ColumnDefinition{});
+    root.ColumnDefinitions().Append(ColumnDefinition{});
+    root.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
+    root.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Auto});
+    root.VerticalAlignment(VerticalAlignment::Center);
+
+    TextBlock icon;
+    icon.FontSize(kIconFontSize);
+    icon.VerticalAlignment(VerticalAlignment::Center);
+    icon.Margin({0, 0, 6, 0});
+    icon.Text(winrt::hstring(
+        snapshot.hasData ? GetWeatherIcon(snapshot.wmoCode, snapshot.isDay).glyph
+                          : L"☁️"));
+    Grid::SetColumn(icon, 0);
+    root.Children().Append(icon);
+
+    StackPanel textStack;
+    textStack.Orientation(Orientation::Vertical);
+    textStack.VerticalAlignment(VerticalAlignment::Center);
+    Grid::SetColumn(textStack, 1);
+
+    TextBlock tempText;
+    tempText.FontSize(kTempFontSize);
+    tempText.Text(winrt::hstring(
+        snapshot.hasData
+            ? FormatTemperature(snapshot.currentTemp, g_settings.useFahrenheit)
+            : L"…"));
+    textStack.Children().Append(tempText);
+
+    TextBlock conditionText;
+    conditionText.FontSize(kConditionFontSize);
+    conditionText.Opacity(0.7);
+    conditionText.Text(winrt::hstring(
+        snapshot.hasData ? ConditionName(snapshot.wmoCode) : L""));
+    textStack.Children().Append(conditionText);
+
+    root.Children().Append(textStack);
+    return root;
+}
+
+// Step 3: Global state and view builders for in-place UI updates
+FrameworkElement g_weatherRoot{nullptr};
+Panel g_weatherRootParent{nullptr};
+HWND g_weatherTaskbarWnd = nullptr;
+
+Grid BuildForecastView();  // Task 7
+
+FrameworkElement BuildCompactView() {
+    return g_settings.displayMode == L"forecast" ? (FrameworkElement)BuildForecastView()
+                                                   : (FrameworkElement)BuildNowView();
+}
+
+void RebuildCompactViewInPlace() {
+    if (!g_weatherRootParent) {
+        return;
+    }
+    auto newView = BuildCompactView();
+    uint32_t index;
+    if (g_weatherRoot && g_weatherRootParent.Children().IndexOf(g_weatherRoot, index)) {
+        g_weatherRootParent.Children().RemoveAt(index);
+        g_weatherRootParent.Children().InsertAt(index, newView);
+    } else {
+        g_weatherRootParent.Children().Append(newView);
+    }
+    g_weatherRoot = newView;
+}
+
+void OnWeatherStateUpdated() {
+    if (!g_weatherTaskbarWnd) {
+        return;
+    }
+    RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+        RebuildCompactViewInPlace();
+    }, nullptr);
+}
+
+// Forward declaration of RunFromWindowThread (defined in Task 14)
+using WindowThreadProc = void(*)(void*);
+static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param);
