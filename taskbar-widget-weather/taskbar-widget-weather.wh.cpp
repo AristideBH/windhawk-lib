@@ -200,3 +200,68 @@ void LoadSettings() {
     g_settings.wheelClick =
         ParseClickAction(GetStringSetting(L"ClickActionSettings.wheel", L"refresh"));
 }
+
+struct WeatherIconInfo {
+    std::wstring glyph;
+};
+
+// Open-Meteo returns WMO weather codes (table 4677). Bucketed into the
+// families that matter visually; exact sub-codes within a bucket (e.g.
+// 61 light rain vs 65 heavy rain) don't get distinct glyphs in v1.
+// `iconStyle` (colored/monochrome) is intentionally not consulted here
+// yet - reserved no-op until real vector icons replace emoji (design
+// doc's "Icon rendering").
+WeatherIconInfo GetWeatherIcon(int wmoCode, bool isDay) {
+    if (wmoCode == 0) {
+        return {isDay ? L"☀️" : L"\U0001F319"};
+    }
+    if (wmoCode == 1) {
+        return {isDay ? L"\U0001F324️" : L"\U0001F319"};
+    }
+    if (wmoCode == 2) {
+        return {L"⛅"};
+    }
+    if (wmoCode == 3) {
+        return {L"☁️"};
+    }
+    if (wmoCode == 45 || wmoCode == 48) {
+        return {L"\U0001F32B️"};
+    }
+    if ((wmoCode >= 51 && wmoCode <= 57) || (wmoCode >= 80 && wmoCode <= 82)) {
+        return {L"\U0001F326️"};
+    }
+    if ((wmoCode >= 61 && wmoCode <= 67)) {
+        return {L"\U0001F327️"};
+    }
+    if ((wmoCode >= 71 && wmoCode <= 77) || wmoCode == 85 || wmoCode == 86) {
+        return {L"\U0001F328️"};
+    }
+    if (wmoCode == 95 || wmoCode == 96 || wmoCode == 99) {
+        return {L"⛈️"};
+    }
+    return {L"☁️"};  // unknown code: safe default, never blank
+}
+
+struct DailyForecast {
+    std::wstring date;   // ISO "YYYY-MM-DD" as returned by Open-Meteo
+    int wmoCode = 0;
+    bool isDay = true;
+    double tempMin = 0.0;
+    double tempMax = 0.0;
+};
+
+struct WeatherState {
+    bool hasData = false;
+    double currentTemp = 0.0;
+    double feelsLike = 0.0;
+    int wmoCode = 0;
+    bool isDay = true;
+    double humidityPercent = 0.0;
+    double windSpeed = 0.0;    // stored in the unit the fetch requested
+    double windDirectionDeg = 0.0;
+    double pressureHpa = 0.0;
+    std::vector<DailyForecast> daily;
+};
+
+WeatherState g_weather;
+std::mutex g_weatherMutex;
