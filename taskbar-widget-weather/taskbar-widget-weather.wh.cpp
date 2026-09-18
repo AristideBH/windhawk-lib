@@ -1047,7 +1047,7 @@ void ShowWeatherPanel(FrameworkElement anchor) {
     auto content = BuildWeatherFlyoutContent();
     flyout.Content(content);
 
-    FlyoutPresenterStyle style{
+    Style style{
         winrt::Windows::UI::Xaml::Interop::TypeName{winrt::hstring(L"Windows.UI.Xaml.Controls.FlyoutPresenter"),
                                                       winrt::Windows::UI::Xaml::Interop::TypeKind::Metadata}};
     style.Setters().Append(Setter{Control::BackgroundProperty(),
