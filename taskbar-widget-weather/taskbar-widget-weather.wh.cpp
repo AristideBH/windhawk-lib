@@ -1028,11 +1028,81 @@ Grid BuildWeatherHeaderAndDetails() {
     return card;
 }
 
+StackPanel BuildForecastListPanel() {
+    WeatherState snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        snapshot = g_weather;
+    }
+
+    StackPanel list;
+    list.Orientation(Orientation::Vertical);
+    list.Margin({0, 12, 0, 0});
+    list.Spacing(4);
+
+    int days = std::min((int)snapshot.daily.size(), g_settings.forecastDaysPanel);
+    for (int i = 0; i < days; i++) {
+        const auto& day = snapshot.daily[i];
+
+        Grid row;
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
+        row.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Star});
+        row.ColumnDefinitions().GetAt(2).Width({1.0, GridUnitType::Auto});
+
+        TextBlock icon;
+        icon.FontSize(16);
+        icon.Margin({0, 0, 8, 0});
+        icon.Text(winrt::hstring(GetWeatherIcon(day.wmoCode, day.isDay).glyph));
+        Grid::SetColumn(icon, 0);
+        row.Children().Append(icon);
+
+        TextBlock dayLabel;
+        dayLabel.FontSize(13);
+        dayLabel.VerticalAlignment(VerticalAlignment::Center);
+        dayLabel.Text(winrt::hstring(day.date));
+        Grid::SetColumn(dayLabel, 1);
+        row.Children().Append(dayLabel);
+
+        TextBlock range;
+        range.FontSize(13);
+        range.VerticalAlignment(VerticalAlignment::Center);
+        range.Text(winrt::hstring(
+            FormatTemperature(day.tempMax, g_settings.useFahrenheit) + L" / " +
+            FormatTemperature(day.tempMin, g_settings.useFahrenheit)));
+        Grid::SetColumn(range, 2);
+        row.Children().Append(range);
+
+        list.Children().Append(row);
+    }
+    return list;
+}
+
+StackPanel BuildWeatherFlyoutContent() {
+    StackPanel content;
+    content.Orientation(Orientation::Vertical);
+    content.MinWidth(260);
+    content.MaxWidth(320);
+
+    content.Children().Append(BuildWeatherHeaderAndDetails());
+    content.Children().Append(BuildForecastListPanel());
+
+    Button refreshButton;
+    refreshButton.Content(winrt::box_value(winrt::hstring(L"Refresh")));
+    refreshButton.Margin({0, 8, 0, 0});
+    refreshButton.HorizontalAlignment(HorizontalAlignment::Stretch);
+    refreshButton.Click(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           RoutedEventArgs const&) { RequestWeatherRefresh(); });
+    content.Children().Append(refreshButton);
+
+    return content;
+}
+
 Flyout g_weatherFlyout{nullptr};
 bool g_weatherFlyoutOpen = false;
-
-StackPanel BuildWeatherFlyoutContent();  // Task 11 fills this in fully;
-                                          // this task calls it as-is.
 
 void ShowWeatherPanel(FrameworkElement anchor) {
     if (!anchor) {
