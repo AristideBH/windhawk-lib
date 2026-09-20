@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.1.54
+// @version         0.2.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -109,12 +109,19 @@ prototype - not yet verified live, see `PLAN.md`.
       Empty space (px) reserved past the stack's own content, so it isn't
       flush against whatever comes next - matches "Edge gap" by default so
       the stack has the same breathing room on both sides.
+  - minWidth: 80
+    $name: Minimum stack width
+    $description: >-
+      Lower bound, in pixels, for the widget stack's width - every widget
+      stretches to at least this wide, even if none of them individually
+      need it. Raise this if a narrow widget (or an empty stack) looks too
+      cramped next to a wider one.
   - maxWidth: 520
     $name: Maximum stack width
     $description: >-
       Upper bound, in pixels, for how wide the widget stack can grow to fit
-      its widest enabled widget. Widgets narrower than this stretch to fill
-      it.
+      its widest enabled widget's own minimum readable width. Widgets
+      narrower than the final width stretch to fill it.
   - paneHeight: 56
     $name: Pane height
     $description: >-
@@ -224,12 +231,16 @@ class IWidget {
     virtual std::wstring DisplayName() const = 0;
 
     // Builds this widget's own root element, attaches it under
-    // host.parent, and returns the width (DIPs) it wants. The host
-    // sizes the stack to the widest enabled widget's returned width
-    // (capped at the user's layout.maxWidth setting) - a widget
-    // narrower than that gets stretched to fill it via the default
-    // HorizontalAlignment::Stretch, so it should not set its own fixed
-    // Width().
+    // host.parent, and returns this widget's own MINIMUM readable width
+    // (DIPs) - the point below which its content would be truncated or
+    // illegible, not a "desired" or preferred size. The host derives
+    // the stack's actual shared width from the widest of every enabled
+    // widget's reported minimum, clamped to the user's
+    // layout.minWidth/layout.maxWidth settings - every widget then
+    // stretches to fill that shared width via the default
+    // HorizontalAlignment::Stretch, so it must not set its own fixed
+    // Width() or override HorizontalAlignment to Left/Center/Right on
+    // its own top-level returned element.
     virtual double Create(const WidgetHost& host) = 0;
 
     // Called on the stack's shared tick signal. No host-side timer
@@ -241,7 +252,8 @@ class IWidget {
     virtual void Tick() = 0;
 
     // Re-reads this widget's own settings sub-namespace and rebuilds
-    // internally, returning its (possibly new) desired width. The host
+    // internally, returning its (possibly new) minimum readable width.
+    // The host
     // calls Destroy() then Create() again rather than this directly,
     // matching both reference mods' full Remove-then-Inject-on-change
     // pattern - kept here as part of the contract for a widget that
@@ -445,8 +457,11 @@ struct WidgetEntry {
     bool crashed = false;
 
     // Cached return value of the widget's last Create()/
-    // OnSettingsChanged() call, used to compute the stack's width.
-    double desiredWidth = 0.0;
+    // OnSettingsChanged() call - its own minimum readable width, not a
+    // "desired" size. The stack's final shared width is derived from
+    // the widest of these across all enabled widgets, clamped to
+    // layout.minWidth/maxWidth (see RebuildStackContents).
+    double minWidth = 0.0;
 };
 
 std::vector<WidgetEntry> g_widgets;
@@ -457,6 +472,7 @@ struct {
     bool navDrag = true;
     bool navWrap = true;
     bool navOverscroll = true;
+    int layoutMinWidth = 80;
     int layoutMaxWidth = 520;
     // Default matches this mod's own history: 32 for plain-text
     // placeholders (Incident 34's revert), 76 while SystemUsageWidget
@@ -1613,11 +1629,11 @@ class PlaceholderWidget : public IWidget {
     PlaceholderWidget(std::wstring id,
                        std::wstring displayName,
                        winrt::Windows::UI::Color color,
-                       double desiredWidth)
+                       double minWidth)
         : id_(std::move(id)),
           displayName_(std::move(displayName)),
           color_(color),
-          desiredWidth_(desiredWidth) {}
+          minWidth_(minWidth) {}
 
     std::wstring Id() const override { return id_; }
     std::wstring DisplayName() const override { return displayName_; }
@@ -1645,7 +1661,7 @@ class PlaceholderWidget : public IWidget {
         host.parent.Children().Append(border);
         root_ = border;
         parent_ = host.parent;
-        return desiredWidth_;
+        return minWidth_;
     }
 
     void Tick() override {}
@@ -1653,7 +1669,7 @@ class PlaceholderWidget : public IWidget {
     double OnSettingsChanged() override {
         // No per-widget settings exist for placeholders - nothing to
         // re-read, size stays the same.
-        return desiredWidth_;
+        return minWidth_;
     }
 
     void Destroy() override {
@@ -1674,7 +1690,7 @@ class PlaceholderWidget : public IWidget {
     std::wstring id_;
     std::wstring displayName_;
     winrt::Windows::UI::Color color_;
-    double desiredWidth_;
+    double minWidth_;
     Border root_{nullptr};
     Panel parent_{nullptr};
 };
@@ -1902,7 +1918,7 @@ void RebuildStackContents() {
             continue;
         }
         try {
-            entry.desiredWidth = entry.widget->Create(host);
+            entry.minWidth = entry.widget->Create(host);
         } catch (...) {
             entry.crashed = true;
         }
@@ -1937,13 +1953,19 @@ void RebuildStackContents() {
         }
     }
 
-    double contentWidth = kMinContentWidth;
+    double contentWidth = 0.0;
     for (auto& entry : g_widgets) {
         if (entry.enabled && !entry.crashed) {
-            contentWidth = std::max(contentWidth, entry.desiredWidth);
+            contentWidth = std::max(contentWidth, entry.minWidth);
         }
     }
-    contentWidth = std::min(contentWidth, (double)g_settings.layoutMaxWidth);
+    // A misconfigured minWidth > maxWidth would otherwise invert the
+    // clamp range below - widen the effective ceiling to match rather
+    // than produce nonsense (spec's error-handling section).
+    double effectiveMaxWidth =
+        std::max((double)g_settings.layoutMinWidth, (double)g_settings.layoutMaxWidth);
+    contentWidth = std::clamp(contentWidth, (double)g_settings.layoutMinWidth,
+                               effectiveMaxWidth);
     ApplyStackWidth(contentWidth);
 
     auto enabled = EnabledIndices();
@@ -2314,6 +2336,36 @@ FrameworkElement BuildLayoutTab() {
         });
     rightPaddingGroup.Children().Append(rightPaddingSlider);
     panel.Children().Append(rightPaddingGroup);
+
+    StackPanel minWidthGroup;
+    minWidthGroup.Orientation(Orientation::Vertical);
+    minWidthGroup.Spacing(4);
+
+    TextBlock minWidthLabel;
+    minWidthLabel.Text(winrt::hstring(L"Minimum stack width: " +
+                                       std::to_wstring(g_settings.layoutMinWidth) +
+                                       L"px"));
+    minWidthGroup.Children().Append(minWidthLabel);
+
+    Slider minWidthSlider;
+    minWidthSlider.Minimum(20);
+    minWidthSlider.Maximum(1000);
+    minWidthSlider.StepFrequency(10);
+    minWidthSlider.Value(g_settings.layoutMinWidth);
+    minWidthSlider.ValueChanged(
+        [minWidthLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutMinWidth = value;
+            WritePrivateDword(L"layout.minWidth", (DWORD)value);
+            minWidthLabel.Text(winrt::hstring(
+                L"Minimum stack width: " + std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    minWidthGroup.Children().Append(minWidthSlider);
+    panel.Children().Append(minWidthGroup);
 
     StackPanel maxWidthGroup;
     maxWidthGroup.Orientation(Orientation::Vertical);
@@ -3418,6 +3470,8 @@ void LoadSettings() {
     g_settings.navDrag = Wh_GetIntSetting(L"nav.drag");
     g_settings.navWrap = Wh_GetIntSetting(L"nav.wrap");
     g_settings.navOverscroll = Wh_GetIntSetting(L"nav.overscroll");
+    int minWidth = Wh_GetIntSetting(L"layout.minWidth");
+    g_settings.layoutMinWidth = minWidth > 0 ? minWidth : 80;
     int maxWidth = Wh_GetIntSetting(L"layout.maxWidth");
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
     int paneHeight = Wh_GetIntSetting(L"layout.paneHeight");
@@ -3453,6 +3507,9 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"nav.overscroll", v)) {
         g_settings.navOverscroll = v != 0;
+    }
+    if (ReadPrivateDword(L"layout.minWidth", v) && v > 0) {
+        g_settings.layoutMinWidth = (int)v;
     }
     if (ReadPrivateDword(L"layout.maxWidth", v) && v > 0) {
         g_settings.layoutMaxWidth = (int)v;
