@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.9
+// @version         0.1.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -932,9 +932,25 @@ void FinalizeTableWidth(Grid& table) {
         double labelWidth = table.ColumnDefinitions().GetAt(0).ActualWidth();
         double percentWidth = table.ColumnDefinitions().GetAt(2).ActualWidth();
         double natural = labelWidth + percentWidth;
-        double total = std::clamp(natural, (double)g_settings.minWidth,
-                                   (double)g_settings.maxWidth);
-        table.Width(total);
+        if (g_remoteRegistered) {
+            // Stack-registered: don't set an explicit clamped Width()
+            // at all - that would override Stretch and pin `table` at
+            // today's computed size forever, never responding to a
+            // later, wider shared width taskbar-widget-stack decides
+            // once every registered widget has reported in (see
+            // docs/superpowers/specs/2026-09-20-stack-width-abi-design.md).
+            // Left as Auto-sized/Stretch, the Star bar column instead
+            // resolves its own share whenever a real layout pass runs
+            // against g_ui.remoteContainer's actual arranged width -
+            // including ones that happen after this function returns,
+            // once the host widens the shared pane.
+            table.HorizontalAlignment(HorizontalAlignment::Stretch);
+            table.ClearValue(FrameworkElement::WidthProperty());
+        } else {
+            double total = std::clamp(natural, (double)g_settings.minWidth,
+                                       (double)g_settings.maxWidth);
+            table.Width(total);
+        }
         // Re-run so the bar's Star column picks up its real share before
         // anything reads ActualWidth() off `table` again (the registered
         // path does, right after this call, to report a desired width
@@ -1173,12 +1189,14 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         UpdateValues();
         StartTimer();
 
-        // ActualWidth already reflects FinalizeTableWidth's clamp - the
-        // host still needs this one concrete number back (its own layout
-        // can't understand "auto, with these bounds"), matching
-        // IWidget::Create's contract ("should not set its own fixed
-        // Width()"): the width was derived from content + settings, not
-        // hardcoded, even though a plain double is what crosses the ABI.
+        // Natural label+percent width (FinalizeTableWidth skips its own
+        // clamped explicit Width() when stack-registered, per
+        // docs/superpowers/specs/2026-09-20-stack-width-abi-design.md) -
+        // this is genuinely this widget's minimum readable size: below
+        // it the label/percent text truncates. The bar's own Star
+        // column fills whatever width the host later stretches
+        // g_ui.remoteContainer to, via the ordinary Grid Star-sizing
+        // this file already uses everywhere else.
         double desiredWidth = table.ActualWidth();
         if (desiredWidth <= 0) {
             desiredWidth = g_settings.minWidth;
