@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.4
+// @version         1.5
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -158,6 +158,12 @@ key required. See PLAN.md for the design.
 
 #include <windhawk_utils.h>
 
+// winbase.h's `#define GetCurrentTime() GetTickCount()` collides with
+// IStoryboard::GetCurrentTime in the WinRT Animation headers pulled in
+// below - undef it first, same fix taskbar-widget-media-player.wh.cpp
+// already needed for the same headers.
+#undef GetCurrentTime
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Xaml.h>
@@ -271,15 +277,18 @@ void LoadSettings() {
         // persists via a separate value key (`displayModeRuntime`, not the
         // settings.yaml key) so a settings change doesn't blow away a
         // runtime toggle. Prefer that runtime value when present.
-        auto* runtimeValue = Wh_GetStringValue(L"displayModeRuntime");
-        if (runtimeValue && *runtimeValue) {
-            newSettings.displayMode = runtimeValue;
+        // Wh_GetStringValue fills a caller-owned buffer (unlike
+        // Wh_GetStringSetting, which allocates/returns a pointer to free
+        // separately) and returns the number of characters written, or 0
+        // if the value doesn't exist / didn't fit.
+        wchar_t runtimeValueBuf[16] = {};
+        size_t runtimeValueLen = Wh_GetStringValue(
+            L"displayModeRuntime", runtimeValueBuf, ARRAYSIZE(runtimeValueBuf));
+        if (runtimeValueLen > 0) {
+            newSettings.displayMode = runtimeValueBuf;
         } else {
             newSettings.displayMode =
                 GetStringSetting(L"DisplaySettings.displayMode", L"now");
-        }
-        if (runtimeValue) {
-            Wh_FreeStringValue(runtimeValue);
         }
     }
     newSettings.iconStyle = GetStringSetting(L"DisplaySettings.iconStyle", L"colored");
@@ -619,12 +628,13 @@ void SaveWeatherCache(const WeatherState& state) {
 }
 
 bool LoadWeatherCache(WeatherState& out) {
-    auto* raw = Wh_GetStringValue(L"weatherCache");
-    if (!raw) {
+    wchar_t cacheBuf[256] = {};
+    size_t cacheLen =
+        Wh_GetStringValue(L"weatherCache", cacheBuf, ARRAYSIZE(cacheBuf));
+    if (cacheLen == 0) {
         return false;
     }
-    std::wstring cached = raw;
-    Wh_FreeStringValue(raw);
+    std::wstring cached = cacheBuf;
     int dayFlag = 0;
     swscanf_s(cached.c_str(), L"%lf|%lf|%d|%d|%lf|%lf|%lf|%lf", &out.currentTemp,
               &out.feelsLike, &out.wmoCode, &dayFlag,
@@ -1487,8 +1497,9 @@ void ShowWeatherPanel(FrameworkElement anchor) {
         transform.TranslateY(8);
         DoubleAnimation opacityAnim;
         opacityAnim.To(1.0);
-        opacityAnim.Duration(winrt::Windows::Foundation::TimeSpan{
-            std::chrono::milliseconds(150)});
+        opacityAnim.Duration(
+            winrt::Windows::UI::Xaml::DurationHelper::FromTimeSpan(
+                std::chrono::milliseconds(150)));
         Storyboard::SetTarget(opacityAnim, content);
         Storyboard::SetTargetProperty(opacityAnim, L"Opacity");
         Storyboard sb;
