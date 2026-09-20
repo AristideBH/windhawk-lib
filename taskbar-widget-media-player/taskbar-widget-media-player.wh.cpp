@@ -2,7 +2,7 @@
 // @id              taskbar-widget-media-player
 // @name            Taskbar Widget Media Player
 // @description     Fork of Salyts' Taskbar Fluent Media Player, integrated with taskbar-widget-stack's cross-mod widget ABI - registers as a widget in that mod's stack if it's installed and enabled, falls back to this mod's own original standalone injection otherwise.
-// @version         0.1.4
+// @version         0.1.5
 // @author          AristideBH (fork), Salyts (original)
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -144,8 +144,8 @@ If you encounter any issues or have a feature suggestion, please open a report o
     - playerWidth: "0 0"
       $name: Media player width (min max)
       $name:ru-RU: Ширина медиаплеера (min max)
-      $description: The first number is the minimum size, and the second is the maximum. You can also set it to 0, which means no limit.
-      $description:ru-RU: Первая цифра — это минимальный размер, а вторая — максимальный. Также можно указать 0 — это без лимита.
+      $description: The first number is the minimum size, and the second is the maximum. You can also set it to 0, which means no limit. This setting only applies when the media player is running standalone (not registered into taskbar-widget-stack).
+      $description:ru-RU: Первая цифра — это минимальный размер, а вторая — максимальный. Также можно указать 0 — это без лимита. Этот параметр действует только тогда, когда медиаплеер работает отдельно (не зарегистрирован в taskbar-widget-stack).
     - playerHeight: "40 40"
       $name: Media player height (min max)
       $name:ru-RU: Высота медиаплеера (min max)
@@ -7819,8 +7819,19 @@ void TryRegisterOrApplySettings(HWND hWnd) {
         }
         WidgetStackWidgetAbiV1 abi;
         FillMPWidgetAbi(abi);
+        // Set true BEFORE calling registerFn, not after: registerFn
+        // (WidgetStack_RegisterWidget in the host) synchronously calls
+        // RebuildStackContents(), which calls this widget's own
+        // Create() (MediaPlayer_Create -> BuildPlayerGrid) before
+        // registerFn ever returns. BuildPlayerGrid's stack-registered
+        // check needs g_mpRemoteRegistered to already read true at that
+        // moment, on this very first registration - not just on some
+        // later unrelated rebuild - or it silently falls back to the
+        // clamped-Width standalone path. We're already committed to
+        // attempting registration by this point, so reset back to false
+        // below only if registerFn actually reports failure.
+        g_mpRemoteRegistered = true;
         if (registerFn(&abi)) {
-            g_mpRemoteRegistered = true;
             g_mpRemoteHostHwnd = hWnd;
             g_mpHostRegisterFn = registerFn;
             g_mpHostUnregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
@@ -7828,6 +7839,7 @@ void TryRegisterOrApplySettings(HWND hWnd) {
             Wh_Log(L"Registered with taskbar-widget-stack");
             return;
         }
+        g_mpRemoteRegistered = false;
         Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to "
                L"standalone");
     }
@@ -10672,9 +10684,19 @@ void Wh_ModSettingsChanged() {
                     if (!g_unloading) {
                         WidgetStackWidgetAbiV1 abi;
                         FillMPWidgetAbi(abi);
-                        if (g_mpHostRegisterFn(&abi)) {
-                            g_mpRemoteRegistered = true;
-                        } else {
+                        // Same reasoning as TryRegisterOrApplySettings:
+                        // g_mpHostRegisterFn calls this widget's own
+                        // Create()/BuildPlayerGrid synchronously before
+                        // returning, so g_mpRemoteRegistered must already
+                        // read true at that moment, not just after the
+                        // call returns - otherwise every settings-change
+                        // rebuild would re-trigger the stale-flag bug.
+                        // The earlier g_mpRemoteRegistered = false above
+                        // (from the unregister step) is stale by this
+                        // point; this is the value that matters.
+                        g_mpRemoteRegistered = true;
+                        if (!g_mpHostRegisterFn(&abi)) {
+                            g_mpRemoteRegistered = false;
                             ApplySettings();
                         }
                         g_needsUiUpdate = true;
