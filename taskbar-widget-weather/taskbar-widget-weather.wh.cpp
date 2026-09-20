@@ -1663,7 +1663,7 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         }
 
         Button wrapper;
-        wrapper.HorizontalAlignment(HorizontalAlignment::Left);
+        wrapper.HorizontalAlignment(HorizontalAlignment::Stretch);
         wrapper.Height(host->paneHeight);
         wrapper.Padding({0, 0, 0, 0});
         wrapper.BorderThickness({0, 0, 0, 0});
