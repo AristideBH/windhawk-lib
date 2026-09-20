@@ -2,7 +2,7 @@
 // @id              taskbar-widget-system-usage
 // @name            Taskbar System Usage
 // @description     CPU/RAM/GPU usage bars injected into the Windows 11 taskbar
-// @version         0.1.10
+// @version         0.1.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -921,12 +921,18 @@ Grid BuildTable() {
 // "sum of the two Auto columns, clamped to what the user configured" is
 // that source now instead of a hardcoded constant).
 //
+// Also returns the natural label+percent width it computed along the way
+// (0.0 if an exception was caught before it could be measured), so the
+// caller can use it when reporting a minimum width in registered mode -
+// see SystemUsage_Create, which adds room for the bar itself on top of
+// this since `natural` alone is just the two text columns.
+//
 // Must run after `table` is already attached to its real parent -
 // ActualWidth/ColumnDefinition.ActualWidth are stale (usually 0) until a
 // real layout pass has run against the actual visual tree, not a
 // detached element (same lesson as this repo's taskbar-widget-stack.wh.cpp
 // UpdateStackScreenRect, Incident 22 there).
-void FinalizeTableWidth(Grid& table) {
+double FinalizeTableWidth(Grid& table) {
     try {
         table.UpdateLayout();
         double labelWidth = table.ColumnDefinitions().GetAt(0).ActualWidth();
@@ -953,11 +959,13 @@ void FinalizeTableWidth(Grid& table) {
         }
         // Re-run so the bar's Star column picks up its real share before
         // anything reads ActualWidth() off `table` again (the registered
-        // path does, right after this call, to report a desired width
+        // path does, right after this call, to report a minimum width
         // back to the host).
         table.UpdateLayout();
+        return natural;
     } catch (...) {
     }
+    return 0.0;
 }
 
 void ApplyBar(RowRefs& refs, double percent) {
@@ -1177,7 +1185,6 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         Grid table = BuildTable();
         container.Child(table);
         parent.Children().Append(container);
-        FinalizeTableWidth(table);
 
         g_ui.hWnd = (HWND)host->taskbarHwnd;
         g_ui.remoteParentPanel = parent;
@@ -1196,8 +1203,14 @@ double __cdecl SystemUsage_Create(void* /*context*/,
         // it the label/percent text truncates. The bar's own Star
         // column fills whatever width the host later stretches
         // g_ui.remoteContainer to, via the ordinary Grid Star-sizing
-        // this file already uses everywhere else.
-        double desiredWidth = table.ActualWidth();
+        // this file already uses everywhere else. `natural` alone is
+        // just the label+percent columns though, so add room for the
+        // bar track itself - otherwise a system-usage-only stack would
+        // report an artificially narrow minimum with no space left for
+        // a legible bar.
+        constexpr double kBarTrackMinWidth = 32.0;  // enough for a legible bar even if this is the only enabled widget
+        double natural = FinalizeTableWidth(table);
+        double desiredWidth = natural + (g_settings.showBar ? kBarTrackMinWidth : 0.0);
         if (desiredWidth <= 0) {
             desiredWidth = g_settings.minWidth;
         }
