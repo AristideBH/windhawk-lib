@@ -2,7 +2,7 @@
 // @id              taskbar-widget-media-player
 // @name            Taskbar Widget Media Player
 // @description     Fork of Salyts' Taskbar Fluent Media Player, integrated with taskbar-widget-stack's cross-mod widget ABI - registers as a widget in that mod's stack if it's installed and enabled, falls back to this mod's own original standalone injection otherwise.
-// @version         0.1.3
+// @version         0.1.4
 // @author          AristideBH (fork), Salyts (original)
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -7666,7 +7666,7 @@ double __cdecl MediaPlayer_Create(void* /*context*/,
         }
 
         Border container;
-        container.HorizontalAlignment(HorizontalAlignment::Left);
+        container.HorizontalAlignment(HorizontalAlignment::Stretch);
         container.Height(host->paneHeight);
         container.Child(playerGrid);
         parent.Children().Append(container);
@@ -8581,11 +8581,19 @@ static Grid BuildPlayerGrid() {
                 wrapper.Transitions(transitions);
             }
         } catch (...) {}
-        if (hasTextOrButtons && g_settings.playerMinWidth > 0) {
-            wrapper.MinWidth((double)g_settings.playerMinWidth);
-        }
-        if (g_settings.playerMaxWidth > 0) {
-            wrapper.MaxWidth((double)g_settings.playerMaxWidth);
+        // playerMinWidth/playerMaxWidth only apply in standalone mode -
+        // once registered into taskbar-widget-stack, the stack's own
+        // layout.minWidth/layout.maxWidth own this decision instead
+        // (see docs/superpowers/specs/2026-09-20-stack-width-abi-design.md),
+        // and this wrapper's natural/unclamped size becomes the
+        // "minimum readable width" MediaPlayer_Create reports back.
+        if (!g_mpRemoteRegistered) {
+            if (hasTextOrButtons && g_settings.playerMinWidth > 0) {
+                wrapper.MinWidth((double)g_settings.playerMinWidth);
+            }
+            if (g_settings.playerMaxWidth > 0) {
+                wrapper.MaxWidth((double)g_settings.playerMaxWidth);
+            }
         }
 
         wrapper.Background(MakeBrush({0x00, 0, 0, 0}));
