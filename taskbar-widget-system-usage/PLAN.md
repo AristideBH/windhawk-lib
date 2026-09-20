@@ -550,9 +550,9 @@ re-triggered some other way - no automatic standalone fallback anymore.
 
 ## Incident 10: registered-mode width now comes from the stack's shared layout (2026-09-20)
 
-Registered-mode width now comes from `taskbar-widget-stack`'s shared
-`layout.minWidth`/`maxWidth` instead of this mod's own reported size -
-see
+**Fix**: registered-mode width now comes from `taskbar-widget-stack`'s
+shared `layout.minWidth`/`maxWidth` instead of this mod's own reported
+size - see
 [docs/superpowers/specs/2026-09-20-stack-width-abi-design.md](../docs/superpowers/specs/2026-09-20-stack-width-abi-design.md)
 and `taskbar-widget-stack/PLAN.md`'s own Incident 49 for the full
 design/root cause. In this file: `FinalizeTableWidth` now branches on
@@ -566,3 +566,9 @@ check, before returning), with a reset to `false` on failure, in both
 `TryRegisterOrInject` and `Wh_ModSettingsChanged` - previously the flag
 was set only after `registerFn()` returned, so it read `false` exactly
 when the new check needed it to be `true`.
+
+**Next retest**: see `taskbar-widget-stack/PLAN.md`'s Incident 49
+"Next retest" - specifically, dragging "Minimum stack width" in the
+stack's settings window and confirming this mod's own bar graphics
+visibly grow with it, not just empty space appearing beside a
+fixed-size bar.
