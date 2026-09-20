@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.8
+// @version         1.9
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2018,6 +2018,18 @@ void TryRegisterOrShowStandalone(HWND hWnd) {
         }
         WidgetStackWidgetAbiV1 abi;
         FillWeatherWidgetAbi(abi);
+        // Set true BEFORE calling registerFn, not after: registerFn
+        // (WidgetStack_RegisterWidget in the host) synchronously calls
+        // RebuildStackContents(), which calls this widget's own Create()
+        // before registerFn ever returns - so anything that reads
+        // g_weatherRemoteRegistered during that call would otherwise see
+        // a stale false. Nothing in this widget's own Create() path
+        // reads the flag today, but this mirrors the same fix applied to
+        // taskbar-widget-media-player.wh.cpp and
+        // taskbar-widget-system-usage.wh.cpp for consistency and to
+        // close out this bug class across the whole codebase. Reset back
+        // to false below on any failure branch.
+        g_weatherRemoteRegistered = true;
         if (registerFn(&abi)) {
             auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
                 hWnd, kUnregisterWidgetPropName);
@@ -2026,16 +2038,17 @@ void TryRegisterOrShowStandalone(HWND hWnd) {
                 // unregister later - treat this the same as a failed
                 // registration and fall through to standalone injection
                 // rather than leaving a dangling remote registration.
+                g_weatherRemoteRegistered = false;
                 Wh_Log(L"WidgetStack_RegisterWidget succeeded but "
                        L"unregister prop is missing, falling back to "
                        L"standalone");
             } else {
-                g_weatherRemoteRegistered = true;
                 g_weatherHostUnregisterFn = unregisterFn;
                 Wh_Log(L"Registered with taskbar-widget-stack");
                 return;
             }
         } else {
+            g_weatherRemoteRegistered = false;
             Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
         }
     }
