@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.3
+// @version         1.4
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -25,7 +25,7 @@ key required. See PLAN.md for the design.
 - LocationSettings:
   - mode: auto
     $name: Location mode
-    $description: "auto" uses Windows' own location service; "manual" uses the city/lat-lon below.
+    $description: "'auto' uses Windows' own location service; 'manual' uses the city/lat-lon below."
     $options:
     - auto: Automatic (Windows location)
     - manual: Manual
