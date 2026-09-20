@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.1
+// @version         1.2
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -503,8 +503,24 @@ bool FetchWeather(double lat, double lon, int days, WeatherState& out) {
         response.EnsureSuccessStatusCode();
         auto body = response.Content().ReadAsStringAsync().get();
         return ParseForecastResponse(body.c_str(), out);
+    } catch (const winrt::hresult_error& ex) {
+        // A bare `catch (...)` here used to swallow every detail,
+        // making a live-tested "exception during fetch, no data ever"
+        // report undiagnosable from the log alone - log the actual
+        // HRESULT/message plus the URL attempted (lat/lon at 0,0 is a
+        // strong signal location resolution silently failed upstream,
+        // not that the fetch itself is broken).
+        Wh_Log(L"FetchWeather: hresult_error 0x%08X: %s (lat=%.4f, lon=%.4f)",
+               (unsigned int)ex.code().value, ex.message().c_str(), lat, lon);
+        return false;
+    } catch (const std::exception& ex) {
+        wchar_t msgBuf[256];
+        MultiByteToWideChar(CP_UTF8, 0, ex.what(), -1, msgBuf, ARRAYSIZE(msgBuf));
+        Wh_Log(L"FetchWeather: std::exception: %s (lat=%.4f, lon=%.4f)", msgBuf,
+               lat, lon);
+        return false;
     } catch (...) {
-        Wh_Log(L"FetchWeather: exception during fetch");
+        Wh_Log(L"FetchWeather: unknown exception (lat=%.4f, lon=%.4f)", lat, lon);
         return false;
     }
 }
@@ -1378,11 +1394,27 @@ extern "C" void __cdecl WeatherWidget_Destroy(void* /*context*/) {
         } catch (...) {
         }
     }
-    if (g_weatherRootParent && g_weatherWrapper) {
-        uint32_t index;
-        if (g_weatherRootParent.Children().IndexOf(g_weatherWrapper, index)) {
-            g_weatherRootParent.Children().RemoveAt(index);
+    // Incident: an unguarded exception here (e.g. a WinRT marshaling
+    // hiccup during a rapid move/settings-change rebuild) used to
+    // propagate out of RemoteWidget::Destroy(), which the stack's own
+    // outer try/catch (taskbar-widget-stack.wh.cpp's RebuildStackContents
+    // destroy loop) silently swallows - leaving g_weatherWrapper still
+    // attached to the panel while the very next Create() call appends a
+    // second one, producing a visible duplicate with no trace in
+    // g_widgets (that side's dedup-by-context was never touched, since
+    // this was never a second registration - it was a failed
+    // de-registration). Matches media-player's MediaPlayer_Destroy,
+    // which wraps the equivalent removal in try/catch for the same
+    // reason.
+    try {
+        if (g_weatherRootParent && g_weatherWrapper) {
+            uint32_t index;
+            if (g_weatherRootParent.Children().IndexOf(g_weatherWrapper, index)) {
+                g_weatherRootParent.Children().RemoveAt(index);
+            }
         }
+    } catch (...) {
+        Wh_Log(L"WeatherWidget_Destroy: exception removing wrapper from parent");
     }
     g_weatherWrapper = nullptr;
     g_weatherBackground = nullptr;
@@ -1748,6 +1780,27 @@ static void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
     if (!hWnd) {
         return;
     }
+    // Unlike media-player's equivalent hook, which just nulls its
+    // bookkeeping on the assumption the old XamlRoot content (and
+    // anything injected into it) dies together with the old taskbar,
+    // this explicitly tears the previous instance down first -
+    // StartTaskbar doesn't always mean the whole tree was destroyed
+    // and recreated (a live-tested remnant: the old wrapper survived a
+    // StartTaskbar call with its parent Panel still alive, so nulling
+    // these pointers without detaching left it orphaned in a live tree
+    // while a second one got created right next to it). Both branches
+    // are try/catch-safe inside WeatherWidget_Destroy/the unregister
+    // call, so this is a harmless no-op on the genuinely-dead-tree case
+    // media-player optimizes for.
+    if (g_weatherRemoteRegistered && g_weatherHostUnregisterFn) {
+        try {
+            g_weatherHostUnregisterFn(kWeatherWidgetContext);
+        } catch (...) {
+            Wh_Log(L"TrayUI_StartTaskbar_Hook: exception unregistering from host");
+        }
+    } else {
+        WeatherWidget_Destroy(nullptr);
+    }
     g_weatherRoot = nullptr;
     g_weatherBackground = nullptr;
     g_weatherWrapper = nullptr;
@@ -1841,8 +1894,18 @@ void Wh_ModUninit() {
     }
     StopWeatherThread();
 
-    if (g_weatherTaskbarWnd) {
-        RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+    // Fall back to a fresh lookup rather than skipping teardown outright
+    // when g_weatherTaskbarWnd was never set - it's only assigned from
+    // Wh_ModAfterInit or TrayUI_StartTaskbar_Hook, so a mod disabled
+    // before either had run (or a FindWindowW that returned null at
+    // startup) used to leave the widget/registration completely torn
+    // down, with no unregister call and no visual removal at all.
+    HWND uninitTaskbarWnd = g_weatherTaskbarWnd;
+    if (!uninitTaskbarWnd) {
+        uninitTaskbarWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    }
+    if (uninitTaskbarWnd) {
+        RunFromWindowThread(uninitTaskbarWnd, [](void*) {
             if (g_weatherRemoteRegistered && g_weatherHostUnregisterFn) {
                 g_weatherHostUnregisterFn(kWeatherWidgetContext);
                 g_weatherRemoteRegistered = false;

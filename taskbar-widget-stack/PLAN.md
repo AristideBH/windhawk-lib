@@ -3045,3 +3045,28 @@ mods already implement (this file, system-usage, and now
 [docs/superpowers/plans/2026-09-18-taskbar-widget-weather.md](../docs/superpowers/plans/2026-09-18-taskbar-widget-weather.md)'s
 Task 12) - implementing #2 in particular means updating all three
 `WidgetStackWidgetAbiV1` copies in lockstep, not just this one.
+
+## Known follow-up: no shared min/max width negotiation in the ABI (not yet implemented)
+
+User-flagged (2026-09-20). Today, `contentWidth` in
+`RebuildStackContents` is just `max(every enabled widget's own
+`desiredWidth` from `Create()`)`, capped at `layout.maxWidth` - each
+widget mod picks its own desired width independently (media-player has
+its own `playerMinWidth`/`playerMaxWidth` settings, weather doesn't
+expose any width settings at all), and the user has to hand-tune each
+mod's width settings against the others to get a sane-looking stack
+instead of the stack itself owning that decision.
+
+Idea for a future ABI revision: add `minWidth`/`maxWidth` fields to
+`WidgetStackHostAbiV1` (the stack's own configured bounds, so a widget
+can size itself within them instead of guessing), and have widgets
+report a width *range* rather than a single fixed number from
+`Create()`/`OnSettingsChanged()` (e.g. change the return type's meaning
+from "my exact width" to "my minimum width," with the stack handling
+the actual stretch-to-fill via the existing
+`HorizontalAlignment::Stretch` default) - so the stack, not each widget
+author, is the single place that reconciles competing width
+preferences. Ties into the same "hand-synced struct across three
+files" caution as the follow-ups above - any shape change here needs
+all three `WidgetStackWidgetAbiV1`/`WidgetStackHostAbiV1` copies (and
+possibly a version bump per follow-up #2 above) updated together.

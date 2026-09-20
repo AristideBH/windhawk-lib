@@ -9,9 +9,81 @@ and the implementation plan that built this file in
 Live-test findings from here on are logged below as dated Incidents,
 same convention as `taskbar-widget-media-player`/`taskbar-widget-system-usage`/`taskbar-widget-stack`.
 
-**Never compiled or tested at all yet** - everything below is reasoned
-through by inspection of the sibling mods' equivalent code, exactly
-like those mods' own PLAN.md files describe for their first pass.
+## Incident 1: first live compile - duplicate widget, taskbar remnants, fetch exception (2026-09-20)
+
+**Symptom** (user report, live test on real Explorer): (1) the weather
+widget duplicates in the stack when moving/activating itself or
+another widget, or when changing a stack setting - a recurrence of
+`taskbar-widget-stack`'s own Incident 46, despite that mod's
+dedup-by-context fix. (2) On Explorer restart, or when this mod is
+disabled, a remnant of the weather widget stays visible in the
+taskbar. (3) The details panel opens away from the widget rather than
+anchored near it, unlike media-player's mini-player flyout (which has
+placement settings). (4) `FetchWeather` throws on every manual
+refresh - no weather data ever loads, and the compact widget stays at
+its narrow loading-placeholder width as a direct consequence.
+
+**Root cause (1, duplicate widget)**: `WeatherWidget_Destroy` removed
+`g_weatherWrapper` from `g_weatherRootParent.Children()` with no
+try/catch around the `IndexOf`/`RemoveAt` calls. `RebuildStackContents`
+(the host's own destroy-then-create cycle, triggered by exactly the
+actions in the symptom) wraps every widget's `Destroy()` in its own
+`try/catch(...)`, which silently swallows any exception from ours -
+leaving `g_weatherWrapper` still attached to the panel while the very
+next `Create()` call appends a fresh one. `g_widgets` (the host's own
+list) never grows past one entry, so Incident 46's dedup - which only
+guards against a second *registration* - never sees anything wrong;
+this was a failed *de*-registration, a different bug wearing the same
+symptom.
+
+**Root cause (2, remnants)**: two separate gaps, not one. (a)
+`TrayUI_StartTaskbar_Hook` nulled `g_weatherWrapper`/`g_weatherRootParent`
+without ever detaching the old wrapper or unregistering from the host
+first - safe only if the entire old XAML tree always dies with the
+`StartTaskbar` call, which isn't guaranteed (media-player's equivalent
+hook makes the same assumption; this mod hit the case where it doesn't
+hold). (b) `Wh_ModUninit`'s teardown was gated on `g_weatherTaskbarWnd`
+being non-null, which is only set from `Wh_ModAfterInit` or the
+`StartTaskbar` hook - disabling the mod before either had run skipped
+teardown entirely.
+
+**Fix (1 and 2)**: wrapped `WeatherWidget_Destroy`'s removal in
+try/catch (matching media-player's `MediaPlayer_Destroy` pattern).
+`TrayUI_StartTaskbar_Hook` now unregisters from the host (if
+registered) or calls `WeatherWidget_Destroy` (if standalone) before
+resetting its bookkeeping, rather than only resetting it - both paths
+are try/catch-safe, so this is a no-op on the case where the old tree
+genuinely already died. `Wh_ModUninit` now falls back to a fresh
+`FindWindowW(L"Shell_TrayWnd", ...)` lookup when `g_weatherTaskbarWnd`
+was never set, instead of skipping teardown outright.
+
+**Fix (4, partial - evidence gathering)**: `FetchWeather`'s
+`catch (...)` gave no diagnostic detail at all. Split into
+`winrt::hresult_error` (logs the HRESULT + message), `std::exception`,
+and a final `catch (...)` fallback - all three now log `lat`/`lon` too,
+since 0.0/0.0 in the log would point at a silent location-resolution
+failure upstream rather than the fetch itself. **Root cause of the
+exception itself is still open** - needs the actual logged HRESULT
+from the next test run to diagnose further (network/firewall,
+malformed request, or something else); do not guess further without
+that log line.
+
+**Not yet fixed**: (3) panel placement - scoping this against
+media-player's `miniPlayerPlacementMode`/near-vs-screen settings before
+implementing, since it's a real settings-surface addition, not a small
+bug fix.
+
+**Next retest**: confirm no duplicate appears after several
+move/enable/disable/settings-change cycles with the stack active;
+confirm no remnant survives an Explorer restart or a mod
+disable/re-enable cycle (test both while stack-registered and
+standalone); trigger a manual refresh and paste back the new
+`FetchWeather` log line so the exception's real cause can be diagnosed.
+
+**Never compiled or tested by this repo's own automation** -
+everything above the first real live test was reasoned through by
+inspection of the sibling mods' equivalent code, exactly like those
+mods' own PLAN.md files describe for their first pass.
 
 ## Live-test checklist
 
