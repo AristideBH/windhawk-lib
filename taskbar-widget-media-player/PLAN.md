@@ -226,6 +226,20 @@ disable/re-enable cycles) without touching any other setting, and
 confirm it lands registered into the stack every time within a few
 seconds, with no manual nudging needed.
 
+## Incident 4: registered-mode width now comes from the stack's shared layout (2026-09-20)
+
+Registered-mode width now comes from `taskbar-widget-stack`'s shared
+`layout.minWidth`/`maxWidth` instead of this mod's own reported size -
+see
+[docs/superpowers/specs/2026-09-20-stack-width-abi-design.md](../docs/superpowers/specs/2026-09-20-stack-width-abi-design.md)
+and `taskbar-widget-stack/PLAN.md`'s own Incident 49 for the full
+design/root cause. In this file: `BuildPlayerGrid()`'s
+`playerMinWidth`/`playerMaxWidth` clamp is now gated to
+standalone-only (`if (!g_mpRemoteRegistered)`), and
+`MediaPlayer_Create`'s `container.HorizontalAlignment` changed from
+`Left` to `Stretch` so registered content actually fills the host's
+negotiated width instead of clamping to its own settings.
+
 ## Next retest
 
 Install and enable this mod alongside `taskbar-widget-stack` (with the

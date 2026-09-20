@@ -3046,27 +3046,79 @@ mods already implement (this file, system-usage, and now
 Task 12) - implementing #2 in particular means updating all three
 `WidgetStackWidgetAbiV1` copies in lockstep, not just this one.
 
-## Known follow-up: no shared min/max width negotiation in the ABI (not yet implemented)
+## Incident 49: shared min/max width negotiation implemented (2026-09-20)
 
-User-flagged (2026-09-20). Today, `contentWidth` in
-`RebuildStackContents` is just `max(every enabled widget's own
-`desiredWidth` from `Create()`)`, capped at `layout.maxWidth` - each
-widget mod picks its own desired width independently (media-player has
-its own `playerMinWidth`/`playerMaxWidth` settings, weather doesn't
-expose any width settings at all), and the user has to hand-tune each
-mod's width settings against the others to get a sane-looking stack
-instead of the stack itself owning that decision.
+**Symptom** (the width-juggling problem as originally reported,
+2026-09-20): `contentWidth` in `RebuildStackContents` was just
+`max(every enabled widget's own `desiredWidth` from `Create()`)`,
+capped at `layout.maxWidth` - each widget mod picked its own desired
+width independently (media-player has its own
+`playerMinWidth`/`playerMaxWidth` settings, weather exposed no width
+settings at all), and the user had to hand-tune each mod's width
+settings against the others to get a sane-looking shared stack instead
+of the stack itself owning that decision.
 
-Idea for a future ABI revision: add `minWidth`/`maxWidth` fields to
-`WidgetStackHostAbiV1` (the stack's own configured bounds, so a widget
-can size itself within them instead of guessing), and have widgets
-report a width *range* rather than a single fixed number from
-`Create()`/`OnSettingsChanged()` (e.g. change the return type's meaning
-from "my exact width" to "my minimum width," with the stack handling
-the actual stretch-to-fill via the existing
-`HorizontalAlignment::Stretch` default) - so the stack, not each widget
-author, is the single place that reconciles competing width
-preferences. Ties into the same "hand-synced struct across three
-files" caution as the follow-ups above - any shape change here needs
-all three `WidgetStackWidgetAbiV1`/`WidgetStackHostAbiV1` copies (and
-possibly a version bump per follow-up #2 above) updated together.
+**Root cause**: two compounding gaps, not one - fixing only one of
+them would not have been enough:
+1. The host had no floor to clamp against (`layout.minWidth` didn't
+   exist) and no shared-range contract - each widget reported a single
+   "this is the width I want" number rather than a minimum the host
+   could reconcile within a negotiated range, so there was no single
+   place that owned "how wide should the shared pane actually be."
+2. Independently of (1), all three widget mods (media-player,
+   system-usage, weather) explicitly set their own root/wrapper/table
+   element's `HorizontalAlignment` to `Left` instead of `Stretch` - so
+   even once the stack settled on a shared content width, each
+   widget's own visible content stayed clamped to its own self-reported
+   size and never actually filled the pane (system-usage's bars in
+   particular left empty space beside them rather than visually
+   growing).
+
+**Fix**: implemented across Tasks 1-4 of
+[docs/superpowers/specs/2026-09-20-stack-width-abi-design.md](../docs/superpowers/specs/2026-09-20-stack-width-abi-design.md):
+- Task 1 (this mod): added `layout.minWidth` setting;
+  `RebuildStackContents` now clamps the widest reported width between
+  `layout.minWidth`/`layout.maxWidth` instead of only capping a max;
+  `WidgetEntry::desiredWidth` renamed to `minWidth` to make the "report
+  your minimum, not your desired width" contract explicit in the field
+  name itself, and `IWidget::Create()`'s doc comment now states that
+  contract in words too.
+- Task 2 (`taskbar-widget-media-player`): `BuildPlayerGrid()`'s own
+  `playerMinWidth`/`playerMaxWidth` clamp is now gated to
+  standalone-only (`if (!g_mpRemoteRegistered)`) - registered mode
+  defers to the host's shared width instead of clamping to its own
+  settings; `MediaPlayer_Create`'s `container.HorizontalAlignment`
+  changed from `Left` to `Stretch`.
+- Task 3 (`taskbar-widget-system-usage`): `FinalizeTableWidth` now
+  branches on `g_remoteRegistered` - registered mode lets `table`
+  stretch (no explicit `Width`, `HorizontalAlignment::Stretch`) instead
+  of always clamping to its own `minWidth`/`maxWidth` settings and
+  staying `Left`-aligned; standalone mode unchanged. Also fixed a real
+  ordering bug found along the way: `g_remoteRegistered` used to be set
+  `true` only *after* the host's synchronous `registerFn()` call
+  returned, but that call itself synchronously triggers `Create()`
+  (and so this new check) before returning - so the flag read `false`
+  exactly when it mattered, on first registration and on every
+  settings-change re-registration. Fixed by setting the flag `true`
+  before calling `registerFn`, with a reset to `false` on failure, in
+  both `TryRegisterOrInject` and `Wh_ModSettingsChanged`.
+- Task 4 (`taskbar-widget-weather`): `WeatherWidget_Create`'s wrapper
+  `HorizontalAlignment` changed from `Left` to `Stretch`.
+
+**Next retest**: With `taskbar-widget-stack`,
+`taskbar-widget-media-player`, `taskbar-widget-system-usage`, and
+`taskbar-widget-weather` all installed and enabled together: confirm
+the shared pane width lands at a sane value with no per-mod width
+tuning needed. Open the stack's settings window and drag "Minimum
+stack width" - confirm every registered widget's pane visibly widens
+together, including system-usage's bar graphics actually growing (not
+just empty space appearing next to a fixed-size bar). Drag "Maximum
+stack width" down below the current natural content width of the
+widest widget - confirm that widget's content clips/truncates
+gracefully rather than overflowing. Disable all but one widget -
+confirm the shared width shrinks to roughly that one widget's own
+minimum (clamped to `layout.minWidth`), not stuck at some stale
+multi-widget-derived value. Re-enable `taskbar-widget-media-player`
+alone in standalone mode (stack disabled) and confirm its own
+`playerMinWidth`/`playerMaxWidth` settings still work exactly as
+before this change.

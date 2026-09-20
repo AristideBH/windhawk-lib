@@ -85,6 +85,18 @@ everything above the first real live test was reasoned through by
 inspection of the sibling mods' equivalent code, exactly like those
 mods' own PLAN.md files describe for their first pass.
 
+## Incident 2: registered-mode width now comes from the stack's shared layout (2026-09-20)
+
+Registered-mode width now comes from `taskbar-widget-stack`'s shared
+`layout.minWidth`/`maxWidth` instead of this mod's own reported size -
+see
+[docs/superpowers/specs/2026-09-20-stack-width-abi-design.md](../docs/superpowers/specs/2026-09-20-stack-width-abi-design.md)
+and `taskbar-widget-stack/PLAN.md`'s own Incident 49 for the full
+design/root cause. In this file: `WeatherWidget_Create`'s wrapper
+`HorizontalAlignment` changed from `Left` to `Stretch`, so this mod's
+content actually fills the host's negotiated width instead of staying
+clamped to its own self-reported size.
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
