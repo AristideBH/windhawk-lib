@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.6
+// @version         1.7
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -178,6 +178,7 @@ key required. See PLAN.md for the design.
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.Devices.Geolocation.h>
 #include <winrt/Windows.Web.Http.h>
+#include <winrt/Windows.Web.Http.Filters.h>
 #include <winrt/Windows.Data.Json.h>
 
 #include <algorithm>
@@ -436,6 +437,23 @@ struct ResolvedLocation {
 ResolvedLocation g_location;
 std::mutex g_locationMutex;
 
+// Both Open-Meteo endpoints sit behind Cloudflare, which by default
+// compresses responses (commonly Brotli). WinRT HttpClient's automatic
+// decompression doesn't reliably handle every encoding a CDN might
+// pick, and a decode failure there surfaces as a bare
+// winrt::hresult_error 0x80072F8F (WinINet's
+// ERROR_INTERNET_DECODING_FAILED) with no indication it's a
+// compression problem rather than a real network failure - live-tested
+// on a real fetch (lat=48.8626, lon=2.4814) before this fix. These
+// responses are small JSON anyway, so there's no real cost to just
+// disabling automatic decompression and letting the server send plain
+// text instead of debugging which encoding the decoder doesn't like.
+winrt::Windows::Web::Http::HttpClient CreateNoCompressionHttpClient() {
+    winrt::Windows::Web::Http::Filters::HttpBaseProtocolFilter filter;
+    filter.AutomaticDecompression(false);
+    return winrt::Windows::Web::Http::HttpClient(filter);
+}
+
 // Blocking - call only from a background thread. Returns false without
 // touching `out` if the city can't be resolved (network error, no
 // match) so callers can keep the previous known-good location instead
@@ -445,7 +463,7 @@ bool GeocodeCity(const std::wstring& city, ResolvedLocation& out) {
         return false;
     }
     try {
-        winrt::Windows::Web::Http::HttpClient client;
+        auto client = CreateNoCompressionHttpClient();
         std::wstring url =
             L"https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" +
             city;
@@ -574,7 +592,7 @@ bool ParseForecastResponse(const std::wstring& body, WeatherState& out) {
 // Blocking - call only from a background thread.
 bool FetchWeather(double lat, double lon, int days, WeatherState& out) {
     try {
-        winrt::Windows::Web::Http::HttpClient client;
+        auto client = CreateNoCompressionHttpClient();
         wchar_t urlBuf[512];
         swprintf_s(urlBuf,
             L"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
