@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.0
+// @version         1.1
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -109,19 +109,26 @@ key required. See PLAN.md for the design.
 #include <windhawk_utils.h>
 
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Animation.h>
-#include <winrt/Windows.UI.Xaml.Shapes.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Windows.UI.Text.h>
+#include <winrt/Windows.UI.h>
 #include <winrt/Windows.Devices.Geolocation.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Data.Json.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cwchar>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -131,7 +138,6 @@ using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Media;
 using namespace winrt::Windows::UI::Xaml::Media::Animation;
-namespace wuxs = winrt::Windows::UI::Xaml::Shapes;
 
 enum class ClickAction { None, OpenPanel, Refresh, ToggleMode };
 
@@ -165,6 +171,7 @@ struct WeatherSettings {
 };
 
 WeatherSettings g_settings;
+std::mutex g_settingsMutex;
 
 std::wstring GetStringSetting(PCWSTR name, PCWSTR fallback) {
     auto* value = Wh_GetStringSetting(name);
@@ -176,41 +183,64 @@ std::wstring GetStringSetting(PCWSTR name, PCWSTR fallback) {
 }
 
 void LoadSettings() {
-    g_settings.locationAuto =
+    // Built up locally (no synchronization needed - it's not shared yet)
+    // and then swapped into g_settings under g_settingsMutex in a single
+    // assignment, so background-thread/UI-render readers of g_settings
+    // never observe a partially-updated struct and never wait on this
+    // function's Wh_Get*Setting calls.
+    WeatherSettings newSettings;
+    newSettings.locationAuto =
         GetStringSetting(L"LocationSettings.mode", L"auto") == L"auto";
-    g_settings.manualCity = GetStringSetting(L"LocationSettings.manualCity", L"");
+    newSettings.manualCity = GetStringSetting(L"LocationSettings.manualCity", L"");
     {
         auto* latStr = Wh_GetStringSetting(L"LocationSettings.manualLat");
-        g_settings.manualLat = latStr ? wcstod(latStr, nullptr) : 0.0;
+        newSettings.manualLat = latStr ? wcstod(latStr, nullptr) : 0.0;
         if (latStr) {
             Wh_FreeStringSetting(latStr);
         }
         auto* lonStr = Wh_GetStringSetting(L"LocationSettings.manualLon");
-        g_settings.manualLon = lonStr ? wcstod(lonStr, nullptr) : 0.0;
+        newSettings.manualLon = lonStr ? wcstod(lonStr, nullptr) : 0.0;
         if (lonStr) {
             Wh_FreeStringSetting(lonStr);
         }
     }
-    g_settings.useFahrenheit =
+    newSettings.useFahrenheit =
         GetStringSetting(L"UnitSettings.temperature", L"celsius") == L"fahrenheit";
-    g_settings.windSpeedUnit = GetStringSetting(L"UnitSettings.windSpeed", L"kmh");
-    g_settings.displayMode =
-        GetStringSetting(L"DisplaySettings.displayMode", L"now");
-    g_settings.iconStyle = GetStringSetting(L"DisplaySettings.iconStyle", L"colored");
-    g_settings.forecastDaysInline =
+    newSettings.windSpeedUnit = GetStringSetting(L"UnitSettings.windSpeed", L"kmh");
+    {
+        // displayMode can be toggled at runtime (ToggleDisplayMode), which
+        // persists via a separate value key (`displayModeRuntime`, not the
+        // settings.yaml key) so a settings change doesn't blow away a
+        // runtime toggle. Prefer that runtime value when present.
+        auto* runtimeValue = Wh_GetStringValue(L"displayModeRuntime");
+        if (runtimeValue && *runtimeValue) {
+            newSettings.displayMode = runtimeValue;
+        } else {
+            newSettings.displayMode =
+                GetStringSetting(L"DisplaySettings.displayMode", L"now");
+        }
+        if (runtimeValue) {
+            Wh_FreeStringValue(runtimeValue);
+        }
+    }
+    newSettings.iconStyle = GetStringSetting(L"DisplaySettings.iconStyle", L"colored");
+    newSettings.forecastDaysInline =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysInline"), 2, 7);
-    g_settings.forecastDaysPanel =
+    newSettings.forecastDaysPanel =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysPanel"), 3, 7);
-    g_settings.refreshIntervalMinutes =
+    newSettings.refreshIntervalMinutes =
         std::max(1, (int)Wh_GetIntSetting(L"DisplaySettings.refreshIntervalMinutes"));
-    g_settings.leftClick =
+    newSettings.leftClick =
         ParseClickAction(GetStringSetting(L"ClickActionSettings.left", L"open_panel"));
-    g_settings.rightClick =
+    newSettings.rightClick =
         ParseClickAction(GetStringSetting(L"ClickActionSettings.right", L"none"));
-    g_settings.doubleClick = ParseClickAction(
+    newSettings.doubleClick = ParseClickAction(
         GetStringSetting(L"ClickActionSettings.doubleClick", L"toggle_mode"));
-    g_settings.wheelClick =
+    newSettings.wheelClick =
         ParseClickAction(GetStringSetting(L"ClickActionSettings.wheel", L"refresh"));
+
+    std::lock_guard<std::mutex> lock(g_settingsMutex);
+    g_settings = newSettings;
 }
 
 struct WeatherIconInfo {
@@ -373,24 +403,38 @@ bool GeolocateAuto(ResolvedLocation& out) {
     }
 }
 
-// Resolves g_location once, per the design doc's "resolve once at
-// startup / mode switch / explicit relocate, never on every weather
-// fetch" rule. Returns true if g_location now holds a valid position
-// (either freshly resolved, or already valid from a previous call).
+// Called once per WeatherThreadProc loop iteration (i.e. roughly once per
+// refresh cycle, not on every render), so location mode/city/lat/lon
+// changes made via Wh_ModSettingsChanged take effect on the next wake
+// instead of requiring an Explorer restart. Returns true if g_location
+// now holds a valid position (either freshly resolved, or already valid
+// from a previous call).
 bool ResolveLocation() {
+    bool locationAuto;
+    double manualLat;
+    double manualLon;
+    std::wstring manualCity;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        locationAuto = g_settings.locationAuto;
+        manualLat = g_settings.manualLat;
+        manualLon = g_settings.manualLon;
+        manualCity = g_settings.manualCity;
+    }
+
     ResolvedLocation resolved;
     bool ok = false;
-    if (g_settings.locationAuto) {
+    if (locationAuto) {
         ok = GeolocateAuto(resolved);
     }
-    if (!ok && g_settings.manualLat != 0.0 && g_settings.manualLon != 0.0) {
-        resolved.lat = g_settings.manualLat;
-        resolved.lon = g_settings.manualLon;
+    if (!ok && manualLat != 0.0 && manualLon != 0.0) {
+        resolved.lat = manualLat;
+        resolved.lon = manualLon;
         resolved.valid = true;
         ok = true;
     }
-    if (!ok && !g_settings.manualCity.empty()) {
-        ok = GeocodeCity(g_settings.manualCity, resolved);
+    if (!ok && !manualCity.empty()) {
+        ok = GeocodeCity(manualCity, resolved);
     }
     if (ok) {
         std::lock_guard<std::mutex> lock(g_locationMutex);
@@ -490,10 +534,12 @@ bool LoadWeatherCache(WeatherState& out) {
     }
     std::wstring cached = raw;
     Wh_FreeStringValue(raw);
+    int dayFlag = 0;
     swscanf_s(cached.c_str(), L"%lf|%lf|%d|%d|%lf|%lf|%lf|%lf", &out.currentTemp,
-              &out.feelsLike, &out.wmoCode, (int*)&out.isDay,
+              &out.feelsLike, &out.wmoCode, &dayFlag,
               &out.humidityPercent, &out.windSpeed, &out.windDirectionDeg,
               &out.pressureHpa);
+    out.isDay = (dayFlag != 0);
     out.hasData = true;
     out.daily.clear();  // forecast list re-populates on the first real fetch
     return true;
@@ -503,7 +549,7 @@ HANDLE g_weatherStopEvent = nullptr;
 HANDLE g_weatherRefreshEvent = nullptr;
 HANDLE g_weatherThread = nullptr;
 
-void OnWeatherStateUpdated();  // implemented in Task 6
+void OnWeatherStateUpdated();
 
 DWORD WINAPI WeatherThreadProc(LPVOID) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -516,23 +562,30 @@ DWORD WINAPI WeatherThreadProc(LPVOID) {
         }
     }
 
-    bool locationEverResolved = false;
     HANDLE waitHandles[2] = {g_weatherStopEvent, g_weatherRefreshEvent};
 
     while (true) {
-        if (!locationEverResolved) {
-            locationEverResolved = ResolveLocation();
-        }
+        // Re-checked every iteration (not latched) so a location-mode
+        // switch or a manual city/lat/lon edit surfaces on the next wake
+        // instead of requiring an Explorer restart - see ResolveLocation's
+        // own comment.
+        bool locationResolved = ResolveLocation();
 
-        if (locationEverResolved) {
+        if (locationResolved) {
             ResolvedLocation loc;
             {
                 std::lock_guard<std::mutex> lock(g_locationMutex);
                 loc = g_location;
             }
             if (loc.valid) {
-                int days = std::max(g_settings.forecastDaysInline,
-                                     g_settings.forecastDaysPanel);
+                int forecastDaysInline;
+                int forecastDaysPanel;
+                {
+                    std::lock_guard<std::mutex> lock(g_settingsMutex);
+                    forecastDaysInline = g_settings.forecastDaysInline;
+                    forecastDaysPanel = g_settings.forecastDaysPanel;
+                }
+                int days = std::max(forecastDaysInline, forecastDaysPanel);
                 WeatherState fetched;
                 if (FetchWeather(loc.lat, loc.lon, days, fetched)) {
                     {
@@ -547,7 +600,12 @@ DWORD WINAPI WeatherThreadProc(LPVOID) {
             }
         }
 
-        DWORD waitMs = (DWORD)g_settings.refreshIntervalMinutes * 60 * 1000;
+        int refreshIntervalMinutes;
+        {
+            std::lock_guard<std::mutex> lock(g_settingsMutex);
+            refreshIntervalMinutes = g_settings.refreshIntervalMinutes;
+        }
+        DWORD waitMs = (DWORD)refreshIntervalMinutes * 60 * 1000;
         DWORD result = WaitForMultipleObjects(2, waitHandles, FALSE, waitMs);
         if (result == WAIT_OBJECT_0) {
             break;  // stop event
@@ -609,7 +667,7 @@ void RequestWeatherRefresh() {
     }
 }
 
-// Step 1: ConditionName - human-readable label for WMO code
+// ConditionName - human-readable label for WMO code
 std::wstring ConditionName(int wmoCode) {
     if (wmoCode == 0) return L"Clear";
     if (wmoCode == 1) return L"Mainly clear";
@@ -625,7 +683,7 @@ std::wstring ConditionName(int wmoCode) {
     return L"Unknown";
 }
 
-// Step 2: BuildNowView - compact view showing icon + temperature + condition
+// BuildNowView - compact view showing icon + temperature + condition
 constexpr double kIconFontSize = 20;
 constexpr double kTempFontSize = 12;    // matches media-player's title font size
 constexpr double kConditionFontSize = 11;  // matches media-player's artist font size
@@ -635,6 +693,11 @@ Grid BuildNowView() {
     {
         std::lock_guard<std::mutex> lock(g_weatherMutex);
         snapshot = g_weather;
+    }
+    bool useFahrenheit;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        useFahrenheit = g_settings.useFahrenheit;
     }
 
     Grid root;
@@ -663,7 +726,7 @@ Grid BuildNowView() {
     tempText.FontSize(kTempFontSize);
     tempText.Text(winrt::hstring(
         snapshot.hasData
-            ? FormatTemperature(snapshot.currentTemp, g_settings.useFahrenheit)
+            ? FormatTemperature(snapshot.currentTemp, useFahrenheit)
             : L"…"));
     textStack.Children().Append(tempText);
 
@@ -678,30 +741,42 @@ Grid BuildNowView() {
     return root;
 }
 
-// Step 3: Global state and view builders for in-place UI updates
+// Global state and view builders for in-place UI updates
 FrameworkElement g_weatherRoot{nullptr};
+Border g_weatherBackground{nullptr};
+Button g_weatherWrapper{nullptr};
 Panel g_weatherRootParent{nullptr};
 HWND g_weatherTaskbarWnd = nullptr;
 
-Grid BuildForecastView();  // Task 7
+// Forward declaration of RunFromWindowThread (defined further below, near
+// the standalone-injection code that owns the window-thread marshaling).
+using WindowThreadProc = void(*)(void*);
+static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param);
+
+Grid BuildForecastView();
 
 FrameworkElement BuildCompactView() {
-    return g_settings.displayMode == L"forecast" ? (FrameworkElement)BuildForecastView()
-                                                   : (FrameworkElement)BuildNowView();
+    std::wstring displayMode;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        displayMode = g_settings.displayMode;
+    }
+    return displayMode == L"forecast" ? (FrameworkElement)BuildForecastView()
+                                       : (FrameworkElement)BuildNowView();
 }
 
+// Replaces the compact view's content in place. `g_weatherBackground` is
+// the Border that hosts the compact view as its single Child (set up at
+// both widget-construction sites); swapping the Child directly avoids
+// ever needing to locate the compact view inside the host panel's
+// Children collection, which it is never a direct member of (only the
+// outer wrapper Button is).
 void RebuildCompactViewInPlace() {
-    if (!g_weatherRootParent) {
+    if (!g_weatherBackground) {
         return;
     }
     auto newView = BuildCompactView();
-    uint32_t index;
-    if (g_weatherRoot && g_weatherRootParent.Children().IndexOf(g_weatherRoot, index)) {
-        g_weatherRootParent.Children().RemoveAt(index);
-        g_weatherRootParent.Children().InsertAt(index, newView);
-    } else {
-        g_weatherRootParent.Children().Append(newView);
-    }
+    g_weatherBackground.Child(newView);
     g_weatherRoot = newView;
 }
 
@@ -714,23 +789,26 @@ void OnWeatherStateUpdated() {
     }, nullptr);
 }
 
-// Forward declaration of RunFromWindowThread (defined in Task 14)
-using WindowThreadProc = void(*)(void*);
-static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param);
-
-// Step 4: BuildForecastView - compact strip showing 3-7 days forecast
+// BuildForecastView - compact strip showing 3-7 days forecast
 Grid BuildForecastView() {
     WeatherState snapshot;
     {
         std::lock_guard<std::mutex> lock(g_weatherMutex);
         snapshot = g_weather;
     }
+    int forecastDaysInline;
+    bool useFahrenheit;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        forecastDaysInline = g_settings.forecastDaysInline;
+        useFahrenheit = g_settings.useFahrenheit;
+    }
 
     Grid root;
     root.VerticalAlignment(VerticalAlignment::Center);
     root.ColumnSpacing(8);
 
-    int days = std::min((int)snapshot.daily.size(), g_settings.forecastDaysInline);
+    int days = std::min((int)snapshot.daily.size(), forecastDaysInline);
     if (days == 0) {
         TextBlock placeholder;
         placeholder.FontSize(kTempFontSize);
@@ -757,7 +835,7 @@ Grid BuildForecastView() {
         TextBlock temp;
         temp.FontSize(kConditionFontSize);
         temp.HorizontalAlignment(HorizontalAlignment::Center);
-        temp.Text(winrt::hstring(FormatTemperature(day.tempMax, g_settings.useFahrenheit)));
+        temp.Text(winrt::hstring(FormatTemperature(day.tempMax, useFahrenheit)));
         cell.Children().Append(temp);
 
         root.Children().Append(cell);
@@ -765,11 +843,19 @@ Grid BuildForecastView() {
     return root;
 }
 
-// Step 5: ToggleDisplayMode - switch between now and forecast views
+// ToggleDisplayMode - switch between now and forecast views
 void ToggleDisplayMode() {
-    g_settings.displayMode =
-        g_settings.displayMode == L"now" ? L"forecast" : L"now";
-    Wh_SetStringValue(L"DisplaySettings.displayMode", g_settings.displayMode.c_str());
+    std::wstring newMode;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        g_settings.displayMode =
+            g_settings.displayMode == L"now" ? L"forecast" : L"now";
+        newMode = g_settings.displayMode;
+    }
+    // Persisted to a runtime-value key (not the settings.yaml key) so
+    // LoadSettings can prefer it over the configured default without a
+    // settings change stomping the toggle - see LoadSettings.
+    Wh_SetStringValue(L"displayModeRuntime", newMode.c_str());
     if (g_weatherTaskbarWnd) {
         RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
             RebuildCompactViewInPlace();
@@ -777,7 +863,7 @@ void ToggleDisplayMode() {
     }
 }
 
-// Task 8: Hover/pressed visual state helpers
+// Hover/pressed visual state helpers
 SolidColorBrush g_weatherHoverBrush{nullptr};
 SolidColorBrush g_weatherPressedBrush{nullptr};
 
@@ -814,7 +900,7 @@ void ApplyWeatherHoverState(Border background, bool hovered, bool pressed) {
 }
 
 // `background` is a full-bounds Border sitting behind the compact
-// view's content (built by the caller - Task 12/14 - specifically so
+// view's content (built by the caller - specifically so
 // this function never needs to know whether it's wiring a stack-hosted
 // or standalone wrapper). `wrapper` is the outer interactive element
 // pointer events are attached to.
@@ -854,7 +940,7 @@ void WireUpHover(FrameworkElement wrapper, Border background) {
     ApplyWeatherHoverState(background, false, false);
 }
 
-void ShowWeatherPanel(FrameworkElement anchor);  // Task 10
+void ShowWeatherPanel(FrameworkElement anchor);
 
 void ExecuteClickAction(ClickAction action, FrameworkElement anchor) {
     switch (action) {
@@ -887,34 +973,50 @@ void WireUpClickActions(FrameworkElement wrapper) {
     wrapper.Tapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
-            ExecuteClickAction(g_settings.leftClick,
-                                sender.try_as<FrameworkElement>());
+            ClickAction leftClick;
+            {
+                std::lock_guard<std::mutex> lock(g_settingsMutex);
+                leftClick = g_settings.leftClick;
+            }
+            ExecuteClickAction(leftClick, sender.try_as<FrameworkElement>());
         });
     wrapper.DoubleTapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            winrt::Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs const&) {
-            ExecuteClickAction(g_settings.doubleClick,
-                                sender.try_as<FrameworkElement>());
+            ClickAction doubleClick;
+            {
+                std::lock_guard<std::mutex> lock(g_settingsMutex);
+                doubleClick = g_settings.doubleClick;
+            }
+            ExecuteClickAction(doubleClick, sender.try_as<FrameworkElement>());
         });
     wrapper.RightTapped(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            winrt::Windows::UI::Xaml::Input::RightTappedRoutedEventArgs const& args) {
-            if (g_settings.rightClick == ClickAction::None) {
+            ClickAction rightClick;
+            {
+                std::lock_guard<std::mutex> lock(g_settingsMutex);
+                rightClick = g_settings.rightClick;
+            }
+            if (rightClick == ClickAction::None) {
                 return;  // let it bubble to the stack's own menu
             }
             args.Handled(true);
-            ExecuteClickAction(g_settings.rightClick,
-                                sender.try_as<FrameworkElement>());
+            ExecuteClickAction(rightClick, sender.try_as<FrameworkElement>());
         });
     wrapper.PointerWheelChanged(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const& args) {
-            if (g_settings.wheelClick == ClickAction::None) {
+            ClickAction wheelClick;
+            {
+                std::lock_guard<std::mutex> lock(g_settingsMutex);
+                wheelClick = g_settings.wheelClick;
+            }
+            if (wheelClick == ClickAction::None) {
                 return;
             }
             args.Handled(true);
-            ExecuteClickAction(g_settings.wheelClick,
-                                sender.try_as<FrameworkElement>());
+            ExecuteClickAction(wheelClick, sender.try_as<FrameworkElement>());
         });
 }
 
@@ -923,6 +1025,13 @@ Grid BuildWeatherHeaderAndDetails() {
     {
         std::lock_guard<std::mutex> lock(g_weatherMutex);
         snapshot = g_weather;
+    }
+    bool useFahrenheit;
+    std::wstring windSpeedUnit;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        useFahrenheit = g_settings.useFahrenheit;
+        windSpeedUnit = g_settings.windSpeedUnit;
     }
 
     Grid card;
@@ -957,7 +1066,7 @@ Grid BuildWeatherHeaderAndDetails() {
     tempText.FontSize(16);
     tempText.Text(winrt::hstring(
         snapshot.hasData
-            ? FormatTemperature(snapshot.currentTemp, g_settings.useFahrenheit) +
+            ? FormatTemperature(snapshot.currentTemp, useFahrenheit) +
                   L" - " + ConditionName(snapshot.wmoCode)
             : L"Loading..."));
     headerText.Children().Append(tempText);
@@ -968,7 +1077,7 @@ Grid BuildWeatherHeaderAndDetails() {
     feelsLikeText.Text(winrt::hstring(
         snapshot.hasData
             ? L"Feels like " +
-                  FormatTemperature(snapshot.feelsLike, g_settings.useFahrenheit)
+                  FormatTemperature(snapshot.feelsLike, useFahrenheit)
             : L""));
     headerText.Children().Append(feelsLikeText);
 
@@ -1014,7 +1123,7 @@ Grid BuildWeatherHeaderAndDetails() {
     details.Children().Append(makeDetailCell(
         L"Wind",
         snapshot.hasData
-            ? FormatWindSpeed(snapshot.windSpeed, g_settings.windSpeedUnit) + L" " +
+            ? FormatWindSpeed(snapshot.windSpeed, windSpeedUnit) + L" " +
                   CompassDirection(snapshot.windDirectionDeg)
             : L"-",
         1));
@@ -1034,13 +1143,20 @@ StackPanel BuildForecastListPanel() {
         std::lock_guard<std::mutex> lock(g_weatherMutex);
         snapshot = g_weather;
     }
+    int forecastDaysPanel;
+    bool useFahrenheit;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        forecastDaysPanel = g_settings.forecastDaysPanel;
+        useFahrenheit = g_settings.useFahrenheit;
+    }
 
     StackPanel list;
     list.Orientation(Orientation::Vertical);
     list.Margin({0, 12, 0, 0});
     list.Spacing(4);
 
-    int days = std::min((int)snapshot.daily.size(), g_settings.forecastDaysPanel);
+    int days = std::min((int)snapshot.daily.size(), forecastDaysPanel);
     for (int i = 0; i < days; i++) {
         const auto& day = snapshot.daily[i];
 
@@ -1070,8 +1186,8 @@ StackPanel BuildForecastListPanel() {
         range.FontSize(13);
         range.VerticalAlignment(VerticalAlignment::Center);
         range.Text(winrt::hstring(
-            FormatTemperature(day.tempMax, g_settings.useFahrenheit) + L" / " +
-            FormatTemperature(day.tempMin, g_settings.useFahrenheit)));
+            FormatTemperature(day.tempMax, useFahrenheit) + L" / " +
+            FormatTemperature(day.tempMin, useFahrenheit)));
         Grid::SetColumn(range, 2);
         row.Children().Append(range);
 
@@ -1228,6 +1344,8 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
 
         parent.Children().Append(wrapper);
         g_weatherRoot = compact;
+        g_weatherBackground = background;
+        g_weatherWrapper = wrapper;
         g_weatherRootParent = parent;
         g_weatherTaskbarWnd = (HWND)host->taskbarHwnd;
 
@@ -1247,6 +1365,9 @@ extern "C" void __cdecl WeatherWidget_Tick(void* /*context*/) {
 }
 
 extern "C" double __cdecl WeatherWidget_OnSettingsChanged(void* /*context*/) {
+    if (g_weatherWrapper) {
+        return g_weatherWrapper.ActualWidth();
+    }
     return g_weatherRoot ? g_weatherRoot.ActualWidth() : 0.0;
 }
 
@@ -1257,6 +1378,14 @@ extern "C" void __cdecl WeatherWidget_Destroy(void* /*context*/) {
         } catch (...) {
         }
     }
+    if (g_weatherRootParent && g_weatherWrapper) {
+        uint32_t index;
+        if (g_weatherRootParent.Children().IndexOf(g_weatherWrapper, index)) {
+            g_weatherRootParent.Children().RemoveAt(index);
+        }
+    }
+    g_weatherWrapper = nullptr;
+    g_weatherBackground = nullptr;
     g_weatherRoot = nullptr;
     g_weatherRootParent = nullptr;
 }
@@ -1471,10 +1600,8 @@ static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param) {
     return true;
 }
 
-HWND g_weatherStandaloneParentWnd = nullptr;
-
 // v1 standalone placement: appends at the end of the taskbar's own
-// RootGrid (Task 13's FindTaskbarRootGrid), i.e. the trailing edge,
+// RootGrid (via FindTaskbarRootGrid), i.e. the trailing edge,
 // with no tracked-anchor positioning (Start/Search/Task View button
 // tracking, configurable left/right edge, etc.) - that richer
 // positioning system is `taskbar-widget-stack`'s and
@@ -1518,14 +1645,13 @@ void InjectWeatherStandalone(HWND hWnd) {
 
     rootGrid.Children().Append(wrapper);
     g_weatherRoot = compact;
+    g_weatherBackground = background;
+    g_weatherWrapper = wrapper;
     g_weatherRootParent = rootGrid;
     g_weatherTaskbarWnd = hWnd;
-    g_weatherStandaloneParentWnd = hWnd;
 }
 
 bool g_weatherRemoteRegistered = false;
-HWND g_weatherRemoteHostHwnd = nullptr;
-WidgetStack_RegisterWidget_t g_weatherHostRegisterFn = nullptr;
 WidgetStack_UnregisterWidget_t g_weatherHostUnregisterFn = nullptr;
 
 void TryRegisterOrShowStandalone(HWND hWnd) {
@@ -1541,15 +1667,25 @@ void TryRegisterOrShowStandalone(HWND hWnd) {
         WidgetStackWidgetAbiV1 abi;
         FillWeatherWidgetAbi(abi);
         if (registerFn(&abi)) {
-            g_weatherRemoteRegistered = true;
-            g_weatherRemoteHostHwnd = hWnd;
-            g_weatherHostRegisterFn = registerFn;
-            g_weatherHostUnregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+            auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
                 hWnd, kUnregisterWidgetPropName);
-            Wh_Log(L"Registered with taskbar-widget-stack");
-            return;
+            if (!unregisterFn) {
+                // Registered with the host but have no way to cleanly
+                // unregister later - treat this the same as a failed
+                // registration and fall through to standalone injection
+                // rather than leaving a dangling remote registration.
+                Wh_Log(L"WidgetStack_RegisterWidget succeeded but "
+                       L"unregister prop is missing, falling back to "
+                       L"standalone");
+            } else {
+                g_weatherRemoteRegistered = true;
+                g_weatherHostUnregisterFn = unregisterFn;
+                Wh_Log(L"Registered with taskbar-widget-stack");
+                return;
+            }
+        } else {
+            Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
         }
-        Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
     }
     if (!g_weatherRootParent) {
         InjectWeatherStandalone(hWnd);
@@ -1613,10 +1749,10 @@ static void WINAPI TrayUI_StartTaskbar_Hook(void* pThis) {
         return;
     }
     g_weatherRoot = nullptr;
+    g_weatherBackground = nullptr;
+    g_weatherWrapper = nullptr;
     g_weatherRootParent = nullptr;
     g_weatherRemoteRegistered = false;
-    g_weatherRemoteHostHwnd = nullptr;
-    g_weatherHostRegisterFn = nullptr;
     g_weatherHostUnregisterFn = nullptr;
     g_weatherTaskbarWnd = hWnd;
     StartWeatherRetryRegister();
@@ -1632,9 +1768,9 @@ static bool HookTaskbarDllSymbols() {
         {{LR"(public: virtual void __cdecl TrayUI::StartTaskbar(void))"},
          &TrayUI_StartTaskbar_Original,
          TrayUI_StartTaskbar_Hook},
-        // The four below feed Task 13's GetTaskbarXamlRoot/
+        // The four below feed GetTaskbarXamlRoot/
         // TryGetTaskbarElementAbi - no hook function, just resolving
-        // each symbol's address into the matching Task 13 global.
+        // each symbol's address into the matching global.
         {{LR"(const CTaskBand::`vftable'{for `ITaskListWndSite'})"},
          &CTaskBand_ITaskListWndSite_vftable},
         {{LR"(public: virtual class std::shared_ptr<class TaskbarHost> __cdecl CTaskBand::GetTaskbarHost(void)const )"},
@@ -1678,15 +1814,28 @@ void Wh_ModUninit() {
     if (g_weatherRetryEvent) {
         SetEvent(g_weatherRetryEvent);
     }
+    bool retryThreadStillRunning = false;
     {
         std::lock_guard<std::mutex> lock(g_weatherRetryThreadMutex);
         if (g_weatherRetryThread) {
-            WaitForSingleObject(g_weatherRetryThread, 3000);
-            CloseHandle(g_weatherRetryThread);
-            g_weatherRetryThread = nullptr;
+            DWORD waitResult = WaitForSingleObject(g_weatherRetryThread, 3000);
+            if (waitResult == WAIT_OBJECT_0) {
+                CloseHandle(g_weatherRetryThread);
+                g_weatherRetryThread = nullptr;
+            } else {
+                // Same reasoning as StopWeatherThread: the still-running
+                // thread may still be using g_weatherRetryEvent (e.g.
+                // blocked inside RunFromWindowThread's SendMessageW if the
+                // taskbar thread is busy), so closing handles out from
+                // under it is unsafe. Leak them until it eventually exits.
+                retryThreadStillRunning = true;
+                Wh_Log(L"Wh_ModUninit: retry thread did not exit within "
+                       L"3000ms; leaving thread/event handles open rather "
+                       L"than risk closing handles still in use");
+            }
         }
     }
-    if (g_weatherRetryEvent) {
+    if (!retryThreadStillRunning && g_weatherRetryEvent) {
         CloseHandle(g_weatherRetryEvent);
         g_weatherRetryEvent = nullptr;
     }
@@ -1698,12 +1847,10 @@ void Wh_ModUninit() {
                 g_weatherHostUnregisterFn(kWeatherWidgetContext);
                 g_weatherRemoteRegistered = false;
             } else {
+                // WeatherWidget_Destroy removes the wrapper Button from
+                // g_weatherRootParent's Children itself (tracked via
+                // g_weatherWrapper), so no separate removal is needed here.
                 WeatherWidget_Destroy(nullptr);
-                uint32_t index;
-                if (g_weatherRootParent && g_weatherRoot &&
-                    g_weatherRootParent.Children().IndexOf(g_weatherRoot, index)) {
-                    g_weatherRootParent.Children().RemoveAt(index);
-                }
             }
         }, nullptr);
     }
@@ -1711,6 +1858,16 @@ void Wh_ModUninit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
+    // Force the next WeatherThreadProc iteration to re-resolve location
+    // (mode switch, or an edited manual city/lat/lon) instead of keeping
+    // whatever was resolved before this settings change, then wake the
+    // thread immediately rather than waiting for the next scheduled
+    // refresh interval.
+    {
+        std::lock_guard<std::mutex> lock(g_locationMutex);
+        g_location.valid = false;
+    }
+    RequestWeatherRefresh();
     if (g_weatherTaskbarWnd) {
         RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
             RebuildCompactViewInPlace();
