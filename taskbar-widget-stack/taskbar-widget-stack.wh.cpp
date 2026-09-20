@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.2.0
+// @version         0.2.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -197,7 +197,7 @@ namespace {
 
 // Floor for the stack's content width (excluding the dots column) so it
 // never collapses to ~0 if every widget is disabled/crashed. Also what
-// the two placeholder widgets report as their own desired width, so
+// the two placeholder widgets report as their own minimum width, so
 // wiring up the dynamic-width machinery below doesn't change today's
 // visuals at all - see PLAN.md's "Widget SDK design".
 constexpr double kMinContentWidth = 30.0;
@@ -221,7 +221,7 @@ struct WidgetHost {
 // taskbar-ai-quota.wh.cpp and taskbar-fluent-media-player.wh.cpp: a
 // single owned root element rebuilt from scratch rather than patched
 // in place, self-sizing (no host size negotiation beyond reporting a
-// desired width), and full responsibility for revoking its own event
+// minimum readable width), and full responsibility for revoking its own event
 // tokens/timers on Destroy().
 class IWidget {
    public:
@@ -1783,7 +1783,7 @@ void RefreshDots() {
 // `contentWidth` DIPs, plus the dots column itself (0 when
 // layout.indicator.hideWhenSingle applies - Incident 25) - called from
 // RebuildStackContents whenever the set of enabled/crashed widgets or
-// their reported desired widths might have changed. See PLAN.md's
+// their reported minimum widths might have changed. See PLAN.md's
 // "Widget SDK design" for why the content-width part exists (real
 // ported widgets are wider than the two placeholders' original fixed
 // 30px pane).
@@ -1903,6 +1903,16 @@ void RebuildStackContents() {
         return;
     }
     StopSnapAnimation();
+
+    // Shrink the measurement surface to the floor before any widget's
+    // Create()/OnSettingsChanged() runs, so a Stretch-aligned top-level
+    // element (every widget's registered-mode wrapper, since the width-
+    // ABI change) measures against layout.minWidth instead of whatever
+    // wider contentWidth a PREVIOUS rebuild already settled on - without
+    // this, ActualWidth() after UpdateLayout() reads back the stack's
+    // own last answer, not the widget's actual minimum, and contentWidth
+    // can only ever grow, never shrink, across rebuilds (a "ratchet").
+    ApplyStackWidth((double)g_settings.layoutMinWidth);
 
     WidgetHost host{g_ui.hWnd, g_ui.widgetsPanel, PaneHeight()};
 
@@ -3230,7 +3240,7 @@ bool InjectWidgetStackGrid(HWND hWnd) {
         }
         // Placeholder width - RebuildStackContents (called below) applies
         // the real width immediately, once widgets have reported their
-        // desired widths.
+        // minimum widths.
         root.Width(kMinContentWidth + kDotsColumnWidth +
                    g_settings.layoutIndicatorGap +
                    g_settings.layoutRightPadding);
