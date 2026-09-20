@@ -2,11 +2,12 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.5
+// @version         1.6
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
 // @architecture    x86-64
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luser32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
