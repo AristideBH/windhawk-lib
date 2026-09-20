@@ -1420,8 +1420,19 @@ bool TryRegisterOrInject(HWND tray) {
         LoadSettings();
         WidgetStackWidgetAbiV1 abi;
         FillWidgetAbi(abi);
+        // Set true BEFORE calling registerFn, not after: registerFn
+        // (WidgetStack_RegisterWidget in the host) synchronously calls
+        // RebuildStackContents(), which calls this widget's own
+        // Create() (SystemUsage_Create -> FinalizeTableWidth) before
+        // registerFn ever returns. FinalizeTableWidth's stack-registered
+        // check needs g_remoteRegistered to already read true at that
+        // moment, on this very first registration - not just on some
+        // later unrelated rebuild - or it silently falls back to the
+        // clamped-Width standalone path. We're already committed to
+        // attempting registration by this point, so reset back to false
+        // below only if registerFn actually reports failure.
+        g_remoteRegistered = true;
         if (registerFn(&abi)) {
-            g_remoteRegistered = true;
             g_remoteHostHwnd = tray;
             g_hostRegisterFn = registerFn;
             g_hostUnregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
@@ -1429,6 +1440,7 @@ bool TryRegisterOrInject(HWND tray) {
             Wh_Log(L"Registered with taskbar-widget-stack");
             return true;
         }
+        g_remoteRegistered = false;
         Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
     }
 
@@ -1535,8 +1547,15 @@ void Wh_ModSettingsChanged() {
             g_remoteRegistered = false;
             WidgetStackWidgetAbiV1 abi;
             FillWidgetAbi(abi);
-            if (registerFn(&abi)) {
-                g_remoteRegistered = true;
+            // Same reasoning as TryRegisterOrInject: registerFn calls
+            // this widget's own Create()/FinalizeTableWidth
+            // synchronously before returning, so g_remoteRegistered
+            // must already read true at that moment, not just after
+            // registerFn returns - otherwise every settings-change
+            // rebuild would re-trigger the same stale-flag bug.
+            g_remoteRegistered = true;
+            if (!registerFn(&abi)) {
+                g_remoteRegistered = false;
             }
         });
     } else if (g_ui.hWnd) {
