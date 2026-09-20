@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.2
+// @version         1.3
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -103,6 +103,56 @@ key required. See PLAN.md for the design.
     - refresh: Refresh now
     - toggle_mode: Toggle Now/Forecast
   $name: Click actions
+- PanelSettings:
+  - placementMode: screen
+    $name: Placement mode
+    $description: Choose whether the weather details panel opens near the widget, or at a fixed position on the screen.
+    $options:
+    - near: Near the widget
+    - screen: Placement on the screen
+
+  - PanelSettingsNear:
+    - panelHorizontalOffsetNear: 0
+      $name: Panel horizontal offset (right/left)
+    - panelVerticalPlacementNear: top
+      $name: Vertical placement
+      $description: Whether the panel opens above or below the widget. Also controls the slide-in animation direction.
+      $options:
+      - top: Top
+      - bottom: Bottom
+    $name: Near the widget
+
+  - PanelSettingsScreen:
+    - panelHorizontalPlacement: right
+      $name: Horizontal placement on the screen
+      $options:
+      - left: Left
+      - center: Center
+      - right: Right
+
+    - panelHorizontalDistanceFromScreenEdge: 0
+      $name: Distance from the right/left side of the screen
+
+    - panelVerticalPlacement: bottom
+      $name: Vertical placement on the screen
+      $options:
+      - top: Top
+      - center: Center
+      - bottom: Bottom
+
+    - panelVerticalDistanceFromScreenEdge: 0
+      $name: Distance from the bottom/top side of the screen
+
+    - panelAnimation: auto
+      $name: Appearance animation
+      $options:
+      - auto: Automatic
+      - top: From top
+      - bottom: From bottom
+      - left: From left
+      - right: From right
+    $name: Placement on the screen
+  $name: Panel placement
 */
 // ==/WindhawkModSettings==
 
@@ -168,6 +218,15 @@ struct WeatherSettings {
     ClickAction rightClick = ClickAction::None;
     ClickAction doubleClick = ClickAction::ToggleMode;
     ClickAction wheelClick = ClickAction::Refresh;
+    // Panel placement (details Flyout position - see ShowWeatherPanel)
+    std::wstring panelPlacementMode = L"screen";  // near|screen
+    int panelHorizontalOffsetNear = 0;
+    std::wstring panelVerticalPlacementNear = L"top";     // top|bottom
+    std::wstring panelHorizontalPlacement = L"right";     // left|center|right
+    int panelHorizontalDistanceFromScreenEdge = 0;
+    std::wstring panelVerticalPlacement = L"bottom";      // top|center|bottom
+    int panelVerticalDistanceFromScreenEdge = 0;
+    std::wstring panelAnimation = L"auto";  // auto|top|bottom|left|right
 };
 
 WeatherSettings g_settings;
@@ -238,6 +297,22 @@ void LoadSettings() {
         GetStringSetting(L"ClickActionSettings.doubleClick", L"toggle_mode"));
     newSettings.wheelClick =
         ParseClickAction(GetStringSetting(L"ClickActionSettings.wheel", L"refresh"));
+    newSettings.panelPlacementMode =
+        GetStringSetting(L"PanelSettings.placementMode", L"screen");
+    newSettings.panelHorizontalOffsetNear = (int)Wh_GetIntSetting(
+        L"PanelSettings.PanelSettingsNear.panelHorizontalOffsetNear");
+    newSettings.panelVerticalPlacementNear = GetStringSetting(
+        L"PanelSettings.PanelSettingsNear.panelVerticalPlacementNear", L"top");
+    newSettings.panelHorizontalPlacement = GetStringSetting(
+        L"PanelSettings.PanelSettingsScreen.panelHorizontalPlacement", L"right");
+    newSettings.panelHorizontalDistanceFromScreenEdge = (int)Wh_GetIntSetting(
+        L"PanelSettings.PanelSettingsScreen.panelHorizontalDistanceFromScreenEdge");
+    newSettings.panelVerticalPlacement = GetStringSetting(
+        L"PanelSettings.PanelSettingsScreen.panelVerticalPlacement", L"bottom");
+    newSettings.panelVerticalDistanceFromScreenEdge = (int)Wh_GetIntSetting(
+        L"PanelSettings.PanelSettingsScreen.panelVerticalDistanceFromScreenEdge");
+    newSettings.panelAnimation = GetStringSetting(
+        L"PanelSettings.PanelSettingsScreen.panelAnimation", L"auto");
 
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     g_settings = newSettings;
@@ -1236,6 +1311,148 @@ StackPanel BuildWeatherFlyoutContent() {
 Flyout g_weatherFlyout{nullptr};
 bool g_weatherFlyoutOpen = false;
 
+// ---------------------------------------------------------------------
+// Panel placement (ported from taskbar-widget-media-player's
+// MiniPlayerAnchor/GetTaskbarMonitorWorkAreaInfo/
+// ComputeScreenPlacementAnchor - same math, renamed for this mod and
+// using g_weatherTaskbarWnd instead of media-player's g_taskbarWnd).
+// Lets the details panel open either near the widget or at a fixed
+// screen position, per PanelSettings.
+// ---------------------------------------------------------------------
+
+struct WeatherPanelAnchor {
+    winrt::Windows::Foundation::Point placementPoint{0.f, 0.f};
+    Controls::Primitives::FlyoutPlacementMode placement =
+        Controls::Primitives::FlyoutPlacementMode::Top;
+    // animAxis/animSign are computed for parity with the reference
+    // implementation but currently unused here - ShowWeatherPanel's
+    // fade-in animation (opacity + fixed TranslateY(8)) doesn't vary
+    // by placement side, unlike media-player's slide-in animation.
+    int animAxis = 0;
+    double animSign = 1.0;
+};
+
+// Gets the taskbar's monitor work area (screen pixels), the taskbar
+// window's screen origin, and the XAML root's DPI scale, so a screen
+// pixel rect can be converted into the XAML root's own coordinate
+// space (what Flyout placement points are expressed in).
+bool GetWeatherTaskbarMonitorWorkAreaInfo(FrameworkElement const& rootContent,
+                                           RECT& outWorkAreaPx,
+                                           POINT& outOriginPx,
+                                           double& outScale) {
+    if (!g_weatherTaskbarWnd || !rootContent) return false;
+
+    HMONITOR mon = MonitorFromWindow(g_weatherTaskbarWnd, MONITOR_DEFAULTTONEAREST);
+    if (!mon) return false;
+
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfo(mon, &mi)) return false;
+    outWorkAreaPx = mi.rcWork;
+
+    POINT originPx{0, 0};
+    if (!ClientToScreen(g_weatherTaskbarWnd, &originPx)) return false;
+    outOriginPx = originPx;
+
+    double scale = 1.0;
+    try {
+        auto xamlRoot = rootContent.XamlRoot();
+        if (xamlRoot) scale = xamlRoot.RasterizationScale();
+    } catch (...) {}
+    if (scale <= 0.0) scale = 1.0;
+    outScale = scale;
+
+    return true;
+}
+
+// Computes the FlyoutPlacementMode + anchor point (in the XAML root's
+// coordinate space) for "screen" placement mode, from
+// PanelSettingsScreen (horizontal/vertical placement + distance from
+// edge) and PanelSettingsScreen.panelAnimation.
+bool ComputeWeatherScreenPlacementAnchor(FrameworkElement const& rootContent,
+                                          WeatherPanelAnchor& outAnchor) {
+    RECT workPx;
+    POINT originPx;
+    double scale;
+    if (!GetWeatherTaskbarMonitorWorkAreaInfo(rootContent, workPx, originPx, scale)) {
+        return false;
+    }
+
+    double left   = (workPx.left   - originPx.x) / scale;
+    double top    = (workPx.top    - originPx.y) / scale;
+    double right  = (workPx.right  - originPx.x) / scale;
+    double bottom = (workPx.bottom - originPx.y) / scale;
+
+    const std::wstring& hPlace = g_settings.panelHorizontalPlacement;
+    const std::wstring& vPlace = g_settings.panelVerticalPlacement;
+    int hDist = g_settings.panelHorizontalDistanceFromScreenEdge;
+    int vDist = g_settings.panelVerticalDistanceFromScreenEdge;
+
+    bool hLeft  = (hPlace == L"left");
+    bool hRight = (hPlace == L"right");
+    bool vTop   = (vPlace == L"top");
+    bool vBottom = (vPlace == L"bottom");
+
+    double anchorX;
+    if (hLeft)       anchorX = left + hDist;
+    else if (hRight) anchorX = right - hDist;
+    else              anchorX = (left + right) / 2.0 + hDist;
+
+    double anchorY;
+    if (vTop)         anchorY = top + vDist;
+    else if (vBottom) anchorY = bottom - vDist;
+    else               anchorY = (top + bottom) / 2.0 + vDist;
+
+    using FPM = Controls::Primitives::FlyoutPlacementMode;
+    FPM placement = FPM::Top;
+    int animAxis = 0;
+    double animSign = 1.0;
+
+    if (vBottom) {
+        placement = hLeft ? FPM::TopEdgeAlignedLeft
+                  : hRight ? FPM::TopEdgeAlignedRight
+                  : FPM::Top;
+        animAxis = 0;
+        animSign = 1.0;
+    } else if (vTop) {
+        placement = hLeft ? FPM::BottomEdgeAlignedLeft
+                  : hRight ? FPM::BottomEdgeAlignedRight
+                  : FPM::Bottom;
+        animAxis = 0;
+        animSign = -1.0;
+    } else {
+        if (hLeft) {
+            placement = FPM::Right;
+            animAxis = 1;
+            animSign = -1.0;
+        } else if (hRight) {
+            placement = FPM::Left;
+            animAxis = 1;
+            animSign = 1.0;
+        } else {
+            placement = FPM::Top;
+            animAxis = 0;
+            animSign = 1.0;
+        }
+    }
+
+    if (g_settings.panelAnimation == L"top") {
+        animAxis = 0; animSign = -1.0;
+    } else if (g_settings.panelAnimation == L"bottom") {
+        animAxis = 0; animSign = 1.0;
+    } else if (g_settings.panelAnimation == L"left") {
+        animAxis = 1; animSign = -1.0;
+    } else if (g_settings.panelAnimation == L"right") {
+        animAxis = 1; animSign = 1.0;
+    }
+
+    outAnchor.placementPoint = {(float)anchorX, (float)anchorY};
+    outAnchor.placement = placement;
+    outAnchor.animAxis = animAxis;
+    outAnchor.animSign = animSign;
+    return true;
+}
+
 void ShowWeatherPanel(FrameworkElement anchor) {
     if (!anchor) {
         return;
@@ -1285,7 +1502,80 @@ void ShowWeatherPanel(FrameworkElement anchor) {
     });
 
     g_weatherFlyout = flyout;
-    flyout.ShowAt(anchor);
+
+    // Decide near-the-widget vs. fixed-screen-position placement from
+    // PanelSettings.placementMode (ported from ShowMiniPlayerFlyout's
+    // equivalent block). showAtElem is the XAML root's content element
+    // (not the widget button itself) so the anchor point below - which
+    // is expressed in that root's coordinate space - lines up with
+    // where FlyoutShowOptions.Position() expects it.
+    bool useScreenPlacement = (g_settings.panelPlacementMode == L"screen");
+    Controls::Primitives::FlyoutPlacementMode placementMode =
+        Controls::Primitives::FlyoutPlacementMode::Top;
+    winrt::Windows::Foundation::Point anchorPoint{0.f, 0.f};
+    FrameworkElement showAtElem = anchor;
+    bool anchorComputed = false;
+
+    try {
+        auto xamlRoot = anchor.XamlRoot();
+        if (xamlRoot) {
+            auto rootContent = xamlRoot.Content().try_as<FrameworkElement>();
+            if (rootContent) {
+                showAtElem = rootContent;
+
+                if (useScreenPlacement) {
+                    WeatherPanelAnchor screenAnchor;
+                    if (ComputeWeatherScreenPlacementAnchor(rootContent, screenAnchor)) {
+                        anchorPoint = screenAnchor.placementPoint;
+                        placementMode = screenAnchor.placement;
+                        anchorComputed = true;
+                    } else {
+                        Wh_Log(L"ShowWeatherPanel: Failed to compute screen anchor, "
+                               L"falling back to 'near the widget' placement");
+                    }
+                }
+
+                if (!anchorComputed) {
+                    // Near mode: anchor relative to the widget's own
+                    // bounds (the `anchor` parameter), same as
+                    // ShowMiniPlayerFlyout's near-mode branch uses its
+                    // `target` parameter.
+                    auto xform = anchor.TransformToVisual(rootContent);
+                    auto pt = xform.TransformPoint({0.f, 0.f});
+                    float cx = pt.X + (float)anchor.ActualWidth() * 0.5f +
+                               (float)g_settings.panelHorizontalOffsetNear;
+
+                    bool placeBelow = (g_settings.panelVerticalPlacementNear == L"bottom");
+                    if (placeBelow) {
+                        float ty = pt.Y + (float)anchor.ActualHeight();
+                        anchorPoint = {cx, ty};
+                        placementMode = Controls::Primitives::FlyoutPlacementMode::Bottom;
+                    } else {
+                        float ty = pt.Y;
+                        anchorPoint = {cx, ty};
+                        placementMode = Controls::Primitives::FlyoutPlacementMode::Top;
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        Wh_Log(L"ShowWeatherPanel: Exception setting position");
+    }
+
+    try {
+        // Without this, WinRT constrains the flyout to stay near its
+        // anchor element's own bounds, which defeats screen-position
+        // placement (whose anchor point can be far from `anchor`).
+        // Matches ShowMiniPlayerFlyout's equivalent call.
+        flyout.ShouldConstrainToRootBounds(false);
+        flyout.Placement(placementMode);
+    } catch (...) {}
+
+    Controls::Primitives::FlyoutShowOptions opts;
+    opts.Placement(placementMode);
+    opts.Position(anchorPoint);
+
+    flyout.ShowAt(showAtElem, opts);
 }
 
 // ---------------------------------------------------------------------
