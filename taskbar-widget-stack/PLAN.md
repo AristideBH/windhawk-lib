@@ -3488,7 +3488,7 @@ this session.
 **Known regression** (carried forward from Task 2's own report):
 touchpad-scroll navigation no longer pauses while a context menu is
 open. The old flyout had `g_contextMenuOpen` (introduced in Incident
-21) specifically to suppress scroll-driven widget stepping while its
+20) specifically to suppress scroll-driven widget stepping while its
 own menu was up; the native taskbar menu is a completely different
 window/surface that this mod has no signal for ("is the *native* menu
 currently open" isn't something this mod can currently detect the way
@@ -3507,7 +3507,7 @@ spec's own "Risks / things to verify live" section,
    other.
 2. Whether anything needs to suppress touchpad-scroll navigation while
    the *native* menu is open, the way `g_contextMenuOpen` did for the
-   old custom flyout (Incident 8) - the native menu is a different
+   old custom flyout (Incident 20) - the native menu is a different
    window/surface entirely, so this may simply not apply, but needs
    checking live: scroll over the stack while the native menu is open,
    confirm nothing unexpected steps widgets underneath it. This is the
