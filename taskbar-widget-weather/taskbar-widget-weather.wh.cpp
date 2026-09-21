@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.9
+// @version         1.10
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2012,7 +2012,18 @@ void TryRegisterOrShowStandalone(HWND hWnd) {
     }
     auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
         hWnd, kRegisterWidgetPropName);
-    if (registerFn) {
+    // Fetch unregisterFn up front, alongside registerFn, rather than only
+    // after a successful registerFn() call: the host
+    // (taskbar-widget-stack) always sets/removes both props together in
+    // the same scope (InjectWidgetStackGrid/RemoveWidgetStackGrid), so
+    // requiring both here before ever calling registerFn means this mod
+    // can never end up registered with the host while having no way to
+    // unregister - the double-registration hazard (stack-registered AND
+    // standalone-injected at once) that a post-hoc "registered but can't
+    // unregister, fall back to standalone" branch used to risk.
+    auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+        hWnd, kUnregisterWidgetPropName);
+    if (registerFn && unregisterFn) {
         if (g_weatherRootParent) {
             WeatherWidget_Destroy(nullptr);  // tear down standalone first
         }
@@ -2031,26 +2042,12 @@ void TryRegisterOrShowStandalone(HWND hWnd) {
         // to false below on any failure branch.
         g_weatherRemoteRegistered = true;
         if (registerFn(&abi)) {
-            auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
-                hWnd, kUnregisterWidgetPropName);
-            if (!unregisterFn) {
-                // Registered with the host but have no way to cleanly
-                // unregister later - treat this the same as a failed
-                // registration and fall through to standalone injection
-                // rather than leaving a dangling remote registration.
-                g_weatherRemoteRegistered = false;
-                Wh_Log(L"WidgetStack_RegisterWidget succeeded but "
-                       L"unregister prop is missing, falling back to "
-                       L"standalone");
-            } else {
-                g_weatherHostUnregisterFn = unregisterFn;
-                Wh_Log(L"Registered with taskbar-widget-stack");
-                return;
-            }
-        } else {
-            g_weatherRemoteRegistered = false;
-            Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
+            g_weatherHostUnregisterFn = unregisterFn;
+            Wh_Log(L"Registered with taskbar-widget-stack");
+            return;
         }
+        g_weatherRemoteRegistered = false;
+        Wh_Log(L"WidgetStack_RegisterWidget failed, falling back to standalone");
     }
     if (!g_weatherRootParent) {
         InjectWeatherStandalone(hWnd);

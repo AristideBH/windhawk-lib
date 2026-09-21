@@ -102,6 +102,24 @@ clamped to its own self-reported size.
 in the stack's settings window and confirming this mod's compact
 widget widens/clips along with the other registered widgets.
 
+## Incident 3: hardened against double-registration (stack + standalone at once) (2026-09-21)
+
+**Fix**: `TryRegisterOrShowStandalone` used to call `registerFn` first and
+only look up `unregisterFn` afterward; if a successful `registerFn` call
+was ever paired with a missing `unregisterFn`, the widget fell back to
+standalone injection while still registered with the host - both a
+stack-managed copy and a standalone copy visible at once. Given
+`taskbar-widget-stack` always publishes both props together
+(`InjectWidgetStackGrid`) and removes both together
+(`RemoveWidgetStackGrid`), this exact state can't occur today, but this
+mod now fetches `unregisterFn` alongside `registerFn` up front and only
+attempts registration when both are present - removing the possibility
+entirely instead of relying on the host's current atomicity.
+
+**Next retest**: no live-test dependency - this only removes an
+otherwise-unreachable code path. Covered by the existing
+register/unregister live-test steps.
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
