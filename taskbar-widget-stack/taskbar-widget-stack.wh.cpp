@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.6.1
+// @version         0.7.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1564,7 +1564,6 @@ struct UiState {
     winrt::event_token pressedToken;
     winrt::event_token movedToken;
     winrt::event_token releasedToken;
-    winrt::event_token rightTappedToken;
     StackPanel widgetsPanel{nullptr};
     StackPanel dotsPanel{nullptr};
     // Resized at runtime by ApplyStackWidth() as widgets are
@@ -1814,7 +1813,6 @@ void StepWidget(int direction) {
     GoToWidget(enabled[rawNext]);
 }
 
-void ShowContextMenu(HWND hWnd, POINT screenPt);
 void RebuildStackContents();
 bool InjectWidgetStackGrid(HWND hWnd);
 void RemoveWidgetStackGrid();
@@ -1912,31 +1910,6 @@ void WireUpNavigation() {
             sender.as<UIElement>().ReleasePointerCapture(args.Pointer());
         });
 
-    g_ui.rightTappedToken = g_ui.root.RightTapped(
-        [](winrt::Windows::Foundation::IInspectable const& sender,
-           wuxi::RightTappedRoutedEventArgs const& args) {
-            POINT pt;
-            GetCursorPos(&pt);
-            HWND hWnd = g_ui.hWnd;
-            // Still deferred via the dispatcher, though ShowContextMenu
-            // no longer pumps a nested Win32 message loop (Incident 23
-            // replaced TrackPopupMenu with a XAML MenuFlyout) - harmless
-            // to keep, and there's no reason left to call it
-            // synchronously from inside this routed-event handler.
-            try {
-                auto dispatcher = sender.as<UIElement>().Dispatcher();
-                if (dispatcher) {
-                    dispatcher.RunAsync(
-                        winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                        [hWnd, pt] { ShowContextMenu(hWnd, pt); });
-                } else {
-                    ShowContextMenu(hWnd, pt);
-                }
-            } catch (...) {
-            }
-            args.Handled(true);
-        });
-
     // Incident 14's two-finger trackpad scroll attempt via
     // `ManipulationDelta` used to live here - confirmed dead for
     // touchpad input (never fired, which is why Incidents 17-22 built
@@ -1972,9 +1945,6 @@ void UnwireNavigation() {
         }
         if (g_ui.releasedToken) {
             g_ui.root.PointerReleased(g_ui.releasedToken);
-        }
-        if (g_ui.rightTappedToken) {
-            g_ui.root.RightTapped(g_ui.rightTappedToken);
         }
     } catch (...) {
     }
@@ -2435,19 +2405,6 @@ void RebuildStackContents() {
     RefreshDots();
     UpdateStackScreenRect();
 }
-
-// Set while a context menu is open (from just before ShowAt to the
-// flyout's Closed event) - stops touchpad nav from stepping widgets
-// while the menu is up.
-bool g_contextMenuOpen = false;
-
-// Keeps the open MenuFlyout alive - the local variable that creates it
-// in ShowContextMenu goes out of scope as soon as that function
-// returns, but showing a flyout adds it to XAML's own open-popup
-// bookkeeping, which is expected to keep it alive on its own; this is
-// pure extra insurance given this file's history with WinRT object
-// lifetime bugs (Incident 8). Cleared in the Closed handler.
-MenuFlyout g_contextMenuFlyout{nullptr};
 
 void ToggleWidgetEnabled(int idx) {
     if (idx >= 0 && idx < (int)g_widgets.size()) {
@@ -3590,157 +3547,6 @@ void CloseSettingsWindow() {
     g_settingsWindow = {};
 }
 
-// Right-click menu, as a XAML MenuFlyout rather than a native
-// TrackPopupMenu (Incident 23 - see PLAN.md). TrackPopupMenu pumps its
-// own nested Win32 message loop, and right-click kept crashing Explorer
-// (0xC0000005, faulting module "unknown", offset 0x0) with the crash
-// site logging added in Incident 22 pointing at "inside TrackPopupMenu
-// itself, before it returns" - after two unrelated hypotheses (Incidents
-// 20, 21) had already been fixed and ruled out as the cause. Rather than
-// keep guessing at what specifically collides with a XAML-island-hosting
-// window's native modal popup loop, this replaces the mechanism
-// entirely with a MenuFlyout - a real XAML control, shown and dismissed
-// through the same Composition/dispatcher machinery as everything else
-// in this file, with no nested Win32 message loop at all. Prior art:
-// user pointed at `taskbar-icon-separators` (windhawk.net) as a mod that
-// already does WinUI-style taskbar context menus this way.
-//
-// Structure (Incident 24, 2026-09-17, per user-supplied mockup): one
-// row per widget, each a submenu (`MenuFlyoutSubItem`) holding "Show
-// widget" (a checkable toggle) and "Move up"/"Move down", followed by
-// a separator and a "Stack settings" row - matching the native
-// Windows 11 taskbar's own per-icon right-click menu style. Replaces
-// the flat toggle-then-separator-then-all-moves layout from the first
-// MenuFlyout pass.
-//
-// Incident 50 (2026-09-21, user request): added three more entries so
-// the menu isn't just "manage widgets" + "open settings" - a "Goto"
-// submenu of flat, one-click rows (jump straight to a widget without
-// the dots/scroll), a "Show indicator dots" quick toggle (the same
-// setting as the settings window's own toggle, mirrored here so a
-// frequent flip doesn't need the whole window), and "Reset position"
-// (forces the stack's on-screen position to be recomputed - a real fix
-// for right_edge's trayGap going stale if the tray's width changed
-// since injection, see ResetStackPosition's own comment).
-//
-// Incident 51 (2026-09-21, user request): removed the per-widget
-// "Show widget"/"Move up"/"Move down" submenus this menu used to build
-// one per widget (Incident 24) - widget ordering/enable-disable is now
-// managed exclusively from the settings window's widgets tab
-// (ToggleWidgetEnabled/ReorderWidgets are both still called from there,
-// and LoadWidgetOrderState from init - nothing else changed about how
-// those work, just who can trigger them from where). Also renamed "Go
-// to widget" to just "Goto" at the top level (the submenu's own rows
-// are still the widgets' names).
-//
-// Incident 56 (2026-09-21, user request): "Show indicator dots" (a flat
-// on/off toggle) replaced with an "Indicator" submenu of three
-// radio-style rows (Dots/Bars/Hidden) - the indicator gained a second
-// visual type ("bars") and "hidden" folded into that same type choice
-// instead of staying a separate boolean, so a single flat toggle no
-// longer covers the setting's actual shape.
-void ShowContextMenu(HWND, POINT) {
-    if (!g_ui.root) {
-        return;
-    }
-    try {
-        MenuFlyout flyout;
-
-        // "Goto" - flat, one row per enabled widget, name only, jumps
-        // directly there on click.
-        auto enabledForGoTo = EnabledIndices();
-        if (enabledForGoTo.size() > 1) {
-            MenuFlyoutSubItem goToItem;
-            goToItem.Text(L"Goto");
-            FontIcon goToIcon;
-            goToIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-            goToIcon.Glyph(L"\uE8A7");  // forward/jump-to glyph
-            goToItem.Icon(goToIcon);
-            for (int idx : enabledForGoTo) {
-                std::wstring label = g_widgets[idx].widget->DisplayName();
-                std::replace(label.begin(), label.end(), L'\n', L' ');
-                MenuFlyoutItem goToWidgetItem;
-                goToWidgetItem.Text(winrt::hstring(label));
-                goToWidgetItem.IsEnabled(idx != g_ui.activeIndex);
-                goToWidgetItem.Click(
-                    [idx](winrt::Windows::Foundation::IInspectable const&,
-                          RoutedEventArgs const&) { GoToWidget(idx); });
-                goToItem.Items().Append(goToWidgetItem);
-            }
-            flyout.Items().Append(goToItem);
-
-            MenuFlyoutSeparator goToSeparator;
-            flyout.Items().Append(goToSeparator);
-        }
-
-        // Same setting/mechanism as the settings window's own "Indicator
-        // type" combo box - mirrored here since it's a frequent flip
-        // that doesn't warrant opening the whole window. Radio-style
-        // (Incident 56, replacing the old flat on/off toggle now that
-        // "hidden" is a third type alongside dots/bars, not a separate
-        // boolean): exactly one of the three rows is checked at a time.
-        MenuFlyoutSubItem indicatorTypeItem;
-        indicatorTypeItem.Text(L"Indicator");
-        static constexpr const wchar_t* kMenuIndicatorTypeLabels[] = {
-            L"Dots", L"Bars", L"Hidden"};
-        static constexpr const wchar_t* kMenuIndicatorTypeValues[] = {
-            L"dots", L"bars", L"hidden"};
-        for (int i = 0; i < ARRAYSIZE(kMenuIndicatorTypeValues); i++) {
-            ToggleMenuFlyoutItem typeItem;
-            typeItem.Text(kMenuIndicatorTypeLabels[i]);
-            const wchar_t* value = kMenuIndicatorTypeValues[i];
-            typeItem.IsChecked(g_settings.layoutIndicatorType == value);
-            typeItem.Click(
-                [value](winrt::Windows::Foundation::IInspectable const&,
-                        RoutedEventArgs const&) {
-                    g_settings.layoutIndicatorType = value;
-                    WritePrivateString(L"layout.indicator.type", value);
-                    RebuildStackContents();
-                });
-            indicatorTypeItem.Items().Append(typeItem);
-        }
-        flyout.Items().Append(indicatorTypeItem);
-
-        MenuFlyoutItem resetPositionItem;
-        resetPositionItem.Text(L"Reset position");
-        FontIcon resetPositionIcon;
-        resetPositionIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-        resetPositionIcon.Glyph(L"\uE777");  // refresh/realign glyph
-        resetPositionItem.Icon(resetPositionIcon);
-        resetPositionItem.Click(
-            [](winrt::Windows::Foundation::IInspectable const&,
-               RoutedEventArgs const&) { ResetStackPosition(); });
-        flyout.Items().Append(resetPositionItem);
-
-        MenuFlyoutSeparator settingsSeparator;
-        flyout.Items().Append(settingsSeparator);
-
-        // Opens the settings window (Incident 26) - was a no-op stub
-        // before that existed.
-        MenuFlyoutItem settings;
-        settings.Text(L"Stack settings");
-        FontIcon settingsIcon;
-        settingsIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-        settingsIcon.Glyph(L"\uE713");  // gear/settings glyph
-        settings.Icon(settingsIcon);
-        settings.Click([](winrt::Windows::Foundation::IInspectable const&,
-                           RoutedEventArgs const&) { OpenSettingsWindow(); });
-        flyout.Items().Append(settings);
-
-        flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
-                          winrt::Windows::Foundation::IInspectable const&) {
-            g_contextMenuOpen = false;
-            g_contextMenuFlyout = nullptr;
-        });
-        g_contextMenuFlyout = flyout;
-        g_contextMenuOpen = true;
-        flyout.ShowAt(g_ui.root);
-    } catch (...) {
-        g_contextMenuOpen = false;
-        g_contextMenuFlyout = nullptr;
-    }
-}
-
 // Hit-tests the live cursor position against the widget stack's own
 // bounds (Incident 18: raw HID input is registered against the whole
 // touchpad device, not scoped to any window/element, so WM_INPUT fires
@@ -3765,7 +3571,7 @@ bool IsCursorOverWidgetStack() {
 // fails to remove anything.
 LRESULT CALLBACK TaskbarWindowSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
                                             LPARAM lParam, UINT_PTR) {
-    if (msg == WM_INPUT && g_settings.navWheel && !g_contextMenuOpen) {
+    if (msg == WM_INPUT && g_settings.navWheel) {
         // Raw HID input from the Precision Touchpad (Incident 17),
         // registered via RegisterRawInputDevices (usage page 0x0D
         // "Digitizer", usage 0x05 "Touch Pad") - the lowest level of
