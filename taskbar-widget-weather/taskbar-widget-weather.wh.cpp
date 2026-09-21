@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.14
+// @version         1.15
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1048,6 +1048,14 @@ Border g_weatherBackground{nullptr};
 FrameworkElement g_weatherWrapper{nullptr};
 Panel g_weatherRootParent{nullptr};
 HWND g_weatherTaskbarWnd = nullptr;
+// Declared here (moved up from its own Flyout-related block below) so
+// WireUpHover can read it - the compact widget's hover visual should
+// stay "on" for as long as the details panel triggered by it is open,
+// not just while the pointer happens to still be over the widget (live
+// feedback, 2026-09-21: clicking to open the panel, then moving the
+// mouse into the panel itself, dropped the widget back to its idle
+// look, which read as broken/flickery).
+bool g_weatherFlyoutOpen = false;
 
 // Forward declaration of RunFromWindowThread (defined further below, near
 // the standalone-injection code that owns the window-thread marshaling).
@@ -1306,42 +1314,73 @@ void EnsureHoverBrushes() {
     }
 }
 
-winrt::Windows::UI::Xaml::Media::Brush MakeWeatherHoverBorderBrush() {
+// Builds the top/bottom gradient border brush at a given alpha scale
+// (1.0 = full 0x28/0x0A stops, 0.0 = fully transparent but still the
+// same gradient shape/type). Idle and hover both go through this now
+// (2026-09-21, live feedback: hovering visibly shifted content by a
+// pixel or two) - BorderThickness used to switch 0<->1 between idle and
+// hover, which changes `background`'s inner content area size since
+// nothing compensated for it. BorderThickness now stays permanently
+// {1,1,1,1}; only the brush's alpha changes, so the border's own
+// footprint - and therefore the content inside it - never moves.
+// Building the idle brush from the same LinearGradientBrush shape
+// (rather than a flat transparent SolidColorBrush) keeps both ends of
+// that transition the same brush type, matching media-player's own
+// pattern of using one brush shape across a state's Normal/PointerOver
+// range rather than swapping brush types per state.
+winrt::Windows::UI::Xaml::Media::Brush MakeWeatherHoverBorderBrush(double alphaScale) {
     try {
         winrt::Windows::UI::Xaml::Media::LinearGradientBrush brush;
         brush.StartPoint(winrt::Windows::Foundation::Point(0.5f, 0.0f));
         brush.EndPoint(winrt::Windows::Foundation::Point(0.5f, 1.0f));
         winrt::Windows::UI::Xaml::Media::GradientStop top, bottom;
-        top.Color(winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF));
+        top.Color(winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x28 * alphaScale), 0xFF, 0xFF, 0xFF));
         top.Offset(0.0);
-        bottom.Color(winrt::Windows::UI::ColorHelper::FromArgb(0x0A, 0xFF, 0xFF, 0xFF));
+        bottom.Color(winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x0A * alphaScale), 0xFF, 0xFF, 0xFF));
         bottom.Offset(1.0);
         brush.GradientStops().Append(top);
         brush.GradientStops().Append(bottom);
         return brush;
     } catch (...) {
-        return SolidColorBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
+        return SolidColorBrush{winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x28 * alphaScale), 0xFF, 0xFF, 0xFF)};
     }
 }
 
 void ApplyWeatherHoverState(Border background, bool hovered, bool pressed) {
     EnsureHoverBrushes();
+    background.BorderThickness({1, 1, 1, 1});
     if (pressed) {
         background.Background(g_weatherPressedBrush);
         background.BorderBrush(g_weatherPressedBorderBrush);
-        background.BorderThickness({1, 1, 1, 1});
     } else if (hovered) {
         background.Background(g_weatherHoverBrush);
-        background.BorderBrush(MakeWeatherHoverBorderBrush());
-        background.BorderThickness({1, 1, 1, 1});
+        background.BorderBrush(MakeWeatherHoverBorderBrush(1.0));
     } else {
         background.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
-        background.BorderBrush(SolidColorBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
-        background.BorderThickness({0, 0, 0, 0});
+        background.BorderBrush(MakeWeatherHoverBorderBrush(0.0));
     }
+}
+
+// Tracks actual pointer state separately from the "should the widget
+// look hovered" question `RefreshWeatherWidgetHoverVisual` answers
+// (real pointer hover OR the details panel being open) - shared_ptrs so
+// both WireUpHover's own pointer-event lambdas and the panel's
+// open/close handlers (in ShowWeatherPanel, wired much later but
+// against the same widget instance) can read and update the same
+// state.
+auto g_weatherPointerHovered = std::make_shared<bool>(false);
+auto g_weatherPointerPressed = std::make_shared<bool>(false);
+
+void RefreshWeatherWidgetHoverVisual() {
+    if (!g_weatherBackground) {
+        return;
+    }
+    bool hovered = *g_weatherPointerHovered || g_weatherFlyoutOpen;
+    ApplyWeatherHoverState(g_weatherBackground, hovered, *g_weatherPointerPressed);
 }
 
 // `background` is a full-bounds Border sitting behind the compact
@@ -1350,38 +1389,45 @@ void ApplyWeatherHoverState(Border background, bool hovered, bool pressed) {
 // or standalone wrapper). `wrapper` is the outer interactive element
 // pointer events are attached to.
 void WireUpHover(FrameworkElement wrapper, Border background) {
-    auto hovered = std::make_shared<bool>(false);
-    auto pressed = std::make_shared<bool>(false);
+    auto hovered = g_weatherPointerHovered;
+    auto pressed = g_weatherPointerPressed;
 
     wrapper.PointerEntered(
-        [hovered, pressed, background](
+        [hovered, pressed](
             winrt::Windows::Foundation::IInspectable const&,
             winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
             *hovered = true;
-            ApplyWeatherHoverState(background, *hovered, *pressed);
+            RefreshWeatherWidgetHoverVisual();
         });
     wrapper.PointerExited(
-        [hovered, pressed, background](
+        [hovered, pressed](
             winrt::Windows::Foundation::IInspectable const&,
             winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
             *hovered = false;
             *pressed = false;
-            ApplyWeatherHoverState(background, *hovered, *pressed);
+            RefreshWeatherWidgetHoverVisual();
         });
     wrapper.PointerPressed(
-        [hovered, pressed, background](
+        [hovered, pressed](
             winrt::Windows::Foundation::IInspectable const&,
             winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
             *pressed = true;
-            ApplyWeatherHoverState(background, *hovered, *pressed);
+            RefreshWeatherWidgetHoverVisual();
         });
     wrapper.PointerReleased(
-        [hovered, pressed, background](
+        [hovered, pressed](
             winrt::Windows::Foundation::IInspectable const&,
             winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
             *pressed = false;
-            ApplyWeatherHoverState(background, *hovered, *pressed);
+            RefreshWeatherWidgetHoverVisual();
         });
+    // Reset explicitly rather than assuming a fresh false: `hovered`/
+    // `pressed` alias the persistent globals above, which survive a
+    // widget Destroy()/Create() cycle (stack reorder, settings change,
+    // re-registration) - without this, a widget destroyed mid-hover
+    // would have its new instance start from a stale `true`.
+    *hovered = false;
+    *pressed = false;
     ApplyWeatherHoverState(background, false, false);
 }
 
@@ -1719,8 +1765,27 @@ Border BuildWeatherFlyoutContent() {
     panelBg.MaxWidth(360);
     panelBg.CornerRadius({8, 8, 8, 8});
     panelBg.Padding({16, 16, 16, 16});
-    panelBg.Background(SolidColorBrush{
-        winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)});
+    // Real backdrop blur (2026-09-21, live feedback: "blur panel bg
+    // too") via AcrylicBrush/Backdrop, same approach
+    // taskbar-widget-media-player's own panel background uses - falls
+    // back to the previous flat solid color if AcrylicBrush throws
+    // (unsupported OS/theme edge case), so the panel is never left with
+    // no background at all either way.
+    try {
+        winrt::Windows::UI::Xaml::Media::AcrylicBrush acrylic;
+        acrylic.BackgroundSource(
+            winrt::Windows::UI::Xaml::Media::AcrylicBackgroundSource::Backdrop);
+        acrylic.TintColor(
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x2B, 0x2B, 0x2B));
+        acrylic.TintOpacity(0.5);
+        acrylic.TintLuminosityOpacity(0.85);
+        acrylic.FallbackColor(
+            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B));
+        panelBg.Background(acrylic);
+    } catch (...) {
+        panelBg.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)});
+    }
     panelBg.BorderBrush(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)});
     panelBg.BorderThickness({1, 1, 1, 1});
@@ -1729,7 +1794,6 @@ Border BuildWeatherFlyoutContent() {
 }
 
 Flyout g_weatherFlyout{nullptr};
-bool g_weatherFlyoutOpen = false;
 
 // ---------------------------------------------------------------------
 // Panel placement (ported from taskbar-widget-media-player's
@@ -1901,6 +1965,7 @@ void ShowWeatherPanel(FrameworkElement anchor) {
     flyout.Opened([content](winrt::Windows::Foundation::IInspectable const&,
                              winrt::Windows::Foundation::IInspectable const&) {
         g_weatherFlyoutOpen = true;
+        RefreshWeatherWidgetHoverVisual();
         CompositeTransform transform;
         content.RenderTransform(transform);
         content.Opacity(0.0);
@@ -1912,13 +1977,31 @@ void ShowWeatherPanel(FrameworkElement anchor) {
                 std::chrono::milliseconds(150)));
         Storyboard::SetTarget(opacityAnim, content);
         Storyboard::SetTargetProperty(opacityAnim, L"Opacity");
+        // Was missing entirely (2026-09-21): TranslateY(8) above set the
+        // starting offset for a slide-up entrance, but nothing ever
+        // animated it back to 0 - content rendered permanently 8px below
+        // its allocated layout bounds, so the Flyout clipped its own
+        // bottom ~8px (RenderTransform moves where something *renders*,
+        // not its layout bounds, so the Flyout's own size/clip never
+        // accounted for the offset). Targeting `transform` directly
+        // (not a "(UIElement.RenderTransform).(...)" property path on
+        // `content`) since it's a DependencyObject in its own right.
+        DoubleAnimation slideAnim;
+        slideAnim.To(0.0);
+        slideAnim.Duration(
+            winrt::Windows::UI::Xaml::DurationHelper::FromTimeSpan(
+                std::chrono::milliseconds(150)));
+        Storyboard::SetTarget(slideAnim, transform);
+        Storyboard::SetTargetProperty(slideAnim, L"TranslateY");
         Storyboard sb;
         sb.Children().Append(opacityAnim);
+        sb.Children().Append(slideAnim);
         sb.Begin();
     });
     flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
                       winrt::Windows::Foundation::IInspectable const&) {
         g_weatherFlyoutOpen = false;
+        RefreshWeatherWidgetHoverVisual();
         g_weatherFlyout = nullptr;
     });
 
@@ -2070,17 +2153,19 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         wrapper.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
-        // Top/bottom margin + larger radius (was flush/4px - live
-        // feedback, 2026-09-21): media-player's own hover surface is a
-        // fixed 40px tall element vertically centered within its own
-        // taller pane, not stretched to fill it - this mod doesn't have
-        // its own configurable widget height the way media-player does,
-        // so a symmetric margin achieves the same "inset, not flush
-        // top-to-bottom" look regardless of the host's configured pane
-        // height.
+        // Top/bottom margin (was flush - live feedback, 2026-09-21, then
+        // halved again on a second pass): media-player's own hover
+        // surface is a fixed 40px tall element vertically centered
+        // within its own taller pane, not stretched to fill it - this
+        // mod doesn't have its own configurable widget height the way
+        // media-player does, so a symmetric margin achieves the same
+        // "inset, not flush top-to-bottom" look regardless of the host's
+        // configured pane height. CornerRadius matches media-player's
+        // own default (`cornerRadiusTL` etc.) exactly - 8 was too large
+        // on the first pass.
         Border background;
-        background.CornerRadius({8, 8, 8, 8});
-        background.Margin({0, 6, 0, 6});
+        background.CornerRadius({4, 4, 4, 4});
+        background.Margin({0, 3, 0, 3});
 
         auto compact = BuildCompactView();
         background.Child(compact);
@@ -2402,8 +2487,8 @@ void InjectWeatherStandalone(HWND hWnd) {
     // See the registered-mode wrapper's own comment on the matching
     // construction site - same margin/radius reasoning.
     Border background;
-    background.CornerRadius({8, 8, 8, 8});
-    background.Margin({0, 6, 0, 6});
+    background.CornerRadius({4, 4, 4, 4});
+    background.Margin({0, 3, 0, 3});
     auto compact = BuildCompactView();
     background.Child(compact);
     wrapper.Children().Append(background);

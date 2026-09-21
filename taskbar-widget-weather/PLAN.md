@@ -346,6 +346,89 @@ of desktop wallpaper/theme, with consistent padding around the header
 block, details row, forecast list, and Refresh button alike (not
 double-padded around the header specifically).
 
+## Incident 7: hover layout shift, panel content clipped at the bottom, no persistent hover/blur (2026-09-21)
+
+**Symptom** (user feedback after live-testing Incident 6): (1) content
+visibly shifted by a pixel or two when hovering the compact widget. (2)
+Border radius (8px, set in Incident 6) still read as too large next to
+media-player's own. (3) The compact widget's hover highlight dropped
+back to idle as soon as the pointer left it to move into the now-open
+details panel, reading as broken/flickery. (4) The panel background
+(Incident 6) was solid but not blurred. (5) Panel content looked
+slightly cropped at the bottom. (6) Top/bottom margin on the compact
+widget's hover surface (added in Incident 6) was still too much - asked
+for half.
+
+**Root cause (1)**: `ApplyWeatherHoverState` switched `background`'s
+`BorderThickness` between `{0,0,0,0}` (idle) and `{1,1,1,1}` (hover/
+pressed) - a `Border`'s `BorderThickness` shrinks its *inner* content
+area without changing its own outer footprint, so toggling it moved
+`background`'s content by 1px on every hover/unhover.
+
+**Root cause (3)**: nothing connected the details panel's open/closed
+state to the compact widget's own hover visual - `ApplyWeatherHoverState`
+was only ever driven by the widget's own `PointerEntered`/`PointerExited`,
+with no path for `ShowWeatherPanel`'s Flyout `Opened`/`Closed` handlers
+(a different function, wired later, with no access to `WireUpHover`'s
+local `hovered`/`pressed` variables) to influence it.
+
+**Root cause (5)**: `flyout.Opened`'s slide-in animation set
+`transform.TranslateY(8)` as the starting position for a slide-up
+entrance, but only ever animated `Opacity` back to 1 - nothing animated
+`TranslateY` back to 0. `RenderTransform` affects where an element
+*renders*, not its layout bounds, so `content` rendered permanently 8px
+below where the Flyout had actually sized/clipped itself for - visible
+as the bottom ~8px of content being cut off, on every single open, not
+an intermittent glitch.
+
+**Fix (1)**: `BorderThickness` is now set to `{1,1,1,1}` unconditionally
+inside `ApplyWeatherHoverState`, every call, regardless of state - only
+the brush changes between states now. The idle border brush is built
+from the same gradient shape as the hover one
+(`MakeWeatherHoverBorderBrush`, now taking an `alphaScale` parameter -
+`1.0` for hover, `0.0` for idle) rather than a flat transparent
+`SolidColorBrush`, so idle and hover are the same brush *type* even
+though nothing currently animates between them.
+
+**Fix (2, 6)**: `CornerRadius` 8 -> 4 (media-player's own default
+`cornerRadiusTL` etc. value, copied exactly this time). `background`'s
+top/bottom `Margin` halved, `{0,6,0,6}` -> `{0,3,0,3}`.
+
+**Fix (3)**: new `g_weatherPointerHovered`/`g_weatherPointerPressed`
+(persistent `shared_ptr<bool>` globals, not `WireUpHover`-local
+variables) plus `RefreshWeatherWidgetHoverVisual()`, which computes the
+widget's hover visual as "real pointer hover OR the panel is open"
+(`g_weatherFlyoutOpen`, moved earlier in the file so this function can
+see it) and applies it via the existing `ApplyWeatherHoverState`.
+`WireUpHover`'s own pointer handlers and `ShowWeatherPanel`'s
+`Opened`/`Closed` handlers both now call this same function instead of
+computing/applying hover state independently.
+
+**Fix (4)**: `panelBg`'s `Background` is now an `AcrylicBrush`
+(`BackgroundSource::Backdrop`, same construction media-player's own
+panel background uses), falling back to the previous flat solid color
+in a `catch (...)` if `AcrylicBrush` throws, so the panel never ends up
+with literally no background either way.
+
+**Fix (5)**: added the missing `TranslateY` `DoubleAnimation` (8 -> 0,
+same 150ms duration as the existing opacity fade), targeting
+`transform` directly rather than a `"(UIElement.RenderTransform).(...)"`
+property-path string on `content` - `transform` is a `DependencyObject`
+in its own right and a valid `Storyboard` target by itself.
+
+**Next retest**: hover the compact widget repeatedly and confirm no
+visible content shift at all (compare a fixed reference point, e.g. the
+icon's left edge, across idle/hover/pressed). Compare corner radius and
+margin directly against media-player's own hover surface again. Open
+the details panel, then move the pointer off the widget and into the
+panel - confirm the widget's hover highlight stays on the whole time
+the panel is open, and drops back to idle only after closing it (with
+the pointer no longer over the widget). Confirm the panel background
+now visibly blurs whatever is behind it (desktop/taskbar content),
+not just a flat color. Confirm the forecast list's last row and the
+Refresh button are both fully visible, nothing clipped at the bottom,
+on every single panel open (not just most of the time).
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
