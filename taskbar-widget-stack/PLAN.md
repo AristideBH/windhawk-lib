@@ -3387,3 +3387,27 @@ with the same active-widget highlighting and edge-cue shrink dots
 already had. Restart Explorer (or disable/re-enable the mod) with the
 stack showing a non-first widget - confirm it always comes back
 showing the top enabled widget, not whatever was last active.
+
+## Incident 57: indicator size/spacing/color customization (2026-09-21)
+
+**Fix**: three new settings under `layout.indicator` - `size` (px,
+default 4, dot diameter/half a bar's height), `itemSpacing` (px,
+default 4, combined gap between adjacent indicators), `activeColor`/
+`inactiveColor` (`"R G B"` strings, defaults `255 255 255`/
+`140 140 140` - same space-separated convention
+`taskbar-widget-media-player`'s own color settings already use).
+`RefreshDots` now derives every dot/bar's size, margin, and fill brush
+from these instead of the previous hardcoded values (edge-cue shrink
+still halves the configured size, same ratio as before). New
+`ParseRgbColor`/`FormatRgbColor` helpers parse/format that string
+format. Settings window gained two sliders (Size, Spacing) and two
+`MakeColorPickerButton` color-swatch buttons (a `ColorPicker` in an
+attached `Flyout`, shown via `FlyoutBase::SetAttachedFlyout`/
+`ShowAttachedFlyout` - the first use of either API in this file, though
+both are standard documented UWP controls).
+
+**Next retest**: drag the Size and Spacing sliders and confirm the
+indicator column's dots/bars resize and re-space live. Open each color
+picker, change active and inactive colors independently, and confirm
+both the picker's own swatch button and the real indicator column
+update live and persist across a settings-window reopen.

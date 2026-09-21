@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.5.0
+// @version         0.5.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -154,10 +154,24 @@ prototype - not yet verified live, see `PLAN.md`.
       $description: >-
         Show the dot indicator to the right of the widgets instead of the
         left (the default).
+    - size: 4
+      $name: Size (px)
+      $description: >-
+        Base size of each indicator - dot diameter, or bar height (bars
+        are drawn twice as tall as this for a readable bar shape).
+    - itemSpacing: 4
+      $name: Spacing between indicators (px)
+      $description: Vertical gap between adjacent indicators in the column.
+    - activeColor: "255 255 255"
+      $name: Active color (R G B)
+      $description: >-
+        Color of the indicator for the currently visible widget. Also
+        editable as a picker from this mod's own settings window.
+    - inactiveColor: "140 140 140"
+      $name: Inactive color (R G B)
+      $description: Color of every other indicator.
     $name: Indicator
-    $description: >-
-      Dot indicator appearance and behavior. More visual options
-      (color/size/shape) are likely to land here later.
+    $description: Dot/bar indicator appearance and behavior.
   $name: Layout
   $description: Sizing behavior for the widget stack.
 */
@@ -502,6 +516,10 @@ struct {
     bool layoutHideIndicatorWhenSingle = true;
     int layoutIndicatorGap = 6;
     bool layoutIndicatorOnRight = false;
+    int layoutIndicatorSize = 4;
+    int layoutIndicatorItemSpacing = 4;
+    std::wstring layoutIndicatorActiveColor = L"255 255 255";
+    std::wstring layoutIndicatorInactiveColor = L"140 140 140";
     // "left_edge" (default - RootGrid's own left edge, unchanged from
     // this mod's original/only behavior), "center_edge", or "right_edge"
     // - see InjectWidgetStackGrid's placement comment (Incident 37).
@@ -623,6 +641,25 @@ void WritePrivateString(const wchar_t* name, const std::wstring& value) {
     RegSetValueExW(key, name, 0, REG_SZ, (const BYTE*)value.c_str(),
                    (DWORD)((value.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
+}
+
+// "R G B" (space-separated, 0-255 each) - same convention
+// taskbar-widget-media-player's own color settings already use, so a
+// value typed by hand in Windhawk's own settings.yaml UI (not just this
+// mod's own settings window) stays human-editable the same way.
+// Malformed input (missing/unparsable component) falls back to opaque
+// black rather than an uninitialized/garbage color.
+winrt::Windows::UI::Color ParseRgbColor(const std::wstring& value) {
+    int r = 0, g = 0, b = 0;
+    swscanf_s(value.c_str(), L"%d %d %d", &r, &g, &b);
+    auto clamp8 = [](int v) { return (BYTE)std::clamp(v, 0, 255); };
+    return winrt::Windows::UI::ColorHelper::FromArgb(255, clamp8(r), clamp8(g),
+                                                       clamp8(b));
+}
+
+std::wstring FormatRgbColor(winrt::Windows::UI::Color const& c) {
+    return std::to_wstring((int)c.R) + L" " + std::to_wstring((int)c.G) +
+           L" " + std::to_wstring((int)c.B);
 }
 
 // Saves the widget list's current order and enabled state as
@@ -1799,26 +1836,38 @@ void RefreshDots() {
     bool moreBefore = windowStart > 0;
     bool moreAfter = windowEnd < total;
 
+    // layout.indicator.size (Incident 57, user request) - the dot's
+    // "normal" diameter, or half a bar's "normal" height (bars read as
+    // fat dots otherwise, hence *2). Edge-cue shrink (Incident 46) stays
+    // a fixed half-size ratio off of whichever base size is configured,
+    // same as it always scaled off the old hardcoded values.
+    double normalSize = (double)g_settings.layoutIndicatorSize;
+    double edgeSize = normalSize / 2.0;
+    // Split evenly so the *combined* gap between two adjacent indicators
+    // equals the configured itemSpacing, matching how the old hardcoded
+    // {0,2,0,2} margin (2px top + 2px bottom = 4px between neighbors)
+    // already worked before this became a setting.
+    double halfItemSpacing = (double)g_settings.layoutIndicatorItemSpacing / 2.0;
+
     for (size_t i = windowStart; i < windowEnd; i++) {
         int idx = enabled[i];
         bool active = idx == g_ui.activeIndex;
         // Same size regardless of active state (2026-09-17) - only the
-        // color (white vs. gray) marks the active dot for now. Sizing
-        // the active dot bigger too was reverted per user request;
-        // more elaborate indicator styling (color/size/shape options)
-        // is likely to become its own settings group later rather than
-        // hardcoded here - see PLAN.md.
+        // color marks the active indicator. Sizing the active one bigger
+        // too was reverted per user request.
         //
-        // Exception (Incident 46): the dot at either end of the visible
-        // window is drawn smaller when there are more widgets beyond it
-        // in that direction - a lightweight "more this way" cue, same
-        // idea as edge dots shrinking in a carousel/page indicator.
+        // Exception (Incident 46): the indicator at either end of the
+        // visible window is drawn smaller when there are more widgets
+        // beyond it in that direction - a lightweight "more this way"
+        // cue, same idea as edge dots shrinking in a carousel/page
+        // indicator.
         bool edgeCue = (i == windowStart && moreBefore) ||
                        (i == windowEnd - 1 && moreAfter);
-        double r = edgeCue ? 1.0 : 2.0;
+        double size = edgeCue ? edgeSize : normalSize;
 
-        SolidColorBrush brush{winrt::Windows::UI::ColorHelper::FromArgb(
-            255, active ? 255 : 140, active ? 255 : 140, active ? 255 : 140)};
+        SolidColorBrush brush{ParseRgbColor(
+            active ? g_settings.layoutIndicatorActiveColor
+                   : g_settings.layoutIndicatorInactiveColor)};
 
         // Small hit target, no enlarged one (2026-09-16 for dots): the
         // earlier "unclickable dots" symptom turned out to be the broken
@@ -1835,15 +1884,15 @@ void RefreshDots() {
         if (bars) {
             wuxs::Rectangle bar;
             bar.Width(3);
-            bar.Height(edgeCue ? 4.0 : 8.0);
-            bar.Margin({0, 2, 0, 2});
+            bar.Height(size * 2.0);
+            bar.Margin({0, halfItemSpacing, 0, halfItemSpacing});
             bar.Fill(brush);
             indicator = bar;
         } else {
             wuxs::Ellipse dot;
-            dot.Width(r * 2);
-            dot.Height(r * 2);
-            dot.Margin({0, 2, 0, 2});
+            dot.Width(size);
+            dot.Height(size);
+            dot.Margin({0, halfItemSpacing, 0, halfItemSpacing});
             dot.Fill(brush);
             indicator = dot;
         }
@@ -2369,6 +2418,59 @@ TextBlock MakeSectionHeader(std::wstring text) {
     return header;
 }
 
+// A small color-swatch Button whose click shows a ColorPicker in an
+// attached Flyout (Incident 57, user request - separate active/inactive
+// indicator color pickers, not a hex text field). First use of
+// ColorPicker/FlyoutBase's attach-a-flyout-from-code pattern in this
+// file - both are standard, documented UWP XAML APIs, just previously
+// unused here (every other mod in this repo edits color as a plain
+// "R G B" text setting via Windhawk's own settings.yaml UI instead).
+// `onChanged` is called with the picked color on every change (not just
+// on close), matching every other settings-window control's
+// live-apply-as-you-drag behavior (e.g. the sliders above).
+Button MakeColorPickerButton(
+    std::wstring const& initialColorStr,
+    std::function<void(winrt::Windows::UI::Color const&)> onChanged) {
+    auto initialColor = ParseRgbColor(initialColorStr);
+
+    Border swatch;
+    swatch.Width(40);
+    swatch.Height(24);
+    swatch.CornerRadius({4, 4, 4, 4});
+    swatch.BorderThickness({1, 1, 1, 1});
+    swatch.BorderBrush(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x40, 0xFF, 0xFF, 0xFF)});
+    swatch.Background(SolidColorBrush{initialColor});
+
+    Button button;
+    button.Content(swatch);
+    button.Padding({2, 2, 2, 2});
+
+    ColorPicker picker;
+    picker.Color(initialColor);
+    picker.IsAlphaEnabled(false);
+    picker.ColorChanged(
+        [swatch, onChanged](winrt::Windows::Foundation::IInspectable const&,
+                             ColorChangedEventArgs const& args) {
+            auto c = args.NewColor();
+            swatch.Background(SolidColorBrush{c});
+            onChanged(c);
+        });
+
+    Flyout flyout;
+    flyout.Content(picker);
+    winrt::Windows::UI::Xaml::Controls::Primitives::FlyoutBase::
+        SetAttachedFlyout(button, flyout);
+    button.Click(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           RoutedEventArgs const&) {
+            winrt::Windows::UI::Xaml::Controls::Primitives::FlyoutBase::
+                ShowAttachedFlyout(sender.as<FrameworkElement>());
+        });
+
+    return button;
+}
+
 FrameworkElement BuildLayoutTab() {
     StackPanel panel;
     panel.Orientation(Orientation::Vertical);
@@ -2687,6 +2789,106 @@ FrameworkElement BuildLayoutTab() {
             WritePrivateDword(L"layout.indicator.onRight", on ? 1 : 0);
             RebuildStackContents();
         }));
+
+    StackPanel indicatorSizeGroup;
+    indicatorSizeGroup.Orientation(Orientation::Vertical);
+    indicatorSizeGroup.Spacing(4);
+
+    TextBlock indicatorSizeLabel;
+    indicatorSizeLabel.Text(
+        winrt::hstring(L"Size: " +
+                        std::to_wstring(g_settings.layoutIndicatorSize) +
+                        L"px"));
+    indicatorSizeGroup.Children().Append(indicatorSizeLabel);
+
+    Slider indicatorSizeSlider;
+    indicatorSizeSlider.Minimum(2);
+    indicatorSizeSlider.Maximum(16);
+    indicatorSizeSlider.StepFrequency(1);
+    indicatorSizeSlider.Value(g_settings.layoutIndicatorSize);
+    indicatorSizeSlider.ValueChanged(
+        [indicatorSizeLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutIndicatorSize = value;
+            WritePrivateDword(L"layout.indicator.size", (DWORD)value);
+            indicatorSizeLabel.Text(
+                winrt::hstring(L"Size: " + std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    indicatorSizeGroup.Children().Append(indicatorSizeSlider);
+    panel.Children().Append(indicatorSizeGroup);
+
+    StackPanel indicatorSpacingGroup;
+    indicatorSpacingGroup.Orientation(Orientation::Vertical);
+    indicatorSpacingGroup.Spacing(4);
+
+    TextBlock indicatorSpacingLabel;
+    indicatorSpacingLabel.Text(winrt::hstring(
+        L"Spacing between indicators: " +
+        std::to_wstring(g_settings.layoutIndicatorItemSpacing) + L"px"));
+    indicatorSpacingGroup.Children().Append(indicatorSpacingLabel);
+
+    Slider indicatorSpacingSlider;
+    indicatorSpacingSlider.Minimum(0);
+    indicatorSpacingSlider.Maximum(16);
+    indicatorSpacingSlider.StepFrequency(1);
+    indicatorSpacingSlider.Value(g_settings.layoutIndicatorItemSpacing);
+    indicatorSpacingSlider.ValueChanged(
+        [indicatorSpacingLabel](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Controls::Primitives::
+                RangeBaseValueChangedEventArgs const& args) {
+            int value = (int)args.NewValue();
+            g_settings.layoutIndicatorItemSpacing = value;
+            WritePrivateDword(L"layout.indicator.itemSpacing", (DWORD)value);
+            indicatorSpacingLabel.Text(
+                winrt::hstring(L"Spacing between indicators: " +
+                                std::to_wstring(value) + L"px"));
+            RebuildStackContents();
+        });
+    indicatorSpacingGroup.Children().Append(indicatorSpacingSlider);
+    panel.Children().Append(indicatorSpacingGroup);
+
+    StackPanel indicatorColorsGroup;
+    indicatorColorsGroup.Orientation(Orientation::Horizontal);
+    indicatorColorsGroup.Spacing(24);
+
+    StackPanel activeColorGroup;
+    activeColorGroup.Orientation(Orientation::Vertical);
+    activeColorGroup.Spacing(4);
+    TextBlock activeColorLabel;
+    activeColorLabel.Text(L"Active color");
+    activeColorGroup.Children().Append(activeColorLabel);
+    activeColorGroup.Children().Append(MakeColorPickerButton(
+        g_settings.layoutIndicatorActiveColor,
+        [](winrt::Windows::UI::Color const& c) {
+            g_settings.layoutIndicatorActiveColor = FormatRgbColor(c);
+            WritePrivateString(L"layout.indicator.activeColor",
+                                g_settings.layoutIndicatorActiveColor);
+            RebuildStackContents();
+        }));
+    indicatorColorsGroup.Children().Append(activeColorGroup);
+
+    StackPanel inactiveColorGroup;
+    inactiveColorGroup.Orientation(Orientation::Vertical);
+    inactiveColorGroup.Spacing(4);
+    TextBlock inactiveColorLabel;
+    inactiveColorLabel.Text(L"Inactive color");
+    inactiveColorGroup.Children().Append(inactiveColorLabel);
+    inactiveColorGroup.Children().Append(MakeColorPickerButton(
+        g_settings.layoutIndicatorInactiveColor,
+        [](winrt::Windows::UI::Color const& c) {
+            g_settings.layoutIndicatorInactiveColor = FormatRgbColor(c);
+            WritePrivateString(L"layout.indicator.inactiveColor",
+                                g_settings.layoutIndicatorInactiveColor);
+            RebuildStackContents();
+        }));
+    indicatorColorsGroup.Children().Append(inactiveColorGroup);
+
+    panel.Children().Append(indicatorColorsGroup);
 
     return panel;
 }
@@ -3893,6 +4095,15 @@ void LoadSettings() {
     g_settings.layoutIndicatorGap = gap >= 0 ? gap : 6;
     g_settings.layoutIndicatorOnRight =
         Wh_GetIntSetting(L"layout.indicator.onRight");
+    int indicatorSize = Wh_GetIntSetting(L"layout.indicator.size");
+    g_settings.layoutIndicatorSize = indicatorSize > 0 ? indicatorSize : 4;
+    int indicatorItemSpacing = Wh_GetIntSetting(L"layout.indicator.itemSpacing");
+    g_settings.layoutIndicatorItemSpacing =
+        indicatorItemSpacing >= 0 ? indicatorItemSpacing : 4;
+    g_settings.layoutIndicatorActiveColor =
+        GetStringSetting(L"layout.indicator.activeColor", L"255 255 255");
+    g_settings.layoutIndicatorInactiveColor =
+        GetStringSetting(L"layout.indicator.inactiveColor", L"140 140 140");
     g_settings.layoutPosition = GetStringSetting(L"layout.position", L"left_edge");
     int edgeGap = Wh_GetIntSetting(L"layout.edgeGap");
     g_settings.layoutEdgeGap = edgeGap >= 0 ? edgeGap : 6;
@@ -3950,6 +4161,24 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"layout.indicator.onRight", v)) {
         g_settings.layoutIndicatorOnRight = v != 0;
+    }
+    if (ReadPrivateDword(L"layout.indicator.size", v) && v > 0) {
+        g_settings.layoutIndicatorSize = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.indicator.itemSpacing", v)) {
+        g_settings.layoutIndicatorItemSpacing = (int)v;
+    }
+    {
+        std::wstring activeColor, inactiveColor;
+        if (ReadPrivateString(L"layout.indicator.activeColor", activeColor) &&
+            !activeColor.empty()) {
+            g_settings.layoutIndicatorActiveColor = activeColor;
+        }
+        if (ReadPrivateString(L"layout.indicator.inactiveColor",
+                               inactiveColor) &&
+            !inactiveColor.empty()) {
+            g_settings.layoutIndicatorInactiveColor = inactiveColor;
+        }
     }
     std::wstring pos;
     if (ReadPrivateString(L"layout.position", pos) && !pos.empty()) {
