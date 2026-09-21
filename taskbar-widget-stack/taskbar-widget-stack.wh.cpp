@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.7.3
+// @version         0.7.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -3683,15 +3683,17 @@ MenuFlyoutSubItem BuildNativeStackSubmenu() {
     MenuFlyoutSubItem root;
     root.Name(kNativeMenuItemName);
     root.Text(L"Widget stack");
+    // "Segoe Fluent Icons" (not "Segoe MDL2 Assets", used for this
+    // file's older menu icons) per user request - "MapLayers" (U+E81E),
+    // the same codepoint in both fonts since Fluent Icons is a
+    // superset/successor of MDL2 Assets for legacy glyphs. Segoe Fluent
+    // Icons is also the exact font family taskbar-restart-explorer
+    // (windhawk.net) uses for its own native-taskbar-menu icon, so it's
+    // already confirmed to render correctly in this exact hooking
+    // context, not just guessed.
     FontIcon rootIcon;
-    rootIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-    // "Stack"/layered-squares glyph - a best-effort pick (this SDK's
-    // codepoints aren't always reliably guessable, per this file's own
-    // Incident 31), confirm it actually renders as a stack icon during
-    // live testing; if not, swap for a plain Unicode character instead
-    // (this file already does that in a few other places rather than
-    // risk a wrong/missing glyph).
-    rootIcon.Glyph(L"");
+    rootIcon.FontFamily(FontFamily(L"Segoe Fluent Icons"));
+    rootIcon.Glyph(L"");
     root.Icon(rootIcon);
 
     ToggleMenuFlyoutItem hideStackItem;
