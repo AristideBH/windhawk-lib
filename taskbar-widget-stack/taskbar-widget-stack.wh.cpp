@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.4.0
+// @version         0.4.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -2652,14 +2652,26 @@ FrameworkElement BuildWidgetsTab() {
 
     // Real drag-and-drop reordering (Incident 52, user request) - a
     // ListView with CanReorderItems+AllowDrop instead of the previous
-    // Up/Down buttons. Plain FrameworkElements appended directly to
-    // Items() (no ItemsSource/DataTemplate binding) - consistent with
-    // this whole file's rebuild-everything-on-change style, and WinUI's
-    // ListView accepts bare UIElements as items just fine, wrapping each
-    // in its own container automatically. SelectionMode::None since
-    // nothing here uses selection highlighting - the checkbox/gear
-    // button are the only interactive parts of a row, drag-holding
-    // anywhere else on the row reorders it.
+    // Up/Down buttons. SelectionMode::None since nothing here uses
+    // selection highlighting - the checkbox/gear button are the only
+    // interactive parts of a row, drag-holding anywhere else on the row
+    // reorders it.
+    //
+    // Incident 53 (2026-09-21, live-tested regression): items were
+    // first appended directly to the ListView's own `Items()` (no
+    // ItemsSource) - CanReorderItems visibly reordered the rows on
+    // screen, but never actually persisted that order anywhere this
+    // code could read back reliably, so DragItemsCompleted's read of
+    // `Items()` didn't reflect it and the real taskbar stack never
+    // reordered to match. An explicit ItemsSource backed by a real
+    // IObservableVector is the documented, unambiguous way to get
+    // CanReorderItems to mutate a collection this code can trust -
+    // reading the final order back from `itemsSource` itself (not
+    // `widgetsList.Items()`) after a drag.
+    auto itemsSource =
+        winrt::single_threaded_observable_vector<
+            winrt::Windows::Foundation::IInspectable>();
+
     ListView widgetsList;
     widgetsList.SelectionMode(ListViewSelectionMode::None);
     widgetsList.CanReorderItems(true);
@@ -2673,10 +2685,10 @@ FrameworkElement BuildWidgetsTab() {
         row.Orientation(Orientation::Horizontal);
         row.Spacing(8);
         // Tags this row with its CURRENT index into g_widgets, read back
-        // by the DragItemsCompleted handler below (after a drag, the
-        // ListView's own Items() collection is already in the new visual
-        // order - walking it and unboxing each row's Tag gives the old
-        // index that now belongs at each new position).
+        // by the DragItemsCompleted handler below (after a drag,
+        // `itemsSource` is already in the new visual order - walking it
+        // and unboxing each row's Tag gives the old index that now
+        // belongs at each new position).
         row.Tag(winrt::box_value(i));
 
         // Plain Unicode glyph, not a Segoe MDL2 FontIcon codepoint - same
@@ -2725,16 +2737,17 @@ FrameworkElement BuildWidgetsTab() {
             row.Children().Append(gearButton);
         }
 
-        widgetsList.Items().Append(row);
+        itemsSource.Append(row);
     }
 
+    widgetsList.ItemsSource(itemsSource);
+
     widgetsList.DragItemsCompleted(
-        [widgetsList](ListViewBase const&,
+        [itemsSource](ListViewBase const&,
                        DragItemsCompletedEventArgs const&) {
             std::vector<int> newOrder;
-            auto items = widgetsList.Items();
-            for (uint32_t k = 0; k < items.Size(); k++) {
-                if (auto fe = items.GetAt(k).try_as<FrameworkElement>()) {
+            for (uint32_t k = 0; k < itemsSource.Size(); k++) {
+                if (auto fe = itemsSource.GetAt(k).try_as<FrameworkElement>()) {
                     newOrder.push_back(
                         winrt::unbox_value_or<int32_t>(fe.Tag(), -1));
                 }

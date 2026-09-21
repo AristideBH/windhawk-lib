@@ -3261,3 +3261,32 @@ positions in one gesture (not just adjacent swaps) - confirm the stack
 itself reorders to match, the change persists across an Explorer
 restart, and the checkbox/gear button on each row still work normally
 (a short tap toggles/opens settings, a press-and-drag reorders).
+
+## Incident 53: drag-and-drop reordered the settings list but not the real stack (2026-09-21)
+
+**Symptom** (live-tested, same day as Incident 52): dragging a widget
+row visibly reordered the rows inside the settings window's Widgets
+tab, but the actual widget stack in the taskbar never reordered to
+match - checkbox toggling (enable/disable) still worked correctly.
+
+**Root cause**: Incident 52's `ListView` had items appended directly
+to its own `Items()` collection, with no `ItemsSource` set.
+`CanReorderItems` visibly moved the rows on screen either way, but
+without an explicit `ItemsSource` backed by a real `IObservableVector`,
+nothing guaranteed that reorder was reflected anywhere
+`DragItemsCompleted`'s handler could read back reliably - reading
+`widgetsList.Items()` afterward didn't return the new order, so every
+`ReorderWidgets` call effectively saw a no-op order and `g_widgets`
+(and therefore the real taskbar) never changed.
+
+**Fix**: `BuildWidgetsTab` now builds an explicit
+`winrt::single_threaded_observable_vector<IInspectable>()`
+(`itemsSource`), appends each row to *that*, and sets it as the
+`ListView`'s `ItemsSource` - the documented, unambiguous way to get
+`CanReorderItems` to mutate a collection this code can trust.
+`DragItemsCompleted` now reads the final order back from `itemsSource`
+itself, not `widgetsList.Items()`.
+
+**Next retest**: same as Incident 52's - drag a widget row across
+several positions in the settings window and confirm the real taskbar
+stack now actually reorders to match, not just the settings list.
