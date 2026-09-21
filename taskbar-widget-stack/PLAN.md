@@ -3454,3 +3454,98 @@ gap instead.
 sections now reads as a visually distinct card, not just a bold label
 over a flat list. Confirm the settings window's title bar/taskbar entry
 now reads "Widget Stack".
+
+## Incident 59: native taskbar context menu integration - old custom flyout removed (2026-09-21)
+
+**Symptom**: right-clicking the widget stack showed this mod's own
+custom `MenuFlyout` (added in Incident 23, restyled in Incidents 24-25
+to look native-ish) - visually distinct from, and inconsistent with,
+right-clicking empty taskbar space immediately next to it, which shows
+Windows' own native context menu (Task Manager, Taskbar settings,
+etc.).
+
+**Fix**: two-part change, implemented and merged as separate tasks
+this session.
+- **Task 1**: added real native-menu integration - symbol-hooks into
+  `Taskbar.View.dll` to inject a "Widget stack" submenu (Hide
+  stack/Reset position/Stack settings) directly into Windows 11's own
+  taskbar right-click context menu, via a generic `Append` hook guarded
+  by a depth counter (to avoid recursing into unrelated menu
+  construction elsewhere in the process). A real Critical bug was found
+  in this same task's own review: the injection had unbounded
+  recursion that crashed `explorer.exe` on the very first native-menu
+  open - fixed in a follow-up commit before this task's work began
+  (see `git log`: "Fix reentrancy/recursion in native taskbar menu
+  injection").
+- **Task 2**: removed the old custom `MenuFlyout` entirely (the
+  `ShowContextMenu` function and all its `RightTapped` wiring) now that
+  the native-menu injection fully supersedes it - no fallback path if
+  the native hook fails on an unsupported build, per explicit user
+  decision (matches this file's existing "degrades safely, logged,
+  nothing injected" pattern used elsewhere for symbol-hook failures:
+  the widget stack itself keeps working, just without the submenu).
+
+**Known regression** (carried forward from Task 2's own report):
+touchpad-scroll navigation no longer pauses while a context menu is
+open. The old flyout had `g_contextMenuOpen` (introduced in Incident
+21) specifically to suppress scroll-driven widget stepping while its
+own menu was up; the native taskbar menu is a completely different
+window/surface that this mod has no signal for ("is the *native* menu
+currently open" isn't something this mod can currently detect the way
+it could detect its own removed flyout). Flagged as an open regression,
+not fixed in this pass - see Open questions below, item 2, which is the
+live test that will show whether this actually matters in practice.
+
+**Open questions to resolve from live testing** (from the design
+spec's own "Risks / things to verify live" section,
+`docs/superpowers/specs/2026-09-21-native-context-menu-design.md`):
+1. Whether the `RightTapped`-vs-`ContextRequested` independence
+   assumption holds - i.e. whether a widget's own configured
+   right-click action (e.g. weather's `ClickActionSettings.right`, set
+   to something like "Refresh") and the native menu's
+   `ContextRequested` handling interact cleanly, or one suppresses the
+   other.
+2. Whether anything needs to suppress touchpad-scroll navigation while
+   the *native* menu is open, the way `g_contextMenuOpen` did for the
+   old custom flyout (Incident 8) - the native menu is a different
+   window/surface entirely, so this may simply not apply, but needs
+   checking live: scroll over the stack while the native menu is open,
+   confirm nothing unexpected steps widgets underneath it. This is the
+   live test for the regression noted above.
+3. Whether `Taskbar.View.dll` is the right module on the tester's
+   actual Windows build, or whether it needs the
+   `ExplorerExtensions.dll` fallback the reference mod also checks for.
+4. Whether the generic `Append` hook's depth-counter guard correctly
+   leaves this mod's *other* `MenuFlyoutSubItem`/`ToggleMenuFlyoutItem`
+   construction completely unaffected (e.g. inside the settings window,
+   or `taskbar-widget-weather`'s own click-action menus if any) - by
+   construction it should (the guard only activates inside
+   `ShowTaskbarSettingsContextMenu`'s own call stack), but worth
+   confirming nothing double-injects or misfires during normal use of
+   those other menus.
+5. Whether the "Widget stack" submenu's icon glyph actually renders as
+   intended on the tester's system.
+
+**Next retest** (copied from the design spec's own "Testing" section):
+- Right-click empty taskbar space → confirm "Widget stack" submenu
+  appears alongside Task Manager/Taskbar settings/etc., with exactly
+  three items.
+- Right-click directly over a widget with no configured right-click
+  action (default) → same native menu with the submenu.
+- Right-click directly over a widget *with* a configured right-click
+  action (e.g. weather set to "Refresh") → confirm that action fires
+  and the native menu does *not* also appear (or, if the
+  `RightTapped`/`ContextRequested` independence assumption above turns
+  out wrong, document whatever the actual live-tested behavior is).
+- Click "Hide stack" → stack disappears, taskbar reclaims the space.
+  Right-click taskbar again → "Widget stack" submenu still present,
+  "Hide stack" now checked, click it again → stack reappears in its
+  previous position/state.
+- Click "Reset position" and "Stack settings" from the new submenu →
+  confirm identical behavior to today's now-removed custom menu.
+- Restart Explorer with the stack hidden → confirm it comes back
+  visible (non-persisted, per design).
+- (If reproducible) test on a Windows build where symbol resolution is
+  expected to fail, or simulate by temporarily breaking a symbol
+  pattern → confirm the widget stack itself still works completely
+  normally, just without the native submenu.
