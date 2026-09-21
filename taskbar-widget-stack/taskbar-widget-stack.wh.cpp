@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.6.0
+// @version         0.6.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1275,6 +1275,18 @@ using MenuFlyoutItemBaseVector_Append_t =
 MenuFlyoutItemBaseVector_Append_t MenuFlyoutItemBaseVector_Append_Original;
 
 void AppendInjectedNativeMenuItems(void* vectorThis) {
+    // Set true BEFORE building the submenu, not after (fix for a
+    // reentrancy bug found in task review): BuildNativeStackSubmenu()
+    // internally calls root.Items().Append(...) three times to build
+    // its own child items, and MenuFlyoutItemBaseVector_Append_Hook
+    // hooks the same *generic* IVector<MenuFlyoutItemBase>::Append
+    // symbol those internal calls also go through (it's not scoped to
+    // just the outer taskbar menu's own vector) - without this ordering,
+    // each of those three internal appends would see
+    // g_currentMenuInjected still false and g_taskbarSettingsMenuDepth
+    // still >0, re-triggering injection recursively without end.
+    g_currentMenuInjected = true;
+
     auto submenu = BuildNativeStackSubmenu();
     MenuFlyoutSeparator separator;
     separator.Name(kNativeMenuSeparatorName);
@@ -1282,7 +1294,6 @@ void AppendInjectedNativeMenuItems(void* vectorThis) {
     MenuFlyoutItemBaseVector_Append_Original(vectorThis, submenu);
     MenuFlyoutItemBaseVector_Append_Original(vectorThis, separator);
 
-    g_currentMenuInjected = true;
     Wh_Log(L"Injected Widget stack into the native taskbar context menu");
 }
 
