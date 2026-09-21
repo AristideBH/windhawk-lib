@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.11
+// @version         1.12
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -54,11 +54,19 @@ key required. See PLAN.md for the design.
     - knots: knots
   $name: Units
 - DisplaySettings:
-  - displayMode: now
+  - displayMode: mixed
     $name: Compact display mode
     $options:
     - now: Now
     - forecast: Forecast strip
+    - mixed: "Now + short forecast"
+  - contentAlignment: left
+    $name: Content alignment
+    $description: Horizontal alignment of the compact widget's content within its pane.
+    $options:
+    - left: Left
+    - center: Center
+    - right: Right
   - iconStyle: colored
     $name: Icon style
     $description: Reserved for a future vector-icon set; has no effect while icons are emoji.
@@ -225,7 +233,8 @@ struct WeatherSettings {
     bool useFahrenheit = false;
     std::wstring windSpeedUnit = L"kmh";  // kmh|mph|ms|knots
     // Display
-    std::wstring displayMode = L"now";    // now|forecast (persisted, mutated at runtime)
+    std::wstring displayMode = L"mixed";  // now|forecast|mixed (persisted, mutated at runtime)
+    std::wstring contentAlignment = L"left";  // left|center|right
     std::wstring iconStyle = L"colored";  // colored|monochrome (reserved, no-op)
     int forecastDaysInline = 3;
     int forecastDaysPanel = 5;
@@ -300,9 +309,11 @@ void LoadSettings() {
             newSettings.displayMode = runtimeValueBuf;
         } else {
             newSettings.displayMode =
-                GetStringSetting(L"DisplaySettings.displayMode", L"now");
+                GetStringSetting(L"DisplaySettings.displayMode", L"mixed");
         }
     }
+    newSettings.contentAlignment =
+        GetStringSetting(L"DisplaySettings.contentAlignment", L"left");
     newSettings.iconStyle = GetStringSetting(L"DisplaySettings.iconStyle", L"colored");
     newSettings.forecastDaysInline =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysInline"), 2, 7);
@@ -1034,7 +1045,7 @@ Grid BuildNowView() {
 // Global state and view builders for in-place UI updates
 FrameworkElement g_weatherRoot{nullptr};
 Border g_weatherBackground{nullptr};
-Button g_weatherWrapper{nullptr};
+FrameworkElement g_weatherWrapper{nullptr};
 Panel g_weatherRootParent{nullptr};
 HWND g_weatherTaskbarWnd = nullptr;
 
@@ -1044,15 +1055,37 @@ using WindowThreadProc = void(*)(void*);
 static bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param);
 
 Grid BuildForecastView();
+Grid BuildMixedView();
 
 FrameworkElement BuildCompactView() {
     std::wstring displayMode;
+    std::wstring contentAlignment;
     {
         std::lock_guard<std::mutex> lock(g_settingsMutex);
         displayMode = g_settings.displayMode;
+        contentAlignment = g_settings.contentAlignment;
     }
-    return displayMode == L"forecast" ? (FrameworkElement)BuildForecastView()
-                                       : (FrameworkElement)BuildNowView();
+    FrameworkElement view;
+    if (displayMode == L"forecast") {
+        view = BuildForecastView();
+    } else if (displayMode == L"mixed") {
+        view = BuildMixedView();
+    } else {
+        view = BuildNowView();
+    }
+    // All three views are Auto-sized internally (no Star columns), so
+    // setting HorizontalAlignment here - rather than on `wrapper`/
+    // `background`, both of which stay Stretch to keep the hover
+    // surface covering the whole pane - is what actually moves the
+    // visible content left/center/right within it.
+    if (contentAlignment == L"center") {
+        view.HorizontalAlignment(HorizontalAlignment::Center);
+    } else if (contentAlignment == L"right") {
+        view.HorizontalAlignment(HorizontalAlignment::Right);
+    } else {
+        view.HorizontalAlignment(HorizontalAlignment::Left);
+    }
+    return view;
 }
 
 // Replaces the compact view's content in place. `g_weatherBackground` is
@@ -1133,13 +1166,99 @@ Grid BuildForecastView() {
     return root;
 }
 
-// ToggleDisplayMode - switch between now and forecast views
+// BuildMixedView - "now" (icon + temp/condition, reusing BuildNowView's own
+// layout) plus a short same-line forecast strip for the next few days
+// (icon + high temp only, same cell style as BuildForecastView's, just
+// capped lower) - the default compact display mode (2026-09-21).
+constexpr int kMixedForecastDays = 3;
+
+Grid BuildMixedView() {
+    WeatherState snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_weatherMutex);
+        snapshot = g_weather;
+    }
+    bool useFahrenheit;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        useFahrenheit = g_settings.useFahrenheit;
+    }
+
+    Grid root;
+    root.VerticalAlignment(VerticalAlignment::Center);
+    root.ColumnSpacing(10);
+    root.Padding({6, 2, 6, 2});
+    root.ColumnDefinitions().Append(ColumnDefinition{});
+    root.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
+
+    // BuildNowView already applies its own {6,2,6,2} padding for when it's
+    // used standalone - reset it here since this view's own root already
+    // owns the one outer padding for the whole mixed layout.
+    auto nowBlock = BuildNowView();
+    nowBlock.Padding({0, 0, 0, 0});
+    Grid::SetColumn(nowBlock, 0);
+    root.Children().Append(nowBlock);
+
+    int days = std::min((int)snapshot.daily.size(), kMixedForecastDays);
+    if (days > 0) {
+        root.ColumnDefinitions().Append(ColumnDefinition{});
+        root.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Auto});
+        Border separator;
+        separator.Width(1);
+        separator.Opacity(0.3);
+        separator.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xFF, 0xFF)});
+        separator.Margin({0, 4, 0, 4});
+        Grid::SetColumn(separator, 1);
+        root.Children().Append(separator);
+
+        root.ColumnDefinitions().Append(ColumnDefinition{});
+        root.ColumnDefinitions().GetAt(2).Width({1.0, GridUnitType::Auto});
+        Grid forecastStrip;
+        forecastStrip.VerticalAlignment(VerticalAlignment::Center);
+        forecastStrip.ColumnSpacing(8);
+        Grid::SetColumn(forecastStrip, 2);
+        for (int i = 0; i < days; i++) {
+            forecastStrip.ColumnDefinitions().Append(ColumnDefinition{});
+            const auto& day = snapshot.daily[i];
+
+            StackPanel cell;
+            cell.Orientation(Orientation::Vertical);
+            cell.HorizontalAlignment(HorizontalAlignment::Center);
+            Grid::SetColumn(cell, i);
+
+            TextBlock icon;
+            icon.FontSize(kIconFontSize * 0.6);
+            icon.HorizontalAlignment(HorizontalAlignment::Center);
+            icon.Text(winrt::hstring(GetWeatherIcon(day.wmoCode, day.isDay).glyph));
+            cell.Children().Append(icon);
+
+            TextBlock temp;
+            temp.FontSize(kConditionFontSize);
+            temp.HorizontalAlignment(HorizontalAlignment::Center);
+            temp.Text(winrt::hstring(FormatTemperature(day.tempMax, useFahrenheit)));
+            cell.Children().Append(temp);
+
+            forecastStrip.Children().Append(cell);
+        }
+        root.Children().Append(forecastStrip);
+    }
+
+    return root;
+}
+
+// ToggleDisplayMode - cycles now -> forecast -> mixed -> now
 void ToggleDisplayMode() {
     std::wstring newMode;
     {
         std::lock_guard<std::mutex> lock(g_settingsMutex);
-        g_settings.displayMode =
-            g_settings.displayMode == L"now" ? L"forecast" : L"now";
+        if (g_settings.displayMode == L"now") {
+            g_settings.displayMode = L"forecast";
+        } else if (g_settings.displayMode == L"forecast") {
+            g_settings.displayMode = L"mixed";
+        } else {
+            g_settings.displayMode = L"now";
+        }
         newMode = g_settings.displayMode;
     }
     // Persisted to a runtime-value key (not the settings.yaml key) so
@@ -1324,11 +1443,14 @@ Grid BuildWeatherHeaderAndDetails() {
         windSpeedUnit = g_settings.windSpeedUnit;
     }
 
-    // No card background (live feedback, 2026-09-21): the panel used to
-    // have its own semi-opaque fill nested inside the Flyout's own
-    // presenter chrome, which looked like a floating rectangle rather
-    // than one uniform panel - relies on the FlyoutPresenter's own
-    // default system background now, like a plain native flyout.
+    // The overall panel has no background of its own (live feedback,
+    // 2026-09-21 - relies on the Flyout's own default presenter chrome,
+    // not a nested double background) - but the header block
+    // specifically got its background back after a second round of
+    // feedback the same day: a plain flat header on the panel's own
+    // (nonexistent) background read as un-anchored, so `header` (below)
+    // now carries its own surface fill, scoped to just that block - the
+    // details row and forecast list underneath stay background-free.
     Grid card;
     card.CornerRadius({6, 6, 6, 6});
     card.Padding({16, 16, 16, 16});
@@ -1337,6 +1459,10 @@ Grid BuildWeatherHeaderAndDetails() {
 
     // Header row: icon + location/temp/condition/feels-like
     Grid header;
+    header.CornerRadius({8, 8, 8, 8});
+    header.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)});
+    header.Padding({10, 10, 10, 10});
     header.ColumnDefinitions().Append(ColumnDefinition{});
     header.ColumnDefinitions().Append(ColumnDefinition{});
     header.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
@@ -1345,8 +1471,10 @@ Grid BuildWeatherHeaderAndDetails() {
 
     // Fixed square "icon zone" (like an avatar/album-art square) instead
     // of a bare oversized glyph floating in open space - live feedback,
-    // 2026-09-21, also asked to tighten the gap to the text next to it
-    // (was 12px, now 8px from the zone's own edge).
+    // 2026-09-21. The gap to the text next to it went 12px -> 8px on the
+    // first feedback pass, then back up a bit (8px -> 12px) on a second
+    // pass asking for "a bit more" room now that the header has its own
+    // background again and the tighter gap read as cramped against it.
     constexpr double kHeaderIconZoneSize = 48;
     Border headerIconZone;
     headerIconZone.Width(kHeaderIconZoneSize);
@@ -1354,7 +1482,7 @@ Grid BuildWeatherHeaderAndDetails() {
     headerIconZone.CornerRadius({6, 6, 6, 6});
     headerIconZone.Background(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0xFF, 0xFF, 0xFF)});
-    headerIconZone.Margin({0, 0, 8, 0});
+    headerIconZone.Margin({0, 0, 12, 0});
     TextBlock headerIcon;
     headerIcon.FontSize(28);
     headerIcon.HorizontalAlignment(HorizontalAlignment::Center);
@@ -1864,21 +1992,20 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
             return 0.0;
         }
 
-        Button wrapper;
+        // A plain Grid, not a Button (2026-09-21): there's only ever one
+        // clickable area here, and a Button brings its own themed
+        // idle/PointerOver/Pressed template chrome that has to be fought
+        // (clearing just its idle Background wasn't the full fix - other
+        // template-driven states could still interfere). `background`
+        // (below) already owns every real hover/press visual via
+        // ApplyWeatherHoverState, matching taskbar-widget-media-player's
+        // own wrapper, which is also a plain Grid for the same reason.
+        // A Grid needs an explicit (even fully transparent) Background to
+        // be hit-testable at all - unlike a Button, it isn't by default -
+        // so this is required, not just cosmetic.
+        Grid wrapper;
         wrapper.HorizontalAlignment(HorizontalAlignment::Stretch);
         wrapper.Height(host->paneHeight);
-        wrapper.Padding({0, 0, 0, 0});
-        wrapper.BorderThickness({0, 0, 0, 0});
-        // A plain Button carries its own themed idle/PointerOver/Pressed
-        // template backgrounds - without clearing the idle one explicitly,
-        // it shows through even while ApplyWeatherHoverState's own
-        // transparent Background on `background` (below) is in effect,
-        // so the compact widget never looked fully transparent at rest
-        // (live-tested, 2026-09-21). `background` still owns all the
-        // real hover/press visuals; this just stops the Button's own
-        // chrome from adding a second, uncontrolled one underneath it -
-        // same idea as taskbar-widget-media-player's own wrapper, which
-        // clears its Background for the same reason.
         wrapper.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
@@ -1887,7 +2014,7 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
 
         auto compact = BuildCompactView();
         background.Child(compact);
-        wrapper.Content(background);
+        wrapper.Children().Append(background);
 
         WireUpHover(wrapper, background);
         WireUpClickActions(wrapper);
@@ -2195,13 +2322,10 @@ void InjectWeatherStandalone(HWND hWnd) {
         return;
     }
 
-    Button wrapper;
+    // See the registered-mode wrapper's own comment above (same reasoning,
+    // standalone-injection site) - a plain Grid, not a Button.
+    Grid wrapper;
     wrapper.HorizontalAlignment(HorizontalAlignment::Left);
-    wrapper.Padding({0, 0, 0, 0});
-    wrapper.BorderThickness({0, 0, 0, 0});
-    // See the registered-mode wrapper's own comment above (same fix,
-    // standalone-injection site) - clears the Button's own default idle
-    // background so only `background`'s explicit hover/press states show.
     wrapper.Background(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
@@ -2209,7 +2333,7 @@ void InjectWeatherStandalone(HWND hWnd) {
     background.CornerRadius({4, 4, 4, 4});
     auto compact = BuildCompactView();
     background.Child(compact);
-    wrapper.Content(background);
+    wrapper.Children().Append(background);
 
     WireUpHover(wrapper, background);
     WireUpClickActions(wrapper);

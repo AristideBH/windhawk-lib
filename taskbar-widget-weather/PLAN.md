@@ -211,6 +211,69 @@ weekday abbreviations for the rest; try a custom format like
 `"{weekday_short}, {month_short} {day}"` and confirm it renders
 correctly.
 
+## Incident 5: follow-up pass from live testing Incident 4's changes (2026-09-21)
+
+**Symptom** (user feedback after live-testing Incident 4, screenshot):
+(1) the panel overall correctly had no background, but the header block
+specifically looked "un-anchored" without one - wanted it back, scoped
+to just that block. (2) The icon-to-text gap in the header, tightened
+from 12px to 8px in Incident 4, needed "a bit more" room again now that
+the header has its own background. (3) The compact widget wrapper was
+still a `Button` under the hood (Incident 4 only cleared its default
+Background) - since there's only ever one clickable area, no `Button`
+chrome is needed at all. (4) No way to align the compact widget's
+content within its pane. (5) No compact view combining "now" with a
+short forecast.
+
+**Fix (1, 2)**: `header` (the icon+temp/condition/feels-like row inside
+`BuildWeatherHeaderAndDetails`) now carries its own `CornerRadius`/
+`Background`/`Padding`, independent of `card`'s (the panel's own outer
+Grid, still background-free). The details row (humidity/wind/pressure)
+and forecast list stay background-free. Icon-to-text gap went from 8px
+back up to 12px.
+
+**Fix (3)**: both `WeatherWidget_Create` and `InjectWeatherStandalone`'s
+wrapper changed from `Button` to a plain `Grid` - `WireUpHover`/
+`WireUpClickActions` both already took `FrameworkElement`, not `Button`
+specifically, so no signature changes were needed; `g_weatherWrapper`'s
+type changed from `Button` to `FrameworkElement` to match (only
+`.ActualWidth()` was ever called on it elsewhere). A `Grid` isn't
+hit-testable without an explicit `Background` the way a `Button` is by
+default, so the transparent `Background` Incident 4 added for the
+Button-chrome fix is now load-bearing for hit-testing too, not just
+cosmetic. Matches `taskbar-widget-media-player`'s own wrapper, which is
+also a plain `Grid`.
+
+**Fix (4)**: new `DisplaySettings.contentAlignment` setting
+(left/center/right, default left). Applied in `BuildCompactView` via
+`HorizontalAlignment` on whichever view it built (`BuildNowView`/
+`BuildForecastView`/`BuildMixedView`, all Auto-sized internally, never
+on `wrapper`/`background` themselves, which stay `Stretch` so the hover
+surface still covers the whole pane regardless of alignment).
+
+**Fix (5)**: new `DisplaySettings.displayMode` option `mixed`
+(`BuildMixedView`) - `BuildNowView`'s own icon+temp/condition, a thin
+separator, then up to `kMixedForecastDays` (3) forecast cells (same
+icon+high-temp cell style as `BuildForecastView`'s, smaller icon).
+`mixed` is now the default (`g_settings.displayMode`'s in-code default
+and the YAML default both changed from `now`). `ToggleDisplayMode` now
+cycles `now -> forecast -> mixed -> now` instead of only toggling
+between the first two.
+
+**Next retest**: confirm the header block shows its own rounded
+background again while the rest of the panel stays transparent, and the
+icon-to-text gap reads less cramped than Incident 4's version. Hover/
+click the compact widget - confirm identical hover/press behavior to
+before (now via `Grid` pointer events instead of `Button`), and that
+right-click still bubbles to `taskbar-widget-stack`'s own menu when
+`ClickActionSettings.right` is "Nothing". Try all three
+`contentAlignment` options and confirm the compact widget's content
+visibly shifts within its pane while the hover surface itself still
+covers the full pane width in every case. Confirm the compact display
+mode now defaults to "Now + short forecast" on a fresh install, and
+that cycling via `ToggleDisplayMode`'s bound click action visits all
+three modes in order.
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
