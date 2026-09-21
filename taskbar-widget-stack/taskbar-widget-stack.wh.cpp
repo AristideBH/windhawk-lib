@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.4.1
+// @version         0.4.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -2644,68 +2644,82 @@ FrameworkElement BuildWidgetSettingsView(int idx) {
     return panel;
 }
 
+// Fixed row height for the Widgets tab's drag-reorder math below - Auto
+// sizing would make "how many rows did the pointer move past" a function
+// of each row's actual rendered height, which is fine right up until a
+// row's content wraps or a future row type is taller/shorter than
+// another; a fixed height keeps the math exact regardless.
+constexpr double kWidgetRowHeight = 36.0;
+
 FrameworkElement BuildWidgetsTab() {
     StackPanel panel;
     panel.Orientation(Orientation::Vertical);
     panel.Margin({16, 16, 16, 16});
     panel.Spacing(6);
 
-    // Real drag-and-drop reordering (Incident 52, user request) - a
-    // ListView with CanReorderItems+AllowDrop instead of the previous
-    // Up/Down buttons. SelectionMode::None since nothing here uses
-    // selection highlighting - the checkbox/gear button are the only
-    // interactive parts of a row, drag-holding anywhere else on the row
-    // reorders it.
-    //
-    // Incident 53 (2026-09-21, live-tested regression): items were
-    // first appended directly to the ListView's own `Items()` (no
-    // ItemsSource) - CanReorderItems visibly reordered the rows on
-    // screen, but never actually persisted that order anywhere this
-    // code could read back reliably, so DragItemsCompleted's read of
-    // `Items()` didn't reflect it and the real taskbar stack never
-    // reordered to match. An explicit ItemsSource backed by a real
-    // IObservableVector is the documented, unambiguous way to get
-    // CanReorderItems to mutate a collection this code can trust -
-    // reading the final order back from `itemsSource` itself (not
-    // `widgetsList.Items()`) after a drag.
-    auto itemsSource =
-        winrt::single_threaded_observable_vector<
-            winrt::Windows::Foundation::IInspectable>();
-
-    ListView widgetsList;
-    widgetsList.SelectionMode(ListViewSelectionMode::None);
-    widgetsList.CanReorderItems(true);
-    widgetsList.AllowDrop(true);
+    // Manual drag-and-drop via low-level pointer events, not a ListView's
+    // CanReorderItems/DragItemsCompleted (Incident 54, 2026-09-21,
+    // live-tested: Incidents 52 and 53's ListView-based attempts both
+    // visibly reordered the *settings list* on screen, but
+    // DragItemsCompleted never actually fired - even with a real
+    // ItemsSource (Incident 53's fix), so the real taskbar stack never
+    // reordered and a checkbox toggle right after a drag would snap the
+    // list back to g_widgets' still-unchanged order. This mod's settings
+    // window is a raw HWND hosting its own DesktopWindowXamlSource, not
+    // a real UWP/WinAppSDK app window - ListView's reorder machinery
+    // likely depends on some OS-level drag-drop registration a real app
+    // window gets for free that this one doesn't. Reimplemented instead
+    // on PointerPressed/PointerMoved/PointerReleased + CapturePointer,
+    // the exact same primitives (and even the same delta-tracking idiom)
+    // this file's own g_ui.root vertical-drag-to-scrub gesture already
+    // uses successfully in this exact hosting context - see
+    // WireUpNavigation's PointerPressed/PointerMoved/PointerReleased
+    // trio for the proven reference.
+    StackPanel list;
+    list.Orientation(Orientation::Vertical);
+    list.Spacing(2);
 
     for (int i = 0; i < (int)g_widgets.size(); i++) {
         std::wstring label = g_widgets[i].widget->DisplayName();
         std::replace(label.begin(), label.end(), L'\n', L' ');
 
-        StackPanel row;
-        row.Orientation(Orientation::Horizontal);
-        row.Spacing(8);
-        // Tags this row with its CURRENT index into g_widgets, read back
-        // by the DragItemsCompleted handler below (after a drag,
-        // `itemsSource` is already in the new visual order - walking it
-        // and unboxing each row's Tag gives the old index that now
-        // belongs at each new position).
-        row.Tag(winrt::box_value(i));
+        Grid row;
+        row.Height(kWidgetRowHeight);
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().Append(ColumnDefinition{});
+        row.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
+        row.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Star});
+        row.ColumnDefinitions().GetAt(2).Width({1.0, GridUnitType::Auto});
+
+        // The row's own visual position while being dragged - moved via
+        // TranslateY in PointerMoved below, reset to 0 on release
+        // (BuildWidgetsTab always gets called again afterward anyway,
+        // which would reset it regardless, but resetting explicitly
+        // avoids a one-frame visual jump before that rebuild lands).
+        CompositeTransform transform;
+        row.RenderTransform(transform);
 
         // Plain Unicode glyph, not a Segoe MDL2 FontIcon codepoint - same
         // reasoning as the gear button below (Incident 31: those
-        // codepoints aren't reliably guessable against this SDK). Purely
-        // a visual "this row can be dragged" affordance, not interactive
-        // itself.
+        // codepoints aren't reliably guessable against this SDK). This
+        // is the drag gesture's own hit target - PointerPressed is wired
+        // here specifically, not on the row as a whole, so a tap on the
+        // checkbox/gear button is never ambiguous with a drag start.
         TextBlock dragHandle;
         dragHandle.Text(L"☰");
         dragHandle.Opacity(0.5);
+        dragHandle.HorizontalAlignment(HorizontalAlignment::Center);
         dragHandle.VerticalAlignment(VerticalAlignment::Center);
+        dragHandle.Margin({0, 0, 8, 0});
+        Grid::SetColumn(dragHandle, 0);
         row.Children().Append(dragHandle);
 
         CheckBox enabledBox;
         enabledBox.Content(winrt::box_value(winrt::hstring(label)));
         enabledBox.IsChecked(g_widgets[i].enabled);
-        enabledBox.MinWidth(160);
+        enabledBox.VerticalAlignment(VerticalAlignment::Center);
+        Grid::SetColumn(enabledBox, 1);
         auto toggleHandler =
             [i](winrt::Windows::Foundation::IInspectable const&,
                 RoutedEventArgs const&) {
@@ -2726,6 +2740,7 @@ FrameworkElement BuildWidgetsTab() {
             // SDK (Symbol::Down didn't even exist), so a literal
             // character is the lower-risk choice here.
             gearButton.Content(winrt::box_value(winrt::hstring(L"⚙")));
+            Grid::SetColumn(gearButton, 2);
             gearButton.Click(
                 [i](winrt::Windows::Foundation::IInspectable const&,
                     RoutedEventArgs const&) {
@@ -2737,28 +2752,74 @@ FrameworkElement BuildWidgetsTab() {
             row.Children().Append(gearButton);
         }
 
-        itemsSource.Append(row);
+        // Fresh per row (not shared across rows) - only guards this
+        // row's own PointerMoved against firing outside an actual drag
+        // (plain hover-move fires PointerMoved too, with nothing
+        // pressed); CapturePointer below is what actually ensures only
+        // the row being dragged ever sees Moved/Released for that
+        // pointer at all, regardless of this flag.
+        auto isDragging = std::make_shared<bool>(false);
+        auto dragStartY = std::make_shared<double>(0.0);
+
+        dragHandle.PointerPressed(
+            [i, row, transform, list, isDragging, dragStartY](
+                winrt::Windows::Foundation::IInspectable const&,
+                winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&
+                    args) {
+                *isDragging = true;
+                // Measured relative to `list` (the static container),
+                // not `row` itself - `row`'s own coordinate space shifts
+                // as TranslateY changes during the drag, which would
+                // make a "relative to row" reading non-linear across
+                // successive PointerMoved calls. `list` never moves.
+                *dragStartY = args.GetCurrentPoint(list).Position().Y;
+                row.CapturePointer(args.Pointer());
+            });
+        row.PointerMoved(
+            [transform, list, isDragging, dragStartY](
+                winrt::Windows::Foundation::IInspectable const&,
+                winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&
+                    args) {
+                if (!*isDragging) {
+                    return;
+                }
+                double y = args.GetCurrentPoint(list).Position().Y;
+                transform.TranslateY(y - *dragStartY);
+            });
+        row.PointerReleased(
+            [i, row, transform, list, isDragging, dragStartY](
+                winrt::Windows::Foundation::IInspectable const&,
+                winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&
+                    args) {
+                if (!*isDragging) {
+                    return;
+                }
+                *isDragging = false;
+                row.ReleasePointerCapture(args.Pointer());
+                double deltaY = transform.TranslateY();
+                transform.TranslateY(0);
+                int offset = (int)std::lround(deltaY / kWidgetRowHeight);
+                int targetIndex = std::clamp(i + offset, 0,
+                                              (int)g_widgets.size() - 1);
+                if (targetIndex != i) {
+                    std::vector<int> newOrder;
+                    for (int k = 0; k < (int)g_widgets.size(); k++) {
+                        newOrder.push_back(k);
+                    }
+                    int moved = newOrder[i];
+                    newOrder.erase(newOrder.begin() + i);
+                    newOrder.insert(newOrder.begin() + targetIndex, moved);
+                    ReorderWidgets(newOrder);
+                }
+                if (g_widgetsTabScroller) {
+                    g_widgetsTabScroller.Content(BuildWidgetsTab());
+                }
+            });
+
+        list.Children().Append(row);
     }
 
-    widgetsList.ItemsSource(itemsSource);
-
-    widgetsList.DragItemsCompleted(
-        [itemsSource](ListViewBase const&,
-                       DragItemsCompletedEventArgs const&) {
-            std::vector<int> newOrder;
-            for (uint32_t k = 0; k < itemsSource.Size(); k++) {
-                if (auto fe = itemsSource.GetAt(k).try_as<FrameworkElement>()) {
-                    newOrder.push_back(
-                        winrt::unbox_value_or<int32_t>(fe.Tag(), -1));
-                }
-            }
-            ReorderWidgets(newOrder);
-            if (g_widgetsTabScroller) {
-                g_widgetsTabScroller.Content(BuildWidgetsTab());
-            }
-        });
-
-    panel.Children().Append(widgetsList);
+    panel.Children().Append(list);
 
     // Add/remove: stubbed disabled (user decision, 2026-09-17) - no
     // widget catalog exists yet to add from. See PLAN.md "Next steps".

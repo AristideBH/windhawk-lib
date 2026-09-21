@@ -3290,3 +3290,46 @@ itself, not `widgetsList.Items()`.
 **Next retest**: same as Incident 52's - drag a widget row across
 several positions in the settings window and confirm the real taskbar
 stack now actually reorders to match, not just the settings list.
+
+## Incident 54: ListView reorder still didn't reach the real stack even with a real ItemsSource (2026-09-21)
+
+**Symptom** (live-tested on version 0.4.1, Incident 53's fix): dragging
+a row still kept its new place in the settings list, the real taskbar
+stack still never reordered, and clicking a checkbox right after a drag
+snapped the settings list back to its original order (while still
+correctly toggling the right widget in the taskbar) - proving
+`g_widgets` itself was never actually being reordered by the drag at
+all, on either Incident 52's or Incident 53's version.
+
+**Root cause**: `ListViewBase`'s `CanReorderItems`/`DragItemsCompleted`
+apparently never actually fires in this mod's settings window,
+regardless of `ItemsSource`. This mod's settings window is a raw Win32
+`HWND` hosting its own `DesktopWindowXamlSource` (Incident 26) - not a
+real UWP/WinAppSDK application window - and `ListView`'s built-in
+reorder machinery most likely depends on some OS-level drag-drop
+registration a real app window gets automatically that this
+manually-created one doesn't. (The rows visibly moving on screen during
+a drag is `ListView`'s own built-in *visual* drag feedback, which
+apparently still renders even when the completion event backing actual
+data mutation never fires.)
+
+**Fix**: replaced the `ListView` entirely with a plain `StackPanel` of
+fixed-height (`kWidgetRowHeight`, 36px) `Grid` rows, and reimplemented
+reordering from `PointerPressed`/`PointerMoved`/`PointerReleased` +
+`CapturePointer` directly - the exact same low-level primitives (and
+delta-tracking idiom: measure position relative to a *static* ancestor,
+not the moving element itself, so successive deltas stay linear) this
+file's own `g_ui.root` vertical drag-to-scrub gesture (`WireUpNavigation`)
+already uses successfully in this exact hosting context. `PointerPressed`
+is wired on a dedicated "☰" drag-handle glyph specifically, not the row
+as a whole, so it's never ambiguous with a tap on the checkbox/gear
+button. On release, the total vertical drag distance divided by the row
+height (rounded) gives how many positions to move by; `ReorderWidgets`
+is unchanged from Incident 52/53 and still owns the actual
+`g_widgets`/persistence/rebuild.
+
+**Next retest**: drag a widget row (via its "☰" handle) up/down across
+several positions - confirm the row follows the pointer smoothly, the
+real taskbar stack reorders to match on release, the change survives an
+Explorer restart, and the checkbox/gear button on each row still work
+normally with no ambiguity against the drag gesture.
