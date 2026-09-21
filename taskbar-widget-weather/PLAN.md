@@ -429,6 +429,19 @@ not just a flat color. Confirm the forecast list's last row and the
 Refresh button are both fully visible, nothing clipped at the bottom,
 on every single panel open (not just most of the time).
 
+## Incident 8: forecast day count for the mixed view wasn't configurable (2026-09-21)
+
+**Fix**: `BuildMixedView`'s forecast day count (Incident 5) was a
+hardcoded `constexpr int kMixedForecastDays = 3`. New
+`DisplaySettings.forecastDaysMixed` setting (1-5, default 3) replaces
+it, loaded/clamped in `LoadSettings` the same way
+`forecastDaysInline`/`forecastDaysPanel` already are.
+
+**Next retest**: change "Forecast days (mixed view)" in settings and
+confirm the compact "Now + short forecast" view's forecast strip
+immediately reflects the new count (clamped to however many days are
+actually cached).
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full

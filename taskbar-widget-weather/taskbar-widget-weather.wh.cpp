@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.15
+// @version         1.16
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -76,6 +76,11 @@ key required. See PLAN.md for the design.
   - forecastDaysInline: 3
     $name: Forecast days (compact strip)
     $description: 2-7 days shown when compact display mode is "Forecast strip".
+  - forecastDaysMixed: 3
+    $name: Forecast days (mixed view)
+    $description: >-
+      1-5 days shown next to "Now" when compact display mode is "Now +
+      short forecast".
   - forecastDaysPanel: 5
     $name: Forecast days (panel)
     $description: 3-7 days shown in the details panel's forecast list.
@@ -237,6 +242,7 @@ struct WeatherSettings {
     std::wstring contentAlignment = L"left";  // left|center|right
     std::wstring iconStyle = L"colored";  // colored|monochrome (reserved, no-op)
     int forecastDaysInline = 3;
+    int forecastDaysMixed = 3;
     int forecastDaysPanel = 5;
     std::wstring forecastDateFormat = L"{rel}";
     int refreshIntervalMinutes = 30;
@@ -317,6 +323,8 @@ void LoadSettings() {
     newSettings.iconStyle = GetStringSetting(L"DisplaySettings.iconStyle", L"colored");
     newSettings.forecastDaysInline =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysInline"), 2, 7);
+    newSettings.forecastDaysMixed =
+        std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysMixed"), 1, 5);
     newSettings.forecastDaysPanel =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysPanel"), 3, 7);
     newSettings.forecastDateFormat =
@@ -1177,8 +1185,9 @@ Grid BuildForecastView() {
 // BuildMixedView - "now" (icon + temp/condition, reusing BuildNowView's own
 // layout) plus a short same-line forecast strip for the next few days
 // (icon + high temp only, same cell style as BuildForecastView's, just
-// capped lower) - the default compact display mode (2026-09-21).
-constexpr int kMixedForecastDays = 3;
+// capped lower) - the default compact display mode (2026-09-21). Day
+// count is DisplaySettings.forecastDaysMixed (1-5, added 2026-09-21 -
+// was a hardcoded constant at first).
 
 Grid BuildMixedView() {
     WeatherState snapshot;
@@ -1187,9 +1196,11 @@ Grid BuildMixedView() {
         snapshot = g_weather;
     }
     bool useFahrenheit;
+    int forecastDaysMixed;
     {
         std::lock_guard<std::mutex> lock(g_settingsMutex);
         useFahrenheit = g_settings.useFahrenheit;
+        forecastDaysMixed = g_settings.forecastDaysMixed;
     }
 
     Grid root;
@@ -1207,7 +1218,7 @@ Grid BuildMixedView() {
     Grid::SetColumn(nowBlock, 0);
     root.Children().Append(nowBlock);
 
-    int days = std::min((int)snapshot.daily.size(), kMixedForecastDays);
+    int days = std::min((int)snapshot.daily.size(), forecastDaysMixed);
     if (days > 0) {
         root.ColumnDefinitions().Append(ColumnDefinition{});
         root.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Auto});
