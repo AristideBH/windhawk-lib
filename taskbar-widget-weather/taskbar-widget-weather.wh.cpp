@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.16
+// @version         1.17
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1390,8 +1390,16 @@ void RefreshWeatherWidgetHoverVisual() {
     if (!g_weatherBackground) {
         return;
     }
+    // While the details panel is open, the widget should look exactly
+    // like plain hover - never pressed (2026-09-21). Opening the Flyout
+    // shifts pointer capture away from the widget, which isn't
+    // guaranteed to deliver a matching PointerReleased first - without
+    // this, a stuck `*g_weatherPointerPressed == true` would render the
+    // darker, flat pressed style for as long as the panel stayed open
+    // instead of the intended hover look.
     bool hovered = *g_weatherPointerHovered || g_weatherFlyoutOpen;
-    ApplyWeatherHoverState(g_weatherBackground, hovered, *g_weatherPointerPressed);
+    bool pressed = *g_weatherPointerPressed && !g_weatherFlyoutOpen;
+    ApplyWeatherHoverState(g_weatherBackground, hovered, pressed);
 }
 
 // `background` is a full-bounds Border sitting behind the compact
@@ -2012,6 +2020,14 @@ void ShowWeatherPanel(FrameworkElement anchor) {
     flyout.Closed([](winrt::Windows::Foundation::IInspectable const&,
                       winrt::Windows::Foundation::IInspectable const&) {
         g_weatherFlyoutOpen = false;
+        // Closing the panel is almost always triggered by a click
+        // elsewhere (light dismiss), well off the widget - reset both
+        // explicitly rather than trusting a PointerExited/PointerReleased
+        // to have fired on the widget itself, since opening the Flyout
+        // in the first place can already disrupt its pointer capture. A
+        // genuinely still-hovered pointer self-corrects on its next move.
+        *g_weatherPointerHovered = false;
+        *g_weatherPointerPressed = false;
         RefreshWeatherWidgetHoverVisual();
         g_weatherFlyout = nullptr;
     });

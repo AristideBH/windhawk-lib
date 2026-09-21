@@ -442,6 +442,35 @@ confirm the compact "Now + short forecast" view's forecast strip
 immediately reflects the new count (clamped to however many days are
 actually cached).
 
+## Incident 9: panel-open state could render as pressed instead of hover (2026-09-21)
+
+**Symptom** (user request): the compact widget's visual state while its
+details panel is open should look exactly like plain hover - never the
+darker/flat pressed look.
+
+**Root cause**: `RefreshWeatherWidgetHoverVisual` passed
+`*g_weatherPointerPressed` straight through to `ApplyWeatherHoverState`
+regardless of `g_weatherFlyoutOpen`. Opening the `Flyout` shifts pointer
+capture away from the widget, which isn't guaranteed to deliver a
+matching `PointerReleased` first - a click that opens the panel could
+leave `*g_weatherPointerPressed` stuck `true` for as long as the panel
+stayed open, rendering the pressed style instead of hover.
+
+**Fix**: `RefreshWeatherWidgetHoverVisual` now forces `pressed` to
+`false` whenever `g_weatherFlyoutOpen` is true, regardless of the
+tracked pointer state - the open state is always exactly the hover
+style, never pressed. `flyout.Closed` also now explicitly resets both
+`g_weatherPointerHovered`/`g_weatherPointerPressed` to `false` (rather
+than trusting `PointerExited`/`PointerReleased` to have fired on the
+widget itself, for the same capture-disruption reason) - a genuinely
+still-hovered pointer self-corrects on its next move.
+
+**Next retest**: click the widget to open the panel and confirm it
+shows the hover look (gradient border, lighter fill), never the
+pressed look (solid border, darker fill), for as long as the panel
+stays open. Close the panel and confirm the widget returns to idle
+(assuming the pointer isn't actually still over it).
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
