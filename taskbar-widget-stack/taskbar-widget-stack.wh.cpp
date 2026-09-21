@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.7.1
+// @version         0.7.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -199,6 +199,7 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Media.Animation.h>
 #include <winrt/Windows.UI.Xaml.Shapes.h>
 #include <winrt/Windows.UI.Text.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
@@ -216,6 +217,7 @@ prototype - not yet verified live, see `PLAN.md`.
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
 using namespace winrt::Windows::UI::Xaml::Media;
+using namespace winrt::Windows::UI::Xaml::Media::Animation;
 namespace wuxi = winrt::Windows::UI::Xaml::Input;
 namespace wuxs = winrt::Windows::UI::Xaml::Shapes;
 namespace wuxh = winrt::Windows::UI::Xaml::Hosting;
@@ -3623,6 +3625,57 @@ bool IsMenuFlyoutSeparatorItem(MenuFlyoutItemBase const& baseItem) {
 constexpr wchar_t kNativeMenuItemName[] = L"WindhawkWidgetStackItem";
 constexpr wchar_t kNativeMenuSeparatorName[] = L"WindhawkWidgetStackSeparator";
 
+// "Hide stack" used to just flip Visibility instantly - live feedback
+// (2026-09-21) asked for it to animate. Fades Opacity over 150ms;
+// showing sets Visibility::Visible first (so layout/measure happens
+// while transparent) then fades in, hiding fades out then sets
+// Visibility::Collapsed only once the fade completes (so it still
+// stops occupying layout space afterward, same as the instant version
+// always did - Collapsed removes it from layout, Opacity alone
+// wouldn't). Same Storyboard/DoubleAnimation/DurationHelper pattern
+// taskbar-widget-weather's own panel-open fade already uses
+// successfully.
+void AnimateStackVisibility(bool hidden) {
+    if (!g_ui.root) {
+        return;
+    }
+    try {
+        if (!hidden) {
+            g_ui.root.Visibility(Visibility::Visible);
+            g_ui.root.Opacity(0.0);
+        }
+        DoubleAnimation opacityAnim;
+        opacityAnim.To(hidden ? 0.0 : 1.0);
+        opacityAnim.Duration(DurationHelper::FromTimeSpan(
+            std::chrono::milliseconds(150)));
+        Storyboard::SetTarget(opacityAnim, g_ui.root);
+        Storyboard::SetTargetProperty(opacityAnim, L"Opacity");
+
+        Storyboard sb;
+        sb.Children().Append(opacityAnim);
+        if (hidden) {
+            auto root = g_ui.root;
+            sb.Completed(
+                [root](winrt::Windows::Foundation::IInspectable const&,
+                       winrt::Windows::Foundation::IInspectable const&) {
+                    try {
+                        if (root) {
+                            root.Visibility(Visibility::Collapsed);
+                        }
+                    } catch (...) {
+                    }
+                });
+        }
+        sb.Begin();
+    } catch (...) {
+        // Animation failed for some reason - fall back to the instant
+        // toggle rather than leaving the stack stuck mid-fade/invisible.
+        g_ui.root.Opacity(1.0);
+        g_ui.root.Visibility(hidden ? Visibility::Collapsed
+                                     : Visibility::Visible);
+    }
+}
+
 // "Widget stack" submenu - Hide stack / Reset position / Stack settings,
 // per the design spec's explicit menu content (Non-goals: no "Goto",
 // no indicator control here - both settings-window/scroll-only now).
@@ -3648,10 +3701,7 @@ MenuFlyoutSubItem BuildNativeStackSubmenu() {
         [](winrt::Windows::Foundation::IInspectable const&,
            RoutedEventArgs const&) {
             g_stackHidden = !g_stackHidden;
-            if (g_ui.root) {
-                g_ui.root.Visibility(g_stackHidden ? Visibility::Collapsed
-                                                    : Visibility::Visible);
-            }
+            AnimateStackVisibility(g_stackHidden);
         });
     root.Items().Append(hideStackItem);
 

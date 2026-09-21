@@ -3549,3 +3549,49 @@ spec's own "Risks / things to verify live" section,
   expected to fail, or simulate by temporarily breaking a symbol
   pattern → confirm the widget stack itself still works completely
   normally, just without the native submenu.
+
+## Incident 60: live-test follow-up on the native context menu (2026-09-21)
+
+**Live-tested, working**: right-clicking empty taskbar space shows the
+"Widget stack" submenu alongside Task Manager/Taskbar settings as
+designed.
+
+**Fix (animated "Hide stack")**: toggling worked but was instant - new
+`AnimateStackVisibility(bool hidden)` fades `g_ui.root`'s `Opacity` over
+150ms via a `Storyboard`/`DoubleAnimation` (same pattern
+`taskbar-widget-weather`'s own panel-open fade already uses), only
+setting `Visibility::Collapsed` once the fade-out completes (so hiding
+still fully removes it from layout afterward, same as the instant
+version always did) and setting `Visibility::Visible` before fading in
+(so layout/measure happens while still transparent, not after). Falls
+back to an instant toggle if the animation itself throws.
+
+**Confirmed limitation (not a bug, ruled out via code reading - no
+`ContextFlyout`/`RightTapped`/`ContextRequested` handling anywhere in
+any widget mod, including `taskbar-widget-system-usage` specifically
+tested): right-clicking directly over a widget's own content shows no
+menu at all**, instead of falling through to the native menu the way
+right-clicking surrounding empty space does. Most likely explanation:
+`ShowTaskbarSettingsContextMenu` (the hooked function) may only be
+Explorer's own path for empty-taskbar-space context menus specifically,
+not a general dispatch point that also covers third-party XAML content
+injected over it - a real limitation of this hook technique, not
+something fixable by anything in this mod's own code. **Accepted as a
+known limitation for now** (user decision, 2026-09-21) rather than
+pursued further - right-clicking the stack's own surrounding/empty
+space still works, which covers most of the interaction.
+
+**Explained, not a bug**: the small leading gap before each item's text
+inside the "Widget stack" submenu (Hide stack / Reset position / Stack
+settings) is standard Windows menu chrome, not something this mod's
+code reserves - "Hide stack" is a `ToggleMenuFlyoutItem` (needs a
+checkmark column when checked), and Windows aligns all sibling items in
+the same menu to a consistent left gutter regardless of whether each
+individual row is itself checkable, matching how native Windows menus
+with a mix of checkable/plain items always render. Removing it would
+mean making "Hide stack" non-checkable, losing its checked/unchecked
+visual state - not pursued.
+
+**Next retest**: confirm the "Hide stack" fade reads as smooth (no
+visible pop/flicker at either end) both hiding and showing, at the
+stack's actual configured pane height/width.
