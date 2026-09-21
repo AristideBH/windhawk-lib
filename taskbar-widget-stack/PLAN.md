@@ -3581,17 +3581,23 @@ known limitation for now** (user decision, 2026-09-21) rather than
 pursued further - right-clicking the stack's own surrounding/empty
 space still works, which covers most of the interaction.
 
-**Explained, not a bug**: the small leading gap before each item's text
-inside the "Widget stack" submenu (Hide stack / Reset position / Stack
-settings) is standard Windows menu chrome, not something this mod's
-code reserves - "Hide stack" is a `ToggleMenuFlyoutItem` (needs a
-checkmark column when checked), and Windows aligns all sibling items in
-the same menu to a consistent left gutter regardless of whether each
-individual row is itself checkable, matching how native Windows menus
-with a mix of checkable/plain items always render. Removing it would
-mean making "Hide stack" non-checkable, losing its checked/unchecked
-visual state - not pursued.
+**Fix (doubled-up gutter in the submenu)**: the initial read on the
+leading gap before each item's text was half right - it genuinely was
+column reservation, but for two separate columns at once, not one.
+`hideStackItem` (a `ToggleMenuFlyoutItem`) forces a checkmark column
+across every sibling in the menu; `resetPositionItem`/`settingsItem`
+each had their own `FontIcon` (refresh/gear glyphs), forcing a *second*,
+icon column across every sibling too - live feedback clarified the gap
+was "un espace pour le toggle et une icone" (space for both the toggle
+*and* an icon), not just one. Removed the icons from
+`resetPositionItem`/`settingsItem` entirely (matching the original
+user-supplied mockup, which only put an icon on the top-level "Widget
+stack" item, never on its three children) - drops the menu back to just
+the one (checkmark) gutter, which is normal/expected for a menu with a
+checkable item in it.
 
 **Next retest**: confirm the "Hide stack" fade reads as smooth (no
 visible pop/flicker at either end) both hiding and showing, at the
-stack's actual configured pane height/width.
+stack's actual configured pane height/width. Confirm the submenu's
+leading gap is now visibly smaller (down to just the checkmark gutter,
+not doubled).

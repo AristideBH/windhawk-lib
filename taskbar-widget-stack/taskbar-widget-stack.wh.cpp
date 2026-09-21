@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.7.2
+// @version         0.7.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -3705,12 +3705,18 @@ MenuFlyoutSubItem BuildNativeStackSubmenu() {
         });
     root.Items().Append(hideStackItem);
 
+    // No icons on these two (live feedback, 2026-09-21): the submenu
+    // was reserving BOTH a checkmark column (for hideStackItem, a
+    // ToggleMenuFlyoutItem) AND an icon column (for these two) at once,
+    // since WinUI aligns every sibling in a menu to the union of
+    // columns any of them need - Windows own menus do the same for a
+    // mix of checkable/iconed items, but here it was doubled up
+    // needlessly since these two never needed an icon in the first
+    // place (the original mockup only put an icon on the top-level
+    // "Widget stack" item, none on its children). Removing them drops
+    // the menu back to just the one (checkmark) gutter.
     MenuFlyoutItem resetPositionItem;
     resetPositionItem.Text(L"Reset position");
-    FontIcon resetPositionIcon;
-    resetPositionIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-    resetPositionIcon.Glyph(L"");  // refresh/realign glyph
-    resetPositionItem.Icon(resetPositionIcon);
     resetPositionItem.Click(
         [](winrt::Windows::Foundation::IInspectable const&,
            RoutedEventArgs const&) { ResetStackPosition(); });
@@ -3718,10 +3724,6 @@ MenuFlyoutSubItem BuildNativeStackSubmenu() {
 
     MenuFlyoutItem settingsItem;
     settingsItem.Text(L"Stack settings");
-    FontIcon settingsIcon;
-    settingsIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
-    settingsIcon.Glyph(L"");  // gear/settings glyph
-    settingsItem.Icon(settingsIcon);
     settingsItem.Click([](winrt::Windows::Foundation::IInspectable const&,
                            RoutedEventArgs const&) { OpenSettingsWindow(); });
     root.Items().Append(settingsItem);
