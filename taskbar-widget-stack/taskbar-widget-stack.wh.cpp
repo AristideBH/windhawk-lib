@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.5.1
+// @version         0.5.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -62,7 +62,8 @@ prototype - not yet verified live, see `PLAN.md`.
     $name: Drag navigation
     $description: >-
       Vertically drag the stack itself to scrub between widgets, snapping to
-      the nearest one on release.
+      the nearest one on release. Known broken as of 2026-09-21 - not yet
+      root-caused, see PLAN.md.
   - wrap: true
     $name: Wrap around
     $description: >-
@@ -1599,6 +1600,10 @@ void WireUpNavigation() {
             }
         });
 
+    // TODO(known broken, 2026-09-21, user report): nav.drag doesn't
+    // reliably step between widgets live-tested - not yet root-caused.
+    // Left enabled (default on) rather than disabled outright since the
+    // user hasn't asked for that, just to have it tracked - see PLAN.md.
     g_ui.pressedToken = g_ui.root.PointerPressed(
         [](winrt::Windows::Foundation::IInspectable const& sender,
            wuxi::PointerRoutedEventArgs const& args) {
@@ -2408,13 +2413,16 @@ FrameworkElement BuildNavigationTab() {
 // sub-sections (Position/Sizing/Indicator) - Incident 55, user request:
 // a lighter alternative to splitting Layout into separate tabs, since
 // the settings underneath it are genuinely three different concerns
-// crammed into one flat list.
+// crammed into one flat list. No margin of its own (Incident 58: used
+// to have a negative bottom margin to tighten the gap to its content
+// when both sat directly in the flat tab panel - now inside
+// WrapLayoutSection's own card, whose sectionPanel.Spacing already
+// controls that gap).
 TextBlock MakeSectionHeader(std::wstring text) {
     TextBlock header;
     header.Text(winrt::hstring(text));
     header.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     header.FontSize(14);
-    header.Margin({0, 4, 0, -4});
     return header;
 }
 
@@ -2471,13 +2479,36 @@ Button MakeColorPickerButton(
     return button;
 }
 
+// Wraps a section's already-built content in a bordered "card"
+// (Incident 58, user request) - a background to visually group each of
+// BuildLayoutTab's three sections' controls, on top of the bold header
+// Incident 55 already added (not instead of it - the header goes
+// inside the card, at its top).
+Border WrapLayoutSection(std::wstring const& title, StackPanel const& content) {
+    StackPanel sectionPanel;
+    sectionPanel.Orientation(Orientation::Vertical);
+    sectionPanel.Spacing(12);
+    sectionPanel.Children().Append(MakeSectionHeader(title));
+    sectionPanel.Children().Append(content);
+
+    Border card;
+    card.CornerRadius({6, 6, 6, 6});
+    card.Padding({12, 12, 12, 12});
+    card.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x14, 0xFF, 0xFF, 0xFF)});
+    card.Child(sectionPanel);
+    return card;
+}
+
 FrameworkElement BuildLayoutTab() {
     StackPanel panel;
     panel.Orientation(Orientation::Vertical);
     panel.Margin({16, 16, 16, 16});
     panel.Spacing(16);
 
-    panel.Children().Append(MakeSectionHeader(L"Position"));
+    StackPanel positionSection;
+    positionSection.Orientation(Orientation::Vertical);
+    positionSection.Spacing(16);
 
     StackPanel positionGroup;
     positionGroup.Orientation(Orientation::Vertical);
@@ -2544,7 +2575,7 @@ FrameworkElement BuildLayoutTab() {
             }
         });
     positionGroup.Children().Append(positionCombo);
-    panel.Children().Append(positionGroup);
+    positionSection.Children().Append(positionGroup);
 
     StackPanel edgeGapGroup;
     edgeGapGroup.Orientation(Orientation::Vertical);
@@ -2578,7 +2609,7 @@ FrameworkElement BuildLayoutTab() {
             }
         });
     edgeGapGroup.Children().Append(edgeGapSlider);
-    panel.Children().Append(edgeGapGroup);
+    positionSection.Children().Append(edgeGapGroup);
 
     StackPanel rightPaddingGroup;
     rightPaddingGroup.Orientation(Orientation::Vertical);
@@ -2608,9 +2639,13 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     rightPaddingGroup.Children().Append(rightPaddingSlider);
-    panel.Children().Append(rightPaddingGroup);
+    positionSection.Children().Append(rightPaddingGroup);
 
-    panel.Children().Append(MakeSectionHeader(L"Sizing"));
+    panel.Children().Append(WrapLayoutSection(L"Position", positionSection));
+
+    StackPanel sizingSection;
+    sizingSection.Orientation(Orientation::Vertical);
+    sizingSection.Spacing(16);
 
     StackPanel minWidthGroup;
     minWidthGroup.Orientation(Orientation::Vertical);
@@ -2640,7 +2675,7 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     minWidthGroup.Children().Append(minWidthSlider);
-    panel.Children().Append(minWidthGroup);
+    sizingSection.Children().Append(minWidthGroup);
 
     StackPanel maxWidthGroup;
     maxWidthGroup.Orientation(Orientation::Vertical);
@@ -2670,7 +2705,7 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     maxWidthGroup.Children().Append(maxWidthSlider);
-    panel.Children().Append(maxWidthGroup);
+    sizingSection.Children().Append(maxWidthGroup);
 
     StackPanel paneHeightGroup;
     paneHeightGroup.Orientation(Orientation::Vertical);
@@ -2700,9 +2735,13 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     paneHeightGroup.Children().Append(paneHeightSlider);
-    panel.Children().Append(paneHeightGroup);
+    sizingSection.Children().Append(paneHeightGroup);
 
-    panel.Children().Append(MakeSectionHeader(L"Indicator"));
+    panel.Children().Append(WrapLayoutSection(L"Sizing", sizingSection));
+
+    StackPanel indicatorSection;
+    indicatorSection.Orientation(Orientation::Vertical);
+    indicatorSection.Spacing(16);
 
     StackPanel indicatorTypeGroup;
     indicatorTypeGroup.Orientation(Orientation::Vertical);
@@ -2742,9 +2781,9 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     indicatorTypeGroup.Children().Append(indicatorTypeCombo);
-    panel.Children().Append(indicatorTypeGroup);
+    indicatorSection.Children().Append(indicatorTypeGroup);
 
-    panel.Children().Append(MakeSettingsToggle(
+    indicatorSection.Children().Append(MakeSettingsToggle(
         L"Hide indicator with one widget",
         g_settings.layoutHideIndicatorWhenSingle, [](bool on) {
             g_settings.layoutHideIndicatorWhenSingle = on;
@@ -2780,9 +2819,9 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     gapGroup.Children().Append(gapSlider);
-    panel.Children().Append(gapGroup);
+    indicatorSection.Children().Append(gapGroup);
 
-    panel.Children().Append(MakeSettingsToggle(
+    indicatorSection.Children().Append(MakeSettingsToggle(
         L"Indicator on the right", g_settings.layoutIndicatorOnRight,
         [](bool on) {
             g_settings.layoutIndicatorOnRight = on;
@@ -2819,7 +2858,7 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     indicatorSizeGroup.Children().Append(indicatorSizeSlider);
-    panel.Children().Append(indicatorSizeGroup);
+    indicatorSection.Children().Append(indicatorSizeGroup);
 
     StackPanel indicatorSpacingGroup;
     indicatorSpacingGroup.Orientation(Orientation::Vertical);
@@ -2850,7 +2889,7 @@ FrameworkElement BuildLayoutTab() {
             RebuildStackContents();
         });
     indicatorSpacingGroup.Children().Append(indicatorSpacingSlider);
-    panel.Children().Append(indicatorSpacingGroup);
+    indicatorSection.Children().Append(indicatorSpacingGroup);
 
     StackPanel indicatorColorsGroup;
     indicatorColorsGroup.Orientation(Orientation::Horizontal);
@@ -2888,7 +2927,9 @@ FrameworkElement BuildLayoutTab() {
         }));
     indicatorColorsGroup.Children().Append(inactiveColorGroup);
 
-    panel.Children().Append(indicatorColorsGroup);
+    indicatorSection.Children().Append(indicatorColorsGroup);
+
+    panel.Children().Append(WrapLayoutSection(L"Indicator", indicatorSection));
 
     return panel;
 }
@@ -3144,7 +3185,7 @@ bool OpenSettingsWindow() {
 
         HWND hWnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME, kSettingsWindowClassName,
-            L"Taskbar Widget Stack Settings", WS_OVERLAPPEDWINDOW,
+            L"Widget Stack", WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT, 480, 420, nullptr, nullptr,
             GetModuleHandleW(nullptr), nullptr);
         if (!hWnd) {

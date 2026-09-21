@@ -3411,3 +3411,46 @@ indicator column's dots/bars resize and re-space live. Open each color
 picker, change active and inactive colors independently, and confirm
 both the picker's own swatch button and the real indicator column
 update live and persist across a settings-window reopen.
+
+## Known issue (open, 2026-09-21): nav.drag doesn't reliably step widgets
+
+**Symptom** (user report, live-tested): vertically dragging the stack
+itself (the `nav.drag` gesture - `WireUpNavigation`'s
+`PointerPressed`/`PointerMoved`/`PointerReleased` trio on `g_ui.root`)
+doesn't reliably step between widgets. Not yet root-caused - flagged as
+a TODO in code (the `PointerPressed` handler) and here rather than
+guessed at blind. Left enabled (default on) in the meantime; the user
+hasn't asked for it to be disabled, just tracked.
+
+**Next steps** (not started): reproduce reliably first (what does
+"doesn't work" mean exactly - no movement at all, wrong direction,
+wrong threshold, only on some input devices/DPI settings?) before
+touching the `dy`/`PaneHeight()` threshold math or the
+`CapturePointer`/`GetCurrentPoint(elem)` mechanics - this gesture was
+already tuned once before (2026-09-16, "very sensitive"/"inverted",
+see the `PointerMoved` handler's own comment), so a second blind
+adjustment risks re-breaking whatever that pass fixed.
+
+## Incident 58: Layout tab section backgrounds + settings window title (2026-09-21)
+
+**Fix (section backgrounds)**: each of the Layout tab's three
+sections (Position/Sizing/Indicator, sub-sectioned with headers in
+Incident 55) now sits inside its own bordered "card"
+(`WrapLayoutSection` - subtle `0x14` white background, 6px corner
+radius, 12px padding) instead of just having a bold header with no
+visual grouping. `BuildLayoutTab` was restructured to build each
+section's controls into its own `StackPanel`
+(`positionSection`/`sizingSection`/`indicatorSection`) instead of
+appending flat into the tab's own `panel`, wrapping each in a card only
+once its controls are complete. `MakeSectionHeader`'s own negative
+bottom margin (a hack to tighten its gap to the flat panel around it)
+was removed - the card's own `sectionPanel.Spacing` now controls that
+gap instead.
+
+**Fix (window title)**: the settings window's title changed from
+"Taskbar Widget Stack Settings" to just "Widget Stack" (user request).
+
+**Next retest**: open the Layout tab and confirm each of the three
+sections now reads as a visually distinct card, not just a bold label
+over a flat list. Confirm the settings window's title bar/taskbar entry
+now reads "Widget Stack".
