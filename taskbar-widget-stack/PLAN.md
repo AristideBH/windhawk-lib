@@ -3177,3 +3177,37 @@ a tray icon's visibility) - confirm the stack's gap from the tray
 readjusts instead of staying stale. Click it on a tracking position
 (e.g. `left_of_start`) too - confirm it's a harmless no-op snap rather
 than a visible jump/flicker.
+
+## Incident 51: right-click menu follow-up from live feedback (2026-09-21)
+
+**Symptom** (user feedback after live-testing Incident 50): (1) "Go to
+widget" was fine but wanted renaming to just "Goto" at the top level.
+(2) Widget ordering/enable-disable should live exclusively in the
+settings window, not duplicated in the right-click menu too. (3)
+"Show indicator dots" visibly toggled the dots but left behind some of
+the space they used to occupy.
+
+**Fix (1, 2)**: renamed the top-level submenu to "Goto" (its own rows
+are still the widgets' names). Removed the per-widget "Show widget"/
+"Move up"/"Move down" submenus this menu built one per widget since
+Incident 24 - `ToggleWidgetEnabled`/`MoveWidget` are unchanged and
+still called from the settings window's widgets tab and from
+`LoadWidgetOrderState` on init, just no longer reachable from this
+menu.
+
+**Fix (3)**: `ApplyStackWidth`'s column-collapse logic (dotsWidth/
+gapWidth both already going to 0 when hidden) was correct by inspection
+- added `g_ui.dotsPanel.Visibility(Visibility::Collapsed)` as a second,
+independent mechanism on top of the 0px column width, so the dots panel
+is fully out of measure/arrange regardless of how the column resolves,
+rather than relying on the column math alone.
+
+**Next retest**: confirm the right-click menu no longer has per-widget
+submenus (only "Goto", "Show indicator dots", "Reset position", "Stack
+settings"); confirm widget order/enable-disable still work correctly
+from the settings window. Toggle "Show indicator dots" off and confirm
+no residual gap remains where the dots column was - if one still
+shows, it's coming from somewhere this fix didn't cover (not the
+column width or the panel's own visibility) and needs a fresh look
+with the actual live-tested visual, not further guessing from code
+alone.

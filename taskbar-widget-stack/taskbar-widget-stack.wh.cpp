@@ -1829,6 +1829,11 @@ void ApplyStackWidth(double contentWidth) {
         g_ui.paddingColumn.Width({rightPadding, GridUnitType::Pixel});
         Grid::SetColumn(g_ui.dotsPanel, onRight ? 2 : 0);
         Grid::SetColumn(g_ui.clipHost, onRight ? 0 : 2);
+        // Belt-and-suspenders on top of the 0px column: Collapsed takes
+        // dotsPanel out of measure/arrange entirely rather than relying
+        // solely on its host column resolving to 0 width.
+        g_ui.dotsPanel.Visibility(hideIndicator ? Visibility::Collapsed
+                                                 : Visibility::Visible);
 
         g_ui.root.Width(contentWidth + dotsWidth + gapWidth + rightPadding);
         g_ui.clipHost.Width(contentWidth);
@@ -2825,14 +2830,24 @@ void CloseSettingsWindow() {
 // MenuFlyout pass.
 //
 // Incident 50 (2026-09-21, user request): added three more entries so
-// the menu isn't just "manage widgets" + "open settings" - a "Go to
-// widget" submenu of flat, one-click rows (jump straight to a widget
-// without the dots/scroll), a "Show indicator dots" quick toggle (the
-// same setting as the settings window's own toggle, mirrored here so a
+// the menu isn't just "manage widgets" + "open settings" - a "Goto"
+// submenu of flat, one-click rows (jump straight to a widget without
+// the dots/scroll), a "Show indicator dots" quick toggle (the same
+// setting as the settings window's own toggle, mirrored here so a
 // frequent flip doesn't need the whole window), and "Reset position"
 // (forces the stack's on-screen position to be recomputed - a real fix
 // for right_edge's trayGap going stale if the tray's width changed
 // since injection, see ResetStackPosition's own comment).
+//
+// Incident 51 (2026-09-21, user request): removed the per-widget
+// "Show widget"/"Move up"/"Move down" submenus this menu used to build
+// one per widget (Incident 24) - widget ordering/enable-disable is now
+// managed exclusively from the settings window's widgets tab
+// (ToggleWidgetEnabled/MoveWidget are both still called from there, and
+// from LoadWidgetOrderState on init - nothing else changed about how
+// those work, just who can trigger them from where). Also renamed "Go
+// to widget" to just "Goto" at the top level (the submenu's own rows
+// are still the widgets' names).
 void ShowContextMenu(HWND, POINT) {
     if (!g_ui.root) {
         return;
@@ -2840,16 +2855,12 @@ void ShowContextMenu(HWND, POINT) {
     try {
         MenuFlyout flyout;
 
-        // "Go to widget" - flat, one row per enabled widget, name only,
-        // jumps directly there on click. Deliberately separate from the
-        // per-widget management submenus below (which stay focused on
-        // show/hide + reorder) rather than merging a third action into
-        // each of those - this one is about quick access to a widget
-        // that's already visible, not managing the set.
+        // "Goto" - flat, one row per enabled widget, name only, jumps
+        // directly there on click.
         auto enabledForGoTo = EnabledIndices();
         if (enabledForGoTo.size() > 1) {
             MenuFlyoutSubItem goToItem;
-            goToItem.Text(L"Go to widget");
+            goToItem.Text(L"Goto");
             FontIcon goToIcon;
             goToIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
             goToIcon.Glyph(L"\uE8A7");  // forward/jump-to glyph
@@ -2870,53 +2881,6 @@ void ShowContextMenu(HWND, POINT) {
             MenuFlyoutSeparator goToSeparator;
             flyout.Items().Append(goToSeparator);
         }
-
-        for (int i = 0; i < (int)g_widgets.size(); i++) {
-            // The pane's own label uses an embedded newline for a
-            // two-line fit (e.g. "Media\nPlayer") - not appropriate for
-            // a single-line menu row.
-            std::wstring label = g_widgets[i].widget->DisplayName();
-            std::replace(label.begin(), label.end(), L'\n', L' ');
-
-            MenuFlyoutSubItem widgetItem;
-            widgetItem.Text(winrt::hstring(label));
-
-            ToggleMenuFlyoutItem showItem;
-            showItem.Text(L"Show widget");
-            showItem.IsChecked(g_widgets[i].enabled);
-            showItem.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                                RoutedEventArgs const&) {
-                ToggleWidgetEnabled(i);
-            });
-            widgetItem.Items().Append(showItem);
-
-            MenuFlyoutSeparator innerSeparator;
-            widgetItem.Items().Append(innerSeparator);
-
-            // No icons on these two (user request, 2026-09-17) -
-            // text only. Disabled (grayed out, non-clickable) at
-            // either end of g_widgets - MoveWidget's own bounds check
-            // already made clicking a no-op there, but leaving them
-            // clickable-looking was misleading.
-            MenuFlyoutItem up;
-            up.Text(L"Move up");
-            up.IsEnabled(i > 0);
-            up.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                          RoutedEventArgs const&) { MoveWidget(i, -1); });
-            widgetItem.Items().Append(up);
-
-            MenuFlyoutItem down;
-            down.Text(L"Move down");
-            down.IsEnabled(i < (int)g_widgets.size() - 1);
-            down.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                            RoutedEventArgs const&) { MoveWidget(i, 1); });
-            widgetItem.Items().Append(down);
-
-            flyout.Items().Append(widgetItem);
-        }
-
-        MenuFlyoutSeparator separator;
-        flyout.Items().Append(separator);
 
         // Same setting/mechanism as the settings window's own "Show dot
         // indicator" toggle - mirrored here since it's a frequent flip
