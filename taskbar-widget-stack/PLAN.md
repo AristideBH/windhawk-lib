@@ -3346,3 +3346,44 @@ request).
 
 **Next retest**: open the Layout tab and confirm the three sections
 read as clearly separated groups.
+
+## Incident 56: indicator types (dots/bars/hidden) + always-top default active widget (2026-09-21)
+
+**Fix (types)**: `layout.indicator.visible` (bool) replaced with
+`layout.indicator.type` (`dots`|`bars`|`hidden`, default `dots`) -
+"hidden" is now one of three type choices instead of a separate
+on/off toggle, and "bars" is a new visual variant (small rectangles,
+same edge-cue-shrink/active-color logic `RefreshDots` already had for
+dots, just a different shape). `ApplyStackWidth`'s column-collapse
+check and `RefreshDots`'s early return both now check
+`layoutIndicatorType == L"hidden"` instead of `!layoutIndicatorVisible`.
+The settings window's "Show dot indicator" toggle became an "Indicator
+type" `ComboBox` (Dots/Bars/Hidden); the right-click menu's "Show
+indicator dots" toggle became an "Indicator" submenu of three
+radio-style rows. Light migration in `LoadSettings`: if no
+`layout.indicator.type` private override exists yet but the old
+`layout.indicator.visible` one does, it's read once and mapped
+(`false` -> `hidden`, `true` -> `dots`) so a previously-hidden
+indicator doesn't silently reappear across the upgrade.
+
+**Fix (default active widget)**: `RebuildStackContents`'s active-index
+resolution used to fall back to `g_ui.activeIndex`'s default-constructed
+value (`0`) when no widget was being tracked by Id yet, which only
+happened to land on the top enabled widget because index 0 usually
+*is* enabled - not an explicit guarantee. A genuinely fresh state
+(`g_ui.activeWidgetId` empty - the first rebuild after a real
+injection: Explorer restart, mod re-enable) now resolves to
+`enabled.front()` explicitly. Left the *other* case - a previously
+active widget that's simply been disabled/unregistered mid-session -
+falling back near its old numeric index rather than jumping to the
+top, since that's a different, legitimate scenario nothing asked to
+change.
+
+**Next retest**: switch between Dots/Bars/Hidden from both the
+settings window and the right-click "Indicator" submenu - confirm
+they stay in sync, "Hidden" collapses the indicator column's width
+(not just visually empties it), and "Bars" renders small rectangles
+with the same active-widget highlighting and edge-cue shrink dots
+already had. Restart Explorer (or disable/re-enable the mod) with the
+stack showing a non-first widget - confirm it always comes back
+showing the top enabled widget, not whatever was last active.

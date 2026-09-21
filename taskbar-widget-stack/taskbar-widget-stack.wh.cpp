@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.4.3
+// @version         0.5.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -131,12 +131,16 @@ prototype - not yet verified live, see `PLAN.md`.
       content (e.g. taskbar-widget-system-usage's CPU/RAM/GPU bars need
       more room than a plain label).
   - indicator:
-    - visible: true
-      $name: Show dot indicator
+    - type: dots
+      $name: Indicator type
       $description: >-
-        Show the dot indicator column at all. Turn off to reclaim the space
-        if you never use it to navigate. Also toggleable from the stack's
-        right-click menu.
+        How the indicator column shows which widget is active. "Hidden"
+        reclaims the space entirely, same as turning it off used to.
+        Also switchable from the stack's right-click menu.
+      $options:
+      - dots: Dots
+      - bars: Bars
+      - hidden: Hidden
     - hideWhenSingle: true
       $name: Hide when only one widget
       $description: >-
@@ -491,7 +495,10 @@ struct {
     // point of Incident 39 is that this no longer needs to be guessed
     // once in code, the user can just set it.
     int layoutPaneHeight = 56;
-    bool layoutIndicatorVisible = true;
+    // "dots"|"bars"|"hidden" - replaces the old layoutIndicatorVisible
+    // bool (Incident 56, user request: hidden folded into the type
+    // choice itself instead of a separate toggle).
+    std::wstring layoutIndicatorType = L"dots";
     bool layoutHideIndicatorWhenSingle = true;
     int layoutIndicatorGap = 6;
     bool layoutIndicatorOnRight = false;
@@ -1762,9 +1769,10 @@ void RefreshDots() {
         return;
     }
     g_ui.dotsPanel.Children().Clear();
-    if (!g_settings.layoutIndicatorVisible) {
+    if (g_settings.layoutIndicatorType == L"hidden") {
         return;
     }
+    bool bars = g_settings.layoutIndicatorType == L"bars";
     auto enabled = EnabledIndices();
     if (g_settings.layoutHideIndicatorWhenSingle && enabled.size() <= 1) {
         // The dots column itself is collapsed to 0 width by
@@ -1809,27 +1817,44 @@ void RefreshDots() {
                        (i == windowEnd - 1 && moreAfter);
         double r = edgeCue ? 1.0 : 2.0;
 
-        // Small dot with no enlarged hit target (2026-09-16): the
-        // earlier "unclickable dots" symptom turned out to be the
-        // broken WindhawkModSettings closing marker (see "Incident
-        // 12"), not the dot's own hit-test size - now that clicks are
-        // confirmed working, an oversized transparent hit box isn't
-        // needed and was just making the indicators look bulkier than
-        // intended.
-        wuxs::Ellipse dot;
-        dot.Width(r * 2);
-        dot.Height(r * 2);
-        dot.Margin({0, 2, 0, 2});
         SolidColorBrush brush{winrt::Windows::UI::ColorHelper::FromArgb(
             255, active ? 255 : 140, active ? 255 : 140, active ? 255 : 140)};
-        dot.Fill(brush);
-        dot.Tapped([idx](winrt::Windows::Foundation::IInspectable const&,
-                          wuxi::TappedRoutedEventArgs const&) {
-            if (g_settings.navDots) {
-                GoToWidget(idx);
-            }
-        });
-        g_ui.dotsPanel.Children().Append(dot);
+
+        // Small hit target, no enlarged one (2026-09-16 for dots): the
+        // earlier "unclickable dots" symptom turned out to be the broken
+        // WindhawkModSettings closing marker (see "Incident 12"), not
+        // the dot's own hit-test size - now that clicks are confirmed
+        // working, an oversized transparent hit box isn't needed and
+        // was just making the indicators look bulkier than intended.
+        // "bars" (Incident 56) reuses the same edge-cue shrink and
+        // active/inactive coloring, just as a small vertical rectangle
+        // instead of a circle - no corner rounding (Shapes::Rectangle
+        // has no CornerRadius; a rounded version would need a Border
+        // instead, not worth it for something this small).
+        FrameworkElement indicator{nullptr};
+        if (bars) {
+            wuxs::Rectangle bar;
+            bar.Width(3);
+            bar.Height(edgeCue ? 4.0 : 8.0);
+            bar.Margin({0, 2, 0, 2});
+            bar.Fill(brush);
+            indicator = bar;
+        } else {
+            wuxs::Ellipse dot;
+            dot.Width(r * 2);
+            dot.Height(r * 2);
+            dot.Margin({0, 2, 0, 2});
+            dot.Fill(brush);
+            indicator = dot;
+        }
+        indicator.Tapped(
+            [idx](winrt::Windows::Foundation::IInspectable const&,
+                  wuxi::TappedRoutedEventArgs const&) {
+                if (g_settings.navDots) {
+                    GoToWidget(idx);
+                }
+            });
+        g_ui.dotsPanel.Children().Append(indicator);
     }
 }
 
@@ -1848,7 +1873,7 @@ void ApplyStackWidth(double contentWidth) {
         return;
     }
     try {
-        bool hideIndicator = !g_settings.layoutIndicatorVisible ||
+        bool hideIndicator = g_settings.layoutIndicatorType == L"hidden" ||
                               (g_settings.layoutHideIndicatorWhenSingle &&
                                EnabledIndices().size() <= 1);
         double dotsWidth = hideIndicator ? 0.0 : kDotsColumnWidth;
@@ -2051,8 +2076,9 @@ void RebuildStackContents() {
         // (in range and enabled). Falls back to the raw index only when
         // no Id is tracked yet (first run) or the previously active
         // widget itself is gone/disabled now.
+        bool freshState = g_ui.activeWidgetId.empty();
         int resolved = -1;
-        if (!g_ui.activeWidgetId.empty()) {
+        if (!freshState) {
             for (int idx : enabled) {
                 try {
                     if (g_widgets[idx].widget->Id() == g_ui.activeWidgetId) {
@@ -2064,10 +2090,22 @@ void RebuildStackContents() {
             }
         }
         if (resolved < 0) {
-            resolved = std::find(enabled.begin(), enabled.end(),
-                                  g_ui.activeIndex) != enabled.end()
-                           ? g_ui.activeIndex
-                           : enabled.front();
+            // Fresh state (first rebuild after a real injection - Explorer
+            // restart, mod re-enable) always lands on the top enabled
+            // widget, explicitly - not whatever g_ui.activeIndex's
+            // default-constructed value happens to be (Incident 56, user
+            // request: this used to only work by coincidence, when
+            // widget 0 itself happened to be enabled). A previously
+            // active widget that's simply gone now (disabled/unregistered
+            // mid-session) still prefers staying near its old numeric
+            // index over jumping to the top - a different, legitimate
+            // case this isn't meant to change.
+            resolved = freshState
+                           ? enabled.front()
+                           : (std::find(enabled.begin(), enabled.end(),
+                                        g_ui.activeIndex) != enabled.end()
+                                  ? g_ui.activeIndex
+                                  : enabled.front());
         }
         g_ui.activeIndex = resolved;
         try {
@@ -2564,13 +2602,45 @@ FrameworkElement BuildLayoutTab() {
 
     panel.Children().Append(MakeSectionHeader(L"Indicator"));
 
-    panel.Children().Append(MakeSettingsToggle(
-        L"Show dot indicator", g_settings.layoutIndicatorVisible,
-        [](bool on) {
-            g_settings.layoutIndicatorVisible = on;
-            WritePrivateDword(L"layout.indicator.visible", on ? 1 : 0);
+    StackPanel indicatorTypeGroup;
+    indicatorTypeGroup.Orientation(Orientation::Vertical);
+    indicatorTypeGroup.Spacing(4);
+
+    TextBlock indicatorTypeLabel;
+    indicatorTypeLabel.Text(L"Indicator type");
+    indicatorTypeGroup.Children().Append(indicatorTypeLabel);
+
+    // Order must match kIndicatorTypeValues - same index-pairing idiom
+    // as kPositionLabels/kPositionValues above.
+    static constexpr const wchar_t* kIndicatorTypeLabels[] = {L"Dots", L"Bars",
+                                                               L"Hidden"};
+    static constexpr const wchar_t* kIndicatorTypeValues[] = {
+        L"dots", L"bars", L"hidden"};
+    ComboBox indicatorTypeCombo;
+    int indicatorTypeIndex = 0;
+    for (int i = 0; i < ARRAYSIZE(kIndicatorTypeValues); i++) {
+        ComboBoxItem item;
+        item.Content(winrt::box_value(winrt::hstring(kIndicatorTypeLabels[i])));
+        indicatorTypeCombo.Items().Append(item);
+        if (g_settings.layoutIndicatorType == kIndicatorTypeValues[i]) {
+            indicatorTypeIndex = i;
+        }
+    }
+    indicatorTypeCombo.SelectedIndex(indicatorTypeIndex);
+    indicatorTypeCombo.SelectionChanged(
+        [](winrt::Windows::Foundation::IInspectable const& sender,
+           SelectionChangedEventArgs const&) {
+            int index = sender.as<ComboBox>().SelectedIndex();
+            if (index < 0 || index >= ARRAYSIZE(kIndicatorTypeValues)) {
+                return;
+            }
+            g_settings.layoutIndicatorType = kIndicatorTypeValues[index];
+            WritePrivateString(L"layout.indicator.type",
+                                g_settings.layoutIndicatorType);
             RebuildStackContents();
-        }));
+        });
+    indicatorTypeGroup.Children().Append(indicatorTypeCombo);
+    panel.Children().Append(indicatorTypeGroup);
 
     panel.Children().Append(MakeSettingsToggle(
         L"Hide indicator with one widget",
@@ -3057,6 +3127,13 @@ void CloseSettingsWindow() {
 // those work, just who can trigger them from where). Also renamed "Go
 // to widget" to just "Goto" at the top level (the submenu's own rows
 // are still the widgets' names).
+//
+// Incident 56 (2026-09-21, user request): "Show indicator dots" (a flat
+// on/off toggle) replaced with an "Indicator" submenu of three
+// radio-style rows (Dots/Bars/Hidden) - the indicator gained a second
+// visual type ("bars") and "hidden" folded into that same type choice
+// instead of staying a separate boolean, so a single flat toggle no
+// longer covers the setting's actual shape.
 void ShowContextMenu(HWND, POINT) {
     if (!g_ui.root) {
         return;
@@ -3091,22 +3168,33 @@ void ShowContextMenu(HWND, POINT) {
             flyout.Items().Append(goToSeparator);
         }
 
-        // Same setting/mechanism as the settings window's own "Show dot
-        // indicator" toggle - mirrored here since it's a frequent flip
-        // that doesn't warrant opening the whole window.
-        ToggleMenuFlyoutItem showDotsItem;
-        showDotsItem.Text(L"Show indicator dots");
-        showDotsItem.IsChecked(g_settings.layoutIndicatorVisible);
-        showDotsItem.Click(
-            [](winrt::Windows::Foundation::IInspectable const&,
-               RoutedEventArgs const&) {
-                g_settings.layoutIndicatorVisible =
-                    !g_settings.layoutIndicatorVisible;
-                WritePrivateDword(L"layout.indicator.visible",
-                                   g_settings.layoutIndicatorVisible ? 1 : 0);
-                RebuildStackContents();
-            });
-        flyout.Items().Append(showDotsItem);
+        // Same setting/mechanism as the settings window's own "Indicator
+        // type" combo box - mirrored here since it's a frequent flip
+        // that doesn't warrant opening the whole window. Radio-style
+        // (Incident 56, replacing the old flat on/off toggle now that
+        // "hidden" is a third type alongside dots/bars, not a separate
+        // boolean): exactly one of the three rows is checked at a time.
+        MenuFlyoutSubItem indicatorTypeItem;
+        indicatorTypeItem.Text(L"Indicator");
+        static constexpr const wchar_t* kMenuIndicatorTypeLabels[] = {
+            L"Dots", L"Bars", L"Hidden"};
+        static constexpr const wchar_t* kMenuIndicatorTypeValues[] = {
+            L"dots", L"bars", L"hidden"};
+        for (int i = 0; i < ARRAYSIZE(kMenuIndicatorTypeValues); i++) {
+            ToggleMenuFlyoutItem typeItem;
+            typeItem.Text(kMenuIndicatorTypeLabels[i]);
+            const wchar_t* value = kMenuIndicatorTypeValues[i];
+            typeItem.IsChecked(g_settings.layoutIndicatorType == value);
+            typeItem.Click(
+                [value](winrt::Windows::Foundation::IInspectable const&,
+                        RoutedEventArgs const&) {
+                    g_settings.layoutIndicatorType = value;
+                    WritePrivateString(L"layout.indicator.type", value);
+                    RebuildStackContents();
+                });
+            indicatorTypeItem.Items().Append(typeItem);
+        }
+        flyout.Items().Append(indicatorTypeItem);
 
         MenuFlyoutItem resetPositionItem;
         resetPositionItem.Text(L"Reset position");
@@ -3797,8 +3885,8 @@ void LoadSettings() {
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
     int paneHeight = Wh_GetIntSetting(L"layout.paneHeight");
     g_settings.layoutPaneHeight = paneHeight > 0 ? paneHeight : 56;
-    g_settings.layoutIndicatorVisible =
-        Wh_GetIntSetting(L"layout.indicator.visible");
+    g_settings.layoutIndicatorType =
+        GetStringSetting(L"layout.indicator.type", L"dots");
     g_settings.layoutHideIndicatorWhenSingle =
         Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
     int gap = Wh_GetIntSetting(L"layout.indicator.gap");
@@ -3840,8 +3928,19 @@ void LoadSettings() {
     if (ReadPrivateDword(L"layout.paneHeight", v) && v > 0) {
         g_settings.layoutPaneHeight = (int)v;
     }
-    if (ReadPrivateDword(L"layout.indicator.visible", v)) {
-        g_settings.layoutIndicatorVisible = v != 0;
+    {
+        std::wstring indicatorType;
+        if (ReadPrivateString(L"layout.indicator.type", indicatorType) &&
+            !indicatorType.empty()) {
+            g_settings.layoutIndicatorType = indicatorType;
+        } else if (ReadPrivateDword(L"layout.indicator.visible", v)) {
+            // Migration (Incident 56): the old boolean setting this type
+            // replaces - only consulted when nothing has ever saved the
+            // new key yet, so a real "dots"/"bars" choice always wins
+            // once one exists. Preserves a previously-hidden indicator
+            // across the upgrade instead of it silently reappearing.
+            g_settings.layoutIndicatorType = v != 0 ? L"dots" : L"hidden";
+        }
     }
     if (ReadPrivateDword(L"layout.indicator.hideWhenSingle", v)) {
         g_settings.layoutHideIndicatorWhenSingle = v != 0;
