@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.19
+// @version         1.20
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1312,12 +1312,10 @@ winrt::Windows::UI::Xaml::Media::Brush g_weatherPressedBorderBrush{nullptr};
 // hover surface side-by-side.
 void EnsureHoverBrushes() {
     if (!g_weatherHoverBrush) {
-        // 0x54 = 33% opacity (live feedback, 2026-09-21, for the hover
-        // fill specifically - this is also what the "panel is open"
-        // state renders as, since that state is defined to look exactly
-        // like hover). Was 0x14 (~8%).
+        // Reverted back to 0x14 (~8%) - the 0x54 (33%) bump (2026-09-21)
+        // was asked to be undone the same day.
         g_weatherHoverBrush = SolidColorBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(0x54, 0xFF, 0xFF, 0xFF)};
+            winrt::Windows::UI::ColorHelper::FromArgb(0x14, 0xFF, 0xFF, 0xFF)};
     }
     if (!g_weatherPressedBrush) {
         g_weatherPressedBrush = SolidColorBrush{
