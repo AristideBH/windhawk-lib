@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.17
+// @version         1.18
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2187,11 +2187,13 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         // mod doesn't have its own configurable widget height the way
         // media-player does, so a symmetric margin achieves the same
         // "inset, not flush top-to-bottom" look regardless of the host's
-        // configured pane height. CornerRadius matches media-player's
-        // own default (`cornerRadiusTL` etc.) exactly - 8 was too large
-        // on the first pass.
+        // configured pane height. CornerRadius: matched media-player's
+        // own default (4) exactly at first, then bumped 33% (live
+        // feedback, 2026-09-21) once the margin/border fixes made a
+        // direct comparison possible - 4 read slightly tighter than
+        // media-player's own hover surface side by side.
         Border background;
-        background.CornerRadius({4, 4, 4, 4});
+        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
         background.Margin({0, 3, 0, 3});
 
         auto compact = BuildCompactView();
@@ -2514,7 +2516,7 @@ void InjectWeatherStandalone(HWND hWnd) {
     // See the registered-mode wrapper's own comment on the matching
     // construction site - same margin/radius reasoning.
     Border background;
-    background.CornerRadius({4, 4, 4, 4});
+    background.CornerRadius({5.33, 5.33, 5.33, 5.33});
     background.Margin({0, 3, 0, 3});
     auto compact = BuildCompactView();
     background.Child(compact);
