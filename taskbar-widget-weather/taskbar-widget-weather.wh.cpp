@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.13
+// @version         1.14
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1275,16 +1275,22 @@ void ToggleDisplayMode() {
 // Hover/pressed visual state helpers
 SolidColorBrush g_weatherHoverBrush{nullptr};
 SolidColorBrush g_weatherPressedBrush{nullptr};
+winrt::Windows::UI::Xaml::Media::Brush g_weatherPressedBorderBrush{nullptr};
 
-// Subtle white overlay, same alpha range as media-player's own hover
-// brushes (0x0F-0x2C over white) - not a full system-hover-color read
-// like media-player's EnsureHoverBrushes does (that reads live
+// Fill: subtle white overlay, same alpha range as media-player's own
+// hover brushes (0x0F-0x2C over white) - not a full system-hover-color
+// read like media-player's EnsureHoverBrushes does (that reads live
 // Fluent Reveal colors via a Windows API media-player already hooks;
-// duplicating that hook here for a first version isn't worth the
-// risk of getting the undocumented call wrong - a fixed subtle
-// overlay reads correctly in both light and dark taskbars, which is
-// what actually matters here. Revisit if it looks visually off against
-// media-player's own hover in a live side-by-side).
+// duplicating that hook here for a first version isn't worth the risk
+// of getting the undocumented call wrong).
+//
+// Border: idle has none; hover gets a top-lighter/bottom-darker white
+// gradient (media-player's own "elevation" border - MakeElevationBorderBrush,
+// same 0x28/0x0A alpha stops); pressed flattens to a single solid
+// color, same as media-player's own pressed-state border. Live feedback
+// (2026-09-21) specifically asked for this gradient border - a flat
+// hover fill alone read visually different from media-player's own
+// hover surface side-by-side.
 void EnsureHoverBrushes() {
     if (!g_weatherHoverBrush) {
         g_weatherHoverBrush = SolidColorBrush{
@@ -1294,17 +1300,47 @@ void EnsureHoverBrushes() {
         g_weatherPressedBrush = SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
     }
+    if (!g_weatherPressedBorderBrush) {
+        g_weatherPressedBorderBrush = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x0A, 0xFF, 0xFF, 0xFF)};
+    }
+}
+
+winrt::Windows::UI::Xaml::Media::Brush MakeWeatherHoverBorderBrush() {
+    try {
+        winrt::Windows::UI::Xaml::Media::LinearGradientBrush brush;
+        brush.StartPoint(winrt::Windows::Foundation::Point(0.5f, 0.0f));
+        brush.EndPoint(winrt::Windows::Foundation::Point(0.5f, 1.0f));
+        winrt::Windows::UI::Xaml::Media::GradientStop top, bottom;
+        top.Color(winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF));
+        top.Offset(0.0);
+        bottom.Color(winrt::Windows::UI::ColorHelper::FromArgb(0x0A, 0xFF, 0xFF, 0xFF));
+        bottom.Offset(1.0);
+        brush.GradientStops().Append(top);
+        brush.GradientStops().Append(bottom);
+        return brush;
+    } catch (...) {
+        return SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
+    }
 }
 
 void ApplyWeatherHoverState(Border background, bool hovered, bool pressed) {
     EnsureHoverBrushes();
     if (pressed) {
         background.Background(g_weatherPressedBrush);
+        background.BorderBrush(g_weatherPressedBorderBrush);
+        background.BorderThickness({1, 1, 1, 1});
     } else if (hovered) {
         background.Background(g_weatherHoverBrush);
+        background.BorderBrush(MakeWeatherHoverBorderBrush());
+        background.BorderThickness({1, 1, 1, 1});
     } else {
         background.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+        background.BorderBrush(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+        background.BorderThickness({0, 0, 0, 0});
     }
 }
 
@@ -1451,9 +1487,13 @@ Grid BuildWeatherHeaderAndDetails() {
     // (nonexistent) background read as un-anchored, so `header` (below)
     // now carries its own surface fill, scoped to just that block - the
     // details row and forecast list underneath stay background-free.
+    // No padding of its own - BuildWeatherFlyoutContent's outer panelBg
+    // Border now owns the one 16px inset from the panel's own edge, for
+    // this and every other section alike (2026-09-21). This used to also
+    // carry that same 16px padding, double-padding the header/details
+    // area relative to the forecast list and Refresh button below it.
     Grid card;
     card.CornerRadius({6, 6, 6, 6});
-    card.Padding({16, 16, 16, 16});
     card.RowDefinitions().Append(RowDefinition{});
     card.RowDefinitions().Append(RowDefinition{});
 
@@ -1643,14 +1683,20 @@ StackPanel BuildForecastListPanel() {
     return list;
 }
 
-StackPanel BuildWeatherFlyoutContent() {
+// Returns a Border, not the inner StackPanel, wrapping everything in one
+// real, always-visible panel background (2026-09-21). ShowWeatherPanel's
+// own FlyoutPresenterStyle deliberately sets the FlyoutPresenter's
+// Background to Transparent - the intent was to avoid a second
+// background stacking on top of this content's own, but relying on the
+// *system* FlyoutPresenter default for that background never actually
+// rendered anything in this Explorer-XAML-island context, before or
+// after that style existed - the panel was invisible-background from
+// the start. This Border is now the *only* source of the panel's
+// background, unconditionally, rather than depending on a system
+// default that doesn't render here.
+Border BuildWeatherFlyoutContent() {
     StackPanel content;
     content.Orientation(Orientation::Vertical);
-    // Matches taskbar-widget-media-player's own fixed panel width
-    // (360px) so every mod's details panel is the same size regardless
-    // of which one happens to be open (live feedback, 2026-09-21).
-    content.MinWidth(360);
-    content.MaxWidth(360);
 
     content.Children().Append(BuildWeatherHeaderAndDetails());
     content.Children().Append(BuildForecastListPanel());
@@ -1664,7 +1710,22 @@ StackPanel BuildWeatherFlyoutContent() {
            RoutedEventArgs const&) { RequestWeatherRefresh(); });
     content.Children().Append(refreshButton);
 
-    return content;
+    Border panelBg;
+    // Matches taskbar-widget-media-player's own fixed panel width
+    // (360px) so every mod's details panel is the same size regardless
+    // of which one happens to be open (live feedback, 2026-09-21) - was
+    // on `content` itself before this Border wrapped it.
+    panelBg.MinWidth(360);
+    panelBg.MaxWidth(360);
+    panelBg.CornerRadius({8, 8, 8, 8});
+    panelBg.Padding({16, 16, 16, 16});
+    panelBg.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)});
+    panelBg.BorderBrush(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)});
+    panelBg.BorderThickness({1, 1, 1, 1});
+    panelBg.Child(content);
+    return panelBg;
 }
 
 Flyout g_weatherFlyout{nullptr};
@@ -2009,8 +2070,17 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         wrapper.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
+        // Top/bottom margin + larger radius (was flush/4px - live
+        // feedback, 2026-09-21): media-player's own hover surface is a
+        // fixed 40px tall element vertically centered within its own
+        // taller pane, not stretched to fill it - this mod doesn't have
+        // its own configurable widget height the way media-player does,
+        // so a symmetric margin achieves the same "inset, not flush
+        // top-to-bottom" look regardless of the host's configured pane
+        // height.
         Border background;
-        background.CornerRadius({4, 4, 4, 4});
+        background.CornerRadius({8, 8, 8, 8});
+        background.Margin({0, 6, 0, 6});
 
         auto compact = BuildCompactView();
         background.Child(compact);
@@ -2329,8 +2399,11 @@ void InjectWeatherStandalone(HWND hWnd) {
     wrapper.Background(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
+    // See the registered-mode wrapper's own comment on the matching
+    // construction site - same margin/radius reasoning.
     Border background;
-    background.CornerRadius({4, 4, 4, 4});
+    background.CornerRadius({8, 8, 8, 8});
+    background.Margin({0, 6, 0, 6});
     auto compact = BuildCompactView();
     background.Child(compact);
     wrapper.Children().Append(background);

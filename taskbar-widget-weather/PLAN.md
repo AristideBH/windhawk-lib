@@ -274,6 +274,78 @@ mode now defaults to "Now + short forecast" on a fresh install, and
 that cycling via `ToggleDisplayMode`'s bound click action visits all
 three modes in order.
 
+## Incident 6: hover styling still didn't match the media-player reference; panel background genuinely never rendered (2026-09-21)
+
+**Symptom** (user feedback, side-by-side screenshot comparison of just
+the hover rectangle, plus a fresh panel screenshot): (1) the compact
+widget's hover highlight had no top/bottom margin (flush full pane
+height, unlike media-player's own inset hover surface), a different-
+looking corner radius, and no "lighter on top" gradient border that
+media-player's own hover has. (2) The panel *still* had no visible
+background, despite Incident 4 removing the old per-header background
+specifically to rely on "the Flyout's own default presenter chrome" -
+described as needing a fix "for good" this time.
+
+**Root cause (1)**: media-player's own hover surface
+(`taskbar-widget-media-player.wh.cpp`'s `playerButton`) is a *fixed*
+40x40 element (`playerMinHeight`/`playerMaxHeight`, both defaulting to
+40) centered within its own taller pane - the inset is a height
+difference, not an explicit margin. It also uses a real
+`LinearGradientBrush` (`MakeElevationBorderBrush`) as `BorderBrush`
+specifically in its *hovered* visual state (transparent at rest, solid
+at pressed) - this mod's own `ApplyWeatherHoverState` only ever touched
+`Background`, never `BorderBrush`, so no gradient (or any border at
+all) could have shown regardless of color values.
+
+**Root cause (2)**: this was a real miss, not a system-default
+limitation. `ShowWeatherPanel` sets an explicit `FlyoutPresenterStyle`
+with `Background` set to `Transparent` (and `BorderThickness`/`Padding`
+to 0) - present since before Incident 4, to stop the *system* chrome
+from creating a second background on top of the panel's own. Incident
+4 removed the header's own background and assumed the Flyout's default
+chrome would show *something* - but that assumption was wrong twice
+over: the presenter's background isn't just unstyled, it's explicitly
+forced transparent by this mod's own code, so there was never any
+background rendering in this Explorer-XAML-island context, before or
+after Incident 4's change.
+
+**Fix (1)**: `background` (the compact widget's hover `Border`, both
+construction sites) got a `{0, 6, 0, 6}` `Margin` (media-player has no
+direct equivalent margin value to copy since its inset comes from a
+fixed height instead, and this mod has no per-widget configurable
+height setting of its own to match that approach with) and its
+`CornerRadius` raised from 4 to 8. `ApplyWeatherHoverState` now also
+sets `BorderBrush`/`BorderThickness` per state: transparent at rest,
+a new `MakeWeatherHoverBorderBrush()` (a top-0x28/bottom-0x0A white
+`LinearGradientBrush`, the same stops as media-player's own
+`MakeElevationBorderBrush`) while hovered, and a solid `0x0A` white
+brush while pressed - matching media-player's Normal/PointerOver/
+Pressed border progression exactly, just via direct property sets
+instead of a VisualStateManager-templated `Button` (this mod doesn't
+use `Button` at all any more, per Incident 5).
+
+**Fix (2)**: `BuildWeatherFlyoutContent` now returns a `Border`
+(`panelBg`), not the inner `StackPanel` directly - `panelBg` carries
+its own unconditional `Background` (solid `0xF0/0x2B2B2B`, not
+acrylic - simpler and doesn't depend on anything that could silently
+fail to render again), `BorderBrush`/`BorderThickness` for a subtle
+edge, `CornerRadius`, and the panel's fixed 360px width (moved here
+from `content` itself). `BuildWeatherHeaderAndDetails`'s `card` no
+longer carries its own 16px padding, since `panelBg` now owns that one
+inset for every section uniformly instead of double-padding just the
+header/details area. `ShowWeatherPanel`'s `FlyoutPresenterStyle` is
+unchanged (still forces the system chrome transparent) - that's now
+correct instead of incidentally hiding a broken assumption, since
+`panelBg` is the actual, only source of the background.
+
+**Next retest**: compare the compact widget's hover highlight directly
+against media-player's own, side by side - margin, radius, and the
+gradient border should now visually match. Open the details panel -
+confirm it now has a real, solid, always-visible background regardless
+of desktop wallpaper/theme, with consistent padding around the header
+block, details row, forecast list, and Refresh button alike (not
+double-padded around the header specifically).
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
