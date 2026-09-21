@@ -3122,3 +3122,58 @@ multi-widget-derived value. Re-enable `taskbar-widget-media-player`
 alone in standalone mode (stack disabled) and confirm its own
 `playerMinWidth`/`playerMaxWidth` settings still work exactly as
 before this change.
+
+## Incident 50: right-click menu had nothing beyond widget management + settings (2026-09-21)
+
+**Symptom** (user request, not a bug): the right-click menu only ever
+offered per-widget management (show/hide, move up/down) and "Stack
+settings" - no quick actions for things done often enough to not want
+the settings window open every time.
+
+**Fix**: added three entries, per user-supplied suggestions:
+- **"Go to widget"** submenu at the top - flat rows, one per *enabled*
+  widget, name only, click jumps straight there via the existing
+  `GoToWidget()` (same function the dot indicators already call).
+  Deliberately a separate submenu from the per-widget management ones
+  below rather than a third item bolted onto each of those - this one
+  is about quick navigation to something already visible, not managing
+  the set. Only shown when there's more than one enabled widget (a
+  single widget has nowhere to jump to); the current widget's own row
+  is present but disabled rather than hidden, so the list order stays
+  stable.
+- **"Show indicator dots"** - a new `layout.indicator.visible` setting
+  (default on), toggleable both here and from the settings window's
+  own new "Show dot indicator" toggle - same private-store-override
+  mechanism as every other quick setting in this file. `ApplyStackWidth`
+  now collapses the dots column (and `RefreshDots` bails out early) when
+  it's off, same code path `layout.indicator.hideWhenSingle` already
+  used for the single-widget case - this is just an unconditional
+  version of the same hide.
+- **"Reset position"** - calls new `ResetStackPosition()`. For a
+  tracking position this just calls the existing `UpdateTrackedPosition()`
+  on demand (it already self-corrects every layout pass, so this is
+  mostly immediate feedback). For the static edge positions it's a real
+  fix, not just a refresh: `right_edge`'s `trayGap` is computed once at
+  injection from the system tray's width at that moment and goes stale
+  if the tray's width changes later (icons added/removed) - a
+  limitation `InjectWidgetStackGrid`'s own comment already documented.
+  `ResetStackPosition` recomputes it fresh from the tray's current
+  width. `center_edge` needs no margin (alignment alone centers it) so
+  it's left untouched; `left_edge` and the tracking-anchor `left_of_*`/
+  `right_of_*` positions get their margin/anchor resync unconditionally
+  even though neither is known to actually drift on its own - cheap
+  insurance, not evidence of an observed bug there.
+
+**Next retest**: right-click the stack with 2+ widgets enabled -
+confirm "Go to widget" lists every enabled widget by name (not the
+disabled ones), clicking one jumps to it, and the currently-active
+widget's own row is grayed out. Toggle "Show indicator dots" from the
+menu - confirm the dots column disappears/reappears immediately and
+the setting sticks across an Explorer restart; confirm the settings
+window's own "Show dot indicator" toggle stays in sync with it either
+way. Click "Reset position" with the stack on `right_edge` after
+changing something that affects the system tray's width (e.g. toggling
+a tray icon's visibility) - confirm the stack's gap from the tray
+readjusts instead of staying stale. Click it on a tracking position
+(e.g. `left_of_start`) too - confirm it's a harmless no-op snap rather
+than a visible jump/flicker.

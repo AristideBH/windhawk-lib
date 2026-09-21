@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.2.1
+// @version         0.3.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -35,8 +35,9 @@ widget stack:
   clicking a dot indicator - each independently toggleable in settings.
 - **Dot indicators** on the left edge show how many widgets are enabled and
   which one is active.
-- **Right-click** the stack for a menu to enable/disable widgets and move
-  them up/down in the stack order.
+- **Right-click** the stack for a menu to jump straight to a widget,
+  enable/disable widgets and move them up/down in the stack order, toggle
+  the dot indicator, reset the stack's position, or open the full settings.
 
 Only Windows 11, primary taskbar (single monitor) is targeted in this
 prototype - not yet verified live, see `PLAN.md`.
@@ -130,6 +131,12 @@ prototype - not yet verified live, see `PLAN.md`.
       content (e.g. taskbar-widget-system-usage's CPU/RAM/GPU bars need
       more room than a plain label).
   - indicator:
+    - visible: true
+      $name: Show dot indicator
+      $description: >-
+        Show the dot indicator column at all. Turn off to reclaim the space
+        if you never use it to navigate. Also toggleable from the stack's
+        right-click menu.
     - hideWhenSingle: true
       $name: Hide when only one widget
       $description: >-
@@ -483,6 +490,7 @@ struct {
     // point of Incident 39 is that this no longer needs to be guessed
     // once in code, the user can just set it.
     int layoutPaneHeight = 56;
+    bool layoutIndicatorVisible = true;
     bool layoutHideIndicatorWhenSingle = true;
     int layoutIndicatorGap = 6;
     bool layoutIndicatorOnRight = false;
@@ -1463,6 +1471,8 @@ void RebuildStackContents();
 bool InjectWidgetStackGrid(HWND hWnd);
 void RemoveWidgetStackGrid();
 void UnwireTracking(bool restoreMargin);
+void UpdateTrackedPosition();
+void ResetStackPosition();
 
 // Registers this mod's pointer-event handlers on `g_ui.root` and stores
 // each subscription's `event_token` in `UiState` so `UnwireNavigation`
@@ -1711,6 +1721,9 @@ void RefreshDots() {
         return;
     }
     g_ui.dotsPanel.Children().Clear();
+    if (!g_settings.layoutIndicatorVisible) {
+        return;
+    }
     auto enabled = EnabledIndices();
     if (g_settings.layoutHideIndicatorWhenSingle && enabled.size() <= 1) {
         // The dots column itself is collapsed to 0 width by
@@ -1794,8 +1807,9 @@ void ApplyStackWidth(double contentWidth) {
         return;
     }
     try {
-        bool hideIndicator = g_settings.layoutHideIndicatorWhenSingle &&
-                              EnabledIndices().size() <= 1;
+        bool hideIndicator = !g_settings.layoutIndicatorVisible ||
+                              (g_settings.layoutHideIndicatorWhenSingle &&
+                               EnabledIndices().size() <= 1);
         double dotsWidth = hideIndicator ? 0.0 : kDotsColumnWidth;
         double gapWidth =
             hideIndicator ? 0.0 : (double)g_settings.layoutIndicatorGap;
@@ -2438,6 +2452,14 @@ FrameworkElement BuildLayoutTab() {
     panel.Children().Append(paneHeightGroup);
 
     panel.Children().Append(MakeSettingsToggle(
+        L"Show dot indicator", g_settings.layoutIndicatorVisible,
+        [](bool on) {
+            g_settings.layoutIndicatorVisible = on;
+            WritePrivateDword(L"layout.indicator.visible", on ? 1 : 0);
+            RebuildStackContents();
+        }));
+
+    panel.Children().Append(MakeSettingsToggle(
         L"Hide indicator with one widget",
         g_settings.layoutHideIndicatorWhenSingle, [](bool on) {
             g_settings.layoutHideIndicatorWhenSingle = on;
@@ -2801,12 +2823,54 @@ void CloseSettingsWindow() {
 // Windows 11 taskbar's own per-icon right-click menu style. Replaces
 // the flat toggle-then-separator-then-all-moves layout from the first
 // MenuFlyout pass.
+//
+// Incident 50 (2026-09-21, user request): added three more entries so
+// the menu isn't just "manage widgets" + "open settings" - a "Go to
+// widget" submenu of flat, one-click rows (jump straight to a widget
+// without the dots/scroll), a "Show indicator dots" quick toggle (the
+// same setting as the settings window's own toggle, mirrored here so a
+// frequent flip doesn't need the whole window), and "Reset position"
+// (forces the stack's on-screen position to be recomputed - a real fix
+// for right_edge's trayGap going stale if the tray's width changed
+// since injection, see ResetStackPosition's own comment).
 void ShowContextMenu(HWND, POINT) {
     if (!g_ui.root) {
         return;
     }
     try {
         MenuFlyout flyout;
+
+        // "Go to widget" - flat, one row per enabled widget, name only,
+        // jumps directly there on click. Deliberately separate from the
+        // per-widget management submenus below (which stay focused on
+        // show/hide + reorder) rather than merging a third action into
+        // each of those - this one is about quick access to a widget
+        // that's already visible, not managing the set.
+        auto enabledForGoTo = EnabledIndices();
+        if (enabledForGoTo.size() > 1) {
+            MenuFlyoutSubItem goToItem;
+            goToItem.Text(L"Go to widget");
+            FontIcon goToIcon;
+            goToIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+            goToIcon.Glyph(L"\uE8A7");  // forward/jump-to glyph
+            goToItem.Icon(goToIcon);
+            for (int idx : enabledForGoTo) {
+                std::wstring label = g_widgets[idx].widget->DisplayName();
+                std::replace(label.begin(), label.end(), L'\n', L' ');
+                MenuFlyoutItem goToWidgetItem;
+                goToWidgetItem.Text(winrt::hstring(label));
+                goToWidgetItem.IsEnabled(idx != g_ui.activeIndex);
+                goToWidgetItem.Click(
+                    [idx](winrt::Windows::Foundation::IInspectable const&,
+                          RoutedEventArgs const&) { GoToWidget(idx); });
+                goToItem.Items().Append(goToWidgetItem);
+            }
+            flyout.Items().Append(goToItem);
+
+            MenuFlyoutSeparator goToSeparator;
+            flyout.Items().Append(goToSeparator);
+        }
+
         for (int i = 0; i < (int)g_widgets.size(); i++) {
             // The pane's own label uses an embedded newline for a
             // two-line fit (e.g. "Media\nPlayer") - not appropriate for
@@ -2853,6 +2917,37 @@ void ShowContextMenu(HWND, POINT) {
 
         MenuFlyoutSeparator separator;
         flyout.Items().Append(separator);
+
+        // Same setting/mechanism as the settings window's own "Show dot
+        // indicator" toggle - mirrored here since it's a frequent flip
+        // that doesn't warrant opening the whole window.
+        ToggleMenuFlyoutItem showDotsItem;
+        showDotsItem.Text(L"Show indicator dots");
+        showDotsItem.IsChecked(g_settings.layoutIndicatorVisible);
+        showDotsItem.Click(
+            [](winrt::Windows::Foundation::IInspectable const&,
+               RoutedEventArgs const&) {
+                g_settings.layoutIndicatorVisible =
+                    !g_settings.layoutIndicatorVisible;
+                WritePrivateDword(L"layout.indicator.visible",
+                                   g_settings.layoutIndicatorVisible ? 1 : 0);
+                RebuildStackContents();
+            });
+        flyout.Items().Append(showDotsItem);
+
+        MenuFlyoutItem resetPositionItem;
+        resetPositionItem.Text(L"Reset position");
+        FontIcon resetPositionIcon;
+        resetPositionIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+        resetPositionIcon.Glyph(L"\uE777");  // refresh/realign glyph
+        resetPositionItem.Icon(resetPositionIcon);
+        resetPositionItem.Click(
+            [](winrt::Windows::Foundation::IInspectable const&,
+               RoutedEventArgs const&) { ResetStackPosition(); });
+        flyout.Items().Append(resetPositionItem);
+
+        MenuFlyoutSeparator settingsSeparator;
+        flyout.Items().Append(settingsSeparator);
 
         // Opens the settings window (Incident 26) - was a no-op stub
         // before that existed.
@@ -3125,6 +3220,49 @@ void UpdateTrackedPosition() {
         auto rootMargin = g_ui.root.Margin();
         if (std::abs(rootMargin.Left - leftPos) > 1.0) {
             g_ui.root.Margin({leftPos, 0, 0, 0});
+        }
+    } catch (...) {
+    }
+}
+
+// Right-click "Reset position" - forces the stack's on-screen position
+// to be recomputed from scratch instead of waiting for whatever would
+// normally trigger it. For a tracking position this just calls
+// UpdateTrackedPosition() early/on-demand (it self-corrects every
+// layout pass anyway, so this is mostly for immediate user-visible
+// feedback after, e.g., the taskbar visibly glitched). For the static
+// edge positions this actually fixes something real: right_edge's
+// trayGap is computed once at injection and goes stale if the system
+// tray's own width changes later (icons added/removed) - a documented
+// limitation in InjectWidgetStackGrid's own comment - so recomputing it
+// here from the tray's current width is the whole point, not just a
+// no-op refresh. center_edge needs no margin (alignment alone centers
+// it) so it's left untouched.
+void ResetStackPosition() {
+    if (!g_ui.root) {
+        return;
+    }
+    try {
+        if (g_ui.trackedElement) {
+            UpdateTrackedPosition();
+            return;
+        }
+        double edgeGap = (double)g_settings.layoutEdgeGap;
+        if (g_settings.layoutPosition == L"right_edge") {
+            double trayGap = edgeGap;
+            if (g_ui.injectionParent) {
+                auto rootElement =
+                    VisualTreeHelper::GetParent(g_ui.injectionParent)
+                        .try_as<FrameworkElement>();
+                if (rootElement) {
+                    if (auto trayFrame = FindSystemTrayFrameGrid(rootElement)) {
+                        trayGap += trayFrame.ActualWidth();
+                    }
+                }
+            }
+            g_ui.root.Margin({0, 0, trayGap, 0});
+        } else if (g_settings.layoutPosition != L"center_edge") {
+            g_ui.root.Margin({edgeGap, 0, 0, 0});
         }
     } catch (...) {
     }
@@ -3486,6 +3624,8 @@ void LoadSettings() {
     g_settings.layoutMaxWidth = maxWidth > 0 ? maxWidth : 520;
     int paneHeight = Wh_GetIntSetting(L"layout.paneHeight");
     g_settings.layoutPaneHeight = paneHeight > 0 ? paneHeight : 56;
+    g_settings.layoutIndicatorVisible =
+        Wh_GetIntSetting(L"layout.indicator.visible");
     g_settings.layoutHideIndicatorWhenSingle =
         Wh_GetIntSetting(L"layout.indicator.hideWhenSingle");
     int gap = Wh_GetIntSetting(L"layout.indicator.gap");
@@ -3526,6 +3666,9 @@ void LoadSettings() {
     }
     if (ReadPrivateDword(L"layout.paneHeight", v) && v > 0) {
         g_settings.layoutPaneHeight = (int)v;
+    }
+    if (ReadPrivateDword(L"layout.indicator.visible", v)) {
+        g_settings.layoutIndicatorVisible = v != 0;
     }
     if (ReadPrivateDword(L"layout.indicator.hideWhenSingle", v)) {
         g_settings.layoutHideIndicatorWhenSingle = v != 0;
