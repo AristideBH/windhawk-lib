@@ -1169,6 +1169,257 @@ bool IsTaskbarPositionViable(const std::wstring& position) {
 // it up as the TrayUI::StartTaskbar hook target.
 void WINAPI TrayUI_StartTaskbar_Hook(void* pThis);
 
+// ---------------------------------------------------------------------
+// Native taskbar context menu integration (Incident 59, user request)
+//
+// Windows 11's own "empty taskbar" right-click menu is itself a WinUI
+// MenuFlyout - built by ContextMenus::ShowTaskbarSettingsContextMenu in
+// Taskbar.View.dll (or ExplorerExtensions.dll on some builds), with
+// items added via the generic IVector<MenuFlyoutItemBase>::Append.
+// This is a *different* module than taskbar.dll (hooked above/below by
+// HookTaskbarDllSymbols) and a *different* mechanism than this mod's
+// own now-removed ShowContextMenu (Incident 23's XAML MenuFlyout,
+// shown by this mod itself) - confirmed by reading
+// taskbar-restart-explorer's (Mgrmjp, windhawk.net) published source,
+// which uses exactly this technique. See
+// docs/superpowers/specs/2026-09-21-native-context-menu-design.md.
+// ---------------------------------------------------------------------
+
+// Not persisted anywhere (explicit user decision) - a session-scoped
+// visual pause. Starts false (visible) on every fresh injection.
+bool g_stackHidden = false;
+
+thread_local int g_taskbarSettingsMenuDepth = 0;
+thread_local bool g_currentMenuInjected = false;
+
+bool IsMenuFlyoutItemBaseNamed(MenuFlyoutItemBase const& baseItem,
+                                const wchar_t* name) {
+    try {
+        if (auto fe = baseItem.try_as<FrameworkElement>()) {
+            return fe.Name() == name;
+        }
+    } catch (...) {
+    }
+    return false;
+}
+
+bool IsMenuFlyoutSeparatorItem(MenuFlyoutItemBase const& baseItem) {
+    try {
+        return !!baseItem.try_as<MenuFlyoutSeparator>();
+    } catch (...) {
+    }
+    return false;
+}
+
+constexpr wchar_t kNativeMenuItemName[] = L"WindhawkWidgetStackItem";
+constexpr wchar_t kNativeMenuSeparatorName[] = L"WindhawkWidgetStackSeparator";
+
+// "Widget stack" submenu - Hide stack / Reset position / Stack settings,
+// per the design spec's explicit menu content (Non-goals: no "Goto",
+// no indicator control here - both settings-window/scroll-only now).
+MenuFlyoutSubItem BuildNativeStackSubmenu() {
+    MenuFlyoutSubItem root;
+    root.Name(kNativeMenuItemName);
+    root.Text(L"Widget stack");
+    FontIcon rootIcon;
+    rootIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+    // "Stack"/layered-squares glyph - a best-effort pick (this SDK's
+    // codepoints aren't always reliably guessable, per this file's own
+    // Incident 31), confirm it actually renders as a stack icon during
+    // live testing; if not, swap for a plain Unicode character instead
+    // (this file already does that in a few other places rather than
+    // risk a wrong/missing glyph).
+    rootIcon.Glyph(L"");
+    root.Icon(rootIcon);
+
+    ToggleMenuFlyoutItem hideStackItem;
+    hideStackItem.Text(L"Hide stack");
+    hideStackItem.IsChecked(g_stackHidden);
+    hideStackItem.Click(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           RoutedEventArgs const&) {
+            g_stackHidden = !g_stackHidden;
+            if (g_ui.root) {
+                g_ui.root.Visibility(g_stackHidden ? Visibility::Collapsed
+                                                    : Visibility::Visible);
+            }
+        });
+    root.Items().Append(hideStackItem);
+
+    MenuFlyoutItem resetPositionItem;
+    resetPositionItem.Text(L"Reset position");
+    FontIcon resetPositionIcon;
+    resetPositionIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+    resetPositionIcon.Glyph(L"");  // refresh/realign glyph
+    resetPositionItem.Icon(resetPositionIcon);
+    resetPositionItem.Click(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           RoutedEventArgs const&) { ResetStackPosition(); });
+    root.Items().Append(resetPositionItem);
+
+    MenuFlyoutItem settingsItem;
+    settingsItem.Text(L"Stack settings");
+    FontIcon settingsIcon;
+    settingsIcon.FontFamily(FontFamily(L"Segoe MDL2 Assets"));
+    settingsIcon.Glyph(L"");  // gear/settings glyph
+    settingsItem.Icon(settingsIcon);
+    settingsItem.Click([](winrt::Windows::Foundation::IInspectable const&,
+                           RoutedEventArgs const&) { OpenSettingsWindow(); });
+    root.Items().Append(settingsItem);
+
+    return root;
+}
+
+using MenuFlyoutItemBaseVector_Append_t =
+    void(__cdecl*)(void* pThis, MenuFlyoutItemBase const& item);
+MenuFlyoutItemBaseVector_Append_t MenuFlyoutItemBaseVector_Append_Original;
+
+void AppendInjectedNativeMenuItems(void* vectorThis) {
+    auto submenu = BuildNativeStackSubmenu();
+    MenuFlyoutSeparator separator;
+    separator.Name(kNativeMenuSeparatorName);
+
+    MenuFlyoutItemBaseVector_Append_Original(vectorThis, submenu);
+    MenuFlyoutItemBaseVector_Append_Original(vectorThis, separator);
+
+    g_currentMenuInjected = true;
+    Wh_Log(L"Injected Widget stack into the native taskbar context menu");
+}
+
+void __cdecl MenuFlyoutItemBaseVector_Append_Hook(
+    void* pThis,
+    MenuFlyoutItemBase const& item) {
+    if (g_taskbarSettingsMenuDepth > 0 && !g_currentMenuInjected) {
+        try {
+            if (!IsMenuFlyoutSeparatorItem(item) &&
+                !IsMenuFlyoutItemBaseNamed(item, kNativeMenuItemName) &&
+                !IsMenuFlyoutItemBaseNamed(item, kNativeMenuSeparatorName)) {
+                AppendInjectedNativeMenuItems(pThis);
+            }
+        } catch (...) {
+            Wh_Log(L"Native taskbar menu append inspection failed; skipping "
+                   L"injection");
+        }
+    }
+    MenuFlyoutItemBaseVector_Append_Original(pThis, item);
+}
+
+struct ScopedTaskbarSettingsMenuBuild {
+    bool outer = false;
+    ScopedTaskbarSettingsMenuBuild() {
+        outer = g_taskbarSettingsMenuDepth++ == 0;
+        if (outer) {
+            g_currentMenuInjected = false;
+        }
+    }
+    ~ScopedTaskbarSettingsMenuBuild() { g_taskbarSettingsMenuDepth--; }
+};
+
+using ContextMenus_ShowTaskbarSettingsContextMenu_t =
+    void(__cdecl*)(FrameworkElement const& target, void* taskbarSettings,
+                   wuxi::ContextRequestedEventArgs const& args,
+                   unsigned long long options);
+ContextMenus_ShowTaskbarSettingsContextMenu_t
+    ContextMenus_ShowTaskbarSettingsContextMenu_Original;
+
+void __cdecl ContextMenus_ShowTaskbarSettingsContextMenu_Hook(
+    FrameworkElement const& target, void* taskbarSettings,
+    wuxi::ContextRequestedEventArgs const& args,
+    unsigned long long options) {
+    ScopedTaskbarSettingsMenuBuild scopedBuild;
+    ContextMenus_ShowTaskbarSettingsContextMenu_Original(
+        target, taskbarSettings, args, options);
+}
+
+HMODULE GetTaskbarViewModuleHandle() {
+    HMODULE module = GetModuleHandleW(L"Taskbar.View.dll");
+    if (!module) {
+        module = GetModuleHandleW(L"ExplorerExtensions.dll");
+    }
+    return module;
+}
+
+bool HookTaskbarViewDllSymbols(HMODULE module) {
+    WindhawkUtils::SYMBOL_HOOK taskbarViewDllHooks[] = {
+        {
+            {
+                LR"(void __cdecl winrt::Taskbar::implementation::ContextMenus::ShowTaskbarSettingsContextMenu(struct winrt::Windows::UI::Xaml::FrameworkElement const &,struct winrt::WindowsUdk::UI::Shell::TaskbarSettings const &,struct winrt::Windows::UI::Xaml::Input::ContextRequestedEventArgs const &,unsigned __int64))",
+            },
+            &ContextMenus_ShowTaskbarSettingsContextMenu_Original,
+            ContextMenus_ShowTaskbarSettingsContextMenu_Hook,
+        },
+        {
+            {
+                LR"(public: __cdecl winrt::impl::consume_Windows_Foundation_Collections_IVector<struct winrt::Windows::Foundation::Collections::IVector<struct winrt::Windows::UI::Xaml::Controls::MenuFlyoutItemBase>,struct winrt::Windows::UI::Xaml::Controls::MenuFlyoutItemBase>::Append(struct winrt::Windows::UI::Xaml::Controls::MenuFlyoutItemBase const &)const )",
+            },
+            &MenuFlyoutItemBaseVector_Append_Original,
+            MenuFlyoutItemBaseVector_Append_Hook,
+        },
+    };
+    if (!WindhawkUtils::HookSymbols(module, taskbarViewDllHooks,
+                                     ARRAYSIZE(taskbarViewDllHooks))) {
+        Wh_Log(L"Native taskbar menu: symbol hook failed, feature disabled");
+        return false;
+    }
+    Wh_Log(L"Native taskbar menu: hooks installed");
+    return true;
+}
+
+std::atomic<bool> g_taskbarViewModuleHooked = false;
+
+void HandleLoadedModuleIfTaskbarView(HMODULE module) {
+    if (!module || g_taskbarViewModuleHooked) {
+        return;
+    }
+    if (GetTaskbarViewModuleHandle() != module) {
+        return;
+    }
+    if (g_taskbarViewModuleHooked.exchange(true)) {
+        return;
+    }
+    if (HookTaskbarViewDllSymbols(module)) {
+        Wh_ApplyHookOperations();
+    }
+}
+
+using LoadLibraryExW_t = decltype(&LoadLibraryExW);
+LoadLibraryExW_t LoadLibraryExW_Original;
+
+HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile,
+                                    DWORD dwFlags) {
+    HMODULE module = LoadLibraryExW_Original(lpLibFileName, hFile, dwFlags);
+    if (module) {
+        HandleLoadedModuleIfTaskbarView(module);
+    }
+    return module;
+}
+
+// Best-effort, non-fatal (Global Constraints: this must never affect
+// Wh_ModInit's own return value or the rest of the mod). Tries to hook
+// immediately if the module is already loaded; otherwise installs a
+// LoadLibraryExW hook to catch it loading later.
+void InitNativeTaskbarMenuHook() {
+    if (HMODULE module = GetTaskbarViewModuleHandle()) {
+        g_taskbarViewModuleHooked = true;
+        HookTaskbarViewDllSymbols(module);
+        return;
+    }
+    HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
+    auto loadLibraryExW =
+        kernelBase ? reinterpret_cast<LoadLibraryExW_t>(
+                         GetProcAddress(kernelBase, "LoadLibraryExW"))
+                   : nullptr;
+    if (!loadLibraryExW) {
+        Wh_Log(L"Native taskbar menu: LoadLibraryExW not found, feature "
+               L"disabled");
+        return;
+    }
+    if (!WindhawkUtils::SetFunctionHook(loadLibraryExW, LoadLibraryExW_Hook,
+                                         &LoadLibraryExW_Original)) {
+        Wh_Log(L"Native taskbar menu: LoadLibraryExW hook install failed");
+    }
+}
+
 bool HookTaskbarDllSymbols() {
     HMODULE h = LoadLibraryExW(L"taskbar.dll", nullptr,
                                 LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -4355,6 +4606,10 @@ BOOL Wh_ModInit() {
         g_injectEvent = nullptr;
         return FALSE;
     }
+
+    // Best-effort - never gates the mod's own load (see its own comment
+    // and docs/superpowers/specs/2026-09-21-native-context-menu-design.md).
+    InitNativeTaskbarMenuHook();
 
     return TRUE;
 }
