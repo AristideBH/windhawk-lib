@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.4.2
+// @version         0.4.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -181,6 +181,7 @@ prototype - not yet verified live, see `PLAN.md`.
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Shapes.h>
+#include <winrt/Windows.UI.Text.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 
 #include <algorithm>
@@ -2316,11 +2317,27 @@ FrameworkElement BuildNavigationTab() {
     return panel;
 }
 
+// Bold, slightly larger section header for BuildLayoutTab's three
+// sub-sections (Position/Sizing/Indicator) - Incident 55, user request:
+// a lighter alternative to splitting Layout into separate tabs, since
+// the settings underneath it are genuinely three different concerns
+// crammed into one flat list.
+TextBlock MakeSectionHeader(std::wstring text) {
+    TextBlock header;
+    header.Text(winrt::hstring(text));
+    header.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    header.FontSize(14);
+    header.Margin({0, 4, 0, -4});
+    return header;
+}
+
 FrameworkElement BuildLayoutTab() {
     StackPanel panel;
     panel.Orientation(Orientation::Vertical);
     panel.Margin({16, 16, 16, 16});
     panel.Spacing(16);
+
+    panel.Children().Append(MakeSectionHeader(L"Position"));
 
     StackPanel positionGroup;
     positionGroup.Orientation(Orientation::Vertical);
@@ -2453,6 +2470,8 @@ FrameworkElement BuildLayoutTab() {
     rightPaddingGroup.Children().Append(rightPaddingSlider);
     panel.Children().Append(rightPaddingGroup);
 
+    panel.Children().Append(MakeSectionHeader(L"Sizing"));
+
     StackPanel minWidthGroup;
     minWidthGroup.Orientation(Orientation::Vertical);
     minWidthGroup.Spacing(4);
@@ -2542,6 +2561,8 @@ FrameworkElement BuildLayoutTab() {
         });
     paneHeightGroup.Children().Append(paneHeightSlider);
     panel.Children().Append(paneHeightGroup);
+
+    panel.Children().Append(MakeSectionHeader(L"Indicator"));
 
     panel.Children().Append(MakeSettingsToggle(
         L"Show dot indicator", g_settings.layoutIndicatorVisible,

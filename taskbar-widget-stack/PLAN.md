@@ -3333,3 +3333,16 @@ several positions - confirm the row follows the pointer smoothly, the
 real taskbar stack reorders to match on release, the change survives an
 Explorer restart, and the checkbox/gear button on each row still work
 normally with no ambiguity against the drag gesture.
+
+## Incident 55: Layout tab sub-sectioning (2026-09-21)
+
+**Fix**: the Layout tab's settings were one flat list mixing three
+different concerns (where the stack sits, how big it is, how the dot
+indicator looks). Added `MakeSectionHeader` (bold, 14px) with three
+headers - "Position", "Sizing", "Indicator" - splitting the existing
+groups visually without moving anything into a separate tab (the
+lighter alternative to a Position/Appearance tab split, per user
+request).
+
+**Next retest**: open the Layout tab and confirm the three sections
+read as clearly separated groups.
