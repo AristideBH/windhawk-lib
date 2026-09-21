@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.10
+// @version         1.11
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -71,6 +71,15 @@ key required. See PLAN.md for the design.
   - forecastDaysPanel: 5
     $name: Forecast days (panel)
     $description: 3-7 days shown in the details panel's forecast list.
+  - forecastDateFormat: "{rel}"
+    $name: Forecast day format
+    $description: >-
+      How each day is labeled in the panel's forecast list. Tokens:
+      {rel} (Today/Tomorrow/After tomorrow, then falls back to
+      {weekday_short}), {weekday}/{weekday_short} (Wednesday/Wed),
+      {month}/{month_short} (September/Sep), {day} (24), {year} (2026).
+      Anything else in the field is kept as-is, so e.g.
+      "{weekday_short}, {month_short} {day}" gives "Wed, Sep 24".
   - refreshIntervalMinutes: 30
     $name: Refresh interval (minutes)
   $name: Display
@@ -220,6 +229,7 @@ struct WeatherSettings {
     std::wstring iconStyle = L"colored";  // colored|monochrome (reserved, no-op)
     int forecastDaysInline = 3;
     int forecastDaysPanel = 5;
+    std::wstring forecastDateFormat = L"{rel}";
     int refreshIntervalMinutes = 30;
     // Click actions
     ClickAction leftClick = ClickAction::OpenPanel;
@@ -298,6 +308,8 @@ void LoadSettings() {
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysInline"), 2, 7);
     newSettings.forecastDaysPanel =
         std::clamp((int)Wh_GetIntSetting(L"DisplaySettings.forecastDaysPanel"), 3, 7);
+    newSettings.forecastDateFormat =
+        GetStringSetting(L"DisplaySettings.forecastDateFormat", L"{rel}");
     newSettings.refreshIntervalMinutes =
         std::max(1, (int)Wh_GetIntSetting(L"DisplaySettings.refreshIntervalMinutes"));
     newSettings.leftClick =
@@ -389,6 +401,7 @@ struct WeatherState {
     double windDirectionDeg = 0.0;
     double pressureHpa = 0.0;
     std::vector<DailyForecast> daily;
+    std::wstring locationName;  // set from ResolvedLocation, not re-derived
 };
 
 WeatherState g_weather;
@@ -428,10 +441,98 @@ std::wstring CompassDirection(double degrees) {
     return kLabels[index];
 }
 
+// Zeller's congruence (Gregorian) - day-of-week from a Y-M-D date, with
+// no calendar library dependency. Returns 0=Sunday..6=Saturday.
+int ComputeWeekday(int year, int month, int day) {
+    static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    if (month < 3) {
+        year -= 1;
+    }
+    int h = (year + year / 4 - year / 100 + year / 400 + t[month - 1] + day) % 7;
+    return ((h % 7) + 7) % 7;
+}
+
+// Forecast panel's own tiny format-string language (DisplaySettings.
+// forecastDateFormat) - tokens are replaced literally, anything else
+// (spaces, commas, ...) passes through unchanged. `{rel}` is the one
+// token with real logic behind it: "Today"/"Tomorrow"/"After tomorrow"
+// for the first three days (dayIndex is the same index used to read
+// `WeatherState::daily`, where index 0 is always today per Open-Meteo's
+// own daily API convention), falling back to the short weekday name
+// beyond that - so a format of just "{rel}" alone is already a complete,
+// sensible format on its own, not just a building block. The other
+// tokens (weekday/weekday_short/month/month_short/day/year) are there
+// for building a fully custom format, e.g. "{weekday_short}, {month_short}
+// {day}", with or without combining them alongside `{rel}`.
+std::wstring FormatForecastDate(const std::wstring& isoDate, int dayIndex,
+                                 const std::wstring& fmt) {
+    static const wchar_t* kWeekdayFull[7] = {
+        L"Sunday",   L"Monday", L"Tuesday", L"Wednesday",
+        L"Thursday", L"Friday", L"Saturday"};
+    static const wchar_t* kWeekdayShort[7] = {L"Sun", L"Mon", L"Tue", L"Wed",
+                                               L"Thu", L"Fri", L"Sat"};
+    static const wchar_t* kMonthFull[12] = {
+        L"January", L"February", L"March",     L"April",
+        L"May",     L"June",     L"July",      L"August",
+        L"September", L"October", L"November", L"December"};
+    static const wchar_t* kMonthShort[12] = {L"Jan", L"Feb", L"Mar", L"Apr",
+                                              L"May", L"Jun", L"Jul", L"Aug",
+                                              L"Sep", L"Oct", L"Nov", L"Dec"};
+
+    int y = 0, m = 0, d = 0;
+    if (swscanf_s(isoDate.c_str(), L"%d-%d-%d", &y, &m, &d) != 3 || m < 1 ||
+        m > 12 || d < 1 || d > 31) {
+        return isoDate;  // malformed - show the raw string rather than guess
+    }
+    int weekday = ComputeWeekday(y, m, d);
+
+    std::wstring result;
+    result.reserve(fmt.size());
+    size_t i = 0;
+    while (i < fmt.size()) {
+        if (fmt[i] != L'{') {
+            result += fmt[i];
+            i++;
+            continue;
+        }
+        size_t close = fmt.find(L'}', i);
+        if (close == std::wstring::npos) {
+            result += fmt.substr(i);  // unterminated token - pass through
+            break;
+        }
+        std::wstring token = fmt.substr(i + 1, close - i - 1);
+        if (token == L"rel") {
+            if (dayIndex == 0) result += L"Today";
+            else if (dayIndex == 1) result += L"Tomorrow";
+            else if (dayIndex == 2) result += L"After tomorrow";
+            else result += kWeekdayShort[weekday];
+        } else if (token == L"weekday") {
+            result += kWeekdayFull[weekday];
+        } else if (token == L"weekday_short") {
+            result += kWeekdayShort[weekday];
+        } else if (token == L"month") {
+            result += kMonthFull[m - 1];
+        } else if (token == L"month_short") {
+            result += kMonthShort[m - 1];
+        } else if (token == L"day") {
+            result += std::to_wstring(d);
+        } else if (token == L"year") {
+            result += std::to_wstring(y);
+        } else {
+            result += L'{';
+            result += token;
+            result += L'}';  // unknown token - pass through literally
+        }
+        i = close + 1;
+    }
+    return result;
+}
+
 struct ResolvedLocation {
     double lat = 0.0;
     double lon = 0.0;
     bool valid = false;
+    std::wstring name;  // e.g. "Paris, France" - best-effort, may be empty
 };
 
 ResolvedLocation g_location;
@@ -483,9 +584,62 @@ bool GeocodeCity(const std::wstring& city, ResolvedLocation& out) {
         out.lat = first.GetNamedNumber(L"latitude");
         out.lon = first.GetNamedNumber(L"longitude");
         out.valid = true;
+        // Name comes free with this same response - no extra call needed,
+        // unlike the GPS/lat-lon paths (see ReverseGeocodeLocation).
+        std::wstring name;
+        if (first.HasKey(L"name")) {
+            name = first.GetNamedString(L"name").c_str();
+        }
+        if (first.HasKey(L"country") && !name.empty()) {
+            name += L", " + std::wstring(first.GetNamedString(L"country").c_str());
+        }
+        out.name = name;
         return true;
     } catch (...) {
         Wh_Log(L"GeocodeCity: exception resolving '%s'", city.c_str());
+        return false;
+    }
+}
+
+// Blocking - call only from a background thread. Best-effort: a failure
+// here leaves `out.name` untouched (caller already has valid
+// coordinates from GeolocateAuto/manual lat-lon by the time this runs,
+// so a missing name is cosmetic, not a reason to fail the whole
+// resolution). Uses BigDataCloud's free reverse-geocode-client endpoint
+// (no API key, same client pattern as GeocodeCity) since Open-Meteo's
+// own geocoding API is forward-only (name -> coordinates).
+bool ReverseGeocodeLocation(double lat, double lon, std::wstring& outName) {
+    try {
+        auto client = CreateNoCompressionHttpClient();
+        wchar_t urlBuf[256];
+        swprintf_s(urlBuf,
+            L"https://api.bigdatacloud.net/data/reverse-geocode-client"
+            L"?latitude=%.4f&longitude=%.4f&localityLanguage=en",
+            lat, lon);
+        auto response =
+            client.GetAsync(winrt::Windows::Foundation::Uri(urlBuf)).get();
+        response.EnsureSuccessStatusCode();
+        auto body = response.Content().ReadAsStringAsync().get();
+        auto json = winrt::Windows::Data::Json::JsonObject::Parse(body);
+        std::wstring city;
+        if (json.HasKey(L"city")) {
+            city = json.GetNamedString(L"city").c_str();
+        }
+        if (city.empty() && json.HasKey(L"locality")) {
+            city = json.GetNamedString(L"locality").c_str();
+        }
+        if (city.empty()) {
+            return false;
+        }
+        std::wstring name = city;
+        if (json.HasKey(L"countryName")) {
+            name += L", " + std::wstring(json.GetNamedString(L"countryName").c_str());
+        }
+        outName = name;
+        return true;
+    } catch (...) {
+        Wh_Log(L"ReverseGeocodeLocation: exception resolving (lat=%.4f, lon=%.4f)",
+               lat, lon);
         return false;
     }
 }
@@ -538,6 +692,13 @@ bool ResolveLocation() {
     }
     if (!ok && !manualCity.empty()) {
         ok = GeocodeCity(manualCity, resolved);
+    }
+    // GeocodeCity already fills `name` from the same response; the GPS
+    // and manual-lat/lon paths above only have coordinates, so look the
+    // name up separately - best-effort, a failure here doesn't fail
+    // `ok` (see ReverseGeocodeLocation's own comment).
+    if (ok && resolved.name.empty()) {
+        ReverseGeocodeLocation(resolved.lat, resolved.lon, resolved.name);
     }
     if (ok) {
         std::lock_guard<std::mutex> lock(g_locationMutex);
@@ -708,6 +869,7 @@ DWORD WINAPI WeatherThreadProc(LPVOID) {
                 int days = std::max(forecastDaysInline, forecastDaysPanel);
                 WeatherState fetched;
                 if (FetchWeather(loc.lat, loc.lon, days, fetched)) {
+                    fetched.locationName = loc.name;
                     {
                         std::lock_guard<std::mutex> lock(g_weatherMutex);
                         g_weather = fetched;
@@ -826,6 +988,9 @@ Grid BuildNowView() {
     root.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
     root.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Auto});
     root.VerticalAlignment(VerticalAlignment::Center);
+    // A bit of breathing room around the compact content - it used to
+    // sit flush against the pane's own edges (live feedback, 2026-09-21).
+    root.Padding({6, 2, 6, 2});
 
     TextBlock icon;
     icon.FontSize(kIconFontSize);
@@ -844,9 +1009,14 @@ Grid BuildNowView() {
 
     TextBlock tempText;
     tempText.FontSize(kTempFontSize);
+    // Unlike the panel/forecast views (which pair the number with a
+    // "Feels like"/range/label giving it context), the compact "Now"
+    // view is just a bare number - without the unit letter it reads
+    // ambiguously at a glance (live feedback, 2026-09-21).
     tempText.Text(winrt::hstring(
         snapshot.hasData
-            ? FormatTemperature(snapshot.currentTemp, useFahrenheit)
+            ? FormatTemperature(snapshot.currentTemp, useFahrenheit) +
+                  (useFahrenheit ? L"F" : L"C")
             : L"…"));
     textStack.Children().Append(tempText);
 
@@ -1154,33 +1324,60 @@ Grid BuildWeatherHeaderAndDetails() {
         windSpeedUnit = g_settings.windSpeedUnit;
     }
 
+    // No card background (live feedback, 2026-09-21): the panel used to
+    // have its own semi-opaque fill nested inside the Flyout's own
+    // presenter chrome, which looked like a floating rectangle rather
+    // than one uniform panel - relies on the FlyoutPresenter's own
+    // default system background now, like a plain native flyout.
     Grid card;
     card.CornerRadius({6, 6, 6, 6});
-    card.Background(SolidColorBrush{
-        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)});
     card.Padding({16, 16, 16, 16});
     card.RowDefinitions().Append(RowDefinition{});
     card.RowDefinitions().Append(RowDefinition{});
 
-    // Header row: icon + temp/condition/feels-like
+    // Header row: icon + location/temp/condition/feels-like
     Grid header;
     header.ColumnDefinitions().Append(ColumnDefinition{});
     header.ColumnDefinitions().Append(ColumnDefinition{});
+    header.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
+    header.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Star});
     Grid::SetRow(header, 0);
 
+    // Fixed square "icon zone" (like an avatar/album-art square) instead
+    // of a bare oversized glyph floating in open space - live feedback,
+    // 2026-09-21, also asked to tighten the gap to the text next to it
+    // (was 12px, now 8px from the zone's own edge).
+    constexpr double kHeaderIconZoneSize = 48;
+    Border headerIconZone;
+    headerIconZone.Width(kHeaderIconZoneSize);
+    headerIconZone.Height(kHeaderIconZoneSize);
+    headerIconZone.CornerRadius({6, 6, 6, 6});
+    headerIconZone.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0xFF, 0xFF, 0xFF)});
+    headerIconZone.Margin({0, 0, 8, 0});
     TextBlock headerIcon;
-    headerIcon.FontSize(36);
+    headerIcon.FontSize(28);
+    headerIcon.HorizontalAlignment(HorizontalAlignment::Center);
     headerIcon.VerticalAlignment(VerticalAlignment::Center);
-    headerIcon.Margin({0, 0, 12, 0});
     headerIcon.Text(winrt::hstring(
         snapshot.hasData ? GetWeatherIcon(snapshot.wmoCode, snapshot.isDay).glyph
                           : L"☁️"));
-    Grid::SetColumn(headerIcon, 0);
-    header.Children().Append(headerIcon);
+    headerIconZone.Child(headerIcon);
+    Grid::SetColumn(headerIconZone, 0);
+    header.Children().Append(headerIconZone);
 
     StackPanel headerText;
     headerText.Orientation(Orientation::Vertical);
+    headerText.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(headerText, 1);
+
+    if (!snapshot.locationName.empty()) {
+        TextBlock locationText;
+        locationText.FontSize(12);
+        locationText.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+        locationText.Text(winrt::hstring(snapshot.locationName));
+        headerText.Children().Append(locationText);
+    }
 
     TextBlock tempText;
     tempText.FontSize(16);
@@ -1265,10 +1462,12 @@ StackPanel BuildForecastListPanel() {
     }
     int forecastDaysPanel;
     bool useFahrenheit;
+    std::wstring dateFormat;
     {
         std::lock_guard<std::mutex> lock(g_settingsMutex);
         forecastDaysPanel = g_settings.forecastDaysPanel;
         useFahrenheit = g_settings.useFahrenheit;
+        dateFormat = g_settings.forecastDateFormat;
     }
 
     StackPanel list;
@@ -1298,7 +1497,7 @@ StackPanel BuildForecastListPanel() {
         TextBlock dayLabel;
         dayLabel.FontSize(13);
         dayLabel.VerticalAlignment(VerticalAlignment::Center);
-        dayLabel.Text(winrt::hstring(day.date));
+        dayLabel.Text(winrt::hstring(FormatForecastDate(day.date, i, dateFormat)));
         Grid::SetColumn(dayLabel, 1);
         row.Children().Append(dayLabel);
 
@@ -1319,8 +1518,11 @@ StackPanel BuildForecastListPanel() {
 StackPanel BuildWeatherFlyoutContent() {
     StackPanel content;
     content.Orientation(Orientation::Vertical);
-    content.MinWidth(260);
-    content.MaxWidth(320);
+    // Matches taskbar-widget-media-player's own fixed panel width
+    // (360px) so every mod's details panel is the same size regardless
+    // of which one happens to be open (live feedback, 2026-09-21).
+    content.MinWidth(360);
+    content.MaxWidth(360);
 
     content.Children().Append(BuildWeatherHeaderAndDetails());
     content.Children().Append(BuildForecastListPanel());
@@ -1667,6 +1869,18 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         wrapper.Height(host->paneHeight);
         wrapper.Padding({0, 0, 0, 0});
         wrapper.BorderThickness({0, 0, 0, 0});
+        // A plain Button carries its own themed idle/PointerOver/Pressed
+        // template backgrounds - without clearing the idle one explicitly,
+        // it shows through even while ApplyWeatherHoverState's own
+        // transparent Background on `background` (below) is in effect,
+        // so the compact widget never looked fully transparent at rest
+        // (live-tested, 2026-09-21). `background` still owns all the
+        // real hover/press visuals; this just stops the Button's own
+        // chrome from adding a second, uncontrolled one underneath it -
+        // same idea as taskbar-widget-media-player's own wrapper, which
+        // clears its Background for the same reason.
+        wrapper.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
         Border background;
         background.CornerRadius({4, 4, 4, 4});
@@ -1985,6 +2199,11 @@ void InjectWeatherStandalone(HWND hWnd) {
     wrapper.HorizontalAlignment(HorizontalAlignment::Left);
     wrapper.Padding({0, 0, 0, 0});
     wrapper.BorderThickness({0, 0, 0, 0});
+    // See the registered-mode wrapper's own comment above (same fix,
+    // standalone-injection site) - clears the Button's own default idle
+    // background so only `background`'s explicit hover/press states show.
+    wrapper.Background(SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
     Border background;
     background.CornerRadius({4, 4, 4, 4});

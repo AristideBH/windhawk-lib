@@ -120,6 +120,97 @@ entirely instead of relying on the host's current atomicity.
 otherwise-unreachable code path. Covered by the existing
 register/unregister live-test steps.
 
+## Incident 4: styling/UX pass from a live-tested screenshot comparison (2026-09-21)
+
+**Symptom** (user-supplied screenshot comparing this mod's compact
+widget + panel against `taskbar-widget-media-player`'s own reference
+mockups): (1) the compact widget showed a persistent faint background
+even at rest, not just on hover, unlike media-player's. (2) The panel's
+header had its own separate semi-opaque background nested inside the
+Flyout's own chrome, reading as a floating rectangle rather than one
+uniform panel. (3) Panel width (260-320px) didn't match media-player's
+fixed 360px, so the two mods' panels were visibly different sizes. (4)
+The compact "Now" view's temperature had no unit letter and sat flush
+against the pane edges. (5) The panel header's icon was a bare
+oversized glyph with 12px of dead space before the text, and had no
+location name. (6) The panel's forecast list showed raw ISO dates
+("2026-09-21") with no way to reformat them.
+
+**Root cause (1)**: `WireUpHover`'s `background` Border already went
+fully transparent at rest (`ApplyWeatherHoverState`) - but the outer
+`wrapper` is a plain `Button`, which carries its own themed idle/
+PointerOver/Pressed template backgrounds that were never explicitly
+cleared, so the Button's own chrome showed through underneath
+`background`'s correct transparent state.
+`taskbar-widget-media-player`'s own wrapper already clears this
+(`wrapper.Background(MakeBrush({0x00,0,0,0}))`) - this mod's two
+wrapper-construction sites (registered-mode and standalone) didn't.
+
+**Fix**: added the same explicit `wrapper.Background(transparent)` at
+both construction sites. Worth remembering for any *future* mod in this
+repo too: a plain `Button` (or any templated control) used as a custom
+hover surface needs its own default background cleared explicitly, or
+it'll show through underneath whatever custom hover/press visual sits
+on top of it - this bit both this mod and (until now) wasn't obvious
+from media-player's code alone since that mod already had the fix
+baked in from the start.
+
+**Fix (2)**: removed `BuildWeatherHeaderAndDetails`'s own `card.Background`
+entirely - the panel now relies on the Flyout's own default
+FlyoutPresenter background, same as a plain native flyout, instead of
+double-nesting an extra fill inside it.
+
+**Fix (3)**: `BuildWeatherFlyoutContent`'s `MinWidth`/`MaxWidth` changed
+from 260/320 to a fixed 360, matching media-player's own panel width
+exactly.
+
+**Fix (4)**: `BuildNowView`'s `tempText` now appends "C"/"F" per
+`UnitSettings.temperature`; `root` (the compact view's own Grid) got a
+`{6, 2, 6, 2}` `Padding`.
+
+**Fix (5)**: the header icon is now a fixed 48x48 `Border` ("icon
+zone", background tint + rounded corners) with the glyph centered
+inside, rather than a bare 36pt glyph; the gap to the text next to it
+shrank from 12px to 8px (now measured from the zone's own edge, not the
+glyph's). A new `locationName` field (`WeatherState`, `ResolvedLocation`)
+shows above the temperature line when available:
+`GeocodeCity` (manual-city location mode) reads it straight out of its
+existing geocoding response at no extra cost; the GPS and manual-lat/lon
+paths have coordinates only, so a new best-effort `ReverseGeocodeLocation`
+(BigDataCloud's free `reverse-geocode-client` endpoint, no API key,
+same `CreateNoCompressionHttpClient` pattern as every other fetch in
+this file) fills it in separately in `ResolveLocation`. A reverse-geocode
+failure doesn't fail location resolution as a whole - the weather itself
+still loads, just without a location label.
+
+**Fix (6)**: new `DisplaySettings.forecastDateFormat` string setting
+(default `"{rel}"`) plus a small token-based `FormatForecastDate`
+(no calendar-library dependency - day-of-week comes from a
+self-contained Zeller's-congruence `ComputeWeekday`). Tokens: `{rel}`
+(Today/Tomorrow/After tomorrow for the first three days, then falls
+back to `{weekday_short}` on its own - so `"{rel}"` alone is already a
+complete format, not just a building block), `{weekday}`/
+`{weekday_short}`, `{month}`/`{month_short}`, `{day}`, `{year}` - freely
+combinable, e.g. `"{weekday_short}, {month_short} {day}"` → "Wed, Sep
+24". Applied in `BuildForecastListPanel`'s day-label text; the compact
+forecast strip (`BuildForecastView`) never showed a date label at all,
+so it's untouched.
+
+**Next retest**: hover/click the compact widget - confirm no background
+shows at rest, only on hover/press (both stack-registered and
+standalone). Open the details panel - confirm no floating card
+background behind the header, panel width matches media-player's own
+panel, the icon sits in a visible square zone with a tighter gap to the
+text, and a location name appears above the temperature (test all three
+location modes: auto/GPS, manual city, manual lat/lon - the last two
+via `ReverseGeocodeLocation` specifically, which is new and untested).
+Confirm the compact "Now" view shows a unit letter and isn't flush
+against the pane edges. In the panel's forecast list, confirm the
+default `{rel}` format shows "Today"/"Tomorrow"/"After tomorrow" then
+weekday abbreviations for the rest; try a custom format like
+`"{weekday_short}, {month_short} {day}"` and confirm it renders
+correctly.
+
 ## Live-test checklist
 
 Copied verbatim from the implementation plan's Task 16 ("Full
