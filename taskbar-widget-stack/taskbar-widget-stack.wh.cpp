@@ -2,7 +2,7 @@
 // @id              taskbar-widget-stack
 // @name            Taskbar Widget Stack
 // @description     Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style
-// @version         0.3.0
+// @version         0.4.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @homepage        https://aristide-bh.com/
@@ -1078,6 +1078,46 @@ FrameworkElement ResolveTrackingAnchor(FrameworkElement const& rootElement,
     return nullptr;
 }
 
+// Defined later as a plain global (UiState-adjacent); forward-declared
+// so IsTaskbarPositionViable below can read it.
+extern HWND g_taskbarWnd;
+
+// Whether a `layout.position` value can actually be resolved against
+// this taskbar's *current* live layout (Incident 52, user request) -
+// used by the settings window to gray out an option instead of letting
+// the user pick something that silently falls back to left_edge at the
+// next injection (e.g. the search box hidden, or no Widgets button on
+// this Windows build/config). Static edge positions never depend on a
+// specific element, so they're always viable. Re-resolves the taskbar's
+// root/repeater fresh on every call rather than caching them - this
+// runs only when the settings window's Layout tab is (re)built, not on
+// any hot path, and the live tree can change between opens (a taskbar
+// button toggled in Windows' own settings, an Explorer restart).
+bool IsTaskbarPositionViable(const std::wstring& position) {
+    if (position == L"left_edge" || position == L"center_edge" ||
+        position == L"right_edge") {
+        return true;
+    }
+    if (!g_taskbarWnd) {
+        return true;  // Nothing to check against yet - don't gray blindly.
+    }
+    auto xamlRoot = GetTaskbarXamlRoot(g_taskbarWnd);
+    if (!xamlRoot) {
+        return true;
+    }
+    auto rootElement = xamlRoot.Content().try_as<FrameworkElement>();
+    if (!rootElement) {
+        return true;
+    }
+    auto taskbarRootGrid = FindTaskbarRootGrid(rootElement);
+    auto repeater = taskbarRootGrid
+                        ? FindChildByName(taskbarRootGrid, L"TaskbarFrameRepeater")
+                        : nullptr;
+    std::wstring side;
+    return ResolveTrackingAnchor(rootElement, repeater, position, side) !=
+           nullptr;
+}
+
 // Defined further down (it calls into the widget-stack functions declared
 // later in this file); forward-declared so HookTaskbarDllSymbols can wire
 // it up as the TrayUI::StartTaskbar hook target.
@@ -2062,12 +2102,32 @@ void ToggleWidgetEnabled(int idx) {
     RebuildStackContents();
 }
 
-void MoveWidget(int idx, int delta) {
-    int other = idx + delta;
-    if (idx >= 0 && idx < (int)g_widgets.size() && other >= 0 &&
-        other < (int)g_widgets.size()) {
-        std::swap(g_widgets[idx], g_widgets[other]);
+// Applies a full reorder from the settings window's drag-and-drop
+// widgets list (Incident 52, user request) - `newOrder[k]` is the OLD
+// index of the widget that should now be at position k. A single drag
+// can move an item across several positions in one go, not just swap
+// two adjacent ones the way MoveWidget does, so this replaces the whole
+// vector at once instead of a sequence of swaps. Silently does nothing
+// on a malformed order (wrong size, an out-of-range or repeated index)
+// rather than guessing at a partial repair.
+void ReorderWidgets(const std::vector<int>& newOrder) {
+    if (newOrder.size() != g_widgets.size()) {
+        return;
     }
+    std::vector<bool> seen(g_widgets.size(), false);
+    for (int oldIndex : newOrder) {
+        if (oldIndex < 0 || oldIndex >= (int)g_widgets.size() ||
+            seen[oldIndex]) {
+            return;
+        }
+        seen[oldIndex] = true;
+    }
+    std::vector<WidgetEntry> reordered;
+    reordered.reserve(g_widgets.size());
+    for (int oldIndex : newOrder) {
+        reordered.push_back(std::move(g_widgets[oldIndex]));
+    }
+    g_widgets = std::move(reordered);
     SaveWidgetOrderState();
     RebuildStackContents();
 }
@@ -2142,9 +2202,25 @@ void ApplyTitleBarTheme(HWND hWnd, bool dark) {
 
 void CloseSettingsWindow();
 
+// Floor for the settings window's own size (Incident 52, user request) -
+// matches the size it's created at (480x420), so it can be resized
+// larger freely but never smaller than what it originally opened at,
+// where controls start clipping/wrapping badly. Raw pixels, same as
+// CreateWindowExW's own call below - this window isn't DPI-scaled at
+// creation either, so there's nothing to convert here to stay
+// consistent with it.
+constexpr LONG kSettingsWindowMinWidth = 480;
+constexpr LONG kSettingsWindowMinHeight = 420;
+
 LRESULT CALLBACK SettingsWindowProc(HWND hWnd, UINT msg, WPARAM wParam,
                                      LPARAM lParam) {
     switch (msg) {
+        case WM_GETMINMAXINFO: {
+            auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+            mmi->ptMinTrackSize.x = kSettingsWindowMinWidth;
+            mmi->ptMinTrackSize.y = kSettingsWindowMinHeight;
+            return 0;
+        }
         case WM_SIZE: {
             if (g_settingsWindow.xamlIslandHwnd) {
                 RECT rc;
@@ -2276,6 +2352,17 @@ FrameworkElement BuildLayoutTab() {
     for (int i = 0; i < ARRAYSIZE(kPositionValues); i++) {
         ComboBoxItem item;
         item.Content(winrt::box_value(winrt::hstring(kPositionLabels[i])));
+        // Grayed out (still selectable if it's already the saved choice,
+        // just not clickable to switch TO) when its target element isn't
+        // found in the taskbar's current live layout - e.g. the search
+        // box hidden, or no Widgets button on this Windows build/config
+        // (Incident 52, user request). Doesn't hide the option outright:
+        // the taskbar's own layout can change later (a button toggled
+        // back on in Windows' own settings), and this is only rechecked
+        // when the tab is rebuilt, not live.
+        if (!IsTaskbarPositionViable(kPositionValues[i])) {
+            item.IsEnabled(false);
+        }
         positionCombo.Items().Append(item);
         if (g_settings.layoutPosition == kPositionValues[i]) {
             selectedIndex = i;
@@ -2513,11 +2600,11 @@ FrameworkElement BuildLayoutTab() {
     return panel;
 }
 
-// Rebuilt (not patched) on every toggle/move, same rebuild-on-change
+// Rebuilt (not patched) on every toggle/reorder, same rebuild-on-change
 // idiom used everywhere else in this file - simpler than diffing, and
-// this list is short. Reuses ToggleWidgetEnabled/MoveWidget directly,
-// the same functions the right-click menu calls, so both surfaces
-// stay in sync through the one SaveWidgetOrderState() path.
+// this list is short. Both ToggleWidgetEnabled and ReorderWidgets funnel
+// through the one SaveWidgetOrderState() path, so persistence stays
+// consistent regardless of which UI action triggered the change.
 ScrollViewer g_widgetsTabScroller{nullptr};
 
 FrameworkElement BuildWidgetsTab();
@@ -2563,6 +2650,21 @@ FrameworkElement BuildWidgetsTab() {
     panel.Margin({16, 16, 16, 16});
     panel.Spacing(6);
 
+    // Real drag-and-drop reordering (Incident 52, user request) - a
+    // ListView with CanReorderItems+AllowDrop instead of the previous
+    // Up/Down buttons. Plain FrameworkElements appended directly to
+    // Items() (no ItemsSource/DataTemplate binding) - consistent with
+    // this whole file's rebuild-everything-on-change style, and WinUI's
+    // ListView accepts bare UIElements as items just fine, wrapping each
+    // in its own container automatically. SelectionMode::None since
+    // nothing here uses selection highlighting - the checkbox/gear
+    // button are the only interactive parts of a row, drag-holding
+    // anywhere else on the row reorders it.
+    ListView widgetsList;
+    widgetsList.SelectionMode(ListViewSelectionMode::None);
+    widgetsList.CanReorderItems(true);
+    widgetsList.AllowDrop(true);
+
     for (int i = 0; i < (int)g_widgets.size(); i++) {
         std::wstring label = g_widgets[i].widget->DisplayName();
         std::replace(label.begin(), label.end(), L'\n', L' ');
@@ -2570,6 +2672,23 @@ FrameworkElement BuildWidgetsTab() {
         StackPanel row;
         row.Orientation(Orientation::Horizontal);
         row.Spacing(8);
+        // Tags this row with its CURRENT index into g_widgets, read back
+        // by the DragItemsCompleted handler below (after a drag, the
+        // ListView's own Items() collection is already in the new visual
+        // order - walking it and unboxing each row's Tag gives the old
+        // index that now belongs at each new position).
+        row.Tag(winrt::box_value(i));
+
+        // Plain Unicode glyph, not a Segoe MDL2 FontIcon codepoint - same
+        // reasoning as the gear button below (Incident 31: those
+        // codepoints aren't reliably guessable against this SDK). Purely
+        // a visual "this row can be dragged" affordance, not interactive
+        // itself.
+        TextBlock dragHandle;
+        dragHandle.Text(L"☰");
+        dragHandle.Opacity(0.5);
+        dragHandle.VerticalAlignment(VerticalAlignment::Center);
+        row.Children().Append(dragHandle);
 
         CheckBox enabledBox;
         enabledBox.Content(winrt::box_value(winrt::hstring(label)));
@@ -2586,30 +2705,6 @@ FrameworkElement BuildWidgetsTab() {
         enabledBox.Checked(toggleHandler);
         enabledBox.Unchecked(toggleHandler);
         row.Children().Append(enabledBox);
-
-        Button upButton;
-        upButton.Content(winrt::box_value(winrt::hstring(L"Up")));
-        upButton.IsEnabled(i > 0);
-        upButton.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                            RoutedEventArgs const&) {
-            MoveWidget(i, -1);
-            if (g_widgetsTabScroller) {
-                g_widgetsTabScroller.Content(BuildWidgetsTab());
-            }
-        });
-        row.Children().Append(upButton);
-
-        Button downButton;
-        downButton.Content(winrt::box_value(winrt::hstring(L"Down")));
-        downButton.IsEnabled(i < (int)g_widgets.size() - 1);
-        downButton.Click([i](winrt::Windows::Foundation::IInspectable const&,
-                              RoutedEventArgs const&) {
-            MoveWidget(i, 1);
-            if (g_widgetsTabScroller) {
-                g_widgetsTabScroller.Content(BuildWidgetsTab());
-            }
-        });
-        row.Children().Append(downButton);
 
         if (g_widgets[i].widget->HasSettings()) {
             Button gearButton;
@@ -2630,8 +2725,27 @@ FrameworkElement BuildWidgetsTab() {
             row.Children().Append(gearButton);
         }
 
-        panel.Children().Append(row);
+        widgetsList.Items().Append(row);
     }
+
+    widgetsList.DragItemsCompleted(
+        [widgetsList](ListViewBase const&,
+                       DragItemsCompletedEventArgs const&) {
+            std::vector<int> newOrder;
+            auto items = widgetsList.Items();
+            for (uint32_t k = 0; k < items.Size(); k++) {
+                if (auto fe = items.GetAt(k).try_as<FrameworkElement>()) {
+                    newOrder.push_back(
+                        winrt::unbox_value_or<int32_t>(fe.Tag(), -1));
+                }
+            }
+            ReorderWidgets(newOrder);
+            if (g_widgetsTabScroller) {
+                g_widgetsTabScroller.Content(BuildWidgetsTab());
+            }
+        });
+
+    panel.Children().Append(widgetsList);
 
     // Add/remove: stubbed disabled (user decision, 2026-09-17) - no
     // widget catalog exists yet to add from. See PLAN.md "Next steps".
@@ -2843,8 +2957,8 @@ void CloseSettingsWindow() {
 // "Show widget"/"Move up"/"Move down" submenus this menu used to build
 // one per widget (Incident 24) - widget ordering/enable-disable is now
 // managed exclusively from the settings window's widgets tab
-// (ToggleWidgetEnabled/MoveWidget are both still called from there, and
-// from LoadWidgetOrderState on init - nothing else changed about how
+// (ToggleWidgetEnabled/ReorderWidgets are both still called from there,
+// and LoadWidgetOrderState from init - nothing else changed about how
 // those work, just who can trigger them from where). Also renamed "Go
 // to widget" to just "Goto" at the top level (the submenu's own rows
 // are still the widgets' names).

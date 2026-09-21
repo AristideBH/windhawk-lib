@@ -3211,3 +3211,53 @@ shows, it's coming from somewhere this fix didn't cover (not the
 column width or the panel's own visibility) and needs a fresh look
 with the actual live-tested visual, not further guessing from code
 alone.
+
+## Incident 52: settings window min-size, non-viable position graying, real drag-and-drop (2026-09-21)
+
+**Fix (min-size)**: added a `WM_GETMINMAXINFO` handler to
+`SettingsWindowProc` clamping `ptMinTrackSize` to `480x420` - the
+window's own creation size. Previously unconstrained; could be resized
+down to the point controls clipped/wrapped badly.
+
+**Fix (non-viable position graying)**: new `IsTaskbarPositionViable`
+reuses the exact same `ResolveTrackingAnchor` (plus a fresh
+`FindTaskbarRootGrid`/`FindChildByName` lookup for the repeater) that
+`InjectWidgetStackGrid` itself uses to resolve a tracking position at
+injection time - if it can't find the target element (search box
+hidden, no Widgets button on this Windows build/config, ...), the
+Layout tab's position `ComboBoxItem` is now built with `IsEnabled(false)`
+instead of silently letting the user pick something that falls back to
+`left_edge` at the next injection. Static edge positions
+(left_edge/center_edge/right_edge) are always viable. Re-checked fresh
+every time the Layout tab is built, not cached or live-updated - the
+taskbar's own layout can change between settings-window opens (a
+button toggled in Windows' own taskbar settings, an Explorer restart).
+
+**Fix (real drag-and-drop)**: the Widgets tab's list is now a `ListView`
+(`CanReorderItems`/`AllowDrop`) instead of the previous per-row Up/Down
+buttons - plain `FrameworkElement` rows appended directly to `Items()`
+(no `ItemsSource`/`DataTemplate` binding, consistent with this file's
+rebuild-everything-on-change style elsewhere), each tagged with its
+current `g_widgets` index via `.Tag()`. `DragItemsCompleted` reads the
+`ListView`'s own now-reordered `Items()` back (unboxing each row's Tag)
+and calls new `ReorderWidgets(newOrder)`, which replaces the whole
+`g_widgets` vector in one move rather than a sequence of adjacent swaps
+- a single drag can move an item several positions in one gesture.
+`MoveWidget` (the old adjacent-swap-only function) is now unused by
+anything and was deleted rather than left as dead code. A small "☰"
+`TextBlock` (plain Unicode glyph, not a guessed Segoe MDL2 codepoint -
+same reasoning as the existing gear button icon) marks each row as
+draggable; the checkbox and gear button stay independently clickable
+per WinUI's own tap-vs-drag gesture handling.
+
+**Next retest**: shrink the settings window - confirm it stops at
+480x420 and won't go smaller. Hide the search box or the Widgets button
+via Windows' own taskbar settings, reopen this mod's settings window,
+and confirm the corresponding "Left/right of Search"/"Left/right of
+Widgets" options are grayed out in the Layout tab's position dropdown
+(re-show the button and reopen the window again - confirm it becomes
+selectable again). Drag a widget row in the Widgets tab across several
+positions in one gesture (not just adjacent swaps) - confirm the stack
+itself reorders to match, the change persists across an Explorer
+restart, and the checkbox/gear button on each row still work normally
+(a short tap toggles/opens settings, a press-and-drag reorders).
