@@ -962,10 +962,10 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
             winrt::Windows::Foundation::Uri uri{uriText};
 
             socket.ConnectAsync(uri).get();
-            g_haWriter = winrt::Windows::Storage::Streams::DataWriter(
-                socket.OutputStream());
             {
                 std::lock_guard<std::mutex> lock(g_haSocketMutex);
+                g_haWriter = winrt::Windows::Storage::Streams::DataWriter(
+                    socket.OutputStream());
                 g_haSocket = socket;
             }
 
