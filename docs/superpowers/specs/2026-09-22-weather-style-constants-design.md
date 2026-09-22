@@ -271,9 +271,18 @@ Every default reproduces today's exact hardcoded value — an install with no `s
 | `SeparatorOpacity` | number | `0.3` | mixed-view day-separator `Opacity` |
 | `PanelBackgroundBrush` | brush | today's `AcrylicBrush` (see below) | `panelBg.Background` |
 | `HeaderBackgroundBrush` | brush | today's `0x20 000000` | `header.Background` only (verified `headerIconZone.Background` is a *different* default color, `0x20 FFFFFF` - kept hardcoded, out of scope, to avoid changing its visual when only `HeaderBackgroundBrush` is set) |
-| `BorderBrush` | brush | today's `0x18 FFFFFF` | `panelBg.BorderBrush`, mixed-view separator `Background` |
+| `BorderBrush` | brush | today's `0x18 FFFFFF` | `panelBg.BorderBrush` |
+| `SeparatorBrush` | brush | today's `0xFF FFFFFF` | mixed-view separator `Background` (see post-ship note below) |
 | `HoverBrush` | brush | today's `0x14 FFFFFF` | compact widget hover fill (`g_weatherHoverBrush`) |
 | `PressedBrush` | brush | today's `0x28 FFFFFF` | compact widget pressed fill (`g_weatherPressedBrush`) |
+
+### Post-ship change: `SeparatorBrush` split from `BorderBrush` (2026-09-22)
+
+Originally shipped with the mixed-view separator sharing `BorderBrush` (documented below, "BorderBrush
+reused for the separator"). Live use surfaced the predicted trap: `SeparatorOpacity` multiplies on top
+of whatever `BorderBrush` already carries, so a typical already-translucent border color made the
+separator read as nearly invisible. Split into its own `SeparatorBrush` slot (default unchanged,
+`0xFF FFFFFF` opaque white, same as before) so it can be set independently of the panel border.
 
 `CornerRadius({n, n, n, n})` call sites take `GetStyleNumber(...)` as `n` on all four corners
 (uniform radius — none of today's call sites use non-uniform radii, so the token stays a single

@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.27
+// @version         1.28
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -193,12 +193,13 @@ key required. See PLAN.md for the design.
       keys above. Slots: CardCornerRadius, PanelCornerRadius,
       CompactCornerRadius, HeaderPadding, PanelPadding, MutedTextOpacity,
       SeparatorOpacity (numbers); PanelBackgroundBrush, HeaderBackgroundBrush,
-      BorderBrush, HoverBrush, PressedBrush (colors/brushes). A slot with no
-      alias, or an alias pointing at a missing key, keeps its built-in default.
-      BorderBrush also feeds the mixed-view day separator, which applies
-      SeparatorOpacity on top of it - an already-translucent BorderBrush can
-      make the separator very hard to see there. As with styleConstants
-      above, a blank entry ends the list.
+      BorderBrush, SeparatorBrush, HoverBrush, PressedBrush (colors/brushes).
+      A slot with no alias, or an alias pointing at a missing key, keeps its
+      built-in default. SeparatorBrush is independent of BorderBrush (the
+      mixed-view day separator used to share BorderBrush, which doubled up
+      with SeparatorOpacity and made it nearly invisible for a translucent
+      border color - it now has its own slot). As with styleConstants above,
+      a blank entry ends the list.
   $name: Style
 */
 // ==/WindhawkModSettings==
@@ -1428,7 +1429,7 @@ Grid BuildMixedView() {
         separator.Opacity(GetStyleNumber(L"SeparatorOpacity", 0.3));
         Brush defaultSeparatorBrush = SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xFF, 0xFF)};
-        separator.Background(GetStyleBrush(L"BorderBrush", defaultSeparatorBrush));
+        separator.Background(GetStyleBrush(L"SeparatorBrush", defaultSeparatorBrush));
         separator.Margin({0, 4, 0, 4});
         Grid::SetColumn(separator, 1);
         root.Children().Append(separator);
