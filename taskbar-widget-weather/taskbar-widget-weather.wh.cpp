@@ -1227,7 +1227,7 @@ Grid BuildNowView() {
 
     TextBlock conditionText;
     conditionText.FontSize(kConditionFontSize);
-    conditionText.Opacity(0.7);
+    conditionText.Opacity(GetStyleNumber(L"MutedTextOpacity", 0.7));
     conditionText.Text(winrt::hstring(
         snapshot.hasData ? ConditionName(snapshot.wmoCode) : L""));
     textStack.Children().Append(conditionText);
@@ -1417,7 +1417,7 @@ Grid BuildMixedView() {
         root.ColumnDefinitions().GetAt(1).Width({1.0, GridUnitType::Auto});
         Border separator;
         separator.Width(1);
-        separator.Opacity(0.3);
+        separator.Opacity(GetStyleNumber(L"SeparatorOpacity", 0.3));
         separator.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xFF, 0xFF)});
         separator.Margin({0, 4, 0, 4});
@@ -1768,17 +1768,22 @@ Grid BuildWeatherHeaderAndDetails() {
     // this and every other section alike (2026-09-21). This used to also
     // carry that same 16px padding, double-padding the header/details
     // area relative to the forecast list and Refresh button below it.
+    double cardCornerRadius = GetStyleNumber(L"CardCornerRadius", 6.0);
     Grid card;
-    card.CornerRadius({6, 6, 6, 6});
+    card.CornerRadius({cardCornerRadius, cardCornerRadius, cardCornerRadius,
+                        cardCornerRadius});
     card.RowDefinitions().Append(RowDefinition{});
     card.RowDefinitions().Append(RowDefinition{});
 
     // Header row: icon + location/temp/condition/feels-like
+    double panelCornerRadius = GetStyleNumber(L"PanelCornerRadius", 8.0);
     Grid header;
-    header.CornerRadius({8, 8, 8, 8});
+    header.CornerRadius({panelCornerRadius, panelCornerRadius, panelCornerRadius,
+                          panelCornerRadius});
     header.Background(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)});
-    header.Padding({10, 10, 10, 10});
+    double headerPadding = GetStyleNumber(L"HeaderPadding", 10.0);
+    header.Padding({headerPadding, headerPadding, headerPadding, headerPadding});
     header.ColumnDefinitions().Append(ColumnDefinition{});
     header.ColumnDefinitions().Append(ColumnDefinition{});
     header.ColumnDefinitions().GetAt(0).Width({1.0, GridUnitType::Auto});
@@ -1795,7 +1800,8 @@ Grid BuildWeatherHeaderAndDetails() {
     Border headerIconZone;
     headerIconZone.Width(kHeaderIconZoneSize);
     headerIconZone.Height(kHeaderIconZoneSize);
-    headerIconZone.CornerRadius({6, 6, 6, 6});
+    headerIconZone.CornerRadius({cardCornerRadius, cardCornerRadius,
+                                  cardCornerRadius, cardCornerRadius});
     headerIconZone.Background(SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0xFF, 0xFF, 0xFF)});
     headerIconZone.Margin({0, 0, 12, 0});
@@ -1834,7 +1840,7 @@ Grid BuildWeatherHeaderAndDetails() {
 
     TextBlock feelsLikeText;
     feelsLikeText.FontSize(13);
-    feelsLikeText.Opacity(0.7);
+    feelsLikeText.Opacity(GetStyleNumber(L"MutedTextOpacity", 0.7));
     feelsLikeText.Text(winrt::hstring(
         snapshot.hasData
             ? L"Feels like " +
@@ -1868,7 +1874,7 @@ Grid BuildWeatherHeaderAndDetails() {
 
         TextBlock labelText;
         labelText.FontSize(11);
-        labelText.Opacity(0.7);
+        labelText.Opacity(GetStyleNumber(L"MutedTextOpacity", 0.7));
         labelText.HorizontalAlignment(HorizontalAlignment::Center);
         labelText.Text(winrt::hstring(label));
         cell.Children().Append(labelText);
@@ -1993,8 +1999,11 @@ Border BuildWeatherFlyoutContent() {
     // on `content` itself before this Border wrapped it.
     panelBg.MinWidth(360);
     panelBg.MaxWidth(360);
-    panelBg.CornerRadius({8, 8, 8, 8});
-    panelBg.Padding({16, 16, 16, 16});
+    double panelCornerRadius = GetStyleNumber(L"PanelCornerRadius", 8.0);
+    panelBg.CornerRadius({panelCornerRadius, panelCornerRadius, panelCornerRadius,
+                           panelCornerRadius});
+    double panelPadding = GetStyleNumber(L"PanelPadding", 16.0);
+    panelBg.Padding({panelPadding, panelPadding, panelPadding, panelPadding});
     // Real backdrop blur (2026-09-21, live feedback: "blur panel bg
     // too") via AcrylicBrush/Backdrop, same approach
     // taskbar-widget-media-player's own panel background uses - falls
@@ -2403,8 +2412,10 @@ extern "C" double __cdecl WeatherWidget_Create(void* /*context*/,
         // feedback, 2026-09-21) once the margin/border fixes made a
         // direct comparison possible - 4 read slightly tighter than
         // media-player's own hover surface side by side.
+        double compactCornerRadius = GetStyleNumber(L"CompactCornerRadius", 5.33);
         Border background;
-        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+        background.CornerRadius({compactCornerRadius, compactCornerRadius,
+                                  compactCornerRadius, compactCornerRadius});
         background.Margin({0, 3, 0, 3});
 
         auto compact = BuildCompactView();
@@ -2726,8 +2737,10 @@ void InjectWeatherStandalone(HWND hWnd) {
 
     // See the registered-mode wrapper's own comment on the matching
     // construction site - same margin/radius reasoning.
+    double compactCornerRadius = GetStyleNumber(L"CompactCornerRadius", 5.33);
     Border background;
-    background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+    background.CornerRadius({compactCornerRadius, compactCornerRadius,
+                              compactCornerRadius, compactCornerRadius});
     background.Margin({0, 3, 0, 3});
     auto compact = BuildCompactView();
     background.Child(compact);
