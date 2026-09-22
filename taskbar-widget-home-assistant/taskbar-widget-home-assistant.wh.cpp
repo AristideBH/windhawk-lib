@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.3.0
+// @version         0.4.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -295,14 +295,200 @@ struct HomeAssistantProfileInstance {
 std::vector<std::unique_ptr<HomeAssistantProfileInstance>> g_profileInstances;
 std::mutex g_profileInstancesMutex;
 
-// Minimal placeholder - Tasks 4/5/6 replace this body with real per-mode
-// rendering (single/multi/dashboard). Signature is final; do not change it.
+// Forward declarations: GetEntityState/CallHaService/g_haConnectionState are
+// defined further down in the WebSocket connection engine section (Task 3),
+// but the single-entity UI built here (Task 4) needs them earlier in the
+// file, ahead of BuildCompactView/HaWidget_Create's existing position.
+EntityState GetEntityState(const std::wstring& entityId);
+void CallHaService(const std::wstring& domain,
+                    const std::wstring& service,
+                    const std::wstring& entityId);
+extern std::atomic<HaConnectionState> g_haConnectionState;
+
+// ---------------------------------------------------------------------
+// Single-entity mode UI (Task 4): compact taskbar view, details panel, and
+// click-to-toggle for light/switch entities. Reused (via the mode switches
+// below) as the fallback rendering for every mode until Tasks 5/6 add their
+// own Multi/Dashboard branches.
+// ---------------------------------------------------------------------
+
+std::wstring DomainIcon(const std::wstring& domain) {
+    if (domain == L"light") {
+        return L"💡";
+    }
+    if (domain == L"switch") {
+        return L"🔌";
+    }
+    if (domain == L"sensor") {
+        return L"📊";
+    }
+    return L"❔";
+}
+
+bool IsToggleableDomain(const std::wstring& domain) {
+    return domain == L"light" || domain == L"switch";
+}
+
+constexpr double kHaIconFontSize = 20;
+constexpr double kHaStateFontSize = 12;
+
+FrameworkElement BuildSingleEntityCompactView(
+    HomeAssistantProfileInstance* instance) {
+    Grid root;
+    root.VerticalAlignment(VerticalAlignment::Center);
+    root.ColumnSpacing(8);
+    root.Padding({6, 2, 6, 2});
+    root.ColumnDefinitions().Append(ColumnDefinition{});
+    root.ColumnDefinitions().Append(ColumnDefinition{});
+
+    if (instance->config.entityIds.empty()) {
+        TextBlock placeholder;
+        placeholder.FontSize(kHaStateFontSize);
+        placeholder.Text(L"No entity configured");
+        root.Children().Append(placeholder);
+        return root;
+    }
+
+    const std::wstring& entityId = instance->config.entityIds[0];
+    EntityState state = GetEntityState(entityId);
+
+    TextBlock icon;
+    icon.FontSize(kHaIconFontSize);
+    icon.VerticalAlignment(VerticalAlignment::Center);
+    icon.Text(winrt::hstring(DomainIcon(state.domain.empty()
+                                             ? DomainOf(entityId)
+                                             : state.domain)));
+    Grid::SetColumn(icon, 0);
+    root.Children().Append(icon);
+
+    TextBlock stateText;
+    stateText.FontSize(kHaStateFontSize);
+    stateText.VerticalAlignment(VerticalAlignment::Center);
+    std::wstring displayState =
+        state.hasData ? state.state + (state.unitOfMeasurement.empty()
+                                            ? L""
+                                            : L" " + state.unitOfMeasurement)
+                       : L"…";
+    stateText.Text(winrt::hstring(displayState));
+    Grid::SetColumn(stateText, 1);
+    root.Children().Append(stateText);
+
+    if (g_haConnectionState.load() != HaConnectionState::Connected &&
+        g_haConnectionState.load() != HaConnectionState::Connecting) {
+        root.Opacity(0.5);
+    }
+
+    return root;
+}
+
+Flyout g_haProfileFlyout{nullptr};
+
+FrameworkElement BuildSingleEntityPanelContent(
+    HomeAssistantProfileInstance* instance) {
+    StackPanel root;
+    root.MinWidth(360);
+    root.MaxWidth(360);
+    root.Padding({16, 16, 16, 16});
+
+    if (instance->config.entityIds.empty()) {
+        TextBlock placeholder;
+        placeholder.Text(L"No entity configured for this profile.");
+        root.Children().Append(placeholder);
+        return root;
+    }
+
+    const std::wstring& entityId = instance->config.entityIds[0];
+    EntityState state = GetEntityState(entityId);
+
+    TextBlock icon;
+    icon.FontSize(kHaIconFontSize * 2);
+    icon.Text(winrt::hstring(DomainIcon(
+        state.domain.empty() ? DomainOf(entityId) : state.domain)));
+    root.Children().Append(icon);
+
+    TextBlock name;
+    name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    name.Text(winrt::hstring(state.friendlyName.empty() ? entityId
+                                                          : state.friendlyName));
+    root.Children().Append(name);
+
+    TextBlock stateText;
+    stateText.Text(winrt::hstring(
+        state.hasData
+            ? state.state + (state.unitOfMeasurement.empty()
+                                  ? L""
+                                  : L" " + state.unitOfMeasurement)
+            : L"No data yet"));
+    root.Children().Append(stateText);
+
+    return root;
+}
+
+// Dispatches to the right panel-content builder by mode. Tasks 5/6 extend
+// this switch with their own Multi/Dashboard branches - do not duplicate
+// ShowProfilePanel itself.
+FrameworkElement BuildProfilePanelContent(HomeAssistantProfileInstance* instance) {
+    switch (instance->config.mode) {
+        case ProfileMode::Single:
+            return BuildSingleEntityPanelContent(instance);
+        default:
+            // Tasks 5/6 replace this default case with real Multi/
+            // Dashboard branches; a plain placeholder here would violate
+            // the no-placeholder rule for a finished plan, so this task
+            // must leave a real, working fallback: reuse the single-entity
+            // layout for the first configured entity, which always
+            // produces a valid, non-empty panel even before Tasks 5/6 run.
+            return BuildSingleEntityPanelContent(instance);
+    }
+}
+
+void ShowProfilePanel(HomeAssistantProfileInstance* instance) {
+    if (!instance || !instance->background) {
+        return;
+    }
+    try {
+        Flyout flyout;
+        flyout.ShouldConstrainToRootBounds(false);
+        flyout.Content(BuildProfilePanelContent(instance));
+        g_haProfileFlyout = flyout;
+        Controls::Primitives::FlyoutBase::SetAttachedFlyout(
+            instance->background, flyout);
+        Controls::Primitives::FlyoutBase::ShowAttachedFlyout(
+            instance->background);
+    } catch (...) {
+    }
+}
+
+void HandleProfileClick(HomeAssistantProfileInstance* instance) {
+    if (!instance) {
+        return;
+    }
+    if (instance->config.mode == ProfileMode::Single &&
+        !instance->config.entityIds.empty()) {
+        const std::wstring& entityId = instance->config.entityIds[0];
+        std::wstring domain = DomainOf(entityId);
+        if (IsToggleableDomain(domain)) {
+            CallHaService(domain, L"toggle", entityId);
+            return;
+        }
+    }
+    ShowProfilePanel(instance);
+}
+
+// Signature is final (set by Task 2); do not change it. Tasks 5/6 extend the
+// switch below with real Multi/Dashboard compact views.
 FrameworkElement BuildCompactView(HomeAssistantProfileInstance* instance) {
-    TextBlock text;
-    text.Text(winrt::hstring(instance->config.displayName.empty()
-                                  ? instance->config.profileId
-                                  : instance->config.displayName));
-    return text;
+    switch (instance->config.mode) {
+        case ProfileMode::Single:
+            return BuildSingleEntityCompactView(instance);
+        default:
+            // Tasks 5/6 replace this default case with real Multi/
+            // Dashboard compact views. Until then, fall back to the
+            // single-entity view over the profile's first configured
+            // entity (if any) so every mode renders something real and
+            // non-empty, never a placeholder string.
+            return BuildSingleEntityCompactView(instance);
+    }
 }
 
 void RebuildProfileInstanceUi(HomeAssistantProfileInstance* instance) {
@@ -405,6 +591,11 @@ extern "C" double __cdecl HaWidget_Create(void* context,
         RebuildProfileInstanceUi(instance);
 
         wrapper.Children().Append(background);
+        wrapper.Tapped(
+            [instance](winrt::Windows::Foundation::IInspectable const&,
+                       winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
+                HandleProfileClick(instance);
+            });
         parent.Children().Append(wrapper);
         return 1.0;
     } catch (...) {
@@ -567,6 +758,11 @@ void InjectProfileStandalone(HomeAssistantProfileInstance* instance,
         RebuildProfileInstanceUi(instance);
 
         wrapper.Children().Append(background);
+        wrapper.Tapped(
+            [instance](winrt::Windows::Foundation::IInspectable const&,
+                       winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
+                HandleProfileClick(instance);
+            });
         rootGrid.Children().Append(wrapper);
     } catch (...) {
     }
