@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.5.0
+// @version         0.6.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -547,6 +547,97 @@ FrameworkElement BuildMultiEntityPanelContent(
     return root;
 }
 
+constexpr int kHaDashboardColumns = 3;
+
+FrameworkElement BuildDashboardPanelContent(
+    HomeAssistantProfileInstance* instance) {
+    Grid root;
+    root.MinWidth(360);
+    root.MaxWidth(360);
+    root.Padding({16, 16, 16, 16});
+    root.ColumnSpacing(8);
+    root.RowSpacing(8);
+    for (int i = 0; i < kHaDashboardColumns; i++) {
+        root.ColumnDefinitions().Append(ColumnDefinition{});
+        root.ColumnDefinitions().GetAt(i).Width({1.0, GridUnitType::Star});
+    }
+
+    if (instance->config.entityIds.empty()) {
+        TextBlock placeholder;
+        placeholder.Text(L"No entities configured for this profile.");
+        Grid::SetColumnSpan(placeholder, kHaDashboardColumns);
+        root.Children().Append(placeholder);
+        return root;
+    }
+
+    int rowCount =
+        ((int)instance->config.entityIds.size() + kHaDashboardColumns - 1) /
+        kHaDashboardColumns;
+    for (int r = 0; r < rowCount; r++) {
+        root.RowDefinitions().Append(RowDefinition{});
+    }
+
+    for (size_t i = 0; i < instance->config.entityIds.size(); i++) {
+        const std::wstring& entityId = instance->config.entityIds[i];
+        EntityState state = GetEntityState(entityId);
+        std::wstring domain =
+            state.domain.empty() ? DomainOf(entityId) : state.domain;
+
+        StackPanel tile;
+        tile.Orientation(Orientation::Vertical);
+        tile.HorizontalAlignment(HorizontalAlignment::Center);
+        tile.Padding({8, 8, 8, 8});
+        Grid::SetRow(tile, (int)(i / kHaDashboardColumns));
+        Grid::SetColumn(tile, (int)(i % kHaDashboardColumns));
+
+        TextBlock icon;
+        icon.FontSize(kHaIconFontSize);
+        icon.HorizontalAlignment(HorizontalAlignment::Center);
+        icon.Text(winrt::hstring(DomainIcon(domain)));
+        tile.Children().Append(icon);
+
+        TextBlock name;
+        name.FontSize(kHaStateFontSize);
+        name.HorizontalAlignment(HorizontalAlignment::Center);
+        name.TextAlignment(TextAlignment::Center);
+        name.Text(winrt::hstring(state.friendlyName.empty() ? entityId
+                                                              : state.friendlyName));
+        tile.Children().Append(name);
+
+        TextBlock stateText;
+        stateText.FontSize(kHaStateFontSize);
+        stateText.Opacity(0.7);
+        stateText.HorizontalAlignment(HorizontalAlignment::Center);
+        stateText.Text(winrt::hstring(
+            state.hasData
+                ? state.state + (state.unitOfMeasurement.empty()
+                                      ? L""
+                                      : L" " + state.unitOfMeasurement)
+                : L"No data yet"));
+        tile.Children().Append(stateText);
+
+        if (IsToggleableDomain(domain)) {
+            Border tileBorder;
+            tileBorder.Background(SolidColorBrush{
+                winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+            tileBorder.Child(tile);
+            tileBorder.PointerPressed(
+                [entityId, domain](
+                    winrt::Windows::Foundation::IInspectable const&,
+                    winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+                    CallHaService(domain, L"toggle", entityId);
+                });
+            Grid::SetRow(tileBorder, (int)(i / kHaDashboardColumns));
+            Grid::SetColumn(tileBorder, (int)(i % kHaDashboardColumns));
+            root.Children().Append(tileBorder);
+        } else {
+            root.Children().Append(tile);
+        }
+    }
+
+    return root;
+}
+
 // Dispatches to the right panel-content builder by mode. Task 6 extends
 // this switch with its own Dashboard branch - do not duplicate
 // ShowProfilePanel itself.
@@ -556,6 +647,8 @@ FrameworkElement BuildProfilePanelContent(HomeAssistantProfileInstance* instance
             return BuildSingleEntityPanelContent(instance);
         case ProfileMode::Multi:
             return BuildMultiEntityPanelContent(instance);
+        case ProfileMode::Dashboard:
+            return BuildDashboardPanelContent(instance);
         default:
             // Tasks 5/6 replace this default case with real Multi/
             // Dashboard branches; a plain placeholder here would violate
@@ -607,6 +700,8 @@ FrameworkElement BuildCompactView(HomeAssistantProfileInstance* instance) {
         case ProfileMode::Single:
             return BuildSingleEntityCompactView(instance);
         case ProfileMode::Multi:
+            return BuildMultiEntityCompactView(instance);
+        case ProfileMode::Dashboard:
             return BuildMultiEntityCompactView(instance);
         default:
             // Tasks 5/6 replace this default case with real Multi/
