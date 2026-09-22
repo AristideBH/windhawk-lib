@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.7.0
+// @version         0.7.1
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -112,6 +112,7 @@ to standalone otherwise. See PLAN.md for the design.
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -405,7 +406,20 @@ struct HomeAssistantProfileInstance {
     bool registeredWithStack = false;
 };
 
-std::vector<std::unique_ptr<HomeAssistantProfileInstance>> g_profileInstances;
+// Process-shutdown safety (see the windhawk-mod-development skill's
+// "Process-shutdown safety" section): each HomeAssistantProfileInstance
+// holds a Grid/Border (strong XAML references), so this container can't be
+// allowed to run its destructor automatically on a hard process exit
+// (Explorer restart/sign-out/reboot skip Wh_ModUninit entirely, and by the
+// time global destructors run under the loader lock, the XAML core may
+// already be torn down). [[clang::no_destroy]] suppresses that automatic
+// destructor; Wh_ModUninit below releases it explicitly instead, via
+// UnregisterAllProfileInstances (marshaled onto the UI thread) followed by
+// an explicit .reset() (vector::clear() alone would leave the buffer
+// allocated).
+[[clang::no_destroy]] std::optional<
+    std::vector<std::unique_ptr<HomeAssistantProfileInstance>>>
+    g_profileInstances{std::in_place};
 std::mutex g_profileInstancesMutex;
 
 // Forward declarations: GetEntityState/CallHaService/g_haConnectionState are
@@ -517,7 +531,10 @@ FrameworkElement BuildSingleEntityCompactView(
     return root;
 }
 
-Flyout g_haProfileFlyout{nullptr};
+// A strong XAML reference - needs [[clang::no_destroy]] (see the
+// process-shutdown-safety note above g_profileInstances); released
+// explicitly (= nullptr) in Wh_ModUninit instead, on the UI thread.
+[[clang::no_destroy]] Flyout g_haProfileFlyout{nullptr};
 
 // Wraps a panel-content root (built by the Single/Multi/Dashboard
 // panel-content functions below) in a themed Border - background, corner
@@ -926,9 +943,11 @@ void RebuildProfileInstanceUi(HomeAssistantProfileInstance* instance) {
 // version).
 // ---------------------------------------------------------------------
 
-SolidColorBrush g_haHoverBrush{nullptr};
-SolidColorBrush g_haPressedBrush{nullptr};
-winrt::Windows::UI::Xaml::Media::Brush g_haPressedBorderBrush{nullptr};
+// Strong XAML references - same [[clang::no_destroy]] + explicit-release-
+// on-the-UI-thread treatment as g_haProfileFlyout above.
+[[clang::no_destroy]] SolidColorBrush g_haHoverBrush{nullptr};
+[[clang::no_destroy]] SolidColorBrush g_haPressedBrush{nullptr};
+[[clang::no_destroy]] winrt::Windows::UI::Xaml::Media::Brush g_haPressedBorderBrush{nullptr};
 
 // Forces the three brushes above to recompute from current style
 // constants the next time EnsureHaHoverBrushes() runs. Called from
@@ -1350,7 +1369,7 @@ void UnregisterAllProfileInstances(HWND taskbarHwnd) {
     std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
     auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
         taskbarHwnd, kUnregisterWidgetPropName);
-    for (auto& instance : g_profileInstances) {
+    for (auto& instance : *g_profileInstances) {
         if (instance->registeredWithStack && unregisterFn) {
             unregisterFn(instance.get());
         } else if (instance->wrapper) {
@@ -1366,7 +1385,7 @@ void UnregisterAllProfileInstances(HWND taskbarHwnd) {
             }
         }
     }
-    g_profileInstances.clear();
+    g_profileInstances->clear();
 }
 
 void RegisterAllProfileInstances(HWND taskbarHwnd) {
@@ -1410,7 +1429,7 @@ void RegisterAllProfileInstances(HWND taskbarHwnd) {
             InjectProfileStandalone(instance.get(), taskbarHwnd);
         }
 
-        g_profileInstances.push_back(std::move(instance));
+        g_profileInstances->push_back(std::move(instance));
     }
 }
 
@@ -1486,7 +1505,7 @@ void NotifyEntityChanged(const std::wstring& entityId) {
     std::vector<HomeAssistantProfileInstance*> affected;
     {
         std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
-        for (auto& instance : g_profileInstances) {
+        for (auto& instance : *g_profileInstances) {
             auto& ids = instance->config.entityIds;
             if (std::find(ids.begin(), ids.end(), entityId) != ids.end()) {
                 affected.push_back(instance.get());
@@ -1503,9 +1522,21 @@ void NotifyEntityChanged(const std::wstring& entityId) {
     }
 }
 
+// g_haStopEvent: a raw HANDLE, safe without [[clang::no_destroy]] per the
+// skill doc (no destructor) as long as Wh_ModUninit signals/waits/closes it
+// - StopHaWebSocketThread below does exactly that, and is called first
+// thing in Wh_ModUninit.
 HANDLE g_haStopEvent = nullptr;
-winrt::Windows::Networking::Sockets::MessageWebSocket g_haSocket{nullptr};
-winrt::Windows::Storage::Streams::DataWriter g_haWriter{nullptr};
+// Strong WinRT/COM references (MessageWebSocket, DataWriter) - need
+// [[clang::no_destroy]]. Unlike the XAML globals above, these aren't
+// UI-thread-affine (they're only ever touched from the WebSocket thread,
+// under g_haSocketMutex), so Wh_ModUninit releases them directly rather
+// than via RunFromWindowThread - StopHaWebSocketThread has already joined
+// that thread by the time Wh_ModUninit does so.
+[[clang::no_destroy]] winrt::Windows::Networking::Sockets::MessageWebSocket
+    g_haSocket{nullptr};
+[[clang::no_destroy]] winrt::Windows::Storage::Streams::DataWriter g_haWriter{
+    nullptr};
 std::mutex g_haSocketMutex;
 
 void SendHaMessage(JsonObject const& message) {
@@ -1638,7 +1669,7 @@ void HandleHaMessage(const winrt::hstring& rawMessage) {
                 std::vector<HomeAssistantProfileInstance*> all;
                 {
                     std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
-                    for (auto& instance : g_profileInstances) {
+                    for (auto& instance : *g_profileInstances) {
                         all.push_back(instance.get());
                     }
                 }
@@ -1834,8 +1865,71 @@ void Wh_ModSettingsChanged() {
 }
 
 void Wh_ModUninit() {
+    // 1. Stop and join the WebSocket thread first - it's the only other
+    //    thread this mod runs, and everything released below (the socket/
+    //    writer it owns, the profile instances it notifies via
+    //    RunFromWindowThread) must not still be in use by it. This also
+    //    signals/waits/CloseHandles g_haStopEvent and g_haWebSocketThread
+    //    themselves (plain HANDLEs, no [[clang::no_destroy]] needed).
     StopHaWebSocketThread();
+
+    // 2. Strong WinRT/COM references owned by the WebSocket engine
+    //    (MessageWebSocket, DataWriter). Not UI-thread-affine, so released
+    //    directly here rather than via RunFromWindowThread - the thread
+    //    that used to own them has already been joined in step 1, and in
+    //    the normal case HaWebSocketThreadProc has already nulled these out
+    //    itself before exiting; this is the explicit, unconditional release
+    //    that also covers the case where the thread never reached that
+    //    point (e.g. still waiting on empty serverUrl/accessToken).
+    {
+        std::lock_guard<std::mutex> lock(g_haSocketMutex);
+        g_haWriter = nullptr;
+        g_haSocket = nullptr;
+    }
+
+    // 3. XAML/UI-thread-affine globals: g_profileInstances (each instance's
+    //    Grid wrapper/Border background), g_haProfileFlyout, and the
+    //    HoverBrush/PressedBrush/PressedBorderBrush trio. Per the skill
+    //    doc's "thread identity depends on how the mod was loaded" note,
+    //    Wh_ModUninit's own calling thread isn't guaranteed to be the
+    //    taskbar's UI thread (a mod injected into an already-running
+    //    explorer.exe runs every lifecycle callback on the Windhawk Engine
+    //    thread instead) - marshal via RunFromWindowThread to be safe
+    //    either way; RunFromWindowThread itself already short-circuits to a
+    //    direct call when the current thread already is the target
+    //    thread, so this is correct (and cheap) even when Wh_ModUninit does
+    //    happen to already be running on the UI thread.
+    //
+    //    UnregisterAllProfileInstances handles detaching/unregistering each
+    //    instance's wrapper (existing Task-2/3 logic, now also run through
+    //    this marshal instead of assuming its caller already runs on the
+    //    right thread); the explicit g_profileInstances.reset() after it
+    //    fully releases the optional's own vector buffer (its own
+    //    .clear() call, still present inside UnregisterAllProfileInstances,
+    //    would otherwise leave that buffer allocated - see the skill doc's
+    //    vector::clear()-is-a-partial-leak note).
+    //
+    //    If g_haTaskbarHwnd was never found (Wh_ModInit's FindWindow came
+    //    back empty), there's no parent to unregister these instances'
+    //    wrappers from in the first place - just drop the WinRT references
+    //    directly.
     if (g_haTaskbarHwnd) {
-        UnregisterAllProfileInstances(g_haTaskbarHwnd);
+        RunFromWindowThread(
+            g_haTaskbarHwnd,
+            [](void*) {
+                UnregisterAllProfileInstances(g_haTaskbarHwnd);
+                g_profileInstances.reset();
+                g_haProfileFlyout = nullptr;
+                g_haHoverBrush = nullptr;
+                g_haPressedBrush = nullptr;
+                g_haPressedBorderBrush = nullptr;
+            },
+            nullptr);
+    } else {
+        g_profileInstances.reset();
+        g_haProfileFlyout = nullptr;
+        g_haHoverBrush = nullptr;
+        g_haPressedBrush = nullptr;
+        g_haPressedBorderBrush = nullptr;
     }
 }
