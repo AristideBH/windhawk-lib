@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.7.1
+// @version         0.7.2
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1121,8 +1121,25 @@ bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param) {
         return false;
     }
     Payload pay{proc, param};
-    SendMessageW(hWnd, kMsg, 0, reinterpret_cast<LPARAM>(&pay));
+    // SendMessageTimeoutW with SMTO_ABORTIFHUNG instead of a plain
+    // SendMessageW: this function is also called from Wh_ModUninit to
+    // release XAML globals safely on the UI thread, and an unresponsive
+    // (but not dead - that's the tid==0 case above) target thread would
+    // otherwise block a synchronous SendMessageW forever, hanging the very
+    // shutdown/unload path this safety mechanism exists to protect. A
+    // 5000ms timeout is long enough for a genuinely busy UI thread to
+    // respond, short enough not to meaningfully hang a user-facing unload.
+    DWORD_PTR result = 0;
+    LRESULT sendResult =
+        SendMessageTimeoutW(hWnd, kMsg, 0, reinterpret_cast<LPARAM>(&pay),
+                             SMTO_ABORTIFHUNG, 5000, &result);
+    DWORD sendError = GetLastError();
     UnhookWindowsHookEx(hook);
+    if (!sendResult && sendError == ERROR_TIMEOUT) {
+        // Target thread is alive but hung/unresponsive - treat exactly like
+        // any other failure path (return false) rather than waiting it out.
+        return false;
+    }
     return true;
 }
 
@@ -1914,7 +1931,7 @@ void Wh_ModUninit() {
     //    wrappers from in the first place - just drop the WinRT references
     //    directly.
     if (g_haTaskbarHwnd) {
-        RunFromWindowThread(
+        bool marshaled = RunFromWindowThread(
             g_haTaskbarHwnd,
             [](void*) {
                 UnregisterAllProfileInstances(g_haTaskbarHwnd);
@@ -1925,6 +1942,22 @@ void Wh_ModUninit() {
                 g_haPressedBorderBrush = nullptr;
             },
             nullptr);
+        if (!marshaled) {
+            // Couldn't marshal onto the UI thread (stale window handle,
+            // hook-install failure, or the target thread being hung and
+            // timing out per RunFromWindowThread's SendMessageTimeoutW
+            // above). Log and accept the resulting resource leak rather
+            // than falling back to an unsafe same-thread/off-UI-thread
+            // release of these XAML objects - releasing XAML off its
+            // owning thread is itself the exact hazard this shutdown-safety
+            // work exists to avoid, so a logged, skipped cleanup is
+            // strictly safer than a same-thread fallback that could crash.
+            Wh_Log(
+                L"Failed to marshal XAML global cleanup onto the taskbar UI "
+                L"thread; skipping cleanup to avoid an unsafe off-thread "
+                L"release (leaking g_profileInstances/g_haProfileFlyout/"
+                L"hover brushes).");
+        }
     } else {
         g_profileInstances.reset();
         g_haProfileFlyout = nullptr;
