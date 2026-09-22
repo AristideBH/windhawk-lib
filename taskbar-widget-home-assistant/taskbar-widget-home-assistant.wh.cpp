@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.6.0
+// @version         0.7.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -191,6 +191,111 @@ std::vector<std::wstring> GetStringArraySetting(const std::wstring& settingName)
     return result;
 }
 
+// ---------------------------------------------------------------------
+// StyleSettings engine (Task 7): byte-for-byte the same engine as
+// taskbar-widget-weather.wh.cpp's own (duplicated fresh - no shared header
+// between mods in this repo), adjusted only to reuse this file's own
+// GetStringArraySetting (Task 1) in place of weather's differently-named
+// ParseKeyValueArraySetting for the array-reading half of the work.
+// styleConstants holds raw "Key=Value" theme entries; styleAliases maps a
+// widget style slot name to one of those keys. A slot with no alias, or an
+// alias pointing at a missing key, resolves to "" and callers fall back to
+// their own hardcoded default.
+// ---------------------------------------------------------------------
+
+std::map<std::wstring, std::wstring> g_styleConstants;
+std::map<std::wstring, std::wstring> g_styleAliases;
+std::mutex g_styleMutex;
+
+std::map<std::wstring, std::wstring> ParseKeyValueMapSetting(
+    const std::wstring& settingName) {
+    std::map<std::wstring, std::wstring> result;
+    for (auto const& entry : GetStringArraySetting(settingName)) {
+        size_t eq = entry.find(L'=');
+        if (eq == std::wstring::npos) {
+            continue;
+        }
+        result[entry.substr(0, eq)] = entry.substr(eq + 1);
+    }
+    return result;
+}
+
+std::wstring ResolveStyleRawValue(const std::wstring& slotName) {
+    std::lock_guard<std::mutex> lock(g_styleMutex);
+    auto aliasIt = g_styleAliases.find(slotName);
+    if (aliasIt == g_styleAliases.end()) {
+        return L"";
+    }
+    auto constIt = g_styleConstants.find(aliasIt->second);
+    if (constIt == g_styleConstants.end()) {
+        return L"";
+    }
+    return constIt->second;
+}
+
+double GetStyleNumber(const std::wstring& slotName, double fallback) {
+    std::wstring raw = ResolveStyleRawValue(slotName);
+    if (raw.empty()) {
+        return fallback;
+    }
+    try {
+        return std::stod(raw);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+// XamlReader::Load requires an xmlns on the root element; user-pasted
+// fragments (copied straight from a Taskbar Styler theme) never have one.
+// Injects the two standard namespaces right after the root tag's name -
+// mirrors weather's own InjectXamlNamespaces exactly.
+std::wstring InjectXamlNamespaces(const std::wstring& fragment) {
+    size_t ltPos = fragment.find(L'<');
+    if (ltPos == std::wstring::npos) {
+        return fragment;
+    }
+    size_t nameStart = ltPos + 1;
+    size_t nameEnd = fragment.find_first_of(L" \t\r\n>", nameStart);
+    if (nameEnd == std::wstring::npos) {
+        return fragment;
+    }
+    std::wstring result = fragment;
+    result.insert(nameEnd,
+        L" xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        L"xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"");
+    return result;
+}
+
+winrt::Windows::UI::Color ParseRgbColor(const std::wstring& value) {
+    int r = 0, g = 0, b = 0;
+    swscanf_s(value.c_str(), L"%d %d %d", &r, &g, &b);
+    auto clamp8 = [](int v) { return (BYTE)std::clamp(v, 0, 255); };
+    return winrt::Windows::UI::ColorHelper::FromArgb(255, clamp8(r), clamp8(g),
+                                                       clamp8(b));
+}
+
+Brush GetStyleBrush(const std::wstring& slotName, Brush const& fallback) {
+    std::wstring raw = ResolveStyleRawValue(slotName);
+    if (raw.empty()) {
+        return fallback;
+    }
+    size_t firstNonSpace = raw.find_first_not_of(L" \t\r\n");
+    if (firstNonSpace == std::wstring::npos) {
+        return fallback;
+    }
+    try {
+        if (raw[firstNonSpace] == L'<') {
+            auto wrapped = InjectXamlNamespaces(raw);
+            auto obj = winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
+                winrt::hstring(wrapped));
+            return obj.as<Brush>();
+        }
+        return SolidColorBrush{ParseRgbColor(raw)};
+    } catch (...) {
+        return fallback;
+    }
+}
+
 ProfileMode ParseProfileMode(const std::wstring& value) {
     if (value == L"multi") {
         return ProfileMode::Multi;
@@ -232,6 +337,14 @@ void LoadSettings() {
         profile.entityIds = GetStringArraySetting(entityIdsKey);
 
         newProfiles.push_back(std::move(profile));
+    }
+
+    auto constants = ParseKeyValueMapSetting(L"StyleSettings.styleConstants");
+    auto aliases = ParseKeyValueMapSetting(L"StyleSettings.styleAliases");
+    {
+        std::lock_guard<std::mutex> styleLock(g_styleMutex);
+        g_styleConstants = std::move(constants);
+        g_styleAliases = std::move(aliases);
     }
 
     std::lock_guard<std::mutex> lock(g_settingsMutex);
@@ -332,6 +445,27 @@ bool IsToggleableDomain(const std::wstring& domain) {
 constexpr double kHaIconFontSize = 20;
 constexpr double kHaStateFontSize = 12;
 
+// OnColor/OffColor (Task 7 StyleSettings slots): applied to every
+// light/switch icon's Foreground, everywhere one renders (compact single,
+// compact multi/dashboard strip, panel list, panel tiles) - callers only
+// invoke this once they've already checked IsToggleableDomain(domain), so
+// non-toggleable domains (sensor, etc.) keep their default inherited
+// Foreground instead of being forced into an on/off color that doesn't
+// apply to them. Defaults (no existing hardcoded value to match, since this
+// is a new mod, not a refactor - implementer's choice, picked to read well
+// against this file's dark/translucent panels): a warm amber for "on"
+// (matches a typical smart-bulb-lit look), a muted mid-gray for "off".
+Brush HaOnOffIconBrush(bool isOn) {
+    if (isOn) {
+        SolidColorBrush defaultOn{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xC1, 0x07)};
+        return GetStyleBrush(L"OnColor", defaultOn);
+    }
+    SolidColorBrush defaultOff{
+        winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x8C, 0x8C, 0x8C)};
+    return GetStyleBrush(L"OffColor", defaultOff);
+}
+
 FrameworkElement BuildSingleEntityCompactView(
     HomeAssistantProfileInstance* instance) {
     Grid root;
@@ -351,13 +485,15 @@ FrameworkElement BuildSingleEntityCompactView(
 
     const std::wstring& entityId = instance->config.entityIds[0];
     EntityState state = GetEntityState(entityId);
+    std::wstring domain = state.domain.empty() ? DomainOf(entityId) : state.domain;
 
     TextBlock icon;
     icon.FontSize(kHaIconFontSize);
     icon.VerticalAlignment(VerticalAlignment::Center);
-    icon.Text(winrt::hstring(DomainIcon(state.domain.empty()
-                                             ? DomainOf(entityId)
-                                             : state.domain)));
+    icon.Text(winrt::hstring(DomainIcon(domain)));
+    if (IsToggleableDomain(domain)) {
+        icon.Foreground(HaOnOffIconBrush(state.hasData && state.state == L"on"));
+    }
     Grid::SetColumn(icon, 0);
     root.Children().Append(icon);
 
@@ -383,27 +519,74 @@ FrameworkElement BuildSingleEntityCompactView(
 
 Flyout g_haProfileFlyout{nullptr};
 
+// Wraps a panel-content root (built by the Single/Multi/Dashboard
+// panel-content functions below) in a themed Border - background, corner
+// radius, padding and border color all driven by the PanelCornerRadius/
+// PanelPadding/PanelBackgroundBrush/BorderBrush style slots (Task 7). None
+// of the three functions build this Border themselves; they hand back a
+// bare StackPanel/Grid root and this is the single place that wraps it.
+// Owns the fixed 360px panel width too - moved here from each root below
+// rather than duplicated on both the wrapper and the inner root - matching
+// taskbar-widget-weather.wh.cpp's own BuildWeatherFlyoutContent Border-wrap
+// pattern (same AcrylicBrush-with-solid-fallback construction for the
+// default background, same default border tint).
+Border WrapPanelContent(FrameworkElement content) {
+    Border panelBg;
+    panelBg.MinWidth(360);
+    panelBg.MaxWidth(360);
+    double panelCornerRadius = GetStyleNumber(L"PanelCornerRadius", 8.0);
+    panelBg.CornerRadius({panelCornerRadius, panelCornerRadius,
+                           panelCornerRadius, panelCornerRadius});
+    double panelPadding = GetStyleNumber(L"PanelPadding", 16.0);
+    panelBg.Padding({panelPadding, panelPadding, panelPadding, panelPadding});
+
+    Brush defaultPanelBackground{nullptr};
+    try {
+        winrt::Windows::UI::Xaml::Media::AcrylicBrush acrylic;
+        acrylic.BackgroundSource(
+            winrt::Windows::UI::Xaml::Media::AcrylicBackgroundSource::Backdrop);
+        acrylic.TintColor(
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x2B, 0x2B, 0x2B));
+        acrylic.TintOpacity(0.5);
+        acrylic.TintLuminosityOpacity(0.85);
+        acrylic.FallbackColor(
+            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B));
+        defaultPanelBackground = acrylic;
+        panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
+    } catch (...) {
+        defaultPanelBackground = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)};
+        panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
+    }
+    Brush defaultPanelBorder = SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)};
+    panelBg.BorderBrush(GetStyleBrush(L"BorderBrush", defaultPanelBorder));
+    panelBg.BorderThickness({1, 1, 1, 1});
+    panelBg.Child(content);
+    return panelBg;
+}
+
 FrameworkElement BuildSingleEntityPanelContent(
     HomeAssistantProfileInstance* instance) {
     StackPanel root;
-    root.MinWidth(360);
-    root.MaxWidth(360);
-    root.Padding({16, 16, 16, 16});
 
     if (instance->config.entityIds.empty()) {
         TextBlock placeholder;
         placeholder.Text(L"No entity configured for this profile.");
         root.Children().Append(placeholder);
-        return root;
+        return WrapPanelContent(root);
     }
 
     const std::wstring& entityId = instance->config.entityIds[0];
     EntityState state = GetEntityState(entityId);
+    std::wstring domain = state.domain.empty() ? DomainOf(entityId) : state.domain;
 
     TextBlock icon;
     icon.FontSize(kHaIconFontSize * 2);
-    icon.Text(winrt::hstring(DomainIcon(
-        state.domain.empty() ? DomainOf(entityId) : state.domain)));
+    icon.Text(winrt::hstring(DomainIcon(domain)));
+    if (IsToggleableDomain(domain)) {
+        icon.Foreground(HaOnOffIconBrush(state.hasData && state.state == L"on"));
+    }
     root.Children().Append(icon);
 
     TextBlock name;
@@ -421,7 +604,7 @@ FrameworkElement BuildSingleEntityPanelContent(
             : L"No data yet"));
     root.Children().Append(stateText);
 
-    return root;
+    return WrapPanelContent(root);
 }
 
 FrameworkElement BuildMultiEntityCompactView(
@@ -459,6 +642,9 @@ FrameworkElement BuildMultiEntityCompactView(
         if (state.hasData && state.state != L"on") {
             icon.Opacity(0.5);
         }
+        if (IsToggleableDomain(domain)) {
+            icon.Foreground(HaOnOffIconBrush(state.hasData && state.state == L"on"));
+        }
         cell.Child(icon);
 
         if (IsToggleableDomain(domain)) {
@@ -479,16 +665,13 @@ FrameworkElement BuildMultiEntityCompactView(
 FrameworkElement BuildMultiEntityPanelContent(
     HomeAssistantProfileInstance* instance) {
     StackPanel root;
-    root.MinWidth(360);
-    root.MaxWidth(360);
-    root.Padding({16, 16, 16, 16});
     root.Spacing(8);
 
     if (instance->config.entityIds.empty()) {
         TextBlock placeholder;
         placeholder.Text(L"No entities configured for this profile.");
         root.Children().Append(placeholder);
-        return root;
+        return WrapPanelContent(root);
     }
 
     for (auto const& entityId : instance->config.entityIds) {
@@ -506,6 +689,9 @@ FrameworkElement BuildMultiEntityPanelContent(
         TextBlock icon;
         icon.FontSize(kHaIconFontSize);
         icon.Text(winrt::hstring(DomainIcon(domain)));
+        if (IsToggleableDomain(domain)) {
+            icon.Foreground(HaOnOffIconBrush(state.hasData && state.state == L"on"));
+        }
         Grid::SetColumn(icon, 0);
         row.Children().Append(icon);
 
@@ -518,7 +704,7 @@ FrameworkElement BuildMultiEntityPanelContent(
         textStack.Children().Append(name);
         TextBlock stateText;
         stateText.FontSize(kHaStateFontSize);
-        stateText.Opacity(0.7);
+        stateText.Opacity(GetStyleNumber(L"MutedTextOpacity", 0.7));
         stateText.Text(winrt::hstring(
             state.hasData
                 ? state.state + (state.unitOfMeasurement.empty()
@@ -544,7 +730,7 @@ FrameworkElement BuildMultiEntityPanelContent(
         root.Children().Append(row);
     }
 
-    return root;
+    return WrapPanelContent(root);
 }
 
 constexpr int kHaDashboardColumns = 3;
@@ -552,9 +738,6 @@ constexpr int kHaDashboardColumns = 3;
 FrameworkElement BuildDashboardPanelContent(
     HomeAssistantProfileInstance* instance) {
     Grid root;
-    root.MinWidth(360);
-    root.MaxWidth(360);
-    root.Padding({16, 16, 16, 16});
     root.ColumnSpacing(8);
     root.RowSpacing(8);
     for (int i = 0; i < kHaDashboardColumns; i++) {
@@ -567,7 +750,7 @@ FrameworkElement BuildDashboardPanelContent(
         placeholder.Text(L"No entities configured for this profile.");
         Grid::SetColumnSpan(placeholder, kHaDashboardColumns);
         root.Children().Append(placeholder);
-        return root;
+        return WrapPanelContent(root);
     }
 
     int rowCount =
@@ -594,6 +777,9 @@ FrameworkElement BuildDashboardPanelContent(
         icon.FontSize(kHaIconFontSize);
         icon.HorizontalAlignment(HorizontalAlignment::Center);
         icon.Text(winrt::hstring(DomainIcon(domain)));
+        if (IsToggleableDomain(domain)) {
+            icon.Foreground(HaOnOffIconBrush(state.hasData && state.state == L"on"));
+        }
         tile.Children().Append(icon);
 
         TextBlock name;
@@ -606,7 +792,7 @@ FrameworkElement BuildDashboardPanelContent(
 
         TextBlock stateText;
         stateText.FontSize(kHaStateFontSize);
-        stateText.Opacity(0.7);
+        stateText.Opacity(GetStyleNumber(L"MutedTextOpacity", 0.7));
         stateText.HorizontalAlignment(HorizontalAlignment::Center);
         stateText.Text(winrt::hstring(
             state.hasData
@@ -635,7 +821,7 @@ FrameworkElement BuildDashboardPanelContent(
         }
     }
 
-    return root;
+    return WrapPanelContent(root);
 }
 
 // Dispatches to the right panel-content builder by mode. Task 6 extends
@@ -724,6 +910,149 @@ void RebuildProfileInstanceUi(HomeAssistantProfileInstance* instance) {
 }
 
 // ---------------------------------------------------------------------
+// HoverBrush/PressedBrush style tokens (Task 7): hover/press visual state
+// for each profile instance's `background` Border, mirroring
+// taskbar-widget-weather.wh.cpp's own EnsureHoverBrushes/
+// ApplyWeatherHoverState/WireUpHover trio - same lazily-cached brushes
+// (computed once per process, invalidated on settings change), same
+// gradient hover border, same default alpha values. Unlike weather (a
+// single global widget), this mod can have several live profile
+// instances at once, each with its own wrapper/background - so hovered/
+// pressed state is captured locally per WireUpHaHover call instead of
+// living in a shared global, and there's no "flyout open" cross-state to
+// track (weather's own ShowWeatherPanel keeps the compact widget looking
+// hovered while its details flyout is open; this mod's flyouts are
+// per-instance and simpler to leave as plain hover/press for a first
+// version).
+// ---------------------------------------------------------------------
+
+SolidColorBrush g_haHoverBrush{nullptr};
+SolidColorBrush g_haPressedBrush{nullptr};
+winrt::Windows::UI::Xaml::Media::Brush g_haPressedBorderBrush{nullptr};
+
+// Forces the three brushes above to recompute from current style
+// constants the next time EnsureHaHoverBrushes() runs. Called from
+// Wh_ModSettingsChanged (below), marshaled onto the UI thread - same
+// requirement as weather's own InvalidateHoverBrushCache, since these are
+// live WinRT smart pointers only safe to touch on the thread that owns
+// the XAML objects.
+void InvalidateHaHoverBrushCache() {
+    g_haHoverBrush = nullptr;
+    g_haPressedBrush = nullptr;
+    g_haPressedBorderBrush = nullptr;
+}
+
+void EnsureHaHoverBrushes() {
+    if (!g_haHoverBrush) {
+        SolidColorBrush defaultHover{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x14, 0xFF, 0xFF, 0xFF)};
+        try {
+            g_haHoverBrush =
+                GetStyleBrush(L"HoverBrush", defaultHover).as<SolidColorBrush>();
+        } catch (...) {
+            g_haHoverBrush = defaultHover;
+        }
+    }
+    if (!g_haPressedBrush) {
+        SolidColorBrush defaultPressed{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
+        try {
+            g_haPressedBrush =
+                GetStyleBrush(L"PressedBrush", defaultPressed).as<SolidColorBrush>();
+        } catch (...) {
+            g_haPressedBrush = defaultPressed;
+        }
+    }
+    if (!g_haPressedBorderBrush) {
+        g_haPressedBorderBrush = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0x0A, 0xFF, 0xFF, 0xFF)};
+    }
+}
+
+// Same top/bottom gradient border shape as weather's own
+// MakeWeatherHoverBorderBrush, at a given alpha scale (1.0 = full
+// 0x28/0x0A stops, 0.0 = fully transparent but the same brush type) - one
+// brush shape across idle/hover keeps BorderThickness constant so the
+// border's footprint (and the content inside it) never shifts on hover.
+winrt::Windows::UI::Xaml::Media::Brush MakeHaHoverBorderBrush(double alphaScale) {
+    try {
+        winrt::Windows::UI::Xaml::Media::LinearGradientBrush brush;
+        brush.StartPoint(winrt::Windows::Foundation::Point(0.5f, 0.0f));
+        brush.EndPoint(winrt::Windows::Foundation::Point(0.5f, 1.0f));
+        winrt::Windows::UI::Xaml::Media::GradientStop top, bottom;
+        top.Color(winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x28 * alphaScale), 0xFF, 0xFF, 0xFF));
+        top.Offset(0.0);
+        bottom.Color(winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x0A * alphaScale), 0xFF, 0xFF, 0xFF));
+        bottom.Offset(1.0);
+        brush.GradientStops().Append(top);
+        brush.GradientStops().Append(bottom);
+        return brush;
+    } catch (...) {
+        return SolidColorBrush{winrt::Windows::UI::ColorHelper::FromArgb(
+            (BYTE)std::lround(0x28 * alphaScale), 0xFF, 0xFF, 0xFF)};
+    }
+}
+
+void ApplyHaHoverState(Border background, bool hovered, bool pressed) {
+    EnsureHaHoverBrushes();
+    background.BorderThickness({1, 1, 1, 1});
+    if (pressed) {
+        background.Background(g_haPressedBrush);
+        background.BorderBrush(g_haPressedBorderBrush);
+    } else if (hovered) {
+        background.Background(g_haHoverBrush);
+        background.BorderBrush(MakeHaHoverBorderBrush(1.0));
+    } else {
+        background.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+        background.BorderBrush(MakeHaHoverBorderBrush(0.0));
+    }
+}
+
+// `background` is the full-bounds Border sitting behind this instance's
+// compact view content; `wrapper` is the outer Grid pointer events are
+// attached to (same shape as weather's own WireUpHover). hovered/pressed
+// are captured per call - one instance's hover state never leaks into
+// another's, since each profile instance owns its own wrapper/background.
+void WireUpHaHover(FrameworkElement wrapper, Border background) {
+    auto hovered = std::make_shared<bool>(false);
+    auto pressed = std::make_shared<bool>(false);
+
+    wrapper.PointerEntered(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *hovered = true;
+            ApplyHaHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerExited(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *hovered = false;
+            *pressed = false;
+            ApplyHaHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerPressed(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *pressed = true;
+            ApplyHaHoverState(background, *hovered, *pressed);
+        });
+    wrapper.PointerReleased(
+        [hovered, pressed, background](
+            winrt::Windows::Foundation::IInspectable const&,
+            winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+            *pressed = false;
+            ApplyHaHoverState(background, *hovered, *pressed);
+        });
+    ApplyHaHoverState(background, false, false);
+}
+
+// ---------------------------------------------------------------------
 // RunFromWindowThread: marshals a call onto the taskbar window's own
 // thread. Mirrors taskbar-widget-weather.wh.cpp's actual, working
 // implementation verbatim (not the simpler PostMessage+heap-payload sketch
@@ -804,8 +1133,10 @@ extern "C" double __cdecl HaWidget_Create(void* context,
         wrapper.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
+        double cardCornerRadius = GetStyleNumber(L"CardCornerRadius", 5.33);
         Border background;
-        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+        background.CornerRadius({cardCornerRadius, cardCornerRadius,
+                                  cardCornerRadius, cardCornerRadius});
         background.Margin({0, 3, 0, 3});
 
         instance->wrapper = wrapper;
@@ -813,6 +1144,7 @@ extern "C" double __cdecl HaWidget_Create(void* context,
         RebuildProfileInstanceUi(instance);
 
         wrapper.Children().Append(background);
+        WireUpHaHover(wrapper, background);
         wrapper.Tapped(
             [instance](winrt::Windows::Foundation::IInspectable const&,
                        winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
@@ -970,8 +1302,10 @@ void InjectProfileStandalone(HomeAssistantProfileInstance* instance,
         wrapper.Background(SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
 
+        double cardCornerRadius = GetStyleNumber(L"CardCornerRadius", 5.33);
         Border background;
-        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+        background.CornerRadius({cardCornerRadius, cardCornerRadius,
+                                  cardCornerRadius, cardCornerRadius});
         background.Margin({0, 3, 0, 3});
 
         instance->wrapper = wrapper;
@@ -980,6 +1314,7 @@ void InjectProfileStandalone(HomeAssistantProfileInstance* instance,
         RebuildProfileInstanceUi(instance);
 
         wrapper.Children().Append(background);
+        WireUpHaHover(wrapper, background);
         wrapper.Tapped(
             [instance](winrt::Windows::Foundation::IInspectable const&,
                        winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
@@ -1483,6 +1818,13 @@ void Wh_ModSettingsChanged() {
         RunFromWindowThread(
             g_haTaskbarHwnd,
             [](void*) {
+                // Reset the cached HoverBrush/PressedBrush style-token
+                // brushes (EnsureHaHoverBrushes reads/writes these globals
+                // on) before rebuilding, so an edited HoverBrush/
+                // PressedBrush style constant takes effect immediately -
+                // mirrors weather's own InvalidateHoverBrushCache call
+                // site.
+                InvalidateHaHoverBrushCache();
                 RebuildAllProfileInstances(g_haTaskbarHwnd);
                 StopHaWebSocketThread();
                 StartHaWebSocketThread();
