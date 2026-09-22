@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.1.0
+// @version         0.2.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -237,4 +237,462 @@ void LoadSettings() {
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     g_settings = std::move(newSettings);
     g_profileConfigs = std::move(newProfiles);
+}
+
+// ---------------------------------------------------------------------
+// Cross-mod widget ABI: lets taskbar-widget-stack host this widget inside
+// its shared pane instead of standalone. The struct layout below must stay
+// byte-identical (field order and types) to the copy in
+// taskbar-widget-stack.wh.cpp and taskbar-widget-weather.wh.cpp - there's
+// no shared header across these DLLs, so this is a hand-synced ABI.
+// ---------------------------------------------------------------------
+
+constexpr wchar_t kRegisterWidgetPropName[] =
+    L"TaskbarWidgetStack_RegisterWidgetFn_v1";
+constexpr wchar_t kUnregisterWidgetPropName[] =
+    L"TaskbarWidgetStack_UnregisterWidgetFn_v1";
+
+extern "C" {
+
+struct WidgetStackHostAbiV1 {
+    void* taskbarHwnd;
+    void* parentPanelAbi;
+    double paneHeight;
+};
+
+struct WidgetStackWidgetAbiV1 {
+    void* context;
+    double(__cdecl* Create)(void* context, const WidgetStackHostAbiV1* host);
+    void(__cdecl* Tick)(void* context);
+    double(__cdecl* OnSettingsChanged)(void* context);
+    void(__cdecl* Destroy)(void* context);
+    void(__cdecl* GetId)(void* context, wchar_t* buffer, int bufferSize);
+    void(__cdecl* GetDisplayName)(void* context,
+                                   wchar_t* buffer,
+                                   int bufferSize);
+};
+
+using WidgetStack_RegisterWidget_t =
+    bool(__cdecl*)(const WidgetStackWidgetAbiV1* widget);
+using WidgetStack_UnregisterWidget_t = void(__cdecl*)(void* context);
+
+}  // extern "C"
+
+// ---------------------------------------------------------------------
+// Per-profile instance: one of these per configured profile. `context` in
+// every ABI callback above is always a `HomeAssistantProfileInstance*` -
+// that's the entire multi-instance mechanism, no separate dispatch table.
+// ---------------------------------------------------------------------
+
+struct HomeAssistantProfileInstance {
+    ProfileConfig config;
+    Grid wrapper{nullptr};
+    Border background{nullptr};
+    void* taskbarHwnd = nullptr;
+    bool registeredWithStack = false;
+};
+
+std::vector<std::unique_ptr<HomeAssistantProfileInstance>> g_profileInstances;
+std::mutex g_profileInstancesMutex;
+
+// Minimal placeholder - Tasks 4/5/6 replace this body with real per-mode
+// rendering (single/multi/dashboard). Signature is final; do not change it.
+FrameworkElement BuildCompactView(HomeAssistantProfileInstance* instance) {
+    TextBlock text;
+    text.Text(winrt::hstring(instance->config.displayName.empty()
+                                  ? instance->config.profileId
+                                  : instance->config.displayName));
+    return text;
+}
+
+void RebuildProfileInstanceUi(HomeAssistantProfileInstance* instance) {
+    if (!instance || !instance->background) {
+        return;
+    }
+    try {
+        instance->background.Child(BuildCompactView(instance));
+    } catch (...) {
+    }
+}
+
+// ---------------------------------------------------------------------
+// RunFromWindowThread: marshals a call onto the taskbar window's own
+// thread. Mirrors taskbar-widget-weather.wh.cpp's actual, working
+// implementation verbatim (not the simpler PostMessage+heap-payload sketch
+// in this task's brief) - a short-lived WH_CALLWNDPROC hook plus a
+// synchronous SendMessageW, unhooked again once the call has run. Every
+// lambda passed in as `proc` must have an empty capture list:
+// WindowThreadProc is a plain function pointer, not std::function, and
+// only a non-capturing lambda converts to one implicitly.
+// ---------------------------------------------------------------------
+
+using WindowThreadProc = void (*)(void*);
+
+bool RunFromWindowThread(HWND hWnd, WindowThreadProc proc, void* param) {
+    static const UINT kMsg =
+        RegisterWindowMessage(L"Windhawk_RunFromWindowThread_" WH_MOD_ID);
+    struct Payload {
+        WindowThreadProc proc;
+        void* param;
+    };
+    if (!hWnd) {
+        return false;
+    }
+    DWORD tid = GetWindowThreadProcessId(hWnd, nullptr);
+    if (!tid) {
+        return false;
+    }
+    if (tid == GetCurrentThreadId()) {
+        proc(param);
+        return true;
+    }
+    HHOOK hook = SetWindowsHookExW(
+        WH_CALLWNDPROC,
+        [](int code, WPARAM w, LPARAM l) CALLBACK -> LRESULT {
+            if (code == HC_ACTION) {
+                auto* cwp = reinterpret_cast<const CWPSTRUCT*>(l);
+                static const UINT kM = RegisterWindowMessage(
+                    L"Windhawk_RunFromWindowThread_" WH_MOD_ID);
+                if (cwp->message == kM) {
+                    auto* p = reinterpret_cast<Payload*>(cwp->lParam);
+                    p->proc(p->param);
+                }
+            }
+            return CallNextHookEx(nullptr, code, w, l);
+        },
+        nullptr, tid);
+    if (!hook) {
+        return false;
+    }
+    Payload pay{proc, param};
+    SendMessageW(hWnd, kMsg, 0, reinterpret_cast<LPARAM>(&pay));
+    UnhookWindowsHookEx(hook);
+    return true;
+}
+
+// ---------------------------------------------------------------------
+// The five ABI callbacks. Each casts `context` back to
+// `HomeAssistantProfileInstance*` to know which profile it's for, and only
+// ever touches that instance's own fields.
+// ---------------------------------------------------------------------
+
+extern "C" double __cdecl HaWidget_Create(void* context,
+                                           const WidgetStackHostAbiV1* host) {
+    auto* instance = (HomeAssistantProfileInstance*)context;
+    if (!instance || !host) {
+        return 0.0;
+    }
+    try {
+        Panel parent{nullptr};
+        winrt::copy_from_abi(parent, host->parentPanelAbi);
+        if (!parent) {
+            return 0.0;
+        }
+        instance->taskbarHwnd = host->taskbarHwnd;
+
+        Grid wrapper;
+        wrapper.HorizontalAlignment(HorizontalAlignment::Stretch);
+        wrapper.Height(host->paneHeight);
+        wrapper.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+
+        Border background;
+        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+        background.Margin({0, 3, 0, 3});
+
+        instance->wrapper = wrapper;
+        instance->background = background;
+        RebuildProfileInstanceUi(instance);
+
+        wrapper.Children().Append(background);
+        parent.Children().Append(wrapper);
+        return 1.0;
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+extern "C" void __cdecl HaWidget_Tick(void* /*context*/) {
+    // State updates arrive via the WebSocket thread's own dispatch (Task
+    // 3), not a poll tick - intentionally empty.
+}
+
+extern "C" double __cdecl HaWidget_OnSettingsChanged(void* context) {
+    // Full-rebuild convention (per spec): settings changes are handled by
+    // completely re-registering every profile instance from scratch
+    // (RebuildAllProfileInstances below), not by this per-instance
+    // callback mutating in place - present for ABI completeness only.
+    (void)context;
+    return 1.0;
+}
+
+extern "C" void __cdecl HaWidget_Destroy(void* context) {
+    auto* instance = (HomeAssistantProfileInstance*)context;
+    if (!instance) {
+        return;
+    }
+    instance->wrapper = nullptr;
+    instance->background = nullptr;
+}
+
+extern "C" void __cdecl HaWidget_GetId(void* context,
+                                        wchar_t* buffer,
+                                        int bufferSize) {
+    auto* instance = (HomeAssistantProfileInstance*)context;
+    if (!instance || !buffer || bufferSize <= 0) {
+        return;
+    }
+    wcsncpy_s(buffer, bufferSize, instance->config.profileId.c_str(),
+              _TRUNCATE);
+}
+
+extern "C" void __cdecl HaWidget_GetDisplayName(void* context,
+                                                 wchar_t* buffer,
+                                                 int bufferSize) {
+    auto* instance = (HomeAssistantProfileInstance*)context;
+    if (!instance || !buffer || bufferSize <= 0) {
+        return;
+    }
+    const std::wstring& name = instance->config.displayName.empty()
+                                    ? instance->config.profileId
+                                    : instance->config.displayName;
+    wcsncpy_s(buffer, bufferSize, name.c_str(), _TRUNCATE);
+}
+
+// ---------------------------------------------------------------------
+// Standalone injection fallback, per profile. Mirrors
+// taskbar-widget-weather.wh.cpp's own InjectWeatherStandalone: find the
+// taskbar's XAML root, walk down to Taskbar.TaskbarFrame's "RootGrid" by
+// name, append a wrapper Grid there.
+//
+// GAP (flagged for review, not silently worked around): weather's real
+// GetTaskbarXamlRoot() depends on taskbar-internals plumbing that is NOT
+// part of this file or of Task 1/2's declared scope - a CTaskBand vtable
+// walk (ITaskListWndSite), a symbol-hooked CTaskBand::_GetTaskbarHost and
+// TaskbarHost::FrameHeight (the latter's prologue bytes are pattern-matched
+// at runtime to recover a non-stable field offset, separately for x64 and
+// ARM64EC), plus the Wh_SetFunctionHook symbol table and the
+// TrayUI::StartTaskbar hook that (re)drives it, all set up once in
+// Wh_ModInit. That's ~150 lines of architecture-sensitive, hand-verified
+// pointer code specific to weather's own mod, not something this task's
+// brief (Steps 1-9) or the 7-task plan's task list ever asks this file to
+// duplicate. Porting it here blind, with no compiler to validate offsets
+// or hook symbols against, would be a much larger and riskier change than
+// "multi-instance ABI registration and profile lifecycle."
+//
+// GetTaskbarXamlRoot() below is therefore a deliberate, clearly-marked
+// stub: it always returns nullptr, so InjectProfileStandalone() below
+// safely no-ops (profiles simply don't render standalone) until a
+// dedicated follow-up task ports weather's real CTaskBand infrastructure.
+// Everything downstream (FindTaskbarRootGrid's signature,
+// InjectProfileStandalone's call shape) is written to match weather's real
+// code so that port is a drop-in replacement of this one function's body.
+// ---------------------------------------------------------------------
+
+XamlRoot GetTaskbarXamlRoot(HWND /*hTaskbarWnd*/) {
+    // See the GAP comment above InjectProfileStandalone: real
+    // implementation requires porting weather's CTaskBand hook
+    // infrastructure, out of scope for this task.
+    return nullptr;
+}
+
+FrameworkElement FindChildByName(FrameworkElement const& root,
+                                  std::wstring_view name,
+                                  int depth = 32) {
+    if (!root || depth == 0) {
+        return nullptr;
+    }
+    int n = VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < n; ++i) {
+        auto child =
+            VisualTreeHelper::GetChild(root, i).try_as<FrameworkElement>();
+        if (!child) {
+            continue;
+        }
+        if (child.Name() == name) {
+            return child;
+        }
+        if (auto found = FindChildByName(child, name, depth - 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// The taskbar's root Grid (parent of both TaskbarFrameRepeater and
+// SystemTrayFrameGrid) - matches weather's FindTaskbarRootGrid exactly.
+Grid FindTaskbarRootGrid(FrameworkElement const& root) {
+    int count = VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < count; i++) {
+        auto c = VisualTreeHelper::GetChild(root, i).try_as<FrameworkElement>();
+        if (c && winrt::get_class_name(c) == L"Taskbar.TaskbarFrame") {
+            auto rootGrid = FindChildByName(c, L"RootGrid");
+            return rootGrid ? rootGrid.try_as<Grid>() : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+void InjectProfileStandalone(HomeAssistantProfileInstance* instance,
+                              HWND taskbarHwnd) {
+    if (!instance || !taskbarHwnd) {
+        return;
+    }
+    try {
+        auto xamlRoot = GetTaskbarXamlRoot(taskbarHwnd);
+        if (!xamlRoot) {
+            return;
+        }
+        auto rootElement = xamlRoot.Content().try_as<FrameworkElement>();
+        if (!rootElement) {
+            return;
+        }
+        Grid rootGrid = FindTaskbarRootGrid(rootElement);
+        if (!rootGrid) {
+            return;
+        }
+
+        Grid wrapper;
+        wrapper.HorizontalAlignment(HorizontalAlignment::Left);
+        wrapper.Background(SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0, 0, 0, 0)});
+
+        Border background;
+        background.CornerRadius({5.33, 5.33, 5.33, 5.33});
+        background.Margin({0, 3, 0, 3});
+
+        instance->wrapper = wrapper;
+        instance->background = background;
+        instance->taskbarHwnd = taskbarHwnd;
+        RebuildProfileInstanceUi(instance);
+
+        wrapper.Children().Append(background);
+        rootGrid.Children().Append(wrapper);
+    } catch (...) {
+    }
+}
+
+// ---------------------------------------------------------------------
+// Registration loop and full-rebuild settings-change handling.
+//
+// NOTE (flagged for review): unlike weather's real
+// TryRegisterOrShowStandalone/WeatherRetryRegisterThreadProc pair, this is
+// a single one-shot attempt per profile with no background retry if
+// taskbar-widget-stack's registration props aren't present yet at the
+// moment this runs (e.g. load-order race where this mod's Wh_ModInit runs
+// before taskbar-widget-stack's). This matches the brief's own Steps 6-7
+// verbatim (no retry step is specified there), but the design spec's
+// "Standalone fallback, per profile" section says each standalone instance
+// should get its own retry thread "matching weather's
+// WeatherRetryRegisterThreadProc pattern" - that pattern needs its own
+// event/thread bookkeeping (creation in Wh_ModInit, teardown in
+// Wh_ModUninit) not present here. Left out rather than half-ported,
+// because with GetTaskbarXamlRoot() stubbed above (see GAP comment) a
+// retry loop would only ever retry the stack-registration half anyway;
+// worth reinstating together with the CTaskBand port above as one
+// follow-up.
+// ---------------------------------------------------------------------
+
+void UnregisterAllProfileInstances(HWND taskbarHwnd) {
+    std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
+    auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+        taskbarHwnd, kUnregisterWidgetPropName);
+    for (auto& instance : g_profileInstances) {
+        if (instance->registeredWithStack && unregisterFn) {
+            unregisterFn(instance.get());
+        } else if (instance->wrapper) {
+            try {
+                if (auto parent =
+                        instance->wrapper.Parent().try_as<Panel>()) {
+                    uint32_t idx;
+                    if (parent.Children().IndexOf(instance->wrapper, idx)) {
+                        parent.Children().RemoveAt(idx);
+                    }
+                }
+            } catch (...) {
+            }
+        }
+    }
+    g_profileInstances.clear();
+}
+
+void RegisterAllProfileInstances(HWND taskbarHwnd) {
+    std::vector<ProfileConfig> profiles;
+    {
+        std::lock_guard<std::mutex> lock(g_settingsMutex);
+        profiles = g_profileConfigs;
+    }
+
+    auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
+        taskbarHwnd, kRegisterWidgetPropName);
+    auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+        taskbarHwnd, kUnregisterWidgetPropName);
+    bool stackAvailable = registerFn && unregisterFn;
+
+    std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
+    for (auto& profile : profiles) {
+        auto instance = std::make_unique<HomeAssistantProfileInstance>();
+        instance->config = profile;
+
+        if (stackAvailable) {
+            WidgetStackWidgetAbiV1 abi{};
+            abi.context = instance.get();
+            abi.Create = HaWidget_Create;
+            abi.Tick = HaWidget_Tick;
+            abi.OnSettingsChanged = HaWidget_OnSettingsChanged;
+            abi.Destroy = HaWidget_Destroy;
+            abi.GetId = HaWidget_GetId;
+            abi.GetDisplayName = HaWidget_GetDisplayName;
+
+            // Set true before calling registerFn: the host's own
+            // RebuildStackContents() calls Create() synchronously inside
+            // this call (same ordering requirement as
+            // taskbar-widget-weather's own registration).
+            instance->registeredWithStack = true;
+            if (!registerFn(&abi)) {
+                instance->registeredWithStack = false;
+                InjectProfileStandalone(instance.get(), taskbarHwnd);
+            }
+        } else {
+            InjectProfileStandalone(instance.get(), taskbarHwnd);
+        }
+
+        g_profileInstances.push_back(std::move(instance));
+    }
+}
+
+void RebuildAllProfileInstances(HWND taskbarHwnd) {
+    UnregisterAllProfileInstances(taskbarHwnd);
+    LoadSettings();
+    RegisterAllProfileInstances(taskbarHwnd);
+}
+
+// ---------------------------------------------------------------------
+// Mod entry points.
+// ---------------------------------------------------------------------
+
+HWND g_haTaskbarHwnd = nullptr;
+
+BOOL Wh_ModInit() {
+    LoadSettings();
+    g_haTaskbarHwnd = FindWindow(L"Shell_TrayWnd", nullptr);
+    if (g_haTaskbarHwnd) {
+        RegisterAllProfileInstances(g_haTaskbarHwnd);
+    }
+    return TRUE;
+}
+
+void Wh_ModSettingsChanged() {
+    if (g_haTaskbarHwnd) {
+        RunFromWindowThread(
+            g_haTaskbarHwnd,
+            [](void*) { RebuildAllProfileInstances(g_haTaskbarHwnd); },
+            nullptr);
+    }
+}
+
+void Wh_ModUninit() {
+    if (g_haTaskbarHwnd) {
+        UnregisterAllProfileInstances(g_haTaskbarHwnd);
+    }
 }
