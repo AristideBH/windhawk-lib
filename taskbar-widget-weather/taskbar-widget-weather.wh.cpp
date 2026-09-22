@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.23
+// @version         1.24
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -176,6 +176,24 @@ key required. See PLAN.md for the design.
       - right: From right
     $name: Placement on the screen
   $name: Panel placement
+- StyleSettings:
+  - styleConstants: []
+    $name: Style constants
+    $description: >-
+      Raw "Key=Value" theme entries - paste your Windows 11 Taskbar Styler
+      styleConstants here as-is (colors as "R G B", or a full XAML brush
+      fragment like <AcrylicBrush .../> or <SolidColorBrush Color="{ThemeResource ...}" />).
+      This list is never interpreted directly; see Style aliases below.
+  - styleAliases: []
+    $name: Style aliases
+    $description: >-
+      "SlotName=rawKey" entries mapping a widget style slot to one of the
+      keys above. Slots: CardCornerRadius, PanelCornerRadius,
+      CompactCornerRadius, HeaderPadding, PanelPadding, MutedTextOpacity,
+      SeparatorOpacity (numbers); PanelBackgroundBrush, HeaderBackgroundBrush,
+      BorderBrush, HoverBrush, PressedBrush (colors/brushes). A slot with no
+      alias, or an alias pointing at a missing key, keeps its built-in default.
+  $name: Style
 */
 // ==/WindhawkModSettings==
 
@@ -194,6 +212,7 @@ key required. See PLAN.md for the design.
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Media.Animation.h>
+#include <winrt/Windows.UI.Xaml.Markup.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Windows.UI.Text.h>
@@ -208,6 +227,7 @@ key required. See PLAN.md for the design.
 #include <chrono>
 #include <cmath>
 #include <cwchar>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -265,6 +285,22 @@ struct WeatherSettings {
 WeatherSettings g_settings;
 std::mutex g_settingsMutex;
 
+// Style constants engine (2026-09-22): lets the user restyle a curated set
+// of this widget's visual properties from Windhawk's own settings screen,
+// using the same raw theme entries they already maintain for Windows 11
+// Taskbar Styler. Two settings: StyleSettings.styleConstants (the raw
+// theme, copy-pasted verbatim, opaque Key=Value pairs this mod never
+// interprets by name) and StyleSettings.styleAliases (SlotName=rawKey,
+// the only place that ties a specific widget style slot to a specific
+// theme entry). See docs/superpowers/specs/2026-09-22-weather-style-constants-design.md.
+// Declared here (rather than alongside the rest of the engine, further
+// below near BuildNowView) because LoadSettings() - defined just below -
+// populates them directly, and file-scope globals must be declared before
+// use in translation-unit order.
+std::map<std::wstring, std::wstring> g_styleConstants;
+std::map<std::wstring, std::wstring> g_styleAliases;
+std::mutex g_styleMutex;
+
 std::wstring GetStringSetting(PCWSTR name, PCWSTR fallback) {
     auto* value = Wh_GetStringSetting(name);
     std::wstring result = value ? value : fallback;
@@ -273,6 +309,17 @@ std::wstring GetStringSetting(PCWSTR name, PCWSTR fallback) {
     }
     return result;
 }
+
+// Defined further below, near BuildNowView, alongside the rest of the style
+// constants engine - LoadSettings() (just below) calls it before that point
+// in the file, so it needs a forward declaration here.
+std::map<std::wstring, std::wstring> ParseKeyValueArraySetting(
+    const std::wstring& settingName);
+
+// Defined near EnsureHoverBrushes/g_weatherHoverBrush further below (those
+// globals are declared later in this file than LoadSettings(), which needs
+// to reset them on every settings reload - see LoadSettings()'s use below).
+void InvalidateHoverBrushCache();
 
 void LoadSettings() {
     // Built up locally (no synchronization needed - it's not shared yet)
@@ -358,6 +405,24 @@ void LoadSettings() {
 
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     g_settings = newSettings;
+
+    {
+        auto constants = ParseKeyValueArraySetting(L"StyleSettings.styleConstants");
+        auto aliases = ParseKeyValueArraySetting(L"StyleSettings.styleAliases");
+        std::lock_guard<std::mutex> styleLock(g_styleMutex);
+        g_styleConstants = std::move(constants);
+        g_styleAliases = std::move(aliases);
+    }
+    // g_weatherHoverBrush/g_weatherPressedBrush/g_weatherPressedBorderBrush
+    // (EnsureHoverBrushes, further below) are lazily computed exactly once
+    // per process, guarded by "if (!g_weatherHoverBrush)". Wh_ModSettingsChanged
+    // calls LoadSettings() in-process (no mod unload/reload) - without this
+    // reset, changing HoverBrush/PressedBrush in styleConstants and saving
+    // would never take effect until the mod actually reloads. Those globals
+    // are declared later in this file than LoadSettings(), so the reset
+    // itself lives in InvalidateHoverBrushCache() (defined near
+    // EnsureHoverBrushes) rather than touching them directly here.
+    InvalidateHoverBrushCache();
 }
 
 struct WeatherIconInfo {
@@ -999,6 +1064,117 @@ constexpr double kConditionFontSize = 11;  // matches media-player's artist font
 constexpr double kForecastCellMinWidth = 26;
 constexpr double kMixedForecastCellMinWidth = 22;
 
+// Windhawk's array-setting convention (verified against Windows 11 Taskbar
+// Styler's own published source, which reads its styleConstants array the
+// same way): index the same setting name with [%d], and stop at the first
+// EMPTY result - Wh_GetStringSetting never returns null for a missing
+// array element, it returns a valid pointer to an empty string. Each entry
+// is "Key=Value"; the first '=' splits key from value.
+std::map<std::wstring, std::wstring> ParseKeyValueArraySetting(
+    const std::wstring& settingName) {
+    std::map<std::wstring, std::wstring> result;
+    std::wstring format = settingName + L"[%d]";
+    for (int i = 0;; i++) {
+        auto* raw = Wh_GetStringSetting(format.c_str(), i);
+        bool empty = !raw || !raw[0];
+        std::wstring entry = raw ? raw : L"";
+        if (raw) {
+            Wh_FreeStringSetting(raw);
+        }
+        if (empty) {
+            break;
+        }
+        size_t eq = entry.find(L'=');
+        if (eq == std::wstring::npos) {
+            continue;
+        }
+        result[entry.substr(0, eq)] = entry.substr(eq + 1);
+    }
+    return result;
+}
+
+std::wstring ResolveStyleRawValue(const std::wstring& slotName) {
+    std::lock_guard<std::mutex> lock(g_styleMutex);
+    auto aliasIt = g_styleAliases.find(slotName);
+    if (aliasIt == g_styleAliases.end()) {
+        return L"";
+    }
+    auto constIt = g_styleConstants.find(aliasIt->second);
+    if (constIt == g_styleConstants.end()) {
+        return L"";
+    }
+    return constIt->second;
+}
+
+double GetStyleNumber(const std::wstring& slotName, double fallback) {
+    std::wstring raw = ResolveStyleRawValue(slotName);
+    if (raw.empty()) {
+        return fallback;
+    }
+    try {
+        return std::stod(raw);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+// XamlReader::Load requires an xmlns on the root element; user-pasted
+// fragments (copied straight from a Taskbar Styler theme) never have one.
+// Injects the two standard namespaces right after the root tag's name,
+// same two namespaces this file's own XamlReader::Load usage would need
+// (see taskbar-widget-media-player.wh.cpp's GetFluentMediaButtonStyle for
+// the same pattern in a sibling mod).
+std::wstring InjectXamlNamespaces(const std::wstring& fragment) {
+    size_t ltPos = fragment.find(L'<');
+    if (ltPos == std::wstring::npos) {
+        return fragment;
+    }
+    size_t nameStart = ltPos + 1;
+    size_t nameEnd = fragment.find_first_of(L" \t\r\n>", nameStart);
+    if (nameEnd == std::wstring::npos) {
+        return fragment;
+    }
+    std::wstring result = fragment;
+    result.insert(nameEnd,
+        L" xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        L"xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"");
+    return result;
+}
+
+// Mirrors taskbar-widget-stack.wh.cpp's ParseRgbColor exactly (not shared -
+// mods in this repo have no shared header). Malformed/missing components
+// fall back to opaque black via swscanf_s leaving them at their zero-init
+// value.
+winrt::Windows::UI::Color ParseRgbColor(const std::wstring& value) {
+    int r = 0, g = 0, b = 0;
+    swscanf_s(value.c_str(), L"%d %d %d", &r, &g, &b);
+    auto clamp8 = [](int v) { return (BYTE)std::clamp(v, 0, 255); };
+    return winrt::Windows::UI::ColorHelper::FromArgb(255, clamp8(r), clamp8(g),
+                                                       clamp8(b));
+}
+
+Brush GetStyleBrush(const std::wstring& slotName, Brush const& fallback) {
+    std::wstring raw = ResolveStyleRawValue(slotName);
+    if (raw.empty()) {
+        return fallback;
+    }
+    size_t firstNonSpace = raw.find_first_not_of(L" \t\r\n");
+    if (firstNonSpace == std::wstring::npos) {
+        return fallback;
+    }
+    try {
+        if (raw[firstNonSpace] == L'<') {
+            auto wrapped = InjectXamlNamespaces(raw);
+            auto obj = winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
+                winrt::hstring(wrapped));
+            return obj.as<Brush>();
+        }
+        return SolidColorBrush{ParseRgbColor(raw)};
+    } catch (...) {
+        return fallback;
+    }
+}
+
 Grid BuildNowView() {
     WeatherState snapshot;
     {
@@ -1317,6 +1493,17 @@ void ToggleDisplayMode() {
 SolidColorBrush g_weatherHoverBrush{nullptr};
 SolidColorBrush g_weatherPressedBrush{nullptr};
 winrt::Windows::UI::Xaml::Media::Brush g_weatherPressedBorderBrush{nullptr};
+
+// Forward-declared and called from LoadSettings() (defined earlier in this
+// file, above these globals). Forces EnsureHoverBrushes() to recompute all
+// three brushes from current style constants the next time any of them is
+// needed, instead of keeping whatever was lazily cached from a previous
+// LoadSettings() pass.
+void InvalidateHoverBrushCache() {
+    g_weatherHoverBrush = nullptr;
+    g_weatherPressedBrush = nullptr;
+    g_weatherPressedBorderBrush = nullptr;
+}
 
 // Fill: subtle white overlay, same alpha range as media-player's own
 // hover brushes (0x0F-0x2C over white) - not a full system-hover-color
