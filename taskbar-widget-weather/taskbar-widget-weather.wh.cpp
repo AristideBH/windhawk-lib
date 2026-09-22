@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.22
+// @version         1.23
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -989,6 +989,16 @@ constexpr double kIconFontSize = 20;
 constexpr double kTempFontSize = 12;    // matches media-player's title font size
 constexpr double kConditionFontSize = 11;  // matches media-player's artist font size
 
+// Forecast/mixed-view day cells are Auto-width columns sized to their own
+// icon/temp content, so a day with a wider glyph or a "-11°" reading pushes
+// its column wider than a "3°" day next to it - ColumnSpacing alone can't
+// make the gaps look even when the cells themselves aren't. Giving every
+// cell the same MinWidth (StackPanel already centers icon/temp inside it)
+// makes each day claim equal room, so the fixed ColumnSpacing reads as
+// consistent, justified spacing instead of drifting with content width.
+constexpr double kForecastCellMinWidth = 26;
+constexpr double kMixedForecastCellMinWidth = 22;
+
 Grid BuildNowView() {
     WeatherState snapshot;
     {
@@ -1145,7 +1155,12 @@ Grid BuildForecastView() {
 
     Grid root;
     root.VerticalAlignment(VerticalAlignment::Center);
-    root.ColumnSpacing(8);
+    // ColumnSpacing only puts a gap *between* columns, leaving the first
+    // and last day cells flush with the strip's own edges (space-between,
+    // not space-around). Space-around means equal room on every side of
+    // every cell, including the two outer ones - so spacing lives on each
+    // cell's own Margin instead, and ColumnSpacing stays 0.
+    root.ColumnSpacing(0);
 
     int days = std::min((int)snapshot.daily.size(), forecastDaysInline);
     if (days == 0) {
@@ -1163,6 +1178,8 @@ Grid BuildForecastView() {
         StackPanel cell;
         cell.Orientation(Orientation::Vertical);
         cell.HorizontalAlignment(HorizontalAlignment::Center);
+        cell.MinWidth(kForecastCellMinWidth);
+        cell.Margin({4, 0, 4, 0});
         Grid::SetColumn(cell, i);
 
         TextBlock icon;
@@ -1235,7 +1252,10 @@ Grid BuildMixedView() {
         root.ColumnDefinitions().GetAt(2).Width({1.0, GridUnitType::Auto});
         Grid forecastStrip;
         forecastStrip.VerticalAlignment(VerticalAlignment::Center);
-        forecastStrip.ColumnSpacing(8);
+        // Space-around (not ColumnSpacing's space-between): each cell's
+        // own Margin gives it equal room on every side, including the two
+        // outer edges - see BuildForecastView's identical comment.
+        forecastStrip.ColumnSpacing(0);
         Grid::SetColumn(forecastStrip, 2);
         for (int i = 0; i < days; i++) {
             forecastStrip.ColumnDefinitions().Append(ColumnDefinition{});
@@ -1244,6 +1264,8 @@ Grid BuildMixedView() {
             StackPanel cell;
             cell.Orientation(Orientation::Vertical);
             cell.HorizontalAlignment(HorizontalAlignment::Center);
+            cell.MinWidth(kMixedForecastCellMinWidth);
+            cell.Margin({4, 0, 4, 0});
             Grid::SetColumn(cell, i);
 
             TextBlock icon;
