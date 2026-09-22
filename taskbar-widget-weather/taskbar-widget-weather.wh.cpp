@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.26
+// @version         1.27
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -177,7 +177,7 @@ key required. See PLAN.md for the design.
     $name: Placement on the screen
   $name: Panel placement
 - StyleSettings:
-  - styleConstants: []
+  - styleConstants: [""]
     $name: Style constants
     $description: >-
       Raw "Key=Value" theme entries - paste your Windows 11 Taskbar Styler
@@ -186,7 +186,7 @@ key required. See PLAN.md for the design.
       This list is never interpreted directly; see Style aliases below. A
       blank entry ends the list - anything after it is ignored, so watch
       for a stray empty row left over from a pasted theme.
-  - styleAliases: []
+  - styleAliases: [""]
     $name: Style aliases
     $description: >-
       "SlotName=rawKey" entries mapping a widget style slot to one of the
