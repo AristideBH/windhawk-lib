@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.25
+// @version         1.26
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -183,7 +183,9 @@ key required. See PLAN.md for the design.
       Raw "Key=Value" theme entries - paste your Windows 11 Taskbar Styler
       styleConstants here as-is (colors as "R G B", or a full XAML brush
       fragment like <AcrylicBrush .../> or <SolidColorBrush Color="{ThemeResource ...}" />).
-      This list is never interpreted directly; see Style aliases below.
+      This list is never interpreted directly; see Style aliases below. A
+      blank entry ends the list - anything after it is ignored, so watch
+      for a stray empty row left over from a pasted theme.
   - styleAliases: []
     $name: Style aliases
     $description: >-
@@ -193,6 +195,10 @@ key required. See PLAN.md for the design.
       SeparatorOpacity (numbers); PanelBackgroundBrush, HeaderBackgroundBrush,
       BorderBrush, HoverBrush, PressedBrush (colors/brushes). A slot with no
       alias, or an alias pointing at a missing key, keeps its built-in default.
+      BorderBrush also feeds the mixed-view day separator, which applies
+      SeparatorOpacity on top of it - an already-translucent BorderBrush can
+      make the separator very hard to see there. As with styleConstants
+      above, a blank entry ends the list.
   $name: Style
 */
 // ==/WindhawkModSettings==
@@ -416,13 +422,15 @@ void LoadSettings() {
     // g_weatherHoverBrush/g_weatherPressedBrush/g_weatherPressedBorderBrush
     // (EnsureHoverBrushes, further below) are lazily computed exactly once
     // per process, guarded by "if (!g_weatherHoverBrush)". Wh_ModSettingsChanged
-    // calls LoadSettings() in-process (no mod unload/reload) - without this
+    // calls LoadSettings() in-process (no mod unload/reload) - without a
     // reset, changing HoverBrush/PressedBrush in styleConstants and saving
-    // would never take effect until the mod actually reloads. Those globals
-    // are declared later in this file than LoadSettings(), so the reset
-    // itself lives in InvalidateHoverBrushCache() (defined near
-    // EnsureHoverBrushes) rather than touching them directly here.
-    InvalidateHoverBrushCache();
+    // would never take effect until the mod actually reloads. That reset
+    // must NOT happen here: LoadSettings() runs on the Windhawk engine
+    // thread, while EnsureHoverBrushes() reads/writes those same globals on
+    // the XAML UI thread, so invalidating them here would be a cross-thread
+    // race on live WinRT smart pointers. Instead, Wh_ModSettingsChanged()
+    // invalidates them itself, marshaled onto the UI thread via
+    // RunFromWindowThread, right before RebuildCompactViewInPlace().
 }
 
 struct WeatherIconInfo {
@@ -2036,11 +2044,12 @@ Border BuildWeatherFlyoutContent() {
         acrylic.FallbackColor(
             winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B));
         defaultPanelBackground = acrylic;
+        panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
     } catch (...) {
         defaultPanelBackground = SolidColorBrush{
             winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)};
+        panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
     }
-    panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
     Brush defaultPanelBorder = SolidColorBrush{
         winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)};
     panelBg.BorderBrush(GetStyleBrush(L"BorderBrush", defaultPanelBorder));
@@ -3034,6 +3043,11 @@ void Wh_ModSettingsChanged() {
     RequestWeatherRefresh();
     if (g_weatherTaskbarWnd) {
         RunFromWindowThread(g_weatherTaskbarWnd, [](void*) {
+            // Invalidate on the UI thread (same thread that
+            // EnsureHoverBrushes reads/writes these globals on) before
+            // rebuilding, so an edited HoverBrush/PressedBrush style
+            // constant takes effect immediately.
+            InvalidateHoverBrushCache();
             RebuildCompactViewInPlace();
         }, nullptr);
     }
