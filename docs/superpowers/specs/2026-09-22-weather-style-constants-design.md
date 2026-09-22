@@ -67,8 +67,12 @@ Only two, resolved by which typed getter the call site uses (not declared in the
 - **Number** (`GetStyleNumber`) — the raw value parsed with `std::stod` in a `try/catch`; falls
   back to the caller's default `double` on empty/missing/malformed input.
 - **Brush** (`GetStyleBrush`) — if the raw value's first non-whitespace character is `<`, it's
-  parsed as a XAML fragment (see below); otherwise it's parsed with the existing `ParseRgbColor`
-  (`"R G B"` shorthand) into a `SolidColorBrush`. Falls back to the caller's default `Brush` on
+  parsed as a XAML fragment (see below); otherwise it's parsed as `"R G B"` shorthand into a
+  `SolidColorBrush`. `taskbar-widget-weather.wh.cpp` has no existing color-parsing helper (that's
+  `taskbar-widget-stack.wh.cpp`'s `ParseRgbColor` - not shared, per this repo's no-shared-header
+  convention), so a local `ParseRgbColor` is added here too, mirroring `taskbar-widget-stack`'s
+  implementation exactly (`swscanf_s(value.c_str(), L"%d %d %d", &r, &g, &b)`, clamped to 0-255,
+  falls back to opaque black on unparsable input). Falls back to the caller's default `Brush` on
   empty/missing/malformed input (including a fragment that fails to parse, or parses to a
   non-`Brush` object).
 
@@ -174,6 +178,17 @@ double GetStyleNumber(const std::wstring& slotName, double fallback) {
 // InjectXamlNamespaces is defined earlier in this same block (see the
 // "XAML fragment parsing" section above) - reused here unchanged.
 
+// Mirrors taskbar-widget-stack.wh.cpp's ParseRgbColor exactly (not shared -
+// see the no-shared-header note above). Malformed/missing components fall
+// back to opaque black via swscanf_s leaving them at their zero-init value.
+winrt::Windows::UI::Color ParseRgbColor(const std::wstring& value) {
+    int r = 0, g = 0, b = 0;
+    swscanf_s(value.c_str(), L"%d %d %d", &r, &g, &b);
+    auto clamp8 = [](int v) { return (BYTE)std::clamp(v, 0, 255); };
+    return winrt::Windows::UI::ColorHelper::FromArgb(255, clamp8(r), clamp8(g),
+                                                       clamp8(b));
+}
+
 Brush GetStyleBrush(const std::wstring& slotName, Brush const& fallback) {
     std::wstring raw = ResolveStyleRawValue(slotName);
     if (raw.empty()) {
@@ -210,10 +225,10 @@ loads every other setting into `g_settings`), via:
 }
 ```
 
-`ParseRgbColor` and `Wh_GetStringSetting`/`Wh_FreeStringSetting` already exist in this file
-(`ParseRgbColor` at the file's color-helpers section; the free function mirrors `GetStringSetting`'s
-existing free-after-copy pattern). `<map>` and `<mutex>` are already included (the file already uses
-`std::mutex` extensively).
+`Wh_GetStringSetting`/`Wh_FreeStringSetting` already appear in this file (the existing
+`GetStringSetting` helper's free-after-copy pattern, near `LoadSettings`). `<mutex>` is already
+included; `<map>` is not (verified - no `std::map` usage anywhere in this file today) and must be
+added alongside the existing `#include <memory>` in the includes block.
 
 ## Settings block addition
 
@@ -255,7 +270,7 @@ Every default reproduces today's exact hardcoded value — an install with no `s
 | `MutedTextOpacity` | number | `0.7` | `conditionText.Opacity`, `feelsLikeText.Opacity`, `labelText.Opacity` |
 | `SeparatorOpacity` | number | `0.3` | mixed-view day-separator `Opacity` |
 | `PanelBackgroundBrush` | brush | today's `AcrylicBrush` (see below) | `panelBg.Background` |
-| `HeaderBackgroundBrush` | brush | today's header/icon-zone `SolidColorBrush` | `header.Background`, `headerIconZone.Background` |
+| `HeaderBackgroundBrush` | brush | today's `0x20 000000` | `header.Background` only (verified `headerIconZone.Background` is a *different* default color, `0x20 FFFFFF` - kept hardcoded, out of scope, to avoid changing its visual when only `HeaderBackgroundBrush` is set) |
 | `BorderBrush` | brush | today's `0x18 FFFFFF` | `panelBg.BorderBrush`, mixed-view separator `Background` |
 | `HoverBrush` | brush | today's `0x14 FFFFFF` | compact widget hover fill (`g_weatherHoverBrush`) |
 | `PressedBrush` | brush | today's `0x28 FFFFFF` | compact widget pressed fill (`g_weatherPressedBrush`) |
@@ -272,6 +287,16 @@ fallback)`'s `fallback` argument is exactly that existing `AcrylicBrush` (constr
 as today, unconditionally, before the styleConstants lookup), preserving the current
 try/catch-to-solid safety net as the innermost fallback layer even when a user-supplied brush also
 fails to parse.
+
+### `HoverBrush`/`PressedBrush` must invalidate the existing lazy cache
+
+`g_weatherHoverBrush`/`g_weatherPressedBrush`/`g_weatherPressedBorderBrush` (in `EnsureHoverBrushes`)
+are lazily computed exactly once per process, guarded by `if (!g_weatherHoverBrush)`. Verified via
+`Wh_ModSettingsChanged`: it calls `LoadSettings()` in-process (no mod unload/reload), so without
+a fix, changing `HoverBrush`/`PressedBrush` in `styleConstants` and saving would never take effect
+until the mod actually reloads. `LoadSettings()` must reset all three globals to `nullptr` after
+refreshing `g_styleConstants`/`g_styleAliases`, so the next `EnsureHoverBrushes()` call recomputes
+them from the new constants.
 
 ### `BorderBrush` reused for the separator
 
