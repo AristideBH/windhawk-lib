@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.8.2
+// @version         0.8.3
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1411,6 +1411,19 @@ void UnregisterAllProfileInstances(HWND taskbarHwnd) {
     g_profileInstances->clear();
 }
 
+// Checked from Wh_ModInit/HaRetryRegisterThreadProc (any thread - GetPropW
+// is a plain property-list lookup, not a UI operation) as well as from
+// inside RegisterAllProfileInstances itself, so both "should I register
+// right now" and "did registration actually get a live stack" share one
+// definition.
+bool IsStackAvailable(HWND taskbarHwnd) {
+    auto registerFn = (WidgetStack_RegisterWidget_t)GetPropW(
+        taskbarHwnd, kRegisterWidgetPropName);
+    auto unregisterFn = (WidgetStack_UnregisterWidget_t)GetPropW(
+        taskbarHwnd, kUnregisterWidgetPropName);
+    return registerFn && unregisterFn;
+}
+
 void RegisterAllProfileInstances(HWND taskbarHwnd) {
     std::vector<ProfileConfig> profiles;
     {
@@ -1962,16 +1975,28 @@ void StopHaWebSocketThread() {
 HWND g_haTaskbarHwnd = nullptr;
 
 // ---------------------------------------------------------------------
-// Retry-register thread: if the taskbar window doesn't exist yet when
-// Wh_ModInit runs - the normal situation when this mod is pre-loaded before
-// Explorer finishes starting, e.g. at boot - FindWindow comes back null and
-// Wh_ModInit has nothing to register into. Without a retry, g_haTaskbarHwnd
-// stays null permanently (Wh_ModSettingsChanged is also gated behind the
-// same null check), so the mod is permanently inert until the user
-// manually disables and re-enables it. Mirrors
+// Retry-register thread: handles two related races where registering
+// immediately in Wh_ModInit would fail or silently no-op. (1) The taskbar
+// window doesn't exist yet when Wh_ModInit runs - the normal situation when
+// this mod is pre-loaded before Explorer finishes starting, e.g. at boot -
+// FindWindow comes back null and Wh_ModInit has nothing to register into.
+// (2) The taskbar window already exists, but taskbar-widget-stack hasn't
+// finished injecting its own grid yet (a very real timing gap live-tested
+// at a few seconds), so its RegisterWidget/UnregisterWidget props aren't
+// installed - registering against it then silently falls back to the
+// standalone stub (a documented no-op, see GetTaskbarXamlRoot), leaving
+// the widget invisible with no further retry unless this loop also checks
+// IsStackAvailable, not just window existence. Either way, without a
+// retry g_haTaskbarHwnd/registration stays stuck in its initial state
+// permanently (Wh_ModSettingsChanged is also gated behind the same
+// g_haTaskbarHwnd null check, and even when it isn't null, rebuilding
+// against a still-unavailable stack just rebuilds the same invisible
+// stub), so the mod is permanently inert until the user manually disables
+// and re-enables it. Mirrors
 // taskbar-widget-weather.wh.cpp's own WeatherRetryRegisterThreadProc/
-// StartWeatherRetryRegister pair: poll for the taskbar window every 500ms
-// (up to 600 attempts, ~5 minutes) and, once found, register the same way
+// StartWeatherRetryRegister pair: poll every 500ms (up to 600 attempts,
+// ~5 minutes) for the taskbar window AND stack availability together, and
+// once both hold, register the same way
 // Wh_ModInit's own direct-registration path does (marshaled onto the
 // taskbar's own thread via RunFromWindowThread), then stop - this mod has
 // no TrayUI::StartTaskbar hook to re-arm the retry on a later taskbar
@@ -1992,8 +2017,18 @@ DWORD WINAPI HaRetryRegisterThreadProc(LPVOID) {
             return 0;
         }
         HWND tray = FindWindow(L"Shell_TrayWnd", nullptr);
+        // Waiting for the window alone isn't enough: it commonly exists
+        // before taskbar-widget-stack has finished injecting its own grid
+        // and installing its RegisterWidget/UnregisterWidget props on it -
+        // registering too early silently falls back to the standalone
+        // stub (a documented no-op, see GetTaskbarXamlRoot), so the widget
+        // never appears until the mod is manually reloaded. Keep polling
+        // until BOTH the window exists AND stack's props are actually
+        // present.
         if (tray) {
             g_haTaskbarHwnd = tray;
+        }
+        if (tray && IsStackAvailable(tray)) {
             RunFromWindowThread(
                 tray,
                 [](void*) { RegisterAllProfileInstances(g_haTaskbarHwnd); },
@@ -2039,7 +2074,17 @@ BOOL Wh_ModInit() {
     g_haRetryStopRequested = false;
     g_haRetryEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
     g_haTaskbarHwnd = FindWindow(L"Shell_TrayWnd", nullptr);
-    if (g_haTaskbarHwnd) {
+    // Registering immediately requires BOTH the taskbar window to exist AND
+    // taskbar-widget-stack's RegisterWidget/UnregisterWidget props to
+    // already be installed on it - the window routinely exists before
+    // stack finishes injecting its grid, and registering too early
+    // silently falls back to the standalone stub (a no-op, see
+    // GetTaskbarXamlRoot), leaving the widget invisible until a manual
+    // mod reload. When stack isn't ready yet, skip the immediate attempt
+    // entirely (it would just build a stub to be torn down moments later)
+    // and let the retry thread's own IsStackAvailable check handle first
+    // registration once stack actually catches up.
+    if (g_haTaskbarHwnd && IsStackAvailable(g_haTaskbarHwnd)) {
         // Wh_ModInit runs on the Windhawk Engine thread when this mod is
         // injected into an already-running explorer.exe (the normal case
         // when a user enables the mod), not the taskbar's own UI thread -
