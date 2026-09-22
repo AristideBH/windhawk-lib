@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.8.0
+// @version         0.8.1
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1692,8 +1692,10 @@ void HandleHaMessage(const winrt::hstring& rawMessage) {
         subscribe.SetNamedValue(
             L"event_type", JsonValue::CreateStringValue(L"state_changed"));
         SendHaMessage(subscribe);
+        Wh_Log(L"HandleHaMessage: auth_ok, sending get_states + subscribe_events");
     } else if (type == L"auth_invalid") {
         g_haConnectionState.store(HaConnectionState::AuthFailed);
+        Wh_Log(L"HandleHaMessage: auth_invalid - check the access token in settings");
     } else if (type == L"event") {
         try {
             auto event = msg.GetNamedObject(L"event", nullptr);
@@ -1728,6 +1730,8 @@ void HandleHaMessage(const winrt::hstring& rawMessage) {
                         g_entityStates[entityId] = parsed;
                     }
                 }
+                Wh_Log(L"HandleHaMessage: get_states populated %u entities",
+                       (unsigned)array.Size());
                 // Bulk initial population: refresh every currently
                 // registered instance once, rather than one
                 // NotifyEntityChanged call per entity. Same use-after-free
@@ -1770,6 +1774,8 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
             accessToken = g_settings.accessToken;
         }
         if (serverUrl.empty() || accessToken.empty()) {
+            Wh_Log(L"HaWebSocketThreadProc: serverUrl or accessToken not set, "
+                   L"waiting");
             WaitForSingleObject(g_haStopEvent, 5000);
             continue;
         }
@@ -1814,7 +1820,9 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
             std::wstring uriText = scheme + serverUrl + L"/api/websocket";
             winrt::Windows::Foundation::Uri uri{uriText};
 
+            Wh_Log(L"HaWebSocketThreadProc: connecting to %s", uriText.c_str());
             socket.ConnectAsync(uri).get();
+            Wh_Log(L"HaWebSocketThreadProc: connected, sending auth");
             {
                 std::lock_guard<std::mutex> lock(g_haSocketMutex);
                 g_haWriter = winrt::Windows::Storage::Streams::DataWriter(
@@ -1859,8 +1867,15 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
                 // this thread fresh; see below).
                 break;
             }
+            Wh_Log(L"HaWebSocketThreadProc: connection closed, will reconnect");
+        } catch (winrt::hresult_error const& ex) {
+            g_haConnectionState.store(HaConnectionState::Disconnected);
+            Wh_Log(L"HaWebSocketThreadProc: connect failed, HRESULT %08X: %s",
+                   ex.code().value, ex.message().c_str());
         } catch (...) {
             g_haConnectionState.store(HaConnectionState::Disconnected);
+            Wh_Log(L"HaWebSocketThreadProc: connect failed with an unknown "
+                   L"exception");
         }
 
         if (WaitForSingleObject(g_haStopEvent, backoffSeconds * 1000) ==
