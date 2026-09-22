@@ -82,6 +82,12 @@ to standalone otherwise. See PLAN.md for the design.
 
 #include <windhawk_utils.h>
 
+// winbase.h's `#define GetCurrentTime() GetTickCount()` collides with
+// IStoryboard::GetCurrentTime in the WinRT Animation headers pulled in
+// below - undef it first, same fix taskbar-widget-media-player.wh.cpp
+// already needed for the same headers.
+#undef GetCurrentTime
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Xaml.h>
