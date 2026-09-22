@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.8.1
+// @version         0.8.2
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1786,7 +1786,22 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
             socket.Control().MessageType(
                 winrt::Windows::Networking::Sockets::SocketMessageType::Utf8);
 
+            // Two SEPARATE events, deliberately not shared: authDone signals
+            // only "the auth handshake finished" (auth_ok/auth_invalid),
+            // closedEvent signals only "the socket actually closed". Sharing
+            // one manual-reset event for both used to cause a real bug: once
+            // authDone was set for auth_ok, it stayed set (manual-reset
+            // never self-clears), so the later "wait until actually
+            // disconnected" call returned immediately instead of blocking -
+            // the connection was torn down and reconnected in a tight loop
+            // within ~100ms of every successful auth, before get_states'
+            // response ever arrived. MessageReceived's "still Connected"
+            // check re-set the same shared event on every later message too,
+            // which would have reintroduced the same bug even if the first
+            // wait had been fixed by resetting the event once.
             winrt::handle authDone(
+                CreateEvent(nullptr, TRUE, FALSE, nullptr));
+            winrt::handle closedEvent(
                 CreateEvent(nullptr, TRUE, FALSE, nullptr));
             bool authFailed = false;
 
@@ -1813,7 +1828,8 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
                 });
 
             socket.Closed([&](auto const&, auto const&) {
-                SetEvent(authDone.get());
+                Wh_Log(L"HaWebSocketThreadProc: socket Closed event fired");
+                SetEvent(closedEvent.get());
             });
 
             std::wstring scheme = useTls ? L"wss://" : L"ws://";
@@ -1847,10 +1863,15 @@ DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
             } else if (g_haConnectionState.load() ==
                        HaConnectionState::Connected) {
                 backoffSeconds = 1;
+                Wh_Log(L"HaWebSocketThreadProc: subscribed, waiting for "
+                       L"events until disconnected/stopped");
                 // Block here until disconnected/stopped - state_changed
                 // events keep arriving via MessageReceived on this same
-                // socket in the background.
-                HANDLE waitHandles[] = {g_haStopEvent, authDone.get()};
+                // socket in the background. closedEvent (not authDone) is
+                // the correct signal here - see the comment above authDone's
+                // declaration for why sharing one event for both used to
+                // cause an immediate-reconnect-loop bug.
+                HANDLE waitHandles[] = {g_haStopEvent, closedEvent.get()};
                 WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
             }
 
