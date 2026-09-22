@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.7.2
+// @version         0.8.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -70,12 +70,15 @@ to standalone otherwise. See PLAN.md for the design.
     $name: Style aliases
     $description: >-
       "SlotName=rawKey" entries mapping a widget style slot to one of the
-      keys above. Slots: CardCornerRadius, PanelCornerRadius, HeaderPadding,
-      PanelPadding, MutedTextOpacity (numbers); PanelBackgroundBrush,
-      HeaderBackgroundBrush, BorderBrush, SeparatorBrush, HoverBrush,
-      PressedBrush, OnColor, OffColor (colors/brushes). A slot with no
-      alias, or an alias pointing at a missing key, keeps its built-in
-      default. As with styleConstants above, a blank entry ends the list.
+      keys above. Slots: CardCornerRadius, PanelCornerRadius, PanelPadding,
+      MutedTextOpacity (numbers); PanelBackgroundBrush, BorderBrush,
+      HoverBrush, PressedBrush, OnColor, OffColor (colors/brushes). A slot
+      with no alias, or an alias pointing at a missing key, keeps its
+      built-in default. As with styleConstants above, a blank entry ends
+      the list. (HeaderPadding, HeaderBackgroundBrush, and SeparatorBrush
+      are not currently read by any code in this mod - there's no header
+      row or separator element to apply them to - so setting them has no
+      effect.)
   $name: Style
 */
 // ==/WindhawkModSettings==
@@ -668,8 +671,14 @@ FrameworkElement BuildMultiEntityCompactView(
             cell.PointerPressed(
                 [entityId, domain](
                     winrt::Windows::Foundation::IInspectable const&,
-                    winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const&) {
+                    winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs const& args) {
                     CallHaService(domain, L"toggle", entityId);
+                    // Mark handled so this click-to-toggle doesn't also
+                    // bubble up as a Tapped on the wrapper Grid
+                    // (HandleProfileClick, wired up in HaWidget_Create/
+                    // InjectProfileStandalone), which would open the panel
+                    // on top of the toggle that just fired.
+                    args.Handled(true);
                 });
         }
 
@@ -841,8 +850,7 @@ FrameworkElement BuildDashboardPanelContent(
     return WrapPanelContent(root);
 }
 
-// Dispatches to the right panel-content builder by mode. Task 6 extends
-// this switch with its own Dashboard branch - do not duplicate
+// Dispatches to the right panel-content builder by mode - do not duplicate
 // ShowProfilePanel itself.
 FrameworkElement BuildProfilePanelContent(HomeAssistantProfileInstance* instance) {
     switch (instance->config.mode) {
@@ -853,12 +861,11 @@ FrameworkElement BuildProfilePanelContent(HomeAssistantProfileInstance* instance
         case ProfileMode::Dashboard:
             return BuildDashboardPanelContent(instance);
         default:
-            // Tasks 5/6 replace this default case with real Multi/
-            // Dashboard branches; a plain placeholder here would violate
-            // the no-placeholder rule for a finished plan, so this task
-            // must leave a real, working fallback: reuse the single-entity
-            // layout for the first configured entity, which always
-            // produces a valid, non-empty panel even before Tasks 5/6 run.
+            // Every ProfileMode value has a real case above; this is a
+            // defensive fallback only (e.g. an out-of-range value from
+            // memory corruption), not a reachable code path. Reuses the
+            // single-entity layout so it still produces a valid,
+            // non-empty panel rather than a placeholder.
             return BuildSingleEntityPanelContent(instance);
     }
 }
@@ -896,8 +903,7 @@ void HandleProfileClick(HomeAssistantProfileInstance* instance) {
     ShowProfilePanel(instance);
 }
 
-// Signature is final (set by Task 2); do not change it. Task 6 extends the
-// switch below with a real Dashboard compact view.
+// Signature is final; do not change it.
 FrameworkElement BuildCompactView(HomeAssistantProfileInstance* instance) {
     switch (instance->config.mode) {
         case ProfileMode::Single:
@@ -907,11 +913,11 @@ FrameworkElement BuildCompactView(HomeAssistantProfileInstance* instance) {
         case ProfileMode::Dashboard:
             return BuildMultiEntityCompactView(instance);
         default:
-            // Tasks 5/6 replace this default case with real Multi/
-            // Dashboard compact views. Until then, fall back to the
-            // single-entity view over the profile's first configured
-            // entity (if any) so every mode renders something real and
-            // non-empty, never a placeholder string.
+            // Every ProfileMode value has a real case above; this is a
+            // defensive fallback only, not a reachable code path. Falls
+            // back to the single-entity view over the profile's first
+            // configured entity (if any) so it still renders something
+            // real and non-empty, never a placeholder string.
             return BuildSingleEntityCompactView(instance);
     }
 }
@@ -1518,24 +1524,66 @@ bool ParseHaStateObject(const std::wstring& entityId,
     return true;
 }
 
+// Re-resolves a profile instance by profileId under g_profileInstancesMutex
+// and rebuilds its UI, if it's still present. Must only be called on the
+// taskbar UI thread (i.e. from inside a RunFromWindowThread-marshaled
+// callback) - see the use-after-free note above NotifyEntityChanged below:
+// callers cross the WebSocket-callback-thread -> UI-thread boundary with a
+// profileId (a std::wstring, safe to copy) instead of a raw
+// HomeAssistantProfileInstance* precisely so this lookup - and the
+// existence check it implies - happens at the moment the callback actually
+// runs, not before. If the instance is no longer found (e.g.
+// Wh_ModSettingsChanged rebuilt g_profileInstances in the meantime), this
+// silently no-ops - a legitimate, harmless race.
+void ResolveAndRebuildProfileByProfileId(const std::wstring& profileId) {
+    HomeAssistantProfileInstance* instance = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
+        for (auto& inst : *g_profileInstances) {
+            if (inst->config.profileId == profileId) {
+                instance = inst.get();
+                break;
+            }
+        }
+    }
+    if (instance) {
+        RebuildProfileInstanceUi(instance);
+    }
+}
+
+// NotifyEntityChanged runs on a WinRT threadpool thread (the WebSocket
+// MessageReceived callback), not the thread StopHaWebSocketThread's join
+// fences - so it must never carry a raw HomeAssistantProfileInstance*
+// across to the UI thread: if Wh_ModSettingsChanged rebuilds
+// g_profileInstances (destroying the current instances) in the window
+// between this function releasing g_profileInstancesMutex and the
+// RunFromWindowThread-marshaled callback actually running on the UI
+// thread, the UI thread would dereference a freed instance. Collecting
+// profileId (copyable, safe) instead and re-resolving it inside
+// ResolveAndRebuildProfileByProfileId - on the UI thread, right before use
+// - closes that window. The lock is held only long enough to snapshot the
+// affected profileIds here, and is not held across the RunFromWindowThread
+// call itself, to avoid inverting lock order against
+// UnregisterAllProfileInstances (which also takes this mutex, on the UI
+// thread it needs to run on).
 void NotifyEntityChanged(const std::wstring& entityId) {
-    std::vector<HomeAssistantProfileInstance*> affected;
+    std::vector<std::wstring> affectedProfileIds;
     {
         std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
         for (auto& instance : *g_profileInstances) {
             auto& ids = instance->config.entityIds;
             if (std::find(ids.begin(), ids.end(), entityId) != ids.end()) {
-                affected.push_back(instance.get());
+                affectedProfileIds.push_back(instance->config.profileId);
             }
         }
     }
-    if (affected.empty() || !g_haTaskbarHwnd) {
+    if (affectedProfileIds.empty() || !g_haTaskbarHwnd) {
         return;
     }
-    for (auto* instance : affected) {
+    for (auto& profileId : affectedProfileIds) {
         RunFromWindowThread(g_haTaskbarHwnd, [](void* param) {
-            RebuildProfileInstanceUi((HomeAssistantProfileInstance*)param);
-        }, instance);
+            ResolveAndRebuildProfileByProfileId(*(std::wstring*)param);
+        }, &profileId);
     }
 }
 
@@ -1682,20 +1730,24 @@ void HandleHaMessage(const winrt::hstring& rawMessage) {
                 }
                 // Bulk initial population: refresh every currently
                 // registered instance once, rather than one
-                // NotifyEntityChanged call per entity.
-                std::vector<HomeAssistantProfileInstance*> all;
+                // NotifyEntityChanged call per entity. Same use-after-free
+                // hazard as NotifyEntityChanged above (this handler also
+                // runs on a WinRT threadpool thread) - collect profileIds
+                // rather than raw instance pointers, and re-resolve each on
+                // the UI thread via ResolveAndRebuildProfileByProfileId.
+                std::vector<std::wstring> allProfileIds;
                 {
                     std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
                     for (auto& instance : *g_profileInstances) {
-                        all.push_back(instance.get());
+                        allProfileIds.push_back(instance->config.profileId);
                     }
                 }
                 if (g_haTaskbarHwnd) {
-                    for (auto* instance : all) {
+                    for (auto& profileId : allProfileIds) {
                         RunFromWindowThread(g_haTaskbarHwnd, [](void* param) {
-                            RebuildProfileInstanceUi(
-                                (HomeAssistantProfileInstance*)param);
-                        }, instance);
+                            ResolveAndRebuildProfileByProfileId(
+                                *(std::wstring*)param);
+                        }, &profileId);
                     }
                 }
             }
@@ -1835,7 +1887,29 @@ void StopHaWebSocketThread() {
         SetEvent(g_haStopEvent);
     }
     if (g_haWebSocketThread) {
-        WaitForSingleObject(g_haWebSocketThread, 5000);
+        DWORD waitResult = WaitForSingleObject(g_haWebSocketThread, 5000);
+        if (waitResult != WAIT_OBJECT_0) {
+            // Thread is still running - most likely blocked inside
+            // MessageWebSocket::ConnectAsync(uri).get() against an
+            // unroutable/typo'd host, where TCP connect timeouts are
+            // commonly ~21s, well past this function's 5s wait. Do NOT
+            // close the thread or stop-event handles here: the still-
+            // running thread may reference g_haStopEvent again (its own
+            // WaitForSingleObject/WaitForMultipleObjects calls), and
+            // closing it out from under that thread would turn those calls
+            // into an immediate WAIT_FAILED, which the thread's loop
+            // doesn't treat as "stop" - it would just keep looping and
+            // reconnecting forever, orphaned with no way to ever signal or
+            // join it again, potentially outliving Wh_ModUninit and
+            // executing unmapped code after DLL unload. Leaking these
+            // handles until the thread eventually exits is the safer
+            // failure mode - same choice taskbar-widget-weather.wh.cpp's
+            // own StopWeatherThread makes for the identical hazard.
+            Wh_Log(L"StopHaWebSocketThread: thread did not exit within "
+                   L"5000ms; leaving thread/event handles open rather than "
+                   L"risk closing handles still in use");
+            return;
+        }
         CloseHandle(g_haWebSocketThread);
         g_haWebSocketThread = nullptr;
     }
@@ -1851,17 +1925,131 @@ void StopHaWebSocketThread() {
 
 HWND g_haTaskbarHwnd = nullptr;
 
+// ---------------------------------------------------------------------
+// Retry-register thread: if the taskbar window doesn't exist yet when
+// Wh_ModInit runs - the normal situation when this mod is pre-loaded before
+// Explorer finishes starting, e.g. at boot - FindWindow comes back null and
+// Wh_ModInit has nothing to register into. Without a retry, g_haTaskbarHwnd
+// stays null permanently (Wh_ModSettingsChanged is also gated behind the
+// same null check), so the mod is permanently inert until the user
+// manually disables and re-enables it. Mirrors
+// taskbar-widget-weather.wh.cpp's own WeatherRetryRegisterThreadProc/
+// StartWeatherRetryRegister pair: poll for the taskbar window every 500ms
+// (up to 600 attempts, ~5 minutes) and, once found, register the same way
+// Wh_ModInit's own direct-registration path does (marshaled onto the
+// taskbar's own thread via RunFromWindowThread), then stop - this mod has
+// no TrayUI::StartTaskbar hook to re-arm the retry on a later taskbar
+// restart, but that's an existing, separately-scoped limitation (see the
+// GAP comment above GetTaskbarXamlRoot): this fix is specifically about the
+// stack-hosted registration path succeeding once Explorer finishes
+// starting, the mod's primary supported path.
+// ---------------------------------------------------------------------
+
+HANDLE g_haRetryThread = nullptr;
+HANDLE g_haRetryEvent = nullptr;
+std::mutex g_haRetryThreadMutex;
+std::atomic<bool> g_haRetryStopRequested{false};
+
+DWORD WINAPI HaRetryRegisterThreadProc(LPVOID) {
+    for (int attempt = 0; attempt < 600; attempt++) {
+        if (g_haRetryStopRequested.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        HWND tray = FindWindow(L"Shell_TrayWnd", nullptr);
+        if (tray) {
+            g_haTaskbarHwnd = tray;
+            RunFromWindowThread(
+                tray,
+                [](void*) { RegisterAllProfileInstances(g_haTaskbarHwnd); },
+                nullptr);
+            return 0;
+        }
+        if (g_haRetryEvent) {
+            WaitForSingleObject(g_haRetryEvent, 500);
+            ResetEvent(g_haRetryEvent);
+        } else {
+            // CreateEvent failed back in Wh_ModInit - fall back to a plain
+            // sleep so this loop still paces itself instead of spinning.
+            Sleep(500);
+        }
+    }
+    Wh_Log(
+        L"HaRetryRegisterThreadProc: giving up after retries, the taskbar "
+        L"window never appeared; Home Assistant widget profiles were not "
+        L"registered");
+    return 0;
+}
+
+void StartHaRetryRegister() {
+    std::lock_guard<std::mutex> lock(g_haRetryThreadMutex);
+    if (g_haRetryStopRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (g_haRetryThread &&
+        WaitForSingleObject(g_haRetryThread, 0) == WAIT_OBJECT_0) {
+        CloseHandle(g_haRetryThread);
+        g_haRetryThread = nullptr;
+    }
+    if (!g_haRetryThread) {
+        g_haRetryThread = CreateThread(nullptr, 0, HaRetryRegisterThreadProc,
+                                        nullptr, 0, nullptr);
+    } else if (g_haRetryEvent) {
+        SetEvent(g_haRetryEvent);
+    }
+}
+
 BOOL Wh_ModInit() {
     LoadSettings();
+    g_haRetryStopRequested = false;
+    g_haRetryEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
     g_haTaskbarHwnd = FindWindow(L"Shell_TrayWnd", nullptr);
     if (g_haTaskbarHwnd) {
-        RegisterAllProfileInstances(g_haTaskbarHwnd);
+        // Wh_ModInit runs on the Windhawk Engine thread when this mod is
+        // injected into an already-running explorer.exe (the normal case
+        // when a user enables the mod), not the taskbar's own UI thread -
+        // but RegisterAllProfileInstances synchronously builds Grid/Border/
+        // SolidColorBrush XAML objects and appends them to the live tree,
+        // which is only safe on the UI thread. Marshal it via
+        // RunFromWindowThread, same as Wh_ModSettingsChanged already does
+        // for its own RebuildAllProfileInstances call.
+        RunFromWindowThread(
+            g_haTaskbarHwnd,
+            [](void*) { RegisterAllProfileInstances(g_haTaskbarHwnd); },
+            nullptr);
+    } else {
+        StartHaRetryRegister();
     }
     StartHaWebSocketThread();
     return TRUE;
 }
 
 void Wh_ModSettingsChanged() {
+    // Load fresh settings on the calling thread first - plain data parsing
+    // (Wh_Get*Setting calls plus a couple of mutex-guarded assignments), no
+    // XAML involved, so it's safe here rather than needing to go through
+    // RunFromWindowThread. Doing this before the WebSocket
+    // stop/start below matters for correctness, not just ordering: it's
+    // what makes the freshly-restarted WebSocket thread pick up a just-
+    // changed serverUrl/accessToken/useTls on its very first connect
+    // attempt instead of stale ones from before this settings change.
+    // RebuildAllProfileInstances below calls LoadSettings() again
+    // internally - redundant (settings can't have changed again in the
+    // few lines between the two calls) but harmless.
+    LoadSettings();
+
+    // StopHaWebSocketThread/StartHaWebSocketThread don't touch XAML - they
+    // only signal/join a plain Win32 thread and reset a HANDLE - so unlike
+    // RebuildAllProfileInstances (which builds Grid/Border/SolidColorBrush
+    // XAML objects and must run on the taskbar UI thread), they don't need
+    // to be marshaled via RunFromWindowThread. Running them here, on
+    // whatever thread Wh_ModSettingsChanged itself was called on, keeps the
+    // UI thread from blocking for up to StopHaWebSocketThread's 5s wait (or
+    // longer, if the connect is hung - see StopHaWebSocketThread's own
+    // comment) on every single settings change, including ones that don't
+    // touch connection settings at all (e.g. a pure style-token tweak).
+    StopHaWebSocketThread();
+    StartHaWebSocketThread();
+
     if (g_haTaskbarHwnd) {
         RunFromWindowThread(
             g_haTaskbarHwnd,
@@ -1874,20 +2062,52 @@ void Wh_ModSettingsChanged() {
                 // site.
                 InvalidateHaHoverBrushCache();
                 RebuildAllProfileInstances(g_haTaskbarHwnd);
-                StopHaWebSocketThread();
-                StartHaWebSocketThread();
             },
             nullptr);
     }
 }
 
 void Wh_ModUninit() {
-    // 1. Stop and join the WebSocket thread first - it's the only other
-    //    thread this mod runs, and everything released below (the socket/
-    //    writer it owns, the profile instances it notifies via
-    //    RunFromWindowThread) must not still be in use by it. This also
-    //    signals/waits/CloseHandles g_haStopEvent and g_haWebSocketThread
-    //    themselves (plain HANDLEs, no [[clang::no_destroy]] needed).
+    // 0. Stop the retry-register thread first, if it's still running (it
+    //    only runs while g_haTaskbarHwnd was never found - normally it's
+    //    already exited by the time the mod is disabled). Same
+    //    wait-then-leak-on-timeout treatment as StopHaWebSocketThread
+    //    below and weather's own retry-thread teardown: the still-running
+    //    thread may be blocked inside RunFromWindowThread's
+    //    SendMessageTimeoutW, still referencing g_haRetryEvent, so closing
+    //    handles out from under it is unsafe.
+    g_haRetryStopRequested = true;
+    if (g_haRetryEvent) {
+        SetEvent(g_haRetryEvent);
+    }
+    bool retryThreadStillRunning = false;
+    {
+        std::lock_guard<std::mutex> lock(g_haRetryThreadMutex);
+        if (g_haRetryThread) {
+            DWORD waitResult = WaitForSingleObject(g_haRetryThread, 3000);
+            if (waitResult == WAIT_OBJECT_0) {
+                CloseHandle(g_haRetryThread);
+                g_haRetryThread = nullptr;
+            } else {
+                retryThreadStillRunning = true;
+                Wh_Log(L"Wh_ModUninit: retry thread did not exit within "
+                       L"3000ms; leaving thread/event handles open rather "
+                       L"than risk closing handles still in use");
+            }
+        }
+    }
+    if (!retryThreadStillRunning && g_haRetryEvent) {
+        CloseHandle(g_haRetryEvent);
+        g_haRetryEvent = nullptr;
+    }
+
+    // 1. Stop and join the WebSocket thread next (the retry-register
+    //    thread from step 0 is the only other thread this mod runs), and
+    //    everything released below (the socket/writer it owns, the
+    //    profile instances it notifies via RunFromWindowThread) must not
+    //    still be in use by it. This also signals/waits/CloseHandles
+    //    g_haStopEvent and g_haWebSocketThread themselves (plain HANDLEs,
+    //    no [[clang::no_destroy]] needed).
     StopHaWebSocketThread();
 
     // 2. Strong WinRT/COM references owned by the WebSocket engine
