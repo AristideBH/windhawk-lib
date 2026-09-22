@@ -2,7 +2,7 @@
 // @id              taskbar-widget-weather
 // @name            Taskbar Widget: Weather
 // @description     Shows current weather + forecast in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         1.24
+// @version         1.25
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1418,8 +1418,9 @@ Grid BuildMixedView() {
         Border separator;
         separator.Width(1);
         separator.Opacity(GetStyleNumber(L"SeparatorOpacity", 0.3));
-        separator.Background(SolidColorBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xFF, 0xFF)});
+        Brush defaultSeparatorBrush = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0xFF, 0xFF, 0xFF)};
+        separator.Background(GetStyleBrush(L"BorderBrush", defaultSeparatorBrush));
         separator.Margin({0, 4, 0, 4});
         Grid::SetColumn(separator, 1);
         root.Children().Append(separator);
@@ -1523,12 +1524,24 @@ void EnsureHoverBrushes() {
     if (!g_weatherHoverBrush) {
         // 0x14 = ~8% opacity (live feedback, 2026-09-21). Went 0x14 ->
         // 0x54 (33%) -> 0x14 -> 0x0A (4%) -> back to 0x14 the same day.
-        g_weatherHoverBrush = SolidColorBrush{
+        SolidColorBrush defaultHover{
             winrt::Windows::UI::ColorHelper::FromArgb(0x14, 0xFF, 0xFF, 0xFF)};
+        try {
+            g_weatherHoverBrush =
+                GetStyleBrush(L"HoverBrush", defaultHover).as<SolidColorBrush>();
+        } catch (...) {
+            g_weatherHoverBrush = defaultHover;
+        }
     }
     if (!g_weatherPressedBrush) {
-        g_weatherPressedBrush = SolidColorBrush{
+        SolidColorBrush defaultPressed{
             winrt::Windows::UI::ColorHelper::FromArgb(0x28, 0xFF, 0xFF, 0xFF)};
+        try {
+            g_weatherPressedBrush =
+                GetStyleBrush(L"PressedBrush", defaultPressed).as<SolidColorBrush>();
+        } catch (...) {
+            g_weatherPressedBrush = defaultPressed;
+        }
     }
     if (!g_weatherPressedBorderBrush) {
         g_weatherPressedBorderBrush = SolidColorBrush{
@@ -1780,8 +1793,9 @@ Grid BuildWeatherHeaderAndDetails() {
     Grid header;
     header.CornerRadius({panelCornerRadius, panelCornerRadius, panelCornerRadius,
                           panelCornerRadius});
-    header.Background(SolidColorBrush{
-        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)});
+    Brush defaultHeaderBackground = SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x20, 0, 0, 0)};
+    header.Background(GetStyleBrush(L"HeaderBackgroundBrush", defaultHeaderBackground));
     double headerPadding = GetStyleNumber(L"HeaderPadding", 10.0);
     header.Padding({headerPadding, headerPadding, headerPadding, headerPadding});
     header.ColumnDefinitions().Append(ColumnDefinition{});
@@ -2010,6 +2024,7 @@ Border BuildWeatherFlyoutContent() {
     // back to the previous flat solid color if AcrylicBrush throws
     // (unsupported OS/theme edge case), so the panel is never left with
     // no background at all either way.
+    Brush defaultPanelBackground{nullptr};
     try {
         winrt::Windows::UI::Xaml::Media::AcrylicBrush acrylic;
         acrylic.BackgroundSource(
@@ -2020,13 +2035,15 @@ Border BuildWeatherFlyoutContent() {
         acrylic.TintLuminosityOpacity(0.85);
         acrylic.FallbackColor(
             winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B));
-        panelBg.Background(acrylic);
+        defaultPanelBackground = acrylic;
     } catch (...) {
-        panelBg.Background(SolidColorBrush{
-            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)});
+        defaultPanelBackground = SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xF0, 0x2B, 0x2B, 0x2B)};
     }
-    panelBg.BorderBrush(SolidColorBrush{
-        winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)});
+    panelBg.Background(GetStyleBrush(L"PanelBackgroundBrush", defaultPanelBackground));
+    Brush defaultPanelBorder = SolidColorBrush{
+        winrt::Windows::UI::ColorHelper::FromArgb(0x18, 0xFF, 0xFF, 0xFF)};
+    panelBg.BorderBrush(GetStyleBrush(L"BorderBrush", defaultPanelBorder));
     panelBg.BorderThickness({1, 1, 1, 1});
     panelBg.Child(content);
     return panelBg;
