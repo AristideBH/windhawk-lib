@@ -2,7 +2,7 @@
 // @id              taskbar-widget-home-assistant
 // @name            Taskbar Widget: Home Assistant
 // @description     Shows and controls Home Assistant entities in the taskbar. Registers into taskbar-widget-stack's pane if installed, falls back to standalone injection otherwise.
-// @version         0.2.0
+// @version         0.3.0
 // @author          Aristide
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -668,6 +668,383 @@ void RebuildAllProfileInstances(HWND taskbarHwnd) {
 }
 
 // ---------------------------------------------------------------------
+// Mod entry points (HWND declared here; the WebSocket engine below needs
+// it before this point, so it's forward-declared just above that section).
+// ---------------------------------------------------------------------
+
+extern HWND g_haTaskbarHwnd;
+
+// ---------------------------------------------------------------------
+// WebSocket connection engine (Task 3): one shared connection to the
+// configured Home Assistant instance - auth handshake, get_states,
+// subscribe_events for state_changed, call_service for control - with
+// reconnect/backoff and a mutex-guarded entity-state map that fans updates
+// out to whichever registered profile instances care about each changed
+// entity id.
+// ---------------------------------------------------------------------
+
+std::atomic<HaConnectionState> g_haConnectionState{HaConnectionState::Disconnected};
+std::map<std::wstring, EntityState> g_entityStates;
+std::mutex g_entityStatesMutex;
+std::atomic<int> g_haNextMessageId{1};
+
+EntityState GetEntityState(const std::wstring& entityId) {
+    std::lock_guard<std::mutex> lock(g_entityStatesMutex);
+    auto it = g_entityStates.find(entityId);
+    if (it == g_entityStates.end()) {
+        return EntityState{};
+    }
+    return it->second;
+}
+
+// Parses one HA "state object" (as returned by get_states, or as the
+// new_state field of a state_changed event) into an EntityState. Returns
+// false (leaving `out` untouched) if entityId/state fields are missing.
+bool ParseHaStateObject(const std::wstring& entityId,
+                         JsonObject const& stateObj,
+                         EntityState& out) {
+    if (!stateObj) {
+        return false;
+    }
+    EntityState result;
+    result.entityId = entityId;
+    result.domain = DomainOf(entityId);
+    try {
+        result.state = std::wstring(stateObj.GetNamedString(L"state", L""));
+    } catch (...) {
+        return false;
+    }
+    try {
+        auto attrs = stateObj.GetNamedObject(L"attributes", nullptr);
+        if (attrs) {
+            result.friendlyName =
+                std::wstring(attrs.GetNamedString(L"friendly_name", L""));
+            result.unitOfMeasurement = std::wstring(
+                attrs.GetNamedString(L"unit_of_measurement", L""));
+        }
+    } catch (...) {
+    }
+    result.hasData = true;
+    out = std::move(result);
+    return true;
+}
+
+void NotifyEntityChanged(const std::wstring& entityId) {
+    std::vector<HomeAssistantProfileInstance*> affected;
+    {
+        std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
+        for (auto& instance : g_profileInstances) {
+            auto& ids = instance->config.entityIds;
+            if (std::find(ids.begin(), ids.end(), entityId) != ids.end()) {
+                affected.push_back(instance.get());
+            }
+        }
+    }
+    if (affected.empty() || !g_haTaskbarHwnd) {
+        return;
+    }
+    for (auto* instance : affected) {
+        RunFromWindowThread(g_haTaskbarHwnd, [](void* param) {
+            RebuildProfileInstanceUi((HomeAssistantProfileInstance*)param);
+        }, instance);
+    }
+}
+
+HANDLE g_haStopEvent = nullptr;
+winrt::Windows::Networking::Sockets::MessageWebSocket g_haSocket{nullptr};
+winrt::Windows::Storage::Streams::DataWriter g_haWriter{nullptr};
+std::mutex g_haSocketMutex;
+
+void SendHaMessage(JsonObject const& message) {
+    std::lock_guard<std::mutex> lock(g_haSocketMutex);
+    if (!g_haWriter) {
+        return;
+    }
+    try {
+        g_haWriter.WriteString(message.Stringify());
+        g_haWriter.StoreAsync();
+    } catch (...) {
+    }
+}
+
+void CallHaService(const std::wstring& domain,
+                    const std::wstring& service,
+                    const std::wstring& entityId) {
+    if (g_haConnectionState.load() != HaConnectionState::Connected) {
+        return;
+    }
+    JsonObject serviceData;
+    serviceData.SetNamedValue(L"entity_id", JsonValue::CreateStringValue(entityId));
+    JsonObject msg;
+    msg.SetNamedValue(L"id", JsonValue::CreateNumberValue(
+                                  g_haNextMessageId.fetch_add(1)));
+    msg.SetNamedValue(L"type", JsonValue::CreateStringValue(L"call_service"));
+    msg.SetNamedValue(L"domain", JsonValue::CreateStringValue(domain));
+    msg.SetNamedValue(L"service", JsonValue::CreateStringValue(service));
+    msg.SetNamedValue(L"service_data", serviceData);
+    SendHaMessage(msg);
+}
+
+void HandleHaStateChangedEvent(JsonObject const& event) {
+    try {
+        auto data = event.GetNamedObject(L"data", nullptr);
+        if (!data) {
+            return;
+        }
+        auto entityId = std::wstring(data.GetNamedString(L"entity_id", L""));
+        if (entityId.empty()) {
+            return;
+        }
+        auto newState = data.GetNamedObject(L"new_state", nullptr);
+        if (!newState) {
+            return;
+        }
+        EntityState parsed;
+        if (!ParseHaStateObject(entityId, newState, parsed)) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_entityStatesMutex);
+            g_entityStates[entityId] = parsed;
+        }
+        NotifyEntityChanged(entityId);
+    } catch (...) {
+    }
+}
+
+void HandleHaMessage(const winrt::hstring& rawMessage) {
+    JsonObject msg{nullptr};
+    try {
+        msg = JsonObject::Parse(rawMessage);
+    } catch (...) {
+        return;
+    }
+    std::wstring type;
+    try {
+        type = std::wstring(msg.GetNamedString(L"type", L""));
+    } catch (...) {
+        return;
+    }
+
+    if (type == L"auth_ok") {
+        g_haConnectionState.store(HaConnectionState::Connected);
+        JsonObject getStates;
+        getStates.SetNamedValue(L"id", JsonValue::CreateNumberValue(
+                                            g_haNextMessageId.fetch_add(1)));
+        getStates.SetNamedValue(L"type",
+                                 JsonValue::CreateStringValue(L"get_states"));
+        SendHaMessage(getStates);
+
+        JsonObject subscribe;
+        subscribe.SetNamedValue(L"id", JsonValue::CreateNumberValue(
+                                            g_haNextMessageId.fetch_add(1)));
+        subscribe.SetNamedValue(
+            L"type", JsonValue::CreateStringValue(L"subscribe_events"));
+        subscribe.SetNamedValue(
+            L"event_type", JsonValue::CreateStringValue(L"state_changed"));
+        SendHaMessage(subscribe);
+    } else if (type == L"auth_invalid") {
+        g_haConnectionState.store(HaConnectionState::AuthFailed);
+    } else if (type == L"event") {
+        try {
+            auto event = msg.GetNamedObject(L"event", nullptr);
+            if (event) {
+                auto eventType =
+                    std::wstring(event.GetNamedString(L"event_type", L""));
+                if (eventType == L"state_changed") {
+                    HandleHaStateChangedEvent(event);
+                }
+            }
+        } catch (...) {
+        }
+    } else if (type == L"result") {
+        // get_states' bulk response: an array under "result", each entry a
+        // full state object with its own top-level "entity_id".
+        try {
+            bool success = msg.GetNamedBoolean(L"success", false);
+            auto resultValue = msg.GetNamedValue(L"result", nullptr);
+            if (success && resultValue &&
+                resultValue.ValueType() == JsonValueType::Array) {
+                auto array = resultValue.GetArray();
+                for (auto const& item : array) {
+                    auto obj = item.GetObject();
+                    auto entityId =
+                        std::wstring(obj.GetNamedString(L"entity_id", L""));
+                    if (entityId.empty()) {
+                        continue;
+                    }
+                    EntityState parsed;
+                    if (ParseHaStateObject(entityId, obj, parsed)) {
+                        std::lock_guard<std::mutex> lock(g_entityStatesMutex);
+                        g_entityStates[entityId] = parsed;
+                    }
+                }
+                // Bulk initial population: refresh every currently
+                // registered instance once, rather than one
+                // NotifyEntityChanged call per entity.
+                std::vector<HomeAssistantProfileInstance*> all;
+                {
+                    std::lock_guard<std::mutex> lock(g_profileInstancesMutex);
+                    for (auto& instance : g_profileInstances) {
+                        all.push_back(instance.get());
+                    }
+                }
+                if (g_haTaskbarHwnd) {
+                    for (auto* instance : all) {
+                        RunFromWindowThread(g_haTaskbarHwnd, [](void* param) {
+                            RebuildProfileInstanceUi(
+                                (HomeAssistantProfileInstance*)param);
+                        }, instance);
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
+}
+
+DWORD WINAPI HaWebSocketThreadProc(LPVOID) {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    int backoffSeconds = 1;
+
+    while (WaitForSingleObject(g_haStopEvent, 0) != WAIT_OBJECT_0) {
+        std::wstring serverUrl, accessToken;
+        bool useTls;
+        {
+            std::lock_guard<std::mutex> lock(g_settingsMutex);
+            serverUrl = g_settings.serverUrl;
+            useTls = g_settings.useTls;
+            accessToken = g_settings.accessToken;
+        }
+        if (serverUrl.empty() || accessToken.empty()) {
+            WaitForSingleObject(g_haStopEvent, 5000);
+            continue;
+        }
+
+        g_haConnectionState.store(HaConnectionState::Connecting);
+        try {
+            winrt::Windows::Networking::Sockets::MessageWebSocket socket;
+            socket.Control().MessageType(
+                winrt::Windows::Networking::Sockets::SocketMessageType::Utf8);
+
+            winrt::handle authDone(
+                CreateEvent(nullptr, TRUE, FALSE, nullptr));
+            bool authFailed = false;
+
+            socket.MessageReceived(
+                [&](auto const&,
+                    winrt::Windows::Networking::Sockets::
+                        MessageWebSocketMessageReceivedEventArgs const& args) {
+                    try {
+                        auto reader = args.GetDataReader();
+                        reader.UnicodeEncoding(
+                            winrt::Windows::Storage::Streams::
+                                UnicodeEncoding::Utf8);
+                        auto text = reader.ReadString(
+                            reader.UnconsumedBufferLength());
+                        HandleHaMessage(text);
+                        if (g_haConnectionState.load() ==
+                                HaConnectionState::Connected ||
+                            g_haConnectionState.load() ==
+                                HaConnectionState::AuthFailed) {
+                            SetEvent(authDone.get());
+                        }
+                    } catch (...) {
+                    }
+                });
+
+            socket.Closed([&](auto const&, auto const&) {
+                SetEvent(authDone.get());
+            });
+
+            std::wstring scheme = useTls ? L"wss://" : L"ws://";
+            std::wstring uriText = scheme + serverUrl + L"/api/websocket";
+            winrt::Windows::Foundation::Uri uri{uriText};
+
+            socket.ConnectAsync(uri).get();
+            g_haWriter = winrt::Windows::Storage::Streams::DataWriter(
+                socket.OutputStream());
+            {
+                std::lock_guard<std::mutex> lock(g_haSocketMutex);
+                g_haSocket = socket;
+            }
+
+            // auth_required arrives via MessageReceived like everything
+            // else; the handshake itself is: wait for auth_required (any
+            // message before auth_ok/auth_invalid), send auth, then wait
+            // for auth_ok/auth_invalid via authDone.
+            JsonObject authMsg;
+            authMsg.SetNamedValue(L"type", JsonValue::CreateStringValue(L"auth"));
+            authMsg.SetNamedValue(
+                L"access_token", JsonValue::CreateStringValue(accessToken));
+            SendHaMessage(authMsg);
+
+            WaitForSingleObject(authDone.get(), 15000);
+
+            if (g_haConnectionState.load() == HaConnectionState::AuthFailed) {
+                authFailed = true;
+            } else if (g_haConnectionState.load() ==
+                       HaConnectionState::Connected) {
+                backoffSeconds = 1;
+                // Block here until disconnected/stopped - state_changed
+                // events keep arriving via MessageReceived on this same
+                // socket in the background.
+                HANDLE waitHandles[] = {g_haStopEvent, authDone.get()};
+                WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_haSocketMutex);
+                g_haWriter = nullptr;
+                g_haSocket = nullptr;
+            }
+            socket.Close(1000, L"");
+
+            if (authFailed) {
+                // Not recoverable by retrying - stop looping until the
+                // next settings change (Wh_ModSettingsChanged restarts
+                // this thread fresh; see below).
+                break;
+            }
+        } catch (...) {
+            g_haConnectionState.store(HaConnectionState::Disconnected);
+        }
+
+        if (WaitForSingleObject(g_haStopEvent, backoffSeconds * 1000) ==
+            WAIT_OBJECT_0) {
+            break;
+        }
+        backoffSeconds = std::min(backoffSeconds * 2, 60);
+    }
+
+    winrt::uninit_apartment();
+    return 0;
+}
+
+HANDLE g_haWebSocketThread = nullptr;
+
+void StartHaWebSocketThread() {
+    g_haStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    g_haWebSocketThread =
+        CreateThread(nullptr, 0, HaWebSocketThreadProc, nullptr, 0, nullptr);
+}
+
+void StopHaWebSocketThread() {
+    if (g_haStopEvent) {
+        SetEvent(g_haStopEvent);
+    }
+    if (g_haWebSocketThread) {
+        WaitForSingleObject(g_haWebSocketThread, 5000);
+        CloseHandle(g_haWebSocketThread);
+        g_haWebSocketThread = nullptr;
+    }
+    if (g_haStopEvent) {
+        CloseHandle(g_haStopEvent);
+        g_haStopEvent = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------
 // Mod entry points.
 // ---------------------------------------------------------------------
 
@@ -679,6 +1056,7 @@ BOOL Wh_ModInit() {
     if (g_haTaskbarHwnd) {
         RegisterAllProfileInstances(g_haTaskbarHwnd);
     }
+    StartHaWebSocketThread();
     return TRUE;
 }
 
@@ -686,12 +1064,17 @@ void Wh_ModSettingsChanged() {
     if (g_haTaskbarHwnd) {
         RunFromWindowThread(
             g_haTaskbarHwnd,
-            [](void*) { RebuildAllProfileInstances(g_haTaskbarHwnd); },
+            [](void*) {
+                RebuildAllProfileInstances(g_haTaskbarHwnd);
+                StopHaWebSocketThread();
+                StartHaWebSocketThread();
+            },
             nullptr);
     }
 }
 
 void Wh_ModUninit() {
+    StopHaWebSocketThread();
     if (g_haTaskbarHwnd) {
         UnregisterAllProfileInstances(g_haTaskbarHwnd);
     }
