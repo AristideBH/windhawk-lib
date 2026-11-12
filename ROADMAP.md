@@ -17,21 +17,33 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 
 ## 0.2
 
-- [ ] Rename to Explorer Extras, settings grouped under a Columns section
-- [ ] Sort from the starting folder applied to every column
+- [x] Rename to Explorer Extras, settings grouped under a Columns section
+- [x] Sort from the starting folder applied to every column
 - [ ] Group headers with Explorer's own names
 - [ ] Sort menu changes re-sort every column, with nothing written to folders
 - [ ] Selection mirrored into Explorer's view: preview pane, details pane,
       status bar, command bar
-- [ ] Column width fitted to the longest name, with minimum and maximum
+- [x] Column width fitted to the longest name, with minimum and maximum
 - [ ] Middle ellipsis on long names, full name in a tooltip
-- [ ] Drag to resize a column, double-click to refit
+- [x] Drag to resize a column, double-click to refit
 - [ ] Rows built only when visible
-- [ ] Folders read on a background thread
+- [x] Folders read on a background thread
 - [ ] Explorer's view follows with a 350 ms delay
 - [ ] Hidden files follow Explorer's setting
 - [ ] Settings: enabled, minimum width, maximum width, follow active column,
       maximum items, debug log
+
+## 0.2.1, fixes from the 0.2 test, see `explorer-extras/SPEC-0.2.1.md`
+
+- [ ] Crash with a second Explorer window found and fixed
+- [x] Log kept across restarts, with thread ids
+- [ ] Columns entry present after Explorer restarts
+- [x] Columns update after copy, rename, delete and Refresh
+- [ ] Back, Up and outside navigation keep the column path
+- [ ] Active column marked
+- [ ] Grouping works, and no longer moves focus to the address bar
+- [x] Resize cursor and hover handle on column separators
+- [ ] Compact view applies, hidden files and compact view update live
 
 ## 0.3
 
@@ -39,6 +51,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Keyboard: left and right between columns, type to jump
 - [ ] Native right-click menu
 - [ ] Quick options flyout on empty space in the columns
+- [ ] Indicator on remote items: phone, network
+- [ ] Multiple selection of files and folders in a column, mirrored into
+      Explorer's view
 
 ## 0.4
 
@@ -60,7 +75,8 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 ## Feature backlog, order open
 
 - [ ] Labels, macOS style
-- [ ] New folder from selection
+- [ ] New folder from selection, from the right-click menu and from the
+      New button in the command bar
 - [ ] Better archive extraction flow
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization

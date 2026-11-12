@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.2
+// @version         0.2.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -75,6 +75,7 @@ menus, drag and drop, and memory of the choice across restarts.
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
+#include <oleauto.h>
 
 #undef GetCurrentTime
 
@@ -108,6 +109,7 @@ menus, drag and drop, and memory of the choice across restarts.
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
 
 namespace mux = winrt::Microsoft::UI::Xaml;
@@ -138,18 +140,37 @@ void OutInit() {
         return;
     }
     std::wstring dir = std::wstring(profile) + L"\\Code\\windhawk-lib\\probes\\logs";
-    CreateDirectoryW(dir.c_str(), nullptr);
     std::wstring path = dir + L"\\explorer-extras.log";
-    if (path.size() < MAX_PATH) {
-        wcscpy_s(g_outPath, path.c_str());
-        // Start each run with an empty file.
-        HANDLE file = CreateFileW(g_outPath, GENERIC_WRITE, FILE_SHARE_READ,
-                                  nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                                  nullptr);
-        if (file != INVALID_HANDLE_VALUE) {
-            CloseHandle(file);
+    if (path.size() >= MAX_PATH ||
+        GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return;
+    }
+    wcscpy_s(g_outPath, path.c_str());
+
+    // The log is kept across restarts, so the lines before a crash survive.
+    // Past 400 KB, only the last 200 KB are kept.
+    HANDLE file = CreateFileW(g_outPath, GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(file, &size) && size.QuadPart > 400 * 1024) {
+        const DWORD keep = 200 * 1024;
+        std::vector<char> tail(keep);
+        LARGE_INTEGER from;
+        from.QuadPart = size.QuadPart - keep;
+        DWORD read = 0;
+        if (SetFilePointerEx(file, from, nullptr, FILE_BEGIN) &&
+            ReadFile(file, tail.data(), keep, &read, nullptr)) {
+            SetFilePointer(file, 0, nullptr, FILE_BEGIN);
+            SetEndOfFile(file);
+            DWORD written = 0;
+            WriteFile(file, tail.data(), read, &written, nullptr);
         }
     }
+    CloseHandle(file);
 }
 
 void Out(const wchar_t* format, ...) {
@@ -167,8 +188,9 @@ void Out(const wchar_t* format, ...) {
     GetLocalTime(&now);
     wchar_t line[1300];
     int chars = _snwprintf_s(line, ARRAYSIZE(line), _TRUNCATE,
-                             L"%02d:%02d:%02d.%03d %s\r\n", now.wHour,
-                             now.wMinute, now.wSecond, now.wMilliseconds, text);
+                             L"%02d:%02d:%02d.%03d [%lu] %s\r\n", now.wHour,
+                             now.wMinute, now.wSecond, now.wMilliseconds,
+                             GetCurrentThreadId(), text);
     if (chars < 0) {
         chars = (int)wcslen(line);
     }
@@ -447,11 +469,16 @@ struct FolderResult {
 
 // The shell's column index for a property, or -1.
 int ColumnForKey(IShellFolder2* folder, const PROPERTYKEY& key) {
-    for (UINT i = 0; i < 80; i++) {
+    // Some folders leave gaps in their column numbers, so a failure doesn't
+    // end the search. Thirty failures in a row do.
+    int misses = 0;
+    for (UINT i = 0; i < 600 && misses < 30; i++) {
         SHCOLUMNID id{};
         if (FAILED(folder->MapColumnToSCID(i, &id))) {
-            break;
+            misses++;
+            continue;
         }
+        misses = 0;
         if (IsEqualPropertyKey(id, key)) {
             return (int)i;
         }
@@ -459,70 +486,19 @@ int ColumnForKey(IShellFolder2* folder, const PROPERTYKEY& key) {
     return -1;
 }
 
-// Splits the sorted entries into the shell's own groups for `spec.groupKey`.
-// Leaves the result ungrouped when the folder offers no categorizer.
-void GroupEntries(IShellFolder* folder, const SortSpec& spec,
-                  FolderResult* result) {
+// Rebuilds `result` so its entries are in group order. `ids` gives a group
+// id per entry, `order` the ids in display order, `names` a title per id in
+// `order`.
+void ApplyGroups(FolderResult* result, const std::vector<int>& ids,
+                 const std::vector<int>& order,
+                 const std::vector<std::wstring>& names) {
     size_t count = result->entries.size();
-    if (!spec.grouped || count == 0) {
-        return;
-    }
-    ICategoryProvider* provider = nullptr;
-    HRESULT hr = folder->CreateViewObject(nullptr, IID_PPV_ARGS(&provider));
-    if (FAILED(hr) || !provider) {
-        Out(L"group: no category provider, hr=0x%08lX", hr);
-        return;
-    }
-    GUID category{};
-    ICategorizer* categorizer = nullptr;
-    hr = provider->GetCategoryForSCID(&spec.groupKey, &category);
-    if (SUCCEEDED(hr)) {
-        hr = provider->CreateCategory(&category, IID_PPV_ARGS(&categorizer));
-    }
-    provider->Release();
-    if (FAILED(hr) || !categorizer) {
-        Out(L"group: no categorizer for this property, hr=0x%08lX", hr);
-        return;
-    }
-
-    std::vector<PCUITEMID_CHILD> children(count);
-    for (size_t i = 0; i < count; i++) {
-        children[i] = result->entries[i].child.get();
-    }
-    std::vector<DWORD> ids(count, 0);
-    hr = categorizer->GetCategory((UINT)count, children.data(), ids.data());
-    if (FAILED(hr)) {
-        Out(L"group: GetCategory failed, hr=0x%08lX", hr);
-        categorizer->Release();
-        return;
-    }
-
-    // Distinct group ids, in the shell's order.
-    std::vector<DWORD> order;
-    for (DWORD id : ids) {
-        if (std::find(order.begin(), order.end(), id) == order.end()) {
-            order.push_back(id);
-        }
-    }
-    bool ascending = spec.groupAscending;
-    std::stable_sort(order.begin(), order.end(),
-                     [categorizer, ascending](DWORD a, DWORD b) {
-                         HRESULT cmp = categorizer->CompareCategory(
-                             CATSORT_DEFAULT, a, b);
-                         short value = (short)HRESULT_CODE(cmp);
-                         return ascending ? value < 0 : value > 0;
-                     });
-
-    // Entries regrouped, keeping their sorted order inside each group.
     std::vector<Entry> regrouped;
     regrouped.reserve(count);
+    result->groupOf.clear();
+    result->groupNames.clear();
     for (size_t g = 0; g < order.size(); g++) {
-        CATEGORY_INFO info{};
-        std::wstring name;
-        if (SUCCEEDED(categorizer->GetCategoryInfo(order[g], &info))) {
-            name = info.wszName;
-        }
-        result->groupNames.push_back(name);
+        result->groupNames.push_back(names[g]);
         for (size_t i = 0; i < count; i++) {
             if (ids[i] == order[g]) {
                 regrouped.push_back(std::move(result->entries[i]));
@@ -531,7 +507,291 @@ void GroupEntries(IShellFolder* folder, const SortSpec& spec,
         }
     }
     result->entries = std::move(regrouped);
+}
+
+LONGLONG LocalDayNumber(const SYSTEMTIME& local) {
+    FILETIME ft{};
+    SystemTimeToFileTime(&local, &ft);
+    ULARGE_INTEGER value;
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+    return (LONGLONG)(value.QuadPart / 864000000000ULL);
+}
+
+// A date bucket like Explorer's, 0 for the most recent. English for now.
+int DateBucket(const SYSTEMTIME& itemLocal, const SYSTEMTIME& nowLocal) {
+    LONGLONG age = LocalDayNumber(nowLocal) - LocalDayNumber(itemLocal);
+    int sinceMonday = (nowLocal.wDayOfWeek + 6) % 7;
+    if (age <= 0) return 0;
+    if (age == 1) return 1;
+    if (age <= sinceMonday) return 2;
+    if (age <= sinceMonday + 7) return 3;
+    if (itemLocal.wYear == nowLocal.wYear &&
+        itemLocal.wMonth == nowLocal.wMonth) return 4;
+    int monthsApart = (nowLocal.wYear - itemLocal.wYear) * 12 +
+                      (nowLocal.wMonth - itemLocal.wMonth);
+    if (monthsApart == 1) return 5;
+    if (itemLocal.wYear == nowLocal.wYear) return 6;
+    return 7;
+}
+
+const wchar_t* const kDateBuckets[] = {
+    L"Today",        L"Yesterday",  L"Earlier this week",
+    L"Last week",    L"Earlier this month", L"Last month",
+    L"Earlier this year", L"A long time ago", L"Unspecified",
+};
+
+const wchar_t* const kSizeBuckets[] = {
+    L"Unspecified", L"Empty (0 KB)",   L"Tiny (0 - 16 KB)",
+    L"Small (16 KB - 1 MB)", L"Medium (1 - 128 MB)",
+    L"Large (128 MB - 1 GB)", L"Huge (1 - 4 GB)", L"Gigantic (> 4 GB)",
+};
+
+int SizeBucket(ULONGLONG size) {
+    if (size == 0) return 1;
+    if (size < 16ULL * 1024) return 2;
+    if (size < 1024ULL * 1024) return 3;
+    if (size < 128ULL * 1024 * 1024) return 4;
+    if (size < 1024ULL * 1024 * 1024) return 5;
+    if (size < 4ULL * 1024 * 1024 * 1024) return 6;
+    return 7;
+}
+
+// Groups by the property's own value when the shell offers no categorizer.
+// Dates and sizes get ranges, names their first letter, everything else the
+// text Explorer shows in that column.
+void GroupFallback(IShellFolder* folder, const SortSpec& spec,
+                   FolderResult* result) {
+    IShellFolder2* folder2 = nullptr;
+    folder->QueryInterface(IID_PPV_ARGS(&folder2));
+    if (!folder2) {
+        Out(L"group fallback: no IShellFolder2");
+        return;
+    }
+    size_t count = result->entries.size();
+    const PROPERTYKEY& key = spec.groupKey;
+    bool isDate = IsEqualPropertyKey(key, PKEY_DateModified) ||
+                  IsEqualPropertyKey(key, PKEY_DateCreated) ||
+                  IsEqualPropertyKey(key, PKEY_DateAccessed) ||
+                  IsEqualPropertyKey(key, PKEY_ItemDate);
+    bool isSize = IsEqualPropertyKey(key, PKEY_Size);
+    bool isName = IsEqualPropertyKey(key, PKEY_ItemNameDisplay);
+    int column = ColumnForKey(folder2, key);
+
+    std::vector<int> ids(count, 0);
+    std::vector<std::wstring> texts;  // Group titles, indexed by id.
+    SYSTEMTIME nowLocal{};
+    GetLocalTime(&nowLocal);
+    int firstType = -1;
+
+    // Read each item's value for the property. Its type decides the grouping:
+    // a date gets ranges, a size gets ranges, text groups by itself.
+    std::vector<VARIANT> values(count);
+    for (size_t i = 0; i < count; i++) {
+        VariantInit(&values[i]);
+        HRESULT hr = folder2->GetDetailsEx(result->entries[i].child.get(), &key,
+                                           &values[i]);
+        if (FAILED(hr)) {
+            VariantInit(&values[i]);
+        }
+        if (firstType < 0 && values[i].vt != VT_EMPTY) {
+            firstType = values[i].vt;
+            if (values[i].vt == VT_DATE) {
+                isDate = true;
+            }
+        }
+    }
+    if (isDate) {
+        texts.assign(std::begin(kDateBuckets), std::end(kDateBuckets));
+    } else if (isSize) {
+        texts.assign(std::begin(kSizeBuckets), std::end(kSizeBuckets));
+    }
+    for (size_t i = 0; i < count; i++) {
+        VARIANT& value = values[i];
+        if (isDate) {
+            ids[i] = 8;
+            SYSTEMTIME utc{}, local{};
+            if (value.vt == VT_DATE &&
+                VariantTimeToSystemTime(value.date, &utc) &&
+                SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) {
+                ids[i] = DateBucket(local, nowLocal);
+            }
+            continue;
+        }
+        if (isSize) {
+            ids[i] = 0;
+            if (!result->entries[i].folder) {
+                if (value.vt == VT_UI8) {
+                    ids[i] = SizeBucket(value.ullVal);
+                } else if (value.vt == VT_I8) {
+                    ids[i] = SizeBucket((ULONGLONG)value.llVal);
+                } else if (value.vt == VT_UI4) {
+                    ids[i] = SizeBucket(value.ulVal);
+                }
+            }
+            continue;
+        }
+        std::wstring text;
+        if (isName) {
+            const std::wstring& name = result->entries[i].name;
+            if (!name.empty()) {
+                wchar_t first = name[0];
+                CharUpperBuffW(&first, 1);
+                text = (first >= L'0' && first <= L'9') ? L"0 - 9"
+                                                         : std::wstring(1, first);
+            }
+        } else if (value.vt == VT_BSTR && value.bstrVal) {
+            text = value.bstrVal;
+        } else if (value.vt != VT_EMPTY && value.vt != VT_NULL) {
+            // Numbers and the like: let OLE turn them into text.
+            VARIANT asText;
+            VariantInit(&asText);
+            if (SUCCEEDED(VariantChangeType(&asText, &value, 0, VT_BSTR)) &&
+                asText.bstrVal) {
+                text = asText.bstrVal;
+            }
+            VariantClear(&asText);
+        }
+        if (text.empty() && column >= 0) {
+            SHELLDETAILS details{};
+            wchar_t buffer[MAX_PATH] = L"";
+            PCUITEMID_CHILD child = result->entries[i].child.get();
+            if (SUCCEEDED(folder2->GetDetailsOf(child, (UINT)column,
+                                                &details)) &&
+                SUCCEEDED(StrRetToBufW(&details.str, child, buffer,
+                                       MAX_PATH))) {
+                text = buffer;
+            }
+        }
+        if (text.empty()) {
+            text = L"Unspecified";
+        }
+        auto found = std::find(texts.begin(), texts.end(), text);
+        if (found == texts.end()) {
+            texts.push_back(text);
+            ids[i] = (int)texts.size() - 1;
+        } else {
+            ids[i] = (int)(found - texts.begin());
+        }
+    }
+    for (auto& value : values) {
+        VariantClear(&value);
+    }
+    Out(L"group fallback: key pid=%lu, first value type=%d", key.pid, firstType);
+    folder2->Release();
+
+    // The groups that occur, in display order.
+    std::vector<int> order;
+    for (int id : ids) {
+        if (std::find(order.begin(), order.end(), id) == order.end()) {
+            order.push_back(id);
+        }
+    }
+    bool ascending = spec.groupAscending;
+    if (isDate) {
+        // Bucket 0 is the most recent, so ascending dates run from 7 to 0.
+        std::sort(order.begin(), order.end(), [ascending](int a, int b) {
+            return ascending ? a > b : a < b;
+        });
+    } else if (isSize) {
+        std::sort(order.begin(), order.end(), [ascending](int a, int b) {
+            return ascending ? a < b : a > b;
+        });
+    } else {
+        std::sort(order.begin(), order.end(),
+                  [ascending, &texts](int a, int b) {
+                      int cmp = StrCmpLogicalW(texts[a].c_str(),
+                                               texts[b].c_str());
+                      return ascending ? cmp < 0 : cmp > 0;
+                  });
+    }
+    std::vector<std::wstring> names;
+    for (int id : order) {
+        names.push_back(id >= 0 && id < (int)texts.size() ? texts[id] : L"");
+    }
+    ApplyGroups(result, ids, order, names);
+    Out(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
+        (int)order.size(), isDate ? 1 : 0, isSize ? 1 : 0, isName ? 1 : 0,
+        column);
+}
+
+// Splits the sorted entries into groups for `spec.groupKey`: the shell's own
+// categorizer when the folder offers one, the fallback above otherwise.
+void GroupEntries(IShellFolder* folder, const SortSpec& spec,
+                  FolderResult* result) {
+    size_t count = result->entries.size();
+    if (!spec.grouped || count == 0) {
+        return;
+    }
+    ICategorizer* categorizer = nullptr;
+    ICategoryProvider* provider = nullptr;
+    HRESULT hr = folder->CreateViewObject(nullptr, IID_PPV_ARGS(&provider));
+    if (SUCCEEDED(hr) && provider) {
+        GUID category{};
+        HRESULT can = provider->CanCategorizeOnSCID(&spec.groupKey);
+        HRESULT forScid = provider->GetCategoryForSCID(&spec.groupKey, &category);
+        HRESULT create = E_FAIL;
+        if (SUCCEEDED(forScid)) {
+            create = provider->CreateCategory(&category,
+                                              IID_PPV_ARGS(&categorizer));
+        }
+        static std::atomic<int> logged{0};
+        if (logged++ < 6) {
+            Out(L"group: key pid=%lu, CanCategorizeOnSCID=0x%08lX GetCategoryForSCID=0x%08lX CreateCategory=0x%08lX",
+                spec.groupKey.pid, can, forScid, create);
+        }
+        provider->Release();
+    } else {
+        Out(L"group: no category provider, hr=0x%08lX", hr);
+    }
+    if (!categorizer) {
+        GroupFallback(folder, spec, result);
+        return;
+    }
+
+    std::vector<PCUITEMID_CHILD> children(count);
+    for (size_t i = 0; i < count; i++) {
+        children[i] = result->entries[i].child.get();
+    }
+    std::vector<DWORD> raw(count, 0);
+    hr = categorizer->GetCategory((UINT)count, children.data(), raw.data());
+    if (FAILED(hr)) {
+        Out(L"group: GetCategory failed, hr=0x%08lX", hr);
+        categorizer->Release();
+        GroupFallback(folder, spec, result);
+        return;
+    }
+    std::vector<DWORD> distinct;
+    for (DWORD id : raw) {
+        if (std::find(distinct.begin(), distinct.end(), id) == distinct.end()) {
+            distinct.push_back(id);
+        }
+    }
+    bool ascending = spec.groupAscending;
+    std::stable_sort(distinct.begin(), distinct.end(),
+                     [categorizer, ascending](DWORD a, DWORD b) {
+                         HRESULT cmp = categorizer->CompareCategory(
+                             CATSORT_DEFAULT, a, b);
+                         short value = (short)HRESULT_CODE(cmp);
+                         return ascending ? value < 0 : value > 0;
+                     });
+    std::vector<int> ids(count), order;
+    std::vector<std::wstring> names;
+    for (size_t g = 0; g < distinct.size(); g++) {
+        CATEGORY_INFO info{};
+        names.push_back(SUCCEEDED(categorizer->GetCategoryInfo(distinct[g],
+                                                               &info))
+                            ? info.wszName
+                            : L"");
+        order.push_back((int)g);
+        for (size_t i = 0; i < count; i++) {
+            if (raw[i] == distinct[g]) {
+                ids[i] = (int)g;
+            }
+        }
+    }
     categorizer->Release();
+    ApplyGroups(result, ids, order, names);
 }
 
 // Reads a folder, sorted and grouped as `spec` says. Runs on the worker
@@ -585,7 +845,18 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
     folder->QueryInterface(IID_PPV_ARGS(&folder2));
     if (folder2) {
         for (auto& sortColumn : spec.columns) {
+            // With grouping on, Explorer lists the group's property as a sort
+            // column too. Inside a group the other columns decide the order.
+            if (spec.grouped && spec.columns.size() > 1 &&
+                IsEqualPropertyKey(sortColumn.propkey, spec.groupKey)) {
+                continue;
+            }
             int column = ColumnForKey(folder2, sortColumn.propkey);
+            static std::atomic<int> logged{0};
+            if (logged++ < 8) {
+                Out(L"sort: key pid=%lu maps to column %d, direction %d",
+                    sortColumn.propkey.pid, column, (int)sortColumn.direction);
+            }
             if (column >= 0) {
                 keys.push_back({column, sortColumn.direction < 0 ? -1 : 1});
             }
@@ -648,6 +919,78 @@ std::wstring MiddleEllipsis(const std::wstring& name, size_t maxChars) {
            name.substr(name.size() - tail);
 }
 
+// ---- Change notifications: a hidden window per Explorer window receives
+// the shell's "this folder changed" messages for every open column. ----
+
+const UINT kNotifyMessage = WM_APP + 71;
+const wchar_t kNotifyClass[] = L"ExplorerExtrasNotify";
+std::atomic<bool> g_notifyClassRegistered{false};
+
+LRESULT CALLBACK NotifyProc(HWND hwnd, UINT message, WPARAM wParam,
+                            LPARAM lParam) {
+    if (message == kNotifyMessage) {
+        // The window's user data points at the time the columns should be
+        // read again. Several changes in a row push it back.
+        PIDLIST_ABSOLUTE* pidls = nullptr;
+        LONG event = 0;
+        bool ownLog = false;
+        HANDLE lock = SHChangeNotification_Lock((HANDLE)wParam, (DWORD)lParam,
+                                                &pidls, &event);
+        if (lock) {
+            // The mod's own log file changes each time the mod logs. Reacting
+            // to it would reload, log, and reload again without end.
+            wchar_t path[MAX_PATH] = L"";
+            if (pidls && pidls[0] && SHGetPathFromIDListW(pidls[0], path) &&
+                g_outPath[0] && lstrcmpiW(path, g_outPath) == 0) {
+                ownLog = true;
+            }
+            SHChangeNotification_Unlock(lock);
+        }
+        auto* due = (ULONGLONG*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        if (due && !ownLog) {
+            *due = GetTickCount64() + 300;
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+HWND CreateNotifyWindow(ULONGLONG* due) {
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    if (!g_notifyClassRegistered.exchange(true)) {
+        WNDCLASSW windowClass = {};
+        windowClass.lpfnWndProc = NotifyProc;
+        windowClass.hInstance = instance;
+        windowClass.lpszClassName = kNotifyClass;
+        RegisterClassW(&windowClass);
+    }
+    HWND hwnd = CreateWindowExW(0, kNotifyClass, L"", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, nullptr, instance, nullptr);
+    if (hwnd) {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)due);
+    }
+    return hwnd;
+}
+
+void UnregisterNotifyClass() {
+    if (g_notifyClassRegistered.exchange(false)) {
+        UnregisterClassW(kNotifyClass, GetModuleHandleW(nullptr));
+    }
+}
+
+ULONG WatchFolder(HWND notifyWindow, PCIDLIST_ABSOLUTE folder) {
+    if (!notifyWindow) {
+        return 0;
+    }
+    SHChangeNotifyEntry entry = {folder, FALSE};
+    return SHChangeNotifyRegister(
+        notifyWindow,
+        SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery,
+        SHCNE_CREATE | SHCNE_DELETE | SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER |
+            SHCNE_MKDIR | SHCNE_RMDIR | SHCNE_UPDATEDIR,
+        kNotifyMessage, 1, &entry);
+}
+
 std::wstring PathOf(PCIDLIST_ABSOLUTE pidl) {
     PWSTR name = nullptr;
     std::wstring result;
@@ -702,11 +1045,17 @@ struct Column {
     muxc::Border grip{nullptr};
     winrt::event_token selectionToken{};
     winrt::event_token doubleTapToken{};
+    winrt::event_token keyToken{};
     winrt::event_token gripPressedToken{};
     winrt::event_token gripMovedToken{};
     winrt::event_token gripReleasedToken{};
     winrt::event_token gripLostToken{};
     winrt::event_token gripDoubleToken{};
+    winrt::event_token gripEnteredToken{};
+    winrt::event_token gripExitedToken{};
+    muxc::Border pill{nullptr};
+    ULONGLONG hoverSince = 0;
+    ULONG notifyId = 0;
 };
 
 struct SiblingHook {
@@ -753,6 +1102,16 @@ struct WindowState {
     Pidl selectFolder;  // A file to select in Explorer's view,
     Pidl selectChild;   // once it shows that folder.
     int selectTries = 0;
+
+    // Change notifications and live settings.
+    HWND notifyWindow = nullptr;
+    ULONGLONG reloadDue = 0;
+    ULONGLONG lastReload = 0;
+    bool shownHidden = false;
+    bool shownCompact = false;
+
+    // The column Explorer's own view is in.
+    int active = -1;
 
     // Column edge being dragged.
     int dragColumn = -1;
@@ -914,6 +1273,7 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
             if (column->list) {
                 column->list.SelectionChanged(column->selectionToken);
                 column->list.DoubleTapped(column->doubleTapToken);
+                column->list.PreviewKeyDown(column->keyToken);
             }
             if (column->grip) {
                 column->grip.PointerPressed(column->gripPressedToken);
@@ -921,6 +1281,12 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->grip.PointerReleased(column->gripReleasedToken);
                 column->grip.PointerCaptureLost(column->gripLostToken);
                 column->grip.DoubleTapped(column->gripDoubleToken);
+                column->grip.PointerEntered(column->gripEnteredToken);
+                column->grip.PointerExited(column->gripExitedToken);
+            }
+            if (column->notifyId) {
+                SHChangeNotifyDeregister(column->notifyId);
+                column->notifyId = 0;
             }
             uint32_t count = state->strip.Children().Size();
             if (count > 0) {
@@ -933,6 +1299,22 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
     }
     if (state->dragColumn >= (int)state->columns.size()) {
         state->dragColumn = -1;
+    }
+    if (state->active >= (int)state->columns.size()) {
+        state->active = (int)state->columns.size() - 1;
+    }
+}
+
+// Marks the column Explorer's own view is in with a light tint.
+void SetActiveColumn(WindowState* state, int index) {
+    state->active = index;
+    for (size_t i = 0; i < state->columns.size(); i++) {
+        try {
+            state->columns[i]->list.Background(
+                (int)i == index ? Brush(22, 128, 128, 128)
+                                : Brush(0, 0, 0, 0));
+        } catch (...) {
+        }
     }
 }
 
@@ -1154,12 +1536,15 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
 
 void OnRowSelected(muxc::ListView const& list);
 void OnRowDoubleTapped(muxc::ListView const& list);
+void OnColumnKey(muxc::ListView const& list,
+                 mux::Input::KeyRoutedEventArgs const& args);
 
 // Adds an empty column for `folder` at the right end and asks the worker to
 // read it. Takes ownership of `folder`.
-void AddColumn(WindowState* state, Pidl folder) {
+void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
     auto column = std::make_unique<Column>();
     column->folder = std::move(folder);
+    column->notifyId = WatchFolder(state->notifyWindow, column->folder.get());
 
     muxc::ListView list;
     list.Width(g_minWidth);
@@ -1180,15 +1565,67 @@ void AddColumn(WindowState* state, Pidl folder) {
             }
         });
 
+    column->keyToken = list.PreviewKeyDown(
+        [](Inspectable const& sender,
+           mux::Input::KeyRoutedEventArgs const& args) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnColumnKey(list, args);
+            }
+        });
+
     // The column's right edge: a separator line that can be dragged.
     muxc::Border line;
     line.Width(1);
     line.Background(Brush(48, 128, 128, 128));
     line.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    // A short rounded handle, shown only while the pointer is on the edge.
+    muxc::Border pill;
+    pill.Width(3);
+    pill.Height(28);
+    pill.CornerRadius(mux::CornerRadius{1.5, 1.5, 1.5, 1.5});
+    pill.Background(Brush(200, 150, 150, 150));
+    pill.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    pill.VerticalAlignment(mux::VerticalAlignment::Center);
+    pill.Opacity(0);
+    muxc::Grid gripContent;
+    gripContent.Children().Append(line);
+    gripContent.Children().Append(pill);
     muxc::Border grip;
-    grip.Width(7);
+    grip.Width(9);
     grip.Background(Brush(0, 0, 0, 0));
-    grip.Child(line);
+    grip.Child(gripContent);
+    column->pill = pill;
+    try {
+        // The left-right resize cursor. The property is protected in XAML,
+        // and reachable through its interface from C++/WinRT.
+        grip.as<mux::IUIElementProtected>().ProtectedCursor(
+            winrt::Microsoft::UI::Input::InputSystemCursor::Create(
+                winrt::Microsoft::UI::Input::InputSystemCursorShape::
+                    SizeWestEast));
+    } catch (...) {
+        LogHresult(L"setting the resize cursor");
+    }
+    column->gripEnteredToken = grip.PointerEntered(
+        [](Inspectable const& sender,
+           mux::Input::PointerRoutedEventArgs const&) {
+            WindowState* state = StateForThisThread(false);
+            int index = state ? ColumnIndexOfGrip(state, sender) : -1;
+            if (index >= 0) {
+                state->columns[index]->hoverSince = GetTickCount64();
+            }
+        });
+    column->gripExitedToken = grip.PointerExited(
+        [](Inspectable const& sender,
+           mux::Input::PointerRoutedEventArgs const&) {
+            WindowState* state = StateForThisThread(false);
+            int index = state ? ColumnIndexOfGrip(state, sender) : -1;
+            if (index >= 0) {
+                state->columns[index]->hoverSince = 0;
+                if (state->columns[index]->pill && state->dragColumn != index) {
+                    state->columns[index]->pill.Opacity(0);
+                }
+            }
+        });
     column->gripPressedToken = grip.PointerPressed(
         [](Inspectable const& sender,
            mux::Input::PointerRoutedEventArgs const& args) {
@@ -1226,11 +1663,11 @@ void AddColumn(WindowState* state, Pidl folder) {
                 }
                 double x = args.GetCurrentPoint(state->strip).Position().X;
                 double width = state->dragStartWidth + (x - state->dragStartX);
-                if (width < 80) {
-                    width = 80;
+                if (width < g_minWidth) {
+                    width = g_minWidth;
                 }
-                if (width > 1200) {
-                    width = 1200;
+                if (width > g_maxWidth) {
+                    width = g_maxWidth;
                 }
                 Column* column = state->columns[index].get();
                 column->userSized = true;
@@ -1252,6 +1689,9 @@ void AddColumn(WindowState* state, Pidl folder) {
                 element.ReleasePointerCapture(args.Pointer());
             }
             if (index < (int)state->columns.size()) {
+                if (state->columns[index]->pill) {
+                    state->columns[index]->pill.Opacity(0);
+                }
                 RefreshNames(state->columns[index].get());
                 Out(L"column %d resized to %d", index + 1,
                     (int)state->columns[index]->list.Width());
@@ -1293,10 +1733,40 @@ void AddColumn(WindowState* state, Pidl folder) {
     column->list = list;
     column->grip = grip;
     column->cell = cell;
-    state->strip.Children().Append(cell);
     Column* raw = column.get();
-    state->columns.push_back(std::move(column));
+    if (atFront) {
+        state->strip.Children().InsertAt(0, cell);
+        state->columns.insert(state->columns.begin(), std::move(column));
+        if (state->active >= 0) {
+            state->active++;
+        }
+    } else {
+        state->strip.Children().Append(cell);
+        state->columns.push_back(std::move(column));
+    }
     RequestLoad(state, raw);
+}
+
+// Selects `child` in a column without treating it as a click. Works whether
+// the column has loaded or not.
+void SelectChildInColumn(WindowState* state, Column* column,
+                         PCUITEMID_CHILD child) {
+    column->selectedChild.reset(ILClone(child));
+    int row = -1;
+    for (size_t r = 0; r < column->rowToEntry.size(); r++) {
+        int entry = column->rowToEntry[r];
+        if (entry >= 0 &&
+            ILIsEqual(column->entries[entry].child.get(), child)) {
+            row = (int)r;
+            break;
+        }
+    }
+    if (row >= 0) {
+        bool wasBuilding = state->building;
+        state->building = true;
+        column->list.SelectedIndex(row);
+        state->building = wasBuilding;
+    }
 }
 
 // Reads every column again, after the sort or group settings changed.
@@ -1391,7 +1861,11 @@ void OnRowSelected(muxc::ListView const& list) {
         if (entry.folder) {
             ScheduleNavigation(state, absolute.get());
             AddColumn(state, std::move(absolute));
+            // The highlight stays here. It moves to the new column when the
+            // user enters it.
+            SetActiveColumn(state, columnIndex);
         } else {
+            SetActiveColumn(state, columnIndex);
             // A file: Explorer shows the file's folder with the file selected.
             state->selectFolder.reset(ILClone(column->folder.get()));
             state->selectChild.reset(ILClone(entry.child.get()));
@@ -1432,6 +1906,62 @@ void OnRowDoubleTapped(muxc::ListView const& list) {
     }
 }
 
+// Right or Enter on a folder enters its column, Left goes back to the parent
+// column, Enter on a file opens it.
+void OnColumnKey(muxc::ListView const& list,
+                 mux::Input::KeyRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        int index = ColumnIndexOfList(state, list);
+        if (index < 0) {
+            return;
+        }
+        auto key = args.Key();
+        using winrt::Windows::System::VirtualKey;
+        Column* column = state->columns[index].get();
+        int row = list.SelectedIndex();
+        int entry = row >= 0 && row < (int)column->rowToEntry.size()
+                        ? column->rowToEntry[row]
+                        : -1;
+        bool onFolder = entry >= 0 && column->entries[entry].folder;
+
+        if (key == VirtualKey::Left) {
+            if (index > 0) {
+                SetActiveColumn(state, index - 1);
+                state->columns[index - 1]->list.Focus(mux::FocusState::Keyboard);
+                args.Handled(true);
+            }
+            return;
+        }
+        if (key == VirtualKey::Enter && entry >= 0 && !onFolder) {
+            OnRowDoubleTapped(list);
+            args.Handled(true);
+            return;
+        }
+        if ((key == VirtualKey::Right || key == VirtualKey::Enter) && onFolder &&
+            index + 1 < (int)state->columns.size()) {
+            Column* child = state->columns[index + 1].get();
+            if (child->list.SelectedIndex() < 0) {
+                // Land on the first real row, past any group header.
+                for (size_t r = 0; r < child->rowToEntry.size(); r++) {
+                    if (child->rowToEntry[r] >= 0) {
+                        child->list.SelectedIndex((int)r);
+                        break;
+                    }
+                }
+            }
+            SetActiveColumn(state, index + 1);
+            child->list.Focus(mux::FocusState::Keyboard);
+            args.Handled(true);
+        }
+    } catch (...) {
+        LogHresult(L"OnColumnKey");
+    }
+}
+
 void HidePanel(WindowState* state, const wchar_t* why) {
     if (!state->source) {
         state->on = false;
@@ -1462,14 +1992,148 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     state->pendingNav.reset();
     state->selectFolder.reset();
     state->selectChild.reset();
+    if (state->notifyWindow) {
+        DestroyWindow(state->notifyWindow);
+        state->notifyWindow = nullptr;
+    }
+    state->reloadDue = 0;
+    state->active = -1;
     state->lastFileList = nullptr;
     state->specCheckAt = 0;
     state->dragColumn = -1;
     state->lastRect = {};
 }
 
-// What Explorer's own view shows changed. Decide whether this mod asked for
-// it, the user went back into a folder that is a column, or went elsewhere.
+// The Explorer window was closed while its panel was showing. Windows has
+// already destroyed the panel's window along with it, and closing or
+// releasing the panel's XAML objects at that point crashes Explorer. So they
+// are let go without being released: a small leak, once per closed window.
+void AbandonWindow(WindowState* state) {
+    Out(L"window closed with the panel on, letting its objects go");
+    state->on = false;
+    try {
+        if (state->timer) {
+            state->timer.Stop();
+            state->timer.Tick(state->tickToken);
+        }
+    } catch (...) {
+    }
+    for (auto& column : state->columns) {
+        if (column->notifyId) {
+            SHChangeNotifyDeregister(column->notifyId);
+            column->notifyId = 0;
+        }
+        column.release();  // Never destroyed, on purpose.
+    }
+    state->columns.clear();
+    if (state->notifyWindow) {
+        DestroyWindow(state->notifyWindow);
+        state->notifyWindow = nullptr;
+    }
+    for (auto& sibling : state->siblings) {
+        (void)winrt::detach_abi(sibling.item);
+    }
+    state->siblings.clear();
+    (void)winrt::detach_abi(state->timer);
+    (void)winrt::detach_abi(state->source);
+    (void)winrt::detach_abi(state->bridge);
+    (void)winrt::detach_abi(state->scroller);
+    (void)winrt::detach_abi(state->strip);
+    (void)winrt::detach_abi(state->menuItem);
+    (void)winrt::detach_abi(state->menuItems);
+    state->topLevel = nullptr;
+    state->lastSeen.reset();
+    state->expected.reset();
+    state->pendingNav.reset();
+    state->selectFolder.reset();
+    state->selectChild.reset();
+    state->lastFileList = nullptr;
+    state->reloadDue = 0;
+    state->specCheckAt = 0;
+    state->active = -1;
+    state->dragColumn = -1;
+    state->lastRect = {};
+}
+
+// Explorer's own view moved to `current` without this mod asking. Keep the
+// columns showing the path from the first column down to that folder.
+void SyncToFolder(WindowState* state, Pidl const& current) {
+    state->pendingNav.reset();
+    state->selectFolder.reset();
+    state->selectChild.reset();
+
+    // Already a column: only the active column moves.
+    for (size_t i = 0; i < state->columns.size(); i++) {
+        if (ILIsEqual(current.get(), state->columns[i]->folder.get())) {
+            Out(L"Explorer moved to column %d", (int)i + 1);
+            SetActiveColumn(state, (int)i);
+            return;
+        }
+    }
+    if (!state->columns.empty()) {
+        PCIDLIST_ABSOLUTE root = state->columns[0]->folder.get();
+
+        // Below the first column: open the chain of columns down to it.
+        if (ILIsParent(root, current.get(), FALSE)) {
+            int deepest = 0;
+            for (int i = (int)state->columns.size() - 1; i >= 0; i--) {
+                if (ILIsParent(state->columns[i]->folder.get(), current.get(),
+                               FALSE)) {
+                    deepest = i;
+                    break;
+                }
+            }
+            state->building = true;
+            RemoveColumnsFrom(state, deepest + 1);
+            state->building = false;
+            PCUIDLIST_RELATIVE rest =
+                ILFindChild((PIDLIST_ABSOLUTE)state->columns[deepest]->folder.get(),
+                            (PIDLIST_ABSOLUTE)current.get());
+            Pidl walk(ILClone(state->columns[deepest]->folder.get()));
+            int parent = deepest;
+            while (rest && !ILIsEmpty(rest) && state->columns.size() < 40) {
+                Pidl step(ILCloneFirst(rest));
+                if (!step) {
+                    break;
+                }
+                SelectChildInColumn(state, state->columns[parent].get(),
+                                    step.get());
+                Pidl next(ILCombine(walk.get(), step.get()));
+                if (!next) {
+                    break;
+                }
+                walk.reset(ILClone(next.get()));
+                AddColumn(state, std::move(next));
+                parent++;
+                rest = ILGetNext(rest);
+            }
+            Out(L"Explorer moved below the first column, %d columns now",
+                (int)state->columns.size());
+            SetActiveColumn(state, (int)state->columns.size() - 1);
+            return;
+        }
+
+        // The parent of the first column, which is what Up does: add it in
+        // front, with the old first column selected in it.
+        if (ILIsParent(current.get(), root, TRUE)) {
+            Pidl childId(ILClone(ILFindLastID(root)));
+            AddColumn(state, Pidl(ILClone(current.get())), true);
+            state->columns[0]->selectedChild = std::move(childId);
+            Out(L"Explorer moved up, parent added as first column");
+            SetActiveColumn(state, 0);
+            try {
+                state->scroller.ChangeView(0.0, nullptr, nullptr);
+            } catch (...) {
+            }
+            return;
+        }
+    }
+    Out(L"Explorer navigated elsewhere, rebuilding");
+    RebuildFromExplorer(state);
+    SetActiveColumn(state, 0);
+}
+
+// What Explorer's own view shows changed.
 void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
     state->lastSeen.reset(ILClone(current.get()));
     if (state->expected && ILIsEqual(current.get(), state->expected.get())) {
@@ -1477,30 +2141,16 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
         return;
     }
     state->expected.reset();
-    for (size_t i = 0; i < state->columns.size(); i++) {
-        if (ILIsEqual(current.get(), state->columns[i]->folder.get())) {
-            if (i + 1 < state->columns.size() ||
-                state->columns[i]->selectedChild) {
-                Out(L"Explorer moved to column %d's folder", (int)i + 1);
-                state->building = true;
-                RemoveColumnsFrom(state, i + 1);
-                state->columns[i]->selectedChild.reset();
-                state->columns[i]->list.SelectedIndex(-1);
-                state->building = false;
-                state->pendingNav.reset();
-                state->selectFolder.reset();
-                state->selectChild.reset();
-            }
-            return;
-        }
-    }
-    Out(L"Explorer navigated elsewhere, rebuilding");
-    RebuildFromExplorer(state);
+    SyncToFolder(state, current);
 }
 
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
+        return;
+    }
+    if (!IsWindow(state->topLevel)) {
+        AbandonWindow(state);
         return;
     }
     if (g_unloading || !g_enabled) {
@@ -1509,7 +2159,7 @@ void OnTick() {
     }
     try {
         if (!IsWindow(state->topLevel)) {
-            HidePanel(state, L"window closed");
+            AbandonWindow(state);
             return;
         }
         state->ticks++;
@@ -1532,9 +2182,38 @@ void OnTick() {
             NavigateExplorer(state, target.get());
         }
 
-        // The Sort menu was used. Take its new settings if they changed.
+        // A watched folder changed on disk: read the columns again.
+        // At most one reload every two seconds, however busy the folder is.
+        if (state->reloadDue && now >= state->reloadDue &&
+            now - state->lastReload >= 2000) {
+            state->reloadDue = 0;
+            state->lastReload = now;
+            Out(L"a column's folder changed, reloading");
+            ReloadAll(state);
+        }
+
+        // The resize handle appears once the pointer has rested on an edge.
+        for (auto& column : state->columns) {
+            if (column->hoverSince && now - column->hoverSince >= 350 &&
+                column->pill) {
+                column->pill.Opacity(1);
+                column->hoverSince = 0;
+            }
+        }
+
+        // A menu command ran. Take new sort, group, hidden-files or compact
+        // settings if any of them changed.
         if (state->specCheckAt && now >= state->specCheckAt) {
             state->specCheckAt = 0;
+            bool hidden = ShowHiddenFiles(), compact = IsCompactMode();
+            if (hidden != state->shownHidden ||
+                compact != state->shownCompact) {
+                Out(L"Explorer setting changed: hidden=%d compact=%d",
+                    hidden ? 1 : 0, compact ? 1 : 0);
+                state->shownHidden = hidden;
+                state->shownCompact = compact;
+                ReloadAll(state);
+            }
             IShellBrowser* browser = BrowserOf(state->topLevel);
             SortSpec after;
             if (browser && ReadSortSpec(browser, &after) &&
@@ -1564,6 +2243,8 @@ void OnTick() {
         if (!current) {
             return;
         }
+        bool listReplaced =
+            state->lastFileList && fileList != state->lastFileList;
         state->lastFileList = fileList;
         if (!state->lastSeen ||
             !ILIsEqual(current.get(), state->lastSeen.get())) {
@@ -1571,6 +2252,10 @@ void OnTick() {
             if (!state->on) {
                 return;
             }
+        } else if (listReplaced && !state->expected) {
+            // Same folder, new file list window: taken as a Refresh.
+            Out(L"file list replaced in the same folder, reloading");
+            ReloadAll(state);
         }
 
         // Mirror the selected file into Explorer's own view. The view fills
@@ -1615,6 +2300,17 @@ void ShowPanel(WindowState* state) {
             state->spec.columns.empty() ? 0
                                         : (int)state->spec.columns[0].direction,
             state->spec.grouped ? 1 : 0);
+
+        state->shownHidden = ShowHiddenFiles();
+        state->shownCompact = IsCompactMode();
+        Out(L"Explorer settings read: hidden=%d compact=%d, raw UseCompactMode=%lu",
+            state->shownHidden ? 1 : 0, state->shownCompact ? 1 : 0,
+            ReadExplorerDword(
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                L"UseCompactMode", 99));
+        if (!state->notifyWindow) {
+            state->notifyWindow = CreateNotifyWindow(&state->reloadDue);
+        }
 
         step = L"building the content";
         muxc::StackPanel strip;
@@ -1661,6 +2357,7 @@ void ShowPanel(WindowState* state) {
 
         step = L"reading the folder";
         RebuildFromExplorer(state);
+        SetActiveColumn(state, 0);
 
         step = L"starting the timer";
         auto timer = state->queue.CreateTimer();
@@ -1942,6 +2639,9 @@ void CloseEverything() {
         try {
             if (state->queue) {
                 queued = state->queue.TryEnqueue([state, done]() {
+                    if (state->topLevel && !IsWindow(state->topLevel)) {
+                        AbandonWindow(state);
+                    }
                     HidePanel(state, L"mod unloading");
                     RemoveMenuEntry(state);
                     state->queue = nullptr;
@@ -1982,6 +2682,32 @@ void StopWorker() {}
 
 #endif
 
+// Explorer can start this mod before it has loaded the module the mod hooks.
+// In that case, wait for the module and hook it when it arrives.
+std::atomic<bool> g_extensionsHooked{false};
+
+using LoadLibraryExW_t = HMODULE(WINAPI*)(LPCWSTR, HANDLE, DWORD);
+LoadLibraryExW_t LoadLibraryExW_Original;
+HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
+    HMODULE module = LoadLibraryExW_Original(name, file, flags);
+    const DWORD dataOnly = LOAD_LIBRARY_AS_DATAFILE |
+                           LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE |
+                           LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if (module && !(flags & dataOnly) && !g_extensionsHooked && !g_unloading) {
+        HMODULE extensions = GetModuleHandleW(L"FileExplorerExtensions.dll");
+        if (extensions && !g_extensionsHooked.exchange(true)) {
+            Out(L"FileExplorerExtensions.dll has loaded, hooking it now");
+            HookExtensions(extensions);
+            Wh_ApplyHookOperations();
+            if (g_hooked) {
+                StartWorker();
+                Out(L"ready. Open the View menu of a File Explorer window.");
+            }
+        }
+    }
+    return module;
+}
+
 void LoadSettings() {
     g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
     int minWidth = Wh_GetIntSetting(L"columns.minWidth");
@@ -2008,15 +2734,24 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.2.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
     if (!module) {
-        Out(L"FileExplorerExtensions.dll isn't loaded yet. Open a File Explorer window, then disable and enable this mod.");
+        HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
+        void* loadLibrary = kernelBase
+            ? (void*)GetProcAddress(kernelBase, "LoadLibraryExW")
+            : nullptr;
+        BOOL waiting = loadLibrary &&
+            Wh_SetFunctionHook(loadLibrary, (void*)LoadLibraryExW_Hook,
+                               (void**)&LoadLibraryExW_Original);
+        Out(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
+            waiting ? 1 : 0);
         return TRUE;
     }
+    g_extensionsHooked = true;
     HookExtensions(module);
     if (g_hooked) {
         StartWorker();
@@ -2046,5 +2781,6 @@ void Wh_ModBeforeUninit() {
 }
 
 void Wh_ModUninit() {
+    UnregisterNotifyClass();
     Out(L"explorer-extras end");
 }
