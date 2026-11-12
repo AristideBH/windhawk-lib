@@ -1,0 +1,247 @@
+---
+name: windhawk-explorer-surfaces
+description: Map of what File Explorer and the desktop are made of, and which Windhawk technique reaches each part. Use for any mod idea that changes Explorer windows or the desktop, such as a new view mode, Miller columns, file labels or tags, desktop icon grouping or stacks, command bar or View menu entries, navigation pane changes or file list styling. Read it before estimating whether an Explorer idea is feasible and before choosing where to hook. This skill is mostly a survey of four published mods and is thin on first-hand experience, so it says what is confirmed and what is not.
+---
+
+# Windhawk Explorer surfaces
+
+Load `windhawk-mod-development` and `windhawk-recon` first.
+
+No finished mod in this repo targets File Explorer yet. This skill combines a reading of four published mods with a day of probe mods run on Ari's ARM64 laptop on 2026-11-12, Windows build 26100, French. Each statement says which of the two it rests on. Replace each "unconfirmed" with a dated fact as later work settles it.
+
+The probe mods are worth keeping as starting points: `probe-explorer-recon`, `probe-explorer-viewmenu`, `probe-desktop-listview`, `probe-desktop-groupby` and `probe-symbols`, in the repo's `probes` folder.
+
+## One window, four technologies
+
+A File Explorer window is not one UI. A mod must pick the surface first, because nothing transfers between them.
+
+| Surface | Technology | Reference mod | Technique |
+| --- | --- | --- | --- |
+| Tabs, command bar, address bar, their menus | WinUI 3, `Microsoft.UI.Xaml` | Windows 11 File Explorer Styler by m417z | XAML diagnostics API |
+| File list and its column header | DirectUI, `dui70.dll` and `duser.dll` | File Explorer WinUI-Like Content Animation by crazyboyybs | Symbol hooks, DirectComposition overlay |
+| Legacy dialogs, menus and classic controls, in any process | Win32 and uxtheme | Win32 UI Modernizer by crazyboyybs | API hooks, repainting |
+| The desktop | Win32 list view | none read | unconfirmed, see below |
+
+Sources, all under `https://raw.githubusercontent.com/ramensoftware/windhawk-mods/main/mods/`: `windows-11-file-explorer-styler.wh.cpp`, `file-explorer-content-animation.wh.cpp`, `win32-ui-modernizer.wh.cpp`, `explorer-column-view.wh.cpp`. Read the relevant one before writing code. The comments in the animation mod are in Portuguese.
+
+Two facts apply to every Explorer mod:
+
+- **There can be several explorer.exe processes.** The option to launch folder windows in a separate process creates more, and the mod loads in each. Don't assume the process that owns the taskbar also owns the folder window. Keep state per process and per window.
+- **Each tab is its own view.** A window with three tabs has three file lists. The tab's host window class is `ShellTabWindowClass`. Track state per tab.
+
+## The XAML chrome
+
+The command bar and tabs use WinUI 3 from the Windows App SDK. The namespace is `Microsoft.UI.Xaml`, not the `Windows.UI.Xaml` used by the taskbar, and the two don't mix. Windhawk's compiler ships the WinUI 3 C++/WinRT headers, so a mod can use `winrt::Microsoft::UI::Xaml` types directly. Put `#undef GetCurrentTime` before including them.
+
+### Confirmed window layout
+
+A `CabinetWClass` window contains, as siblings:
+
+- `ShellTabWindowClass`, one per tab, holding `DUIViewWndClassName`, then `DirectUIHWND`. Inside that are the navigation pane, a classic `SysTreeView32`, and `SHELLDLL_DefView` with its own `DirectUIHWND` for the file list.
+- `Microsoft.UI.Content.DesktopChildSiteBridge`, the WinUI 3 island that draws the chrome over the whole window.
+
+Each window has its own UI thread.
+
+### The command bar is in FileExplorerExtensions.dll
+
+Confirmed. The module ships in the `MicrosoftWindows.Client.FileExp` app package, and symbol lookup works on it. Its classes, all under `winrt::FileExplorerExtensions::implementation`:
+
+- `CommandBarControl_Wave1` is the live command bar control. `CommandBarControl` also exists and was not seen in use.
+- `CommandBarFlyout` is the menu behind each dropdown button. It behaves as a `MenuFlyout`.
+- `CommandBarItemVM` is one command. Its `Id()` returns names such as `windows.iconsize.details`, `windows.sortbycolumn:0` and `windows.newitem`.
+- `CommandBarManager::InvokeMenuItem` runs when the user picks an item.
+
+Eight flyouts are constructed with each new window. Menus are built once per window, so a hook loaded later sees nothing until a new window opens.
+
+### How each menu is built
+
+| Menu | Built by | When |
+| --- | --- | --- |
+| New, kind 1 | `CreateNewItemMenu`, then `CreateMenuFlyoutItem` per entry | Window creation |
+| Sort and group, kind 2 | `CreateSortAndGroupMenu`, then `CreateRadioMenuFlyoutItem` per entry | Window creation |
+| Back and Forward, kinds 9 and 10 | `CreateTravelLogMenu` | Window creation |
+| Filters, Gallery filter, Search options, kinds 5, 6 and 4 | their own `Create...Menu` | Window creation |
+| View | No builder function. Declared in XAML, each entry bound to its command by id. | Loaded with the bar |
+
+`CreateViewsMenu` exists in the module and is never called. Don't hook it. Three test rounds were spent finding that out.
+
+### Reaching the View menu
+
+Confirmed working. Hook `CommandBarControl_Wave1::PointerPressedHandler` or `CommandBarControlGotFocusHandler`. Both are `void (this, IInspectable const& sender, args const&)` and the sender is the control itself. Walk down from it with `VisualTreeHelper`. The bar has about 250 elements and six `AppBarButton`s with a flyout.
+
+Only one button has a name, `SortAndGroupButton`. The others have an empty name and an empty automation id, so match on something else:
+
+- The View flyout is the only one whose first eight items are `RadioMenuFlyoutItem`s. This holds in any language.
+- The button's `Label()` is "Afficher" in French, useful as a second check and not as the only one.
+
+The View flyout's 13 items, in order: eight layouts from extra large icons to content, a separator, the details pane and preview pane, a separator, and a "Show" submenu of toggles. The layouts are radio items in the group `windows.iconsize`, each with an `ImageIcon` whose source is an `SvgImageSource`.
+
+### Adding an entry
+
+Confirmed working: `Items().InsertAt(8, item)` puts an item after the last layout. A `RadioMenuFlyoutItem` with `GroupName` `windows.iconsize` takes the selection mark when clicked and its `Click` handler runs on the window's UI thread. A `FontIcon` displays, though the neighbours use SVG images, so the final icon should be an `ImageIcon` with an `SvgImageSource`.
+
+What the final mod still has to handle:
+
+- **Insertion at window creation.** The probe inserts on a click. Find a hook that runs when the bar loads, such as `OnApplyTemplate`.
+- **State.** Explorer doesn't know the entry exists. The mark doesn't survive a new window or an Explorer restart, and Explorer won't clear it when another layout is chosen from elsewhere. The mod must store which folders use its view and set the mark itself.
+- **Removal.** On unload, revoke the click handler and remove the item on the window's own thread through the item's `DispatcherQueue`, and drop the last references there. The probe does this and it worked.
+- **Rebuilds.** Whether Explorer ever recreates the flyout, for example on a theme or language change, is unconfirmed.
+
+Adding a ninth child under the `windows.iconsize` command would not show, because the XAML lists the entries one by one.
+
+### The other route in
+
+Windows 11 File Explorer Styler reaches the same tree with `InitializeXamlDiagnosticsEx` and `IVisualTreeService`, the mechanism a XAML debugger uses, and matches elements with selectors. Matching by tooltip text is language dependent. The hook-and-walk route above needs no diagnostics connection, so it doesn't compete with Styler for one. Inspect the tree by hand with UWPSpy, choosing the `explorer.exe` process and the WinUI 3 framework.
+
+## The file list
+
+The item view is DirectUI. Window classes seen in the animation mod: `SHELLDLL_DefView` as the view's host, `DirectUIHWND` inside it, and the element class names `UIItemsView` and `ItemsView`.
+
+The animation mod hooks, with fallbacks marked optional:
+
+- `CShellBrowser::BrowseObject` in `ExplorerFrame.dll`, to learn about navigation. It lists two signatures for different builds.
+- `UIItem` and `UIItemsView` symbols in the same module, to enumerate visible items. The source comments say older builds and modes still use these classes, so they may be absent.
+- Symbols in `dui70.dll` and `duser.dll`, to control painting.
+
+It draws its transition on a DirectComposition surface placed over the list, using D3D11, and hands the real content back when done. So covering or replacing the content area smoothly is possible. It also falls back to plain behavior on builds where a symbol is missing, which is the right model.
+
+Nothing here draws custom content per file item. Per-item drawing inside DirectUI is unconfirmed territory.
+
+On Ari's laptop the symbol hooks above can't be resolved for now. Microsoft's server had no symbol files for the System32 modules shipped by the update of 2026-11-10, see the symbol section of the core skill. Recheck before assuming it still holds. The route still open is `dui70.dll`'s exported functions, which need no symbol file. Which exports paint a file list item is unconfirmed.
+
+## What Column View teaches
+
+Explorer Column View by ItsMikesch gives Finder-style columns. Ari uses the idea and dislikes the result, so its design is a record of what not to copy.
+
+How it works: each column is a full Explorer folder view created through `IExplorerBrowser`, hosted in its own Win32 child window. It hooks `CreateWindowExW`, subclasses the tab's window, and hooks Explorer's internal get and set view-mode functions so the top View menu applies to the last focused column. It contains no XAML.
+
+Why it doesn't feel native, in Ari's words and what the source explains:
+
+- **No entry in the View dropdown.** The mod never touches the XAML chrome. Columns are a mod setting, not a view mode.
+- **A column is not a simple list.** Each one is a whole folder view with its own view modes, headers and behaviors.
+- **Dividers and styling are rough.** They are Win32 child windows, outside both the XAML and DirectUI look.
+
+What it gets right and a replacement should keep: real shell behavior for free. Context menus, drag and drop, rename, thumbnails, archives and network folders all work because each column is a real view. A custom-drawn column has to rebuild every one of those.
+
+That is the central trade-off for Miller columns:
+
+| Approach | Looks native | Shell behaviors | Cost |
+| --- | --- | --- | --- |
+| Host real folder views, as Column View does | No | Free | Medium, already done by that mod |
+| Draw light list columns over the content area, shell interfaces for data only | Yes, if drawn well | Each one rebuilt by hand | High |
+| Real folder views forced into List mode with hidden headers, plus custom dividers | Partly | Free | Medium, unconfirmed |
+
+Decide which one with Ari before any code. The third row is worth a feasibility test because it keeps the free behaviors.
+
+## The desktop
+
+Confirmed on 2026-11-12.
+
+The desktop icons are a `SysListView32` titled "FolderView", inside `SHELLDLL_DefView`, inside `Progman`, in the explorer.exe process that owns the taskbar. The list view is in icon view with `LVS_OWNERDATA` set. It is a virtual list: Explorer supplies every item on demand.
+
+Three routes to grouping were tested:
+
+| Route | Result |
+| --- | --- |
+| Native list view groups | Closed. `LVM_INSERTGROUP` and `LVM_ENABLEGROUPVIEW` succeed, but assigning an item to a group fails for every item, because the owner supplies item data. Nothing shows. |
+| Explorer's own "Group by", through `IFolderView2::SetGroupBy` | Closed. Returns `E_FAIL` on the desktop. The internal reason is unknown. |
+| Positioning icons through the shell | Open. `IFolderView::SelectAndPositionItems` placed 8 of 8 icons exactly. |
+
+So desktop grouping has to be built as layout. A mod arranges icons into clusters and keeps them there. A stack would be several icons at one position, fanned out on demand. Whether Explorer accepts two icons at the same position with align-to-grid on is the next thing to test.
+
+How to reach the desktop's folder view from inside explorer.exe, confirmed working from a worker thread: `CoCreateInstance(CLSID_ShellWindows)`, `FindWindowSW` with `CSIDL_DESKTOP` and `SWC_DESKTOP`, `IServiceProvider::QueryService(SID_STopLevelBrowser)`, `QueryActiveShellView`, then `QueryInterface` for `IFolderView2`.
+
+Two warnings from the tests:
+
+- **Turning group view on moves the icons and they don't come back.** The first probe left all eight in a single column, and `LVM_SETITEMPOSITION32` did not restore them. Only `SelectAndPositionItems` did. Read positions through `IFolderView::GetItemPosition`, save them before any test, and restore through the shell.
+- **Never run a desktop test without a saved layout and a restore path.** Ari had to restore his by hand in a second round.
+
+## File labels and tags
+
+macOS-style colored labels need two parts that are independent: where a label is stored, and how it is shown.
+
+Storage options, none tested here:
+
+- An NTFS alternate data stream on the file. Travels with moves on the same volume, lost on FAT, on many cloud folders and in archives.
+- The shell property system. Only some file types accept written properties.
+- A sidecar database keyed by path or file id. Works for every file, breaks on renames done outside Explorer unless it tracks file ids.
+
+Display options:
+
+- Shell icon overlays. Windows supports a small fixed number of overlay handlers across all programs, and cloud sync clients usually fill them. An overlay handler is also a shell extension, which a Windhawk mod is not well placed to provide.
+- Drawing a dot or tint in the file list. That is per-item drawing in DirectUI, listed above as unconfirmed.
+- A column or group in the existing views, if property storage works.
+
+Ask Ari which storage trade-off he accepts before testing display. The display test depends on the file list result above.
+
+## Order of work for an Explorer idea
+
+1. Name the surface from the table at the top.
+2. Read the reference mod for that surface.
+3. Write the smallest feasibility test, a diagnostic mod that proves the one unconfirmed thing the idea depends on. Log results and nothing else.
+4. Record the result in PLAN.md as a confirmed fact or a rejected approach.
+5. Only then design settings, with `windhawk-ui-kit`.
+
+Feasibility tests, with their state on 2026-11-12:
+
+| Idea | The one thing to prove first | State |
+| --- | --- | --- |
+| Native "Columns" entry in the View menu | A mod can add a clickable item to the View flyout | Proved |
+| Miller columns | A real folder view can be stripped down to a plain list, or a custom list can host shell drag and drop and context menus | Not started |
+| File labels | A mark can be drawn on one item in the DirectUI file list | Symbol hooks unavailable until Microsoft publishes symbols for the 2026-11 update, `dui70.dll` exports untested |
+| Desktop grouping | Icons can be clustered and stacked by position | Positioning proved, stacking untested |
+
+## Compatibility to check
+
+Ari runs these Explorer mods, so test with all of them enabled: Windows 11 File Explorer Styler, File Explorer WinUI-Like Content Animation and Win32 UI Modernizer. The animation mod already carries a compatibility option for Styler, which shows these mods do collide. Also test with several tabs, with a second Explorer window, with the separate-process option on, and in dark and light theme.
+
+## What `dui70.dll` exports
+
+Listed on 2026-11-12 with `probes/probe-dui70-exports.wh.cpp`, ARM64, build 26300.9974. Exports need no symbol file, so these hooks survive the symbol outages that follow Windows updates.
+
+`dui70.dll` exports 4321 named functions. The ones that matter for drawing on file list items:
+
+- `DirectUI::Element::Paint(HDC, RECT const*, RECT const*, RECT*, RECT*)`, virtual. Subclasses override it, and an override's own code is not exported.
+- `DirectUI::Element::PaintBackground(HDC, Value*, RECT const&, RECT const&, RECT const&, RECT const&)`, `PaintBorder` and `PaintContent(HDC, RECT const*)`. These are not virtual, so every caller reaches the exported function.
+- Tree access: `Element::GetParent()`, `GetChildren(Value**)`, `FindDescendent(unsigned short)`, `GetID()`, `GetAccName(Value**)`, `GetRootRelativeBounds`, `GetLocation`, `GetExtent`, `GetVisible`.
+- Building: `Element::Create(unsigned int, Element*, unsigned long*, Element**)`, `Element::Add(Element*)`, and the plain C export `StrToID`.
+- 78 classes export `GetClassInfoW`.
+
+`ExplorerFrame.dll` exports 3 named functions and none helps. The file list's item classes live there, so their own methods stay out of reach without symbols. `duser.dll` exports 150 functions, 68 of them gadget functions.
+
+Untested: whether a file list item's paint goes through the exported `PaintBackground` or `PaintContent`. A probe that hooks both and logs the class of each element painted would answer it.
+
+## Column view groundwork, confirmed
+
+Confirmed on 2026-11-12 with `probes/probe-bench.wh.cpp` v0.1, ARM64, build 26300.9974. None of it needs a System32 symbol file.
+
+### A WinUI 3 panel over the file list
+
+- Run on the window's UI thread. `CommandBarControl_Wave1::PointerPressedHandler` in `FileExplorerExtensions.dll` gets you there. It fires on a click on a command bar button. A click on an empty spot of the bar did not fire it.
+- Create `Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource`, call `Initialize(WindowId{(uint64_t)topLevelHwnd})` with the `CabinetWClass` window, set `Content`, then use `SiteBridge()` with `MoveAndResize` and `Show`. The bridge's window is `(HWND)bridge.WindowId().Value`, class `Microsoft.UI.Content.DesktopChildSiteBridge`, a child of the top-level window. Raise it with `SetWindowPos(HWND_TOP)`.
+- Position it on the visible `SHELLDLL_DefView`'s rectangle, mapped to the top-level window's client coordinates. Values are physical pixels.
+- WinUI controls created this way get Explorer's own styles. A `ListView` shows the native selection look. Clicks and selection work.
+- Explorer's own flyouts, such as the View menu, draw above the panel.
+- A 250 ms `DispatcherQueueTimer` that re-reads the rectangle keeps the panel in step with maximise and restore.
+- Navigation replaces the `SHELLDLL_DefView` window. The panel survives because its parent is the top-level window. Look the file list up again on each tick.
+- The original file list stays alive under the panel and keeps painting. A real mod should hide it or accept the cost.
+- Close in this order on the UI thread: stop the timer and revoke its handler, revoke control handlers, `Content(nullptr)`, `Close()`. From another thread, queue that through the thread's `DispatcherQueue` and wait.
+- Headers needed: `winrt/Microsoft.UI.Content.h`, `Microsoft.UI.Xaml.Hosting.h`, `Microsoft.UI.Xaml.Controls.Primitives.h` for `Click` and `SelectionChanged`, `Microsoft.UI.h`, `Windows.Graphics.h`, `Windows.UI.h`.
+
+### Folder data from the shell
+
+- The top-level window, the visible `ShellTabWindowClass` and the file list were all on the same thread as the command bar click.
+- `SendMessageTimeoutW(tabHwnd, WM_USER + 7, ...)` on the visible `ShellTabWindowClass` returns the tab's `IShellBrowser`, not AddRef'd.
+- `QueryActiveShellView`, then `IFolderView`. `GetFolder(IPersistFolder2)` with `GetCurFolder` gives the current folder. `GetFolder(IShellFolder)` with `ItemCount`, `Item` and `GetDisplayNameOf` gives the items.
+
+### DirectUI painting without symbols
+
+- Hooks on the exported `Element::PaintBackground` and `Element::PaintContent` both fire for file list items. `UIItem` rows came through with a 954x34 rectangle in details view, and `UIProperty`, `UIImage` and `UIDetailsPropertyCollection` came through too.
+- Class names are available without symbols. Find the vtable slot of `Element::GetClassInfoW` by searching the exported vtable `??_7Element@DirectUI@@6B@` for the exported function's address, and do the same for `ClassInfoBase::GetName` in `??_7ClassInfoBase@DirectUI@@6B@`. On this build the slots were 35 and 8. Never hard-code them.
+- Still open for labels: mapping a `UIItem` to its file. `Element::GetAccName` is the first thing to try.
+
+### Probe practice
+
+- Put related tests in one mod so one compile covers them.
+- Log to a file in the repo as well as through `Wh_Log`.
+- Read a control file once a second for switches, so a test can be turned off without Windhawk's settings.

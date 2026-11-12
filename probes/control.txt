@@ -1,0 +1,3 @@
+host=0
+paint=1
+dump=1
