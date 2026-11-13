@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.11.0
+// @version         0.11.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -9328,6 +9328,12 @@ void ShowPanel(WindowState* state) {
 void ChooseColumns(WindowState* state) {
     if (!state->source) {
         ShowPanel(state);
+        // Choosing Columns in a folder is remembered for it, also when this
+        // builds the panel. Without this, a folder left in another layout
+        // earlier stayed marked that way.
+        if (state->on && state->lastSeen) {
+            RememberFolderColumns(PathOf(state->lastSeen.get()), 1);
+        }
         return;
     }
     HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
@@ -9724,6 +9730,14 @@ void EntryTick() {
             // One tick with a visible file list. Three ticks in 0.3.0 left
             // Explorer's own list showing for about 270 ms.
             if (++state->restoreSettle >= 1) {
+                // A folder that was left in another layout stays in it.
+                IShellBrowser* openBrowser = BrowserOf(state->topLevel);
+                Pidl openFolder = openBrowser ? CurrentFolder(openBrowser) : Pidl();
+                if (openFolder && RememberedColumns(PathOf(openFolder.get())) == 0) {
+                    Out(L"the folder this window opens on was left in its own layout, not restoring Columns");
+                    StopEntry(state);
+                    return;
+                }
                 Out(L"restoring Columns, window=%p, tick %d", state->topLevel,
                     state->entryTries);
                 ShowPanel(state);
@@ -10093,7 +10107,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.11.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.11.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

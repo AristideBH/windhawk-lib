@@ -2250,6 +2250,12 @@ void ShowPanel(WindowState* state) {
 void ChooseColumns(WindowState* state) {
     if (!state->source) {
         ShowPanel(state);
+        // Choosing Columns in a folder is remembered for it, also when this
+        // builds the panel. Without this, a folder left in another layout
+        // earlier stayed marked that way.
+        if (state->on && state->lastSeen) {
+            RememberFolderColumns(PathOf(state->lastSeen.get()), 1);
+        }
         return;
     }
     HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");

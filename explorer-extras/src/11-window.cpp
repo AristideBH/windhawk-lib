@@ -149,6 +149,14 @@ void EntryTick() {
             // One tick with a visible file list. Three ticks in 0.3.0 left
             // Explorer's own list showing for about 270 ms.
             if (++state->restoreSettle >= 1) {
+                // A folder that was left in another layout stays in it.
+                IShellBrowser* openBrowser = BrowserOf(state->topLevel);
+                Pidl openFolder = openBrowser ? CurrentFolder(openBrowser) : Pidl();
+                if (openFolder && RememberedColumns(PathOf(openFolder.get())) == 0) {
+                    Out(L"the folder this window opens on was left in its own layout, not restoring Columns");
+                    StopEntry(state);
+                    return;
+                }
                 Out(L"restoring Columns, window=%p, tick %d", state->topLevel,
                     state->entryTries);
                 ShowPanel(state);
