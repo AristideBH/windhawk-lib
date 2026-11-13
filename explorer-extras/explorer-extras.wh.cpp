@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.15
+// @version         0.5.16
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - headerKeyboard: false
+    $name: Keyboard on group headers
+    $description: Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.
   - doubleClickUp: false
     $name: Double-click on empty space goes up
     $description: A double-click on the empty space of a column goes up one folder, as in the "Explorer double-click up" mod. In the first column the parent folder is added in front.
@@ -168,6 +171,7 @@ std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
+std::atomic<bool> g_headerKeyboard{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -5891,8 +5895,12 @@ void OnColumnKey(muxc::ListView const& list,
             state->focusUntil = GetTickCount64() + 1500;
             args.Handled(true);
         };
-        // The keyboard on a group header, or on its way there.
-        {
+        // The keyboard on a group header, or on its way there. A setting, off by
+        // default. Turned off while a header has it, the header is let go.
+        if (!g_headerKeyboard && column->focusHeader >= 0) {
+            SetHeaderFocus(column, list, -1);
+        }
+        if (g_headerKeyboard) {
             int header = column->focusHeader;
             if (header >= 0 && header < (int)column->rowGroup.size()) {
                 int group = column->rowGroup[header];
@@ -7628,6 +7636,7 @@ void LoadSettings() {
     g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
     g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
+    g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
         g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
@@ -7662,7 +7671,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
