@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.6
+// @version         0.3.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1090,14 +1090,30 @@ struct ContextMenuState {
     HMENU hmenu = nullptr;
     UINT idFirst = 1;
     HWND owner = nullptr;
+    Column* column = nullptr;  // The column and item the menu is for.
+    size_t entry = 0;
     muxc::MenuFlyout flyout{nullptr};
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
 };
 
+// An item being renamed in place.
+struct RenameState {
+    Column* column = nullptr;
+    size_t entry = 0;
+    muxc::Grid grid{nullptr};
+    muxc::TextBlock text{nullptr};
+    muxc::TextBox box{nullptr};
+    winrt::event_token keyToken{};
+    winrt::event_token lostToken{};
+    ULONGLONG startedAt = 0;
+    bool done = false;
+};
+
 struct WindowState {
     DWORD thread = 0;
     std::unique_ptr<ContextMenuState> context;
+    std::unique_ptr<RenameState> rename;
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
 
@@ -1311,8 +1327,7 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) &&
             factory) {
             HBITMAP bitmap = nullptr;
-            if (SUCCEEDED(factory->GetImage(SIZE{32, 32}, SIIGBF_BIGGERSIZEOK,
-                                            &bitmap)) &&
+            if (SUCCEEDED(factory->GetImage(SIZE{32, 32}, 0, &bitmap)) &&
                 bitmap) {
                 IconBits bits;
                 bits.index = i;
@@ -1646,7 +1661,12 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight) {
 }
 
 // Fills a column's list from freshly loaded data.
+void CancelRename(WindowState* state);
+
 void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
+    if (state->rename && state->rename->column == column) {
+        CancelRename(state);
+    }
     column->entries = std::move(data.entries);
     column->rowToEntry.clear();
     column->texts.clear();
@@ -2183,6 +2203,189 @@ void OnRowSelected(muxc::ListView const& list) {
 
 // ---- Right-click menu ----
 
+// ---- Rename in place and clipboard, which the shell menu can't do here ----
+
+void CancelRename(WindowState* state) {
+    if (!state->rename) {
+        return;
+    }
+    auto rename = std::move(state->rename);
+    rename->done = true;
+    try {
+        if (rename->box) {
+            rename->box.KeyDown(rename->keyToken);
+            rename->box.LostFocus(rename->lostToken);
+        }
+        if (rename->grid && rename->box) {
+            uint32_t index = 0;
+            if (rename->grid.Children().IndexOf(rename->box, index)) {
+                rename->grid.Children().RemoveAt(index);
+            }
+        }
+        if (rename->text) {
+            rename->text.Visibility(mux::Visibility::Visible);
+        }
+    } catch (...) {
+        LogHresult(L"CancelRename");
+    }
+}
+
+void CommitRename(WindowState* state) {
+    if (!state->rename || state->rename->done) {
+        return;
+    }
+    std::wstring newName = state->rename->box.Text().c_str();
+    Column* column = state->rename->column;
+    size_t entryIndex = state->rename->entry;
+    CancelRename(state);
+    if (newName.empty() || entryIndex >= column->entries.size() ||
+        newName == column->entries[entryIndex].name) {
+        return;
+    }
+    IShellFolder* parent = nullptr;
+    HRESULT hr = ILIsEmpty(column->folder.get())
+                     ? SHGetDesktopFolder(&parent)
+                     : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                      IID_PPV_ARGS(&parent));
+    if (FAILED(hr) || !parent) {
+        return;
+    }
+    PITEMID_CHILD renamed = nullptr;
+    hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
+                           newName.c_str(), SHGDN_INFOLDER, &renamed);
+    Out(L"rename \"%s\" to \"%s\": hr=0x%08lX",
+        column->entries[entryIndex].name.c_str(), newName.c_str(), hr);
+    if (renamed) {
+        CoTaskMemFree(renamed);
+    }
+    parent->Release();
+    // The folder's change notification reloads the column.
+}
+
+void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
+    CancelRename(state);
+    bool known = false;
+    for (auto& c : state->columns) {
+        known = known || c.get() == column;
+    }
+    if (!known || entryIndex >= column->texts.size() ||
+        !column->texts[entryIndex]) {
+        return;
+    }
+    auto text = column->texts[entryIndex];
+    auto grid = text.Parent().try_as<muxc::Grid>();
+    if (!grid) {
+        return;
+    }
+    const std::wstring name = column->entries[entryIndex].name;
+    muxc::TextBox box;
+    box.Text(name);
+    box.VerticalAlignment(mux::VerticalAlignment::Center);
+    box.MinHeight(0);
+    box.Padding(mux::Thickness{4, 1, 4, 1});
+    muxc::Grid::SetColumn(box, 1);
+    muxc::Grid::SetColumnSpan(box, 2);
+
+    auto rename = std::make_unique<RenameState>();
+    rename->column = column;
+    rename->entry = entryIndex;
+    rename->grid = grid;
+    rename->text = text;
+    rename->box = box;
+    rename->startedAt = GetTickCount64();
+    rename->keyToken = box.KeyDown(
+        [](Inspectable const&, mux::Input::KeyRoutedEventArgs const& args) {
+            WindowState* state = StateForThisThread(false);
+            if (!state || !state->rename) {
+                return;
+            }
+            using winrt::Windows::System::VirtualKey;
+            try {
+                if (args.Key() == VirtualKey::Enter) {
+                    args.Handled(true);
+                    CommitRename(state);
+                } else if (args.Key() == VirtualKey::Escape) {
+                    args.Handled(true);
+                    CancelRename(state);
+                }
+            } catch (...) {
+                LogHresult(L"rename key");
+            }
+        });
+    rename->lostToken = box.LostFocus(
+        [](Inspectable const&, mux::RoutedEventArgs const&) {
+            WindowState* state = StateForThisThread(false);
+            if (!state || !state->rename) {
+                return;
+            }
+            try {
+                // Closing the flyout hands focus back to the list. Take it
+                // again if that happens right after the box opened.
+                if (GetTickCount64() - state->rename->startedAt < 400) {
+                    state->rename->box.Focus(mux::FocusState::Programmatic);
+                } else {
+                    CommitRename(state);
+                }
+            } catch (...) {
+                LogHresult(L"rename lost focus");
+            }
+        });
+    text.Visibility(mux::Visibility::Collapsed);
+    grid.Children().Append(box);
+    state->rename = std::move(rename);
+    box.Focus(mux::FocusState::Programmatic);
+    size_t dot = name.rfind(L'.');
+    bool keepExtension = !column->entries[entryIndex].folder &&
+                         dot != std::wstring::npos && dot > 0;
+    box.SelectionStart(0);
+    box.SelectionLength((uint32_t)(keepExtension ? dot : name.size()));
+    Out(L"rename started for \"%s\"", name.c_str());
+}
+
+// Cut and Copy from the shell's menu don't work without a view behind them,
+// so the item's data object goes on the clipboard here.
+bool CopyOrCut(WindowState* state, Column* column, size_t entryIndex, bool cut) {
+    IShellFolder* parent = nullptr;
+    HRESULT hr = ILIsEmpty(column->folder.get())
+                     ? SHGetDesktopFolder(&parent)
+                     : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                      IID_PPV_ARGS(&parent));
+    if (FAILED(hr) || !parent) {
+        return false;
+    }
+    PCUITEMID_CHILD child = column->entries[entryIndex].child.get();
+    IDataObject* data = nullptr;
+    hr = parent->GetUIObjectOf(state->topLevel, 1, &child, IID_IDataObject,
+                               nullptr, (void**)&data);
+    parent->Release();
+    if (FAILED(hr) || !data) {
+        return false;
+    }
+    if (cut) {
+        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+        if (memory) {
+            if (DWORD* effect = (DWORD*)GlobalLock(memory)) {
+                *effect = DROPEFFECT_MOVE;
+                GlobalUnlock(memory);
+            }
+            FORMATETC fmt = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1,
+                             TYMED_HGLOBAL};
+            STGMEDIUM medium = {};
+            medium.tymed = TYMED_HGLOBAL;
+            medium.hGlobal = memory;
+            if (FAILED(data->SetData(&fmt, &medium, TRUE))) {
+                GlobalFree(memory);
+            }
+        }
+    }
+    hr = OleSetClipboard(data);
+    data->Release();
+    Out(L"%s \"%s\": hr=0x%08lX", cut ? L"cut" : L"copy",
+        column->entries[entryIndex].name.c_str(), hr);
+    return SUCCEEDED(hr);
+}
+
 // Lets go of the shell menu and every handler on the flyout's items.
 void CloseContextMenu(WindowState* state) {
     if (!state->context) {
@@ -2287,6 +2490,32 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                     }
                     UINT id = winrt::unbox_value<uint32_t>(item.Tag());
                     ContextMenuState* context = state->context.get();
+                    wchar_t verb[64] = L"";
+                    context->menu->GetCommandString(
+                        id - context->idFirst, GCS_VERBW, nullptr,
+                        (char*)verb, ARRAYSIZE(verb));
+                    Out(L"context menu verb \"%s\"", verb);
+                    if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
+                        CopyOrCut(state, context->column, context->entry,
+                                  !_wcsicmp(verb, L"cut"));
+                        return;
+                    }
+                    if (!_wcsicmp(verb, L"rename") && state->queue) {
+                        Column* column = context->column;
+                        size_t entry = context->entry;
+                        // After the flyout has closed and given focus back.
+                        state->queue.TryEnqueue([column, entry]() {
+                            WindowState* state = StateForThisThread(false);
+                            if (state && state->on && !g_unloading) {
+                                try {
+                                    BeginRename(state, column, entry);
+                                } catch (...) {
+                                    LogHresult(L"BeginRename");
+                                }
+                            }
+                        });
+                        return;
+                    }
                     CMINVOKECOMMANDINFOEX invoke = {};
                     invoke.cbSize = sizeof(invoke);
                     invoke.hwnd = context->owner;
@@ -2379,6 +2608,8 @@ void OnRowRightTapped(muxc::ListView const& list,
         state->context->menu = menu;
         state->context->hmenu = hmenu;
         state->context->owner = state->topLevel;
+        state->context->column = column;
+        state->context->entry = (size_t)entryIndex;
         muxc::MenuFlyout flyout;
         FillFlyoutItems(state, hmenu, flyout.Items(), 0);
         state->context->flyout = flyout;
@@ -2448,6 +2679,9 @@ void OnColumnKey(muxc::ListView const& list,
     if (!state || !state->on || g_unloading) {
         return;
     }
+    if (state->rename) {
+        return;  // Typing into the rename box.
+    }
     try {
         int index = ColumnIndexOfList(state, list);
         if (index < 0) {
@@ -2503,6 +2737,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    CancelRename(state);
     CloseContextMenu(state);
     try {
         if (state->timer) {
@@ -2560,6 +2795,7 @@ void AbandonWindow(WindowState* state) {
     Out(L"window closed with the panel on, letting its objects go");
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
+    (void)state->rename.release();
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -3609,7 +3845,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
