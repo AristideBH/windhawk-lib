@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.6.1
+// @version         0.6.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1476,6 +1476,8 @@ struct UndoEntry {
     std::vector<std::wstring> paths;  // Deleted paths, to restore.
     std::wstring renamedFrom;         // A rename: the old path
     std::wstring renamedTo;           // and the new one.
+    bool created = false;             // A new folder, whose path is in renamedTo.
+    std::vector<std::pair<std::wstring, std::wstring>> renames;  // Several renames at once, old and new.
 };
 
 // An item being renamed in place.
@@ -1485,6 +1487,7 @@ struct RenameState {
     muxc::Grid grid{nullptr};
     muxc::TextBlock text{nullptr};
     muxc::TextBox box{nullptr};
+    std::vector<size_t> multi;  // Several items renamed together: all their entries.
     winrt::event_token keyToken{};
     winrt::event_token lostToken{};
     ULONGLONG startedAt = 0;
@@ -2987,13 +2990,51 @@ bool SameListing(const FolderResult& data, const Column& column) {
     return data.truncated == more;
 }
 
+void LiftStale(WindowState* state, int columnIndex);
+void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder);
+void SetActiveColumn(WindowState* state, int index, bool ensureVisible);
+
+// A folder on disk that is no longer there: deleted, renamed or moved.
+// Folders that aren't on disk (This PC, Control Panel) are never "gone" here.
+bool FolderGone(PCIDLIST_ABSOLUTE folder) {
+    wchar_t path[MAX_PATH] = L"";
+    if (!folder || ILIsEmpty(folder) || !SHGetPathFromIDListW(folder, path) || !path[0]) {
+        return false;
+    }
+    return !PathIsDirectoryW(path);
+}
+
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
         return;
     }
-    for (auto& column : state->columns) {
+    for (size_t position = 0; position < state->columns.size(); position++) {
+        auto& column = state->columns[position];
         if (column->generation == loaded->generation) {
+            // The column's folder is gone: the column and those after it are
+            // removed, and the one before it shows its folder again, without
+            // the row that led here.
+            if (position > 0 && FolderGone(column->folder.get())) {
+                Out(L"a column's folder is gone, its columns are removed");
+                try {
+                    bool wasBuilding = state->building;
+                    state->building = true;
+                    RemoveColumnsFrom(state, position);
+                    Column* previous = state->columns[position - 1].get();
+                    previous->selectedChild.reset();
+                    previous->list.SelectedItems().Clear();
+                    state->building = wasBuilding;
+                    LiftStale(state, (int)position - 1);
+                    SetActiveColumn(state, (int)position - 1);
+                    ScheduleNavigation(state, previous->folder.get());
+                    RequestLoad(state, previous);
+                } catch (...) {
+                    state->building = false;
+                    LogHresult(L"pruning a column");
+                }
+                return;
+            }
             bool wasBuilding = state->building;
             state->building = true;
             try {
@@ -3636,6 +3677,10 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
             state->focusUntil = GetTickCount64() + 2500;
         }
     }
+    if (FolderGone(folder)) {
+        Out(L"not navigating Explorer to a folder that is gone");
+        return;
+    }
     state->cursorFixUntil = GetTickCount64() + 2500;
     g_ourBrowse = true;
     // Without taking the keyboard: Explorer's view used to take it, and giving
@@ -3874,6 +3919,13 @@ void OnRowSelected(muxc::ListView const& list) {
             SetActiveColumn(state, columnIndex);
             return;
         }
+        if (entry.folder && FolderGone(absolute.get())) {
+            // The row is stale: the folder was deleted, renamed or moved. Read
+            // the column again instead of opening a column on nothing.
+            Out(L"\"%s\" is gone, the column is read again", entry.name.c_str());
+            RequestLoad(state, column);
+            return;
+        }
         if (entry.folder) {
             // Explorer's view shows this column's folder with the item
             // selected, so the toolbar and the panes act on the folder.
@@ -4097,7 +4149,28 @@ bool UndoLast(WindowState* state) {
     UndoEntry entry = std::move(state->undo.back());
     state->undo.pop_back();
     HRESULT hr;
-    if (entry.deletion) {
+    if (entry.created) {
+        // A new folder is taken back to the Recycle Bin, with what is in it.
+        std::wstring names = entry.renamedTo;
+        names.push_back(L'\0');
+        names.push_back(L'\0');
+        SHFILEOPSTRUCTW op = {};
+        op.hwnd = state->topLevel;
+        op.wFunc = FO_DELETE;
+        op.pFrom = names.c_str();
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION;
+        int result = SHFileOperationW(&op);
+        hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
+        Out(L"Undo new folder \"%s\": result %d", entry.renamedTo.c_str(), result);
+    } else if (!entry.renames.empty()) {
+        hr = S_OK;
+        for (size_t i = entry.renames.size(); i-- > 0;) {
+            if (!MoveFileW(entry.renames[i].second.c_str(), entry.renames[i].first.c_str())) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+            }
+        }
+        Out(L"Undo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
+    } else if (entry.deletion) {
         hr = RestoreFromRecycleBin(state, entry.paths);
         Out(L"Undo delete of %d item(s): hr=0x%08lX", (int)entry.paths.size(), hr);
     } else {
@@ -4121,7 +4194,19 @@ bool RedoLast(WindowState* state) {
     UndoEntry entry = std::move(state->redo.back());
     state->redo.pop_back();
     HRESULT hr = S_OK;
-    if (entry.deletion) {
+    if (entry.created) {
+        hr = CreateDirectoryW(entry.renamedTo.c_str(), nullptr)
+                 ? S_OK
+                 : HRESULT_FROM_WIN32(GetLastError());
+        Out(L"Redo new folder \"%s\": hr=0x%08lX", entry.renamedTo.c_str(), hr);
+    } else if (!entry.renames.empty()) {
+        for (auto& pair : entry.renames) {
+            if (!MoveFileW(pair.first.c_str(), pair.second.c_str())) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+            }
+        }
+        Out(L"Redo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
+    } else if (entry.deletion) {
         std::wstring names;
         for (auto& path : entry.paths) {
             names += path;
@@ -4192,7 +4277,67 @@ void CommitRename(WindowState* state) {
     std::wstring newName = state->rename->box.Text().c_str();
     Column* column = state->rename->column;
     size_t entryIndex = state->rename->entry;
+    std::vector<size_t> together = state->rename->multi;
     CancelRename(state);
+
+    // Several items: the typed name, then a number, and each keeps its own
+    // extension, as Explorer names them: "Name (1).txt", "Name (2).jpg".
+    if (together.size() > 1 && !newName.empty()) {
+        auto extensionOf = [](std::wstring const& name) {
+            size_t dot = name.rfind(L'.');
+            return dot != std::wstring::npos && dot > 0 ? name.substr(dot) : std::wstring();
+        };
+        std::wstring firstExtension =
+            entryIndex < column->entries.size() && !column->entries[entryIndex].folder
+                ? extensionOf(column->entries[entryIndex].name)
+                : std::wstring();
+        std::wstring base = newName;
+        if (!firstExtension.empty() && base.size() > firstExtension.size() &&
+            _wcsicmp(base.c_str() + base.size() - firstExtension.size(), firstExtension.c_str()) == 0) {
+            base.resize(base.size() - firstExtension.size());
+        }
+        IShellFolder* parent = nullptr;
+        HRESULT bound = ILIsEmpty(column->folder.get())
+                            ? SHGetDesktopFolder(&parent)
+                            : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                             IID_PPV_ARGS(&parent));
+        if (FAILED(bound) || !parent) {
+            return;
+        }
+        UndoEntry undo;
+        int number = 0;
+        for (size_t entry : together) {
+            if (entry >= column->entries.size()) {
+                continue;
+            }
+            number++;
+            std::wstring name = base + L" (" + std::to_wstring(number) + L")" +
+                                (column->entries[entry].folder
+                                     ? std::wstring()
+                                     : extensionOf(column->entries[entry].name));
+            std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            PITEMID_CHILD renamed = nullptr;
+            HRESULT hr = parent->SetNameOf(state->topLevel, column->entries[entry].child.get(),
+                                           name.c_str(), SHGDN_INFOLDER, &renamed);
+            Out(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
+                column->entries[entry].name.c_str(), name.c_str(), hr);
+            if (SUCCEEDED(hr) && renamed) {
+                std::wstring newPath = FilePathOf(column->folder.get(), renamed);
+                if (!oldPath.empty() && !newPath.empty()) {
+                    undo.renames.emplace_back(oldPath, newPath);
+                }
+            }
+            if (renamed) {
+                CoTaskMemFree(renamed);
+            }
+        }
+        parent->Release();
+        if (!undo.renames.empty()) {
+            PushUndo(state, std::move(undo));
+        }
+        RequestLoad(state, column);
+        return;
+    }
     if (newName.empty() || entryIndex >= column->entries.size() ||
         newName == column->entries[entryIndex].name) {
         return;
@@ -4234,6 +4379,21 @@ void CommitRename(WindowState* state) {
     }
     if (renamed) {
         CoTaskMemFree(renamed);
+    }
+}
+
+void BeginRename(WindowState* state, Column* column, size_t entryIndex);
+
+// Several selected items are renamed together: the box opens on the first, and
+// what is typed names all of them.
+void BeginMultiRename(WindowState* state, Column* column, std::vector<size_t> const& entries) {
+    if (entries.empty()) {
+        return;
+    }
+    BeginRename(state, column, entries[0]);
+    if (state->rename && entries.size() > 1) {
+        state->rename->multi = entries;
+        Out(L"renaming %d items together", (int)entries.size());
     }
 }
 
@@ -4632,6 +4792,10 @@ void CreateNewFolder(WindowState* state, Column* column) {
         std::wstring full = std::wstring(path) + L"\\" + candidate;
         if (!PathFileExistsW(full.c_str())) {
             if (CreateDirectoryW(full.c_str(), nullptr)) {
+                UndoEntry undo;
+                undo.created = true;
+                undo.renamedTo = full;
+                PushUndo(state, std::move(undo));
                 state->renameName = candidate;
                 state->renameColumn = column;
                 RequestLoad(state, column);
@@ -6194,8 +6358,8 @@ void OnColumnKey(muxc::ListView const& list,
             keep();
             return;
         }
-        if (key == VirtualKey::F2 && picked.size() == 1) {
-            BeginRename(state, column, picked[0]);
+        if (key == VirtualKey::F2 && !picked.empty()) {
+            BeginMultiRename(state, column, picked);
             args.Handled(true);
             return;
         }
@@ -6892,8 +7056,8 @@ void OnTick() {
                     std::vector<size_t> picked = SelectedEntries(column, column->list);
                     Out(L"Explorer's own rename box found, renaming in the column instead (%d selected)",
                         (int)picked.size());
-                    if (picked.size() == 1) {
-                        BeginRename(state, column, picked[0]);
+                    if (!picked.empty()) {
+                        BeginMultiRename(state, column, picked);
                     }
                 }
             }
@@ -7903,7 +8067,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.6.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.6.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

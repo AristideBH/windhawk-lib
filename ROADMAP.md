@@ -131,7 +131,7 @@ DirectUI hook, another author's mod, a design call.
 - [x] Keyboard on group headers (0.5.2, a setting, off by default since
       0.5.16): Up from the first item of a group goes to its header, Left and
       Right collapse and open it, Enter toggles, Up and Down move on.
-- [ ] Rename several items at once, like Explorer's own
+- [ ] (0.6.2, not tested) Rename several items at once: F2 or the toolbar on several selected items, one name, numbered like Explorer. Ctrl+Z takes back a new folder or a group of renames.
 - [ ] Focusing a virtual shell item, such as a link, in the Desktop folder
 - [ ] Open in Columns without the flash of Explorer's own list. Fine for now.
 - [ ] The Documents folder icon shows small. Maybe the icon cache.
