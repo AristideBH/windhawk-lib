@@ -160,11 +160,12 @@ DirectUI hook, another author's mod, a design call.
 ## Found in a review of the whole session, 2026-11-13
 
 Keyboard and everyday gaps:
-- [ ] F5 refreshes the columns, Escape clears the selection, Backspace goes to
-      the parent column, the Menu key and Shift+F10 open the item's flyout,
-      Ctrl+Shift+N makes a new folder
-- [ ] Redo (Ctrl+Y) for deletes and renames; only Ctrl+Z exists
-- [ ] Copy as path (Ctrl+Shift+C)
+- [ ] (0.6.0, not tested) F5 refreshes the columns, Escape clears the
+      selection, Backspace goes to the parent column, the Menu key and
+      Shift+F10 open the item's flyout, Ctrl+Shift+N makes a new folder,
+      Ctrl+Shift+C copies the paths, Ctrl+Y redoes a delete or a rename
+- [ ] (0.6.0, not tested) The pill and the selection rectangle follow a
+      change of the system accent or theme
 - [ ] Middle-click opens a folder in a new tab
 - [ ] Space for a quick preview, if Explorer's preview pane can be driven
 

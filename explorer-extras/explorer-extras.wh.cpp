@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.16
+// @version         0.6.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -448,6 +448,10 @@ thread_local bool g_ourBrowse = false;  // True while this mod itself navigates.
 // are let through to the box.
 thread_local bool g_renaming = false;
 
+// The window of the panel, while it is on. Backspace goes to the columns, not
+// to Explorer's own Back accelerator, when the keyboard is in it.
+thread_local HWND g_panelWindow = nullptr;
+
 using TranslateAcceleratorW_t = int(WINAPI*)(HWND, HACCEL, LPMSG);
 TranslateAcceleratorW_t TranslateAcceleratorW_Original;
 int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
@@ -455,6 +459,13 @@ int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
         (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP ||
          msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
         return 0;  // Not translated: the message goes on to the focused control.
+    }
+    if (g_panelWindow && msg && msg->wParam == VK_BACK &&
+        (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP)) {
+        HWND focus = GetFocus();
+        if (focus && (focus == g_panelWindow || IsChild(g_panelWindow, focus))) {
+            return 0;
+        }
     }
     return TranslateAcceleratorW_Original(hwnd, accel, msg);
 }
@@ -1480,7 +1491,11 @@ struct WindowState {
     std::unique_ptr<ContextMenuState> context;
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
+    std::vector<UndoEntry> redo;
     int styleVersion = -1;  // The row style the rows were last given.
+    winrt::Windows::UI::Color pillColor{};    // The accent shades the panel was last drawn with.
+    winrt::Windows::UI::Color accentColor{};
+    bool colorsSet = false;
     ULONGLONG scrollQuietUntil = 0;  // A scroll of the strip is under way: no refocusing meanwhile.
     ULONGLONG cursorFixUntil = 0;  // While Explorer navigates, a busy cursor over the panel is put right.
     bool shownDark = false;  // The theme the panel background was made for.
@@ -3930,6 +3945,7 @@ std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
 }
 
 void PushUndo(WindowState* state, UndoEntry&& entry) {
+    state->redo.clear();  // A new action ends the redo history.
     state->undo.push_back(std::move(entry));
     if (state->undo.size() > 20) {
         state->undo.erase(state->undo.begin());
@@ -4082,7 +4098,83 @@ bool UndoLast(WindowState* state) {
         Out(L"Undo rename \"%s\" back to \"%s\": hr=0x%08lX", entry.renamedTo.c_str(),
             entry.renamedFrom.c_str(), hr);
     }
+    if (SUCCEEDED(hr)) {
+        state->redo.push_back(std::move(entry));
+    }
     return true;
+}
+
+// Does again what Ctrl+Z took back: the delete goes to the Recycle Bin again,
+// the rename is made again. False if there is nothing to redo.
+bool RedoLast(WindowState* state) {
+    if (state->redo.empty()) {
+        return false;
+    }
+    UndoEntry entry = std::move(state->redo.back());
+    state->redo.pop_back();
+    HRESULT hr = S_OK;
+    if (entry.deletion) {
+        std::wstring names;
+        for (auto& path : entry.paths) {
+            names += path;
+            names.push_back(L'\0');
+        }
+        names.push_back(L'\0');
+        SHFILEOPSTRUCTW op = {};
+        op.hwnd = state->topLevel;
+        op.wFunc = FO_DELETE;
+        op.pFrom = names.c_str();
+        op.fFlags = FOF_ALLOWUNDO;
+        int result = SHFileOperationW(&op);
+        hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
+        Out(L"Redo delete of %d item(s): result %d", (int)entry.paths.size(), result);
+    } else {
+        BOOL moved = MoveFileW(entry.renamedFrom.c_str(), entry.renamedTo.c_str());
+        hr = moved ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+        Out(L"Redo rename \"%s\" to \"%s\": hr=0x%08lX", entry.renamedFrom.c_str(),
+            entry.renamedTo.c_str(), hr);
+    }
+    if (SUCCEEDED(hr)) {
+        state->undo.push_back(std::move(entry));  // Straight, so the redo history stays.
+    }
+    return true;
+}
+
+// The selected items' paths on the clipboard as text, each in quotes on its
+// own line, like Explorer's "Copy as path".
+void CopyAsPath(WindowState* state, Column* column, std::vector<size_t> const& entries) {
+    std::wstring text;
+    for (size_t entry : entries) {
+        if (entry >= column->entries.size()) {
+            continue;
+        }
+        std::wstring path = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+        if (path.empty()) {
+            continue;
+        }
+        if (!text.empty()) {
+            text += L"\r\n";
+        }
+        text += L"\"" + path + L"\"";
+    }
+    if (text.empty() || !OpenClipboard(state->topLevel)) {
+        return;
+    }
+    EmptyClipboard();
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    if (memory) {
+        if (wchar_t* target = (wchar_t*)GlobalLock(memory)) {
+            memcpy(target, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(memory);
+            if (!SetClipboardData(CF_UNICODETEXT, memory)) {
+                GlobalFree(memory);
+            }
+        } else {
+            GlobalFree(memory);
+        }
+    }
+    CloseClipboard();
+    Out(L"copied %d path(s) as text", (int)entries.size());
 }
 
 void CommitRename(WindowState* state) {
@@ -4654,62 +4746,12 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
     Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
 }
 
-void OnRowRightTapped(muxc::ListView const& list,
-                      mux::Input::RightTappedRoutedEventArgs const& args) {
-    WindowState* state = StateForThisThread(false);
-    if (!state || !state->on || g_unloading) {
-        return;
-    }
+// The item's flyout: the shell's own commands for the picked items, at a point
+// of the list. Used by the right-click and by the Menu key.
+void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& list,
+                    std::vector<size_t> const& picked,
+                    winrt::Windows::Foundation::Point position) {
     try {
-        int columnIndex = ColumnIndexOfList(state, list);
-        if (columnIndex < 0) {
-            return;
-        }
-        Column* column = state->columns[columnIndex].get();
-
-        // The row under the pointer: climb from what was hit to its item.
-        mux::DependencyObject node =
-            args.OriginalSource().try_as<mux::DependencyObject>();
-        muxc::ListViewItem row{nullptr};
-        for (int i = 0; node && i < 20; i++) {
-            if (auto found = node.try_as<muxc::ListViewItem>()) {
-                row = found;
-                break;
-            }
-            node = mux::Media::VisualTreeHelper::GetParent(node);
-        }
-        if (!row) {
-            // Empty space: the column's own menu, and the column becomes the
-            // active one so Paste and the panes act on its folder.
-            args.Handled(true);
-            state->building = true;
-            list.SelectedItems().Clear();
-            state->building = false;
-            column->selectedChild.reset();
-            SetActiveColumn(state, columnIndex);
-            ScheduleNavigation(state, column->folder.get());
-            ShowBackgroundMenu(state, column, list, args);
-            return;
-        }
-        int rowIndex = list.IndexFromContainer(row);
-        int entryIndex = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
-                             ? column->rowToEntry[rowIndex]
-                             : -1;
-        if (entryIndex < 0) {
-            return;
-        }
-        args.Handled(true);
-        // Right-click inside a selection acts on all of it. Outside, it
-        // selects the item under the pointer first.
-        std::vector<size_t> picked;
-        if (row.IsSelected()) {
-            picked = SelectedEntries(column, list);
-        }
-        if (picked.empty()) {
-            list.SelectedIndex(rowIndex);
-            picked.push_back((size_t)entryIndex);
-        }
-
         CloseContextMenu(state);
         IShellFolder* parent = nullptr;
         HRESULT hr = ILIsEmpty(column->folder.get())
@@ -4770,11 +4812,74 @@ void OnRowRightTapped(muxc::ListView const& list,
                 }
             });
         muxc::Primitives::FlyoutShowOptions options;
-        options.Position(args.GetPosition(list));
+        options.Position(position);
         flyout.ShowAt(list, options);
         Out(L"context menu shown for %d item(s), first \"%s\", %u entries",
-            (int)picked.size(), column->entries[entryIndex].name.c_str(),
+            (int)picked.size(), column->entries[picked[0]].name.c_str(),
             flyout.Items().Size());
+    } catch (...) {
+        LogHresult(L"ShowItemFlyout");
+        CloseContextMenu(state);
+    }
+}
+
+void OnRowRightTapped(muxc::ListView const& list,
+                      mux::Input::RightTappedRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        int columnIndex = ColumnIndexOfList(state, list);
+        if (columnIndex < 0) {
+            return;
+        }
+        Column* column = state->columns[columnIndex].get();
+
+        // The row under the pointer: climb from what was hit to its item.
+        mux::DependencyObject node =
+            args.OriginalSource().try_as<mux::DependencyObject>();
+        muxc::ListViewItem row{nullptr};
+        for (int i = 0; node && i < 20; i++) {
+            if (auto found = node.try_as<muxc::ListViewItem>()) {
+                row = found;
+                break;
+            }
+            node = mux::Media::VisualTreeHelper::GetParent(node);
+        }
+        if (!row) {
+            // Empty space: the column's own menu, and the column becomes the
+            // active one so Paste and the panes act on its folder.
+            args.Handled(true);
+            state->building = true;
+            list.SelectedItems().Clear();
+            state->building = false;
+            column->selectedChild.reset();
+            SetActiveColumn(state, columnIndex);
+            ScheduleNavigation(state, column->folder.get());
+            ShowBackgroundMenu(state, column, list, args);
+            return;
+        }
+        int rowIndex = list.IndexFromContainer(row);
+        int entryIndex = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
+                             ? column->rowToEntry[rowIndex]
+                             : -1;
+        if (entryIndex < 0) {
+            return;
+        }
+        args.Handled(true);
+        // Right-click inside a selection acts on all of it. Outside, it
+        // selects the item under the pointer first.
+        std::vector<size_t> picked;
+        if (row.IsSelected()) {
+            picked = SelectedEntries(column, list);
+        }
+        if (picked.empty()) {
+            list.SelectedIndex(rowIndex);
+            picked.push_back((size_t)entryIndex);
+        }
+
+        ShowItemFlyout(state, column, list, picked, args.GetPosition(list));
     } catch (...) {
         LogHresult(L"OnRowRightTapped");
         if (state) {
@@ -5959,6 +6064,65 @@ void OnColumnKey(muxc::ListView const& list,
                 return;
             }
         }
+        bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        // Everyday keys.
+        if (key == VirtualKey::F5 && !ctrl && !alt) {
+            ReloadAll(state);
+            Out(L"F5: the columns are read again");
+            keep();
+            return;
+        }
+        if (key == VirtualKey::Escape && !ctrl && !alt && !picked.empty()) {
+            list.SelectedItems().Clear();
+            keep();
+            return;
+        }
+        if (key == VirtualKey::Back && !ctrl && !alt && !shift) {
+            // Up one column; in the first one, Explorer goes to the parent folder.
+            if (index > 0) {
+                SetActiveColumn(state, index - 1);
+                state->columns[index - 1]->list.Focus(mux::FocusState::Keyboard);
+                state->focusColumn = state->columns[index - 1].get();
+                state->focusUntil = GetTickCount64() + 1500;
+                args.Handled(true);
+            } else if (!ILIsEmpty(column->folder.get())) {
+                Pidl parent(ILClone(column->folder.get()));
+                ILRemoveLastID(parent.get());
+                if (parent && !IsInControlPanel(parent.get())) {
+                    NavigateExplorer(state, parent.get());
+                }
+                args.Handled(true);
+            }
+            return;
+        }
+        if (((key == VirtualKey::Application) || (key == VirtualKey::F10 && shift)) &&
+            !picked.empty()) {
+            // The flyout of the selected item, below its row.
+            auto selectedRow = list.Items().GetAt((uint32_t)row).try_as<muxc::ListViewItem>();
+            winrt::Windows::Foundation::Point where{40, 40};
+            if (selectedRow) {
+                where = selectedRow.TransformToVisual(list).TransformPoint(
+                    winrt::Windows::Foundation::Point{40, (float)selectedRow.ActualHeight()});
+            }
+            ShowItemFlyout(state, column, list, picked, where);
+            args.Handled(true);
+            return;
+        }
+        if (ctrl && shift && !alt && key == VirtualKey::N) {
+            CreateNewFolder(state, column);
+            keep();
+            return;
+        }
+        if (ctrl && shift && !alt && key == VirtualKey::C) {
+            CopyAsPath(state, column, picked);
+            keep();
+            return;
+        }
+        if (ctrl && !alt && key == VirtualKey::Y && RedoLast(state)) {
+            ReloadAll(state);
+            keep();
+            return;
+        }
         if (ctrl && !alt && (key == VirtualKey::C || key == VirtualKey::X)) {
             if (!picked.empty()) {
                 CopyOrCut(state, column, picked, key == VirtualKey::X);
@@ -6090,6 +6254,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    g_panelWindow = nullptr;
     RestoreNativeList(state);
     CancelRename(state);
     CloseContextMenu(state);
@@ -6157,6 +6322,7 @@ void AbandonWindow(WindowState* state) {
     (void)state->context.release();  // Never destroyed, like the columns.
     (void)state->rename.release();
     g_renaming = false;
+    g_panelWindow = nullptr;
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -6614,6 +6780,36 @@ void OnTick() {
             Out(L"theme changed, panel background taken again");
         }
 
+        // The system accent or the theme changed: the pill and the selection
+        // rectangle take the new colour.
+        if (state->ticks % 20 == 0 && state->pill && state->bandBox) {
+            try {
+                bool darkNow = IsDarkMode();
+                winrt::Windows::UI::ViewManagement::UISettings colours;
+                auto pillShade = colours.GetColorValue(
+                    darkNow ? winrt::Windows::UI::ViewManagement::UIColorType::AccentLight2
+                            : winrt::Windows::UI::ViewManagement::UIColorType::AccentDark1);
+                auto accent = colours.GetColorValue(
+                    winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+                auto same = [](winrt::Windows::UI::Color const& a, winrt::Windows::UI::Color const& b) {
+                    return a.R == b.R && a.G == b.G && a.B == b.B;
+                };
+                if (!state->colorsSet || !same(pillShade, state->pillColor) ||
+                    !same(accent, state->accentColor)) {
+                    if (state->colorsSet) {
+                        Out(L"accent or theme changed, the pill and the selection rectangle follow");
+                    }
+                    state->colorsSet = true;
+                    state->pillColor = pillShade;
+                    state->accentColor = accent;
+                    state->pill.Background(mux::Media::SolidColorBrush(pillShade));
+                    state->bandBox.Background(Brush(48, accent.R, accent.G, accent.B));
+                    state->bandBox.BorderBrush(Brush(170, accent.R, accent.G, accent.B));
+                }
+            } catch (...) {
+            }
+        }
+
         // A column resized or moved: the pill follows, without animation.
         UpdatePill(state, false);
 
@@ -6943,6 +7139,7 @@ void ShowPanel(WindowState* state) {
         SetWindowPos((HWND)bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         state->lastRect = rect;
+        g_panelWindow = (HWND)bridge.WindowId().Value;
         state->lastFileList = fileList;
         state->scroller = scroller;
         state->strip = strip;
@@ -7671,7 +7868,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.6.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
