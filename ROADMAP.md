@@ -55,8 +55,12 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       appear, about 270 ms.
 - [ ] Real file icons and thumbnails
 - [ ] Native right-click menu
-- [ ] Open in Columns without the flash of Explorer's own list
+- [ ] Polish pass: open in Columns without the flash of Explorer's own list.
+      Fine for now, per Ari.
 - [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
+- [ ] Focusing a Control Panel item, or another virtual shell item such as a
+      link, in the Desktop folder. These aren't real folders on disk, so the
+      column logic needs a way to open and focus them. Not looked at yet.
 
 ## 0.3.1
 
