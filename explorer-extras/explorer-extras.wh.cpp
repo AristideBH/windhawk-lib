@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.9
+// @version         0.3.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2204,6 +2204,17 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         return;
     }
     state->expected.reset(ILClone(folder));
+    // Explorer's view takes focus when it navigates. If the keyboard was in
+    // a column, the tick gives it back.
+    if (state->bridge && state->active >= 0 &&
+        state->active < (int)state->columns.size()) {
+        HWND panel = (HWND)state->bridge.WindowId().Value;
+        HWND focused = GetFocus();
+        if (panel && focused && (focused == panel || IsChild(panel, focused))) {
+            state->focusColumn = state->columns[state->active].get();
+            state->focusUntil = GetTickCount64() + 2500;
+        }
+    }
     HRESULT hr = browser->BrowseObject(folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
     if (FAILED(hr)) {
         Out(L"BrowseObject failed, hr=0x%08lX", hr);
@@ -3445,8 +3456,16 @@ void OnTick() {
             for (auto& c : state->columns) {
                 known = known || c.get() == state->focusColumn;
             }
-            if (known) {
+            // Only when focus has left the panel, and then once: focusing a
+            // list again would move its keyboard cursor.
+            HWND panel = state->bridge ? (HWND)state->bridge.WindowId().Value
+                                       : nullptr;
+            HWND focused = GetFocus();
+            bool inside = panel && focused &&
+                          (focused == panel || IsChild(panel, focused));
+            if (known && panel && !inside) {
                 state->focusColumn->list.Focus(mux::FocusState::Programmatic);
+                Out(L"focus taken back from Explorer's view");
             }
         } else {
             state->focusColumn = nullptr;
@@ -4276,7 +4295,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
