@@ -139,10 +139,10 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
 - [ ] Better archive extraction flow
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization
-- [ ] Built-in versions of two Windhawk mods that are disabled for now:
-      double-click on empty space goes up one folder
-      (`explorer-double-click-up`), and details view columns fit their
-      content (`file-explorer-details-autofit-columns`)
+- [ ] (0.5.5, not tested) Double-click on empty space goes up one folder, a
+      setting, on by default (built-in `explorer-double-click-up`)
+- [ ] Details view columns fit their content (built-in
+      `file-explorer-details-autofit-columns`)
 - [ ] Small tweaks
 
 ## Outside this mod

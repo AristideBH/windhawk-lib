@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.4
+// @version         0.5.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - doubleClickUp: true
+    $name: Double-click on empty space goes up
+    $description: A double-click on the empty space of a column goes up one folder, as in the "Explorer double-click up" mod. In the first column the parent folder is added in front.
   - compactScrollbars: false
     $name: Compact scrollbars
     $description: Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.
@@ -164,6 +167,7 @@ std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_compactScroll{false};
+std::atomic<bool> g_doubleClickUp{true};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -3010,6 +3014,8 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
 void OnRowSelected(muxc::ListView const& list);
 void SetHeaderFocus(Column* column, muxc::ListView const& list, int row);
 void OnRowDoubleTapped(muxc::ListView const& list);
+void OnEmptyDoubleTapped(muxc::ListView const& list,
+                         mux::Input::DoubleTappedRoutedEventArgs const& args);
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args);
 void OnColumnBackgroundTapped(muxc::ListView const& list,
@@ -3056,6 +3062,9 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
                 node = mux::Media::VisualTreeHelper::GetParent(node);
             }
             if (!onRow) {
+                if (auto list = sender.try_as<muxc::ListView>()) {
+                    OnEmptyDoubleTapped(list, args);
+                }
                 return;
             }
             if (auto list = sender.try_as<muxc::ListView>()) {
@@ -5434,6 +5443,51 @@ void OnBandReleased(muxc::ListView const& list) {
     }
 }
 
+// A double-click on the empty space of a column goes up one folder: the column
+// before it becomes the active one, or, in the first column, Explorer is taken
+// to the parent folder, which is then added in front of the columns.
+void OnEmptyDoubleTapped(muxc::ListView const& list,
+                         mux::Input::DoubleTappedRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading || !g_doubleClickUp) {
+        return;
+    }
+    try {
+        int index = ColumnIndexOfList(state, list);
+        if (index < 0) {
+            return;
+        }
+        Column* column = state->columns[index].get();
+        // A group header takes the double-click for itself.
+        if (HeaderRowAt(column, list, args.GetPosition(list)) >= 0) {
+            return;
+        }
+        if (index > 0) {
+            Column* previous = state->columns[index - 1].get();
+            LiftStale(state, index - 1);
+            SetActiveColumn(state, index - 1);
+            ScheduleNavigation(state, previous->folder.get());
+            state->focusColumn = previous;
+            state->focusUntil = GetTickCount64() + 1500;
+            previous->list.Focus(mux::FocusState::Pointer);
+            Out(L"double-click on empty space: back to column %d", index);
+            return;
+        }
+        if (ILIsEmpty(column->folder.get())) {
+            return;  // The top of the namespace.
+        }
+        Pidl parent(ILClone(column->folder.get()));
+        ILRemoveLastID(parent.get());
+        if (!parent || IsInControlPanel(parent.get())) {
+            return;
+        }
+        NavigateExplorer(state, parent.get());
+        Out(L"double-click on empty space: up from the first column");
+    } catch (...) {
+        LogHresult(L"OnEmptyDoubleTapped");
+    }
+}
+
 // Opens or collapses the group of a header row.
 // The end of an opening or closing group: closed rows are taken out of the
 // layout, and every row gets its normal height back.
@@ -7411,6 +7465,7 @@ void LoadSettings() {
     g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
     g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
     g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
+    g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
         g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
@@ -7445,7 +7500,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
