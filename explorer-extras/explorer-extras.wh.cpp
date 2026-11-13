@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.1
+// @version         0.3.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1054,6 +1054,9 @@ struct Column {
     winrt::event_token selectionToken{};
     winrt::event_token doubleTapToken{};
     winrt::event_token keyToken{};
+    winrt::event_token loadedToken{};
+    winrt::event_token panelWheelToken{};
+    mux::UIElement panel{nullptr};  // The list's row panel, for the wheel.
     winrt::event_token gripPressedToken{};
     winrt::event_token gripMovedToken{};
     winrt::event_token gripReleasedToken{};
@@ -1292,6 +1295,10 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->list.SelectionChanged(column->selectionToken);
                 column->list.DoubleTapped(column->doubleTapToken);
                 column->list.PreviewKeyDown(column->keyToken);
+                column->list.Loaded(column->loadedToken);
+            }
+            if (column->panel) {
+                column->panel.PointerWheelChanged(column->panelWheelToken);
             }
             if (column->grip) {
                 column->grip.PointerPressed(column->gripPressedToken);
@@ -1588,6 +1595,49 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
            mux::Input::KeyRoutedEventArgs const& args) {
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnColumnKey(list, args);
+            }
+        });
+
+    // A horizontal wheel turn must not scroll a column up or down. The list's
+    // own scroll viewer takes the event before any handler on the list, so
+    // the handler goes on the row panel inside it, which sees the event first.
+    // It only marks the event handled. The strip itself is moved by the
+    // handler on the panel's root, which also sees handled events.
+    column->loadedToken = list.Loaded(
+        [](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            try {
+                auto list = sender.try_as<muxc::ListView>();
+                WindowState* state = StateForThisThread(false);
+                if (!list || !state) {
+                    return;
+                }
+                int index = ColumnIndexOfList(state, list);
+                if (index < 0 || state->columns[index]->panel) {
+                    return;
+                }
+                auto panel = list.ItemsPanelRoot();
+                if (!panel) {
+                    return;
+                }
+                Column& column = *state->columns[index];
+                column.panel = panel;
+                column.panelWheelToken = panel.PointerWheelChanged(
+                    [](Inspectable const& source,
+                       mux::Input::PointerRoutedEventArgs const& args) {
+                        try {
+                            auto element = source.try_as<mux::UIElement>();
+                            if (element &&
+                                args.GetCurrentPoint(element)
+                                    .Properties()
+                                    .IsHorizontalMouseWheel()) {
+                                args.Handled(true);
+                            }
+                        } catch (...) {
+                            LogHresult(L"column wheel");
+                        }
+                    });
+            } catch (...) {
+                LogHresult(L"column loaded");
             }
         });
 
@@ -3045,7 +3095,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

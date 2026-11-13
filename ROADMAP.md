@@ -59,10 +59,11 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       Fine for now, per Ari.
 - [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
 - [ ] Mouse horizontal scroll wheel scrolls the strip sideways across the
-      columns, and does not scroll vertically inside a column. Written in
-      0.3.1, compiled by syntax check only, not run.
-- [ ] Flash shortened: restore waits one tick instead of three. 0.3.1, not
-      run.
+      columns, and does not scroll vertically inside a column. Sideways works
+      in 0.3.1. The column still scrolled vertically, so 0.3.2 marks the
+      event handled on each column's row panel. Syntax check only, not run.
+- [x] Flash shortened: restore waits one tick instead of three. Tested in
+      0.3.1, shorter.
 - [ ] Focusing a Control Panel item, or another virtual shell item such as a
       link, in the Desktop folder. These aren't real folders on disk, so the
       column logic needs a way to open and focus them. Not looked at yet.
