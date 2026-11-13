@@ -1487,6 +1487,20 @@ void OnTick() {
             return;  // This tab is not in Columns: nothing to keep up.
         }
 
+        // A tab made after the panel is a window above it, and covers it: the
+        // panel would show but get no mouse. Keep it on top.
+        {
+            HWND panelWindow = (HWND)state->bridge.WindowId().Value;
+            if (panelWindow && GetWindow(panelWindow, GW_HWNDPREV)) {
+                SetWindowPos(panelWindow, HWND_TOP, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                static int logged = 0;
+                if (logged++ < 8) {
+                    Out(L"the panel was covered by a sibling window, raised again");
+                }
+            }
+        }
+
         // Keep the panel on the file list. Plain Win32, cheap.
         RECT rect;
         if (fileList && FileListRect(state->topLevel, fileList, &rect) &&

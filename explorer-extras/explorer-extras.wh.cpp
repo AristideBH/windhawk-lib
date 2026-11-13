@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.8.2
+// @version         0.8.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -7766,6 +7766,20 @@ void OnTick() {
             return;  // This tab is not in Columns: nothing to keep up.
         }
 
+        // A tab made after the panel is a window above it, and covers it: the
+        // panel would show but get no mouse. Keep it on top.
+        {
+            HWND panelWindow = (HWND)state->bridge.WindowId().Value;
+            if (panelWindow && GetWindow(panelWindow, GW_HWNDPREV)) {
+                SetWindowPos(panelWindow, HWND_TOP, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                static int logged = 0;
+                if (logged++ < 8) {
+                    Out(L"the panel was covered by a sibling window, raised again");
+                }
+            }
+        }
+
         // Keep the panel on the file list. Plain Win32, cheap.
         RECT rect;
         if (fileList && FileListRect(state->topLevel, fileList, &rect) &&
@@ -9189,7 +9203,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.8.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.8.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
