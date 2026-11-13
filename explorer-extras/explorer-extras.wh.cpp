@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.11
+// @version         0.7.12
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1577,6 +1577,7 @@ struct Column {
     int focusHeader = -1;  // The group header the keyboard is on.
     winrt::event_token moveToken{};
     winrt::event_token pressToken{};
+    mux::Input::PointerEventHandler stopScrollHandler{nullptr};  // A press stops a scroll in flight.
     winrt::event_token releaseToken{};
     winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
@@ -2348,6 +2349,11 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->list.PointerMoved(column->moveToken);
                 column->list.PointerExited(column->exitToken);
                 column->list.PointerPressed(column->pressToken);
+                if (column->stopScrollHandler) {
+                    column->list.RemoveHandler(mux::UIElement::PointerPressedEvent(),
+                                               winrt::box_value(column->stopScrollHandler));
+                    column->stopScrollHandler = nullptr;
+                }
                 column->list.PointerReleased(column->releaseToken);
                 column->list.PointerCaptureLost(column->captureLostToken);
                 column->list.PreviewKeyDown(column->keyToken);
@@ -3525,6 +3531,22 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 OnBandPressed(list, args);
             }
         });
+    // A click stops a scroll that is still gliding. A row marks its own press as
+    // handled, so this is added to see handled presses too.
+    column->stopScrollHandler = mux::Input::PointerEventHandler(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+            try {
+                if (auto list = sender.try_as<muxc::ListView>()) {
+                    auto scroller = FindListScroller(list, 0);
+                    if (scroller) {
+                        scroller.ChangeView(nullptr, scroller.VerticalOffset(), nullptr, true);
+                    }
+                }
+            } catch (...) {
+            }
+        });
+    list.AddHandler(mux::UIElement::PointerPressedEvent(),
+                    winrt::box_value(column->stopScrollHandler), true);
     column->releaseToken = list.PointerReleased(
         [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
             if (auto list = sender.try_as<muxc::ListView>()) {
@@ -8802,7 +8824,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
