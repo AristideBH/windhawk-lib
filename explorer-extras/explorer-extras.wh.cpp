@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.13
+// @version         0.7.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -3540,7 +3540,14 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     auto scroller = FindListScroller(list, 0);
                     if (scroller) {
                         double offset = scroller.VerticalOffset();
+                        // Move by half a pixel and back, without animation: a change to
+                        // the same offset is ignored while the list glides.
+                        double nudge = offset + 0.5 <= scroller.ScrollableHeight() ? 0.5 : -0.5;
+                        scroller.ChangeView(nullptr, offset + nudge, nullptr, true);
                         scroller.ChangeView(nullptr, offset, nullptr, true);
+                        bool inertia = scroller.IsScrollInertiaEnabled();
+                        scroller.IsScrollInertiaEnabled(false);
+                        scroller.IsScrollInertiaEnabled(inertia);
                         // A ChangeView to where the list already is can be ignored
                         // while it glides. Turning vertical scrolling off and on
                         // again ends the glide.
@@ -8835,7 +8842,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
