@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.15
+// @version         0.3.16
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1195,6 +1195,8 @@ struct WindowState {
     int entryTries = 0;
     int restoreSettle = 0;
     HWND armTab = nullptr;  // A new tab to wait for before restoring Columns.
+    std::wstring renameName;      // A folder just made, to put in edit mode
+    Column* renameColumn = nullptr;  // once its column has loaded.
 
     // Panel.
     bool on = false;
@@ -1743,6 +1745,7 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight) {
 
 // Fills a column's list from freshly loaded data.
 void CancelRename(WindowState* state);
+void BeginRename(WindowState* state, Column* column, size_t entryIndex);
 
 // Dims the rows that were cut, in every column that shows their folder.
 void ApplyCutState(WindowState* state) {
@@ -1823,6 +1826,27 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     }
     if (state->cutFolder) {
         ApplyCutState(state);
+    }
+    if (!state->renameName.empty() && state->renameColumn == column) {
+        std::wstring wanted = state->renameName;
+        state->renameName.clear();
+        state->renameColumn = nullptr;
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            if (column->entries[i].name == wanted && state->queue) {
+                // After the column has been laid out.
+                state->queue.TryEnqueue([column, i]() {
+                    WindowState* state = StateForThisThread(false);
+                    if (state && state->on && !g_unloading) {
+                        try {
+                            BeginRename(state, column, i);
+                        } catch (...) {
+                            LogHresult(L"rename of the new folder");
+                        }
+                    }
+                });
+                break;
+            }
+        }
     }
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
@@ -2792,6 +2816,153 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
     }
 }
 
+HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
+                           const char* verb);
+HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder);
+void BeginRename(WindowState* state, Column* column, size_t entryIndex);
+
+// Is there something to paste? Files or folders on the clipboard.
+bool ClipboardHasFiles() {
+    IDataObject* data = nullptr;
+    if (FAILED(OleGetClipboard(&data)) || !data) {
+        return false;
+    }
+    static UINT idList = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+    FORMATETC list = {(CLIPFORMAT)idList, nullptr, DVASPECT_CONTENT, -1,
+                      TYMED_HGLOBAL};
+    FORMATETC drop = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    bool has = data->QueryGetData(&list) == S_OK ||
+               data->QueryGetData(&drop) == S_OK;
+    data->Release();
+    return has;
+}
+
+// A new folder in a column's folder, named like Explorer names it. Only for
+// folders on disk. Then the column reloads and the name is put in edit mode.
+void CreateNewFolder(WindowState* state, Column* column) {
+    wchar_t path[MAX_PATH] = L"";
+    if (!SHGetPathFromIDListW(column->folder.get(), path) || !path[0]) {
+        Out(L"new folder: this folder isn't on disk");
+        return;
+    }
+    std::wstring name = L"New folder";
+    for (int i = 1; i < 100; i++) {
+        std::wstring candidate =
+            i == 1 ? name : name + L" (" + std::to_wstring(i) + L")";
+        std::wstring full = std::wstring(path) + L"\\" + candidate;
+        if (!PathFileExistsW(full.c_str())) {
+            if (CreateDirectoryW(full.c_str(), nullptr)) {
+                state->renameName = candidate;
+                state->renameColumn = column;
+                RequestLoad(state, column);
+                Out(L"new folder \"%s\" created", candidate.c_str());
+            } else {
+                Out(L"new folder: CreateDirectory failed, gle=%lu",
+                    GetLastError());
+            }
+            return;
+        }
+    }
+}
+
+void RunBackgroundAction(WindowState* state, Column* column,
+                         const std::wstring& action) {
+    bool known = false;
+    for (auto& c : state->columns) {
+        known = known || c.get() == column;
+    }
+    if (!known) {
+        return;
+    }
+    if (action == L"paste") {
+        HRESULT hr = PasteIntoFolder(state, column->folder.get());
+        Out(L"background Paste: hr=0x%08lX", hr);
+    } else if (action == L"newfolder") {
+        CreateNewFolder(state, column);
+    } else if (action == L"refresh") {
+        RequestLoad(state, column);
+    } else if (action == L"properties") {
+        HRESULT hr = InvokeVerbOnFolder(state, column->folder.get(), "properties");
+        Out(L"background Properties: hr=0x%08lX", hr);
+    }
+}
+
+// Right-click on a column's empty space.
+void ShowBackgroundMenu(WindowState* state, Column* column,
+                        muxc::ListView const& list,
+                        mux::Input::RightTappedRoutedEventArgs const& args) {
+    CloseContextMenu(state);
+    state->context = std::make_unique<ContextMenuState>();
+    state->context->owner = state->topLevel;
+    state->context->column = column;
+
+    muxc::MenuFlyout flyout;
+    struct Item {
+        const wchar_t* id;
+        const wchar_t* text;
+        bool enabled;
+    };
+    Item items[] = {
+        {L"paste", L"Paste", ClipboardHasFiles()},
+        {L"newfolder", L"New folder", true},
+        {nullptr, nullptr, false},
+        {L"refresh", L"Refresh", true},
+        {L"properties", L"Properties", true},
+    };
+    for (auto& item : items) {
+        if (!item.id) {
+            flyout.Items().Append(muxc::MenuFlyoutSeparator());
+            continue;
+        }
+        muxc::MenuFlyoutItem entry;
+        entry.Text(item.text);
+        entry.IsEnabled(item.enabled);
+        entry.Tag(winrt::box_value(winrt::hstring{item.id}));
+        auto token = entry.Click(
+            [](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                WindowState* state = StateForThisThread(false);
+                if (!state || !state->context || g_unloading) {
+                    return;
+                }
+                try {
+                    auto item = sender.try_as<muxc::MenuFlyoutItem>();
+                    if (!item) {
+                        return;
+                    }
+                    std::wstring action =
+                        winrt::unbox_value<winrt::hstring>(item.Tag()).c_str();
+                    Column* column = state->context->column;
+                    RunBackgroundAction(state, column, action);
+                } catch (...) {
+                    LogHresult(L"background menu");
+                }
+            });
+        state->context->hooks.emplace_back(entry, token);
+        flyout.Items().Append(entry);
+    }
+    state->context->flyout = flyout;
+    state->context->closedToken = flyout.Closed(
+        [](Inspectable const&, Inspectable const&) {
+            WindowState* state = StateForThisThread(false);
+            if (!state || g_unloading || !state->queue) {
+                return;
+            }
+            try {
+                state->queue.TryEnqueue([]() {
+                    WindowState* state = StateForThisThread(false);
+                    if (state && !g_unloading) {
+                        CloseContextMenu(state);
+                    }
+                });
+            } catch (...) {
+            }
+        });
+    muxc::Primitives::FlyoutShowOptions options;
+    options.Position(args.GetPosition(list));
+    flyout.ShowAt(list, options);
+    Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
+}
+
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args) {
     WindowState* state = StateForThisThread(false);
@@ -2817,7 +2988,17 @@ void OnRowRightTapped(muxc::ListView const& list,
             node = mux::Media::VisualTreeHelper::GetParent(node);
         }
         if (!row) {
-            return;  // Empty space. The quick options come in 0.3.1.
+            // Empty space: the column's own menu, and the column becomes the
+            // active one so Paste and the panes act on its folder.
+            args.Handled(true);
+            state->building = true;
+            list.SelectedItems().Clear();
+            state->building = false;
+            column->selectedChild.reset();
+            SetActiveColumn(state, columnIndex);
+            ScheduleNavigation(state, column->folder.get());
+            ShowBackgroundMenu(state, column, list, args);
+            return;
         }
         int rowIndex = list.IndexFromContainer(row);
         int entryIndex = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
@@ -2985,7 +3166,8 @@ HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
 
 // Paste into a folder, through that folder's item in its
 // parent, which is the route the right-click menu's Paste took.
-HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
+HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
+                           const char* verb) {
     IShellFolder* parent = nullptr;
     PCUITEMID_CHILD child = nullptr;
     HRESULT hr = SHBindToParent(folder, IID_PPV_ARGS(&parent),
@@ -3006,13 +3188,17 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         CMINVOKECOMMANDINFO invoke = {};
         invoke.cbSize = sizeof(invoke);
         invoke.hwnd = state->topLevel;
-        invoke.lpVerb = "paste";
+        invoke.lpVerb = verb;
         invoke.nShow = SW_SHOWNORMAL;
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);
     menu->Release();
     return hr;
+}
+
+HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
+    return InvokeVerbOnFolder(state, folder, "paste");
 }
 
 // A click on the empty space of a column makes it the active one: Explorer's
@@ -4480,7 +4666,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

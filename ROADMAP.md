@@ -87,7 +87,8 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Keyboard shortcuts in a column: Delete, Ctrl+C, Ctrl+X, Ctrl+V, F2
       rename, Ctrl+A, Alt+Enter for properties. Copy, Cut and Rename already
       exist from the right-click menu, Paste does not.
-- [ ] Right-click on a column's empty space: flyout with Paste and the other
+- [ ] (0.3.16, not tested: Paste, New folder with rename, Refresh,
+      Properties.) Right-click on a column's empty space: flyout with Paste and the other
       background options (New folder, Refresh, Properties, sort and group).
       This is the quick options flyout below. The shell's background menu
       may return `E_NOTIMPL` for Paste, as Copy did, then paste goes through
