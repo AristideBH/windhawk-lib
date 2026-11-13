@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.9.6
+// @version         0.9.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -5586,94 +5586,8 @@ void RunBackgroundAction(WindowState* state, Column* column,
     }
 }
 
-// Right-click on a column's empty space.
-void ShowBackgroundMenu(WindowState* state, Column* column,
-                        muxc::ListView const& list,
-                        mux::Input::RightTappedRoutedEventArgs const& args) {
-    CloseContextMenu(state);
-    state->context = std::make_unique<ContextMenuState>();
-    state->context->owner = state->topLevel;
-    state->context->column = column;
-
-    muxc::MenuFlyout flyout;
-    struct Item {
-        const wchar_t* id;
-        const wchar_t* text;
-        bool enabled;
-    };
-    // The Desktop's properties are the Personalization page of Settings.
-    bool desktop = ILIsEmpty(column->folder.get());
-    if (!desktop) {
-        PIDLIST_ABSOLUTE known = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr,
-                                             &known)) &&
-            known) {
-            desktop = ILIsEqual(known, column->folder.get());
-            CoTaskMemFree(known);
-        }
-    }
-    // Inside an archive being browsed, writing and properties make no sense.
-    bool inArchive = ArchiveParentColumn(state, column) >= 0;
-    Item items[] = {
-        {L"paste", L"Paste", ClipboardHasFiles() && !inArchive},
-        {L"newfolder", L"New folder", !inArchive},
-        {nullptr, nullptr, false},
-        {L"refresh", L"Refresh", true},
-        {L"properties", desktop ? L"Personalize" : L"Folder properties", !inArchive},
-    };
-    for (auto& item : items) {
-        if (!item.id) {
-            flyout.Items().Append(muxc::MenuFlyoutSeparator());
-            continue;
-        }
-        muxc::MenuFlyoutItem entry;
-        entry.Text(item.text);
-        entry.IsEnabled(item.enabled);
-        entry.Tag(winrt::box_value(winrt::hstring{item.id}));
-        auto token = entry.Click(
-            [](Inspectable const& sender, mux::RoutedEventArgs const&) {
-                WindowState* state = StateForThisThread(false);
-                if (!state || !state->context || g_unloading) {
-                    return;
-                }
-                try {
-                    auto item = sender.try_as<muxc::MenuFlyoutItem>();
-                    if (!item) {
-                        return;
-                    }
-                    std::wstring action =
-                        winrt::unbox_value<winrt::hstring>(item.Tag()).c_str();
-                    Column* column = state->context->column;
-                    RunBackgroundAction(state, column, action);
-                } catch (...) {
-                    LogHresult(L"background menu");
-                }
-            });
-        state->context->hooks.emplace_back(entry, token);
-        flyout.Items().Append(entry);
-    }
-    state->context->flyout = flyout;
-    state->context->closedToken = flyout.Closed(
-        [](Inspectable const&, Inspectable const&) {
-            WindowState* state = StateForThisThread(false);
-            if (!state || g_unloading || !state->queue) {
-                return;
-            }
-            try {
-                state->queue.TryEnqueue([]() {
-                    WindowState* state = StateForThisThread(false);
-                    if (state && !g_unloading) {
-                        CloseContextMenu(state);
-                    }
-                });
-            } catch (...) {
-            }
-        });
-    muxc::Primitives::FlyoutShowOptions options;
-    options.Position(args.GetPosition(list));
-    flyout.ShowAt(list, options);
-    Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
-}
+void ShowBackgroundMenu(WindowState* state, Column* column, muxc::ListView const& list,
+                        mux::Input::RightTappedRoutedEventArgs const& args);
 
 // The item's flyout: the shell's own commands for the picked items, at a point
 // of the list. Used by the right-click and by the Menu key.
@@ -6261,6 +6175,166 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         LogHresult(L"ShowItemFlyout");
         CloseContextMenu(state);
     }
+}
+
+// Right-click on a column's empty space: the same look as the item menu, a row
+// of quick actions on top and the rest listed below.
+void ShowBackgroundMenu(WindowState* state, Column* column,
+                        muxc::ListView const& list,
+                        mux::Input::RightTappedRoutedEventArgs const& args) {
+    CloseContextMenu(state);
+    state->context = std::make_unique<ContextMenuState>();
+    state->context->owner = state->topLevel;
+    state->context->column = column;
+
+    // The Desktop's properties are the Personalization page of Settings.
+    bool desktop = ILIsEmpty(column->folder.get());
+    if (!desktop) {
+        PIDLIST_ABSOLUTE known = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr, &known)) && known) {
+            desktop = ILIsEqual(known, column->folder.get());
+            CoTaskMemFree(known);
+        }
+    }
+    // Inside an archive being browsed, writing and properties make no sense.
+    bool inArchive = ArchiveParentColumn(state, column) >= 0;
+
+    muxc::Flyout flyout;
+    muxc::StackPanel root;
+    root.Orientation(muxc::Orientation::Vertical);
+    root.MinWidth(260);
+    root.Margin(mux::Thickness{-12, -11, -12, -13});
+    root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
+
+    auto plainButton = []() {
+        muxc::Button button;
+        button.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+        button.BorderThickness(mux::Thickness{0, 0, 0, 0});
+        button.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+        return button;
+    };
+    auto onClick = [&](muxc::Button const& button, std::wstring action) {
+        auto token = button.Click(
+            [action](Inspectable const&, mux::RoutedEventArgs const&) {
+                try {
+                    WindowState* now = StateForThisThread(false);
+                    if (!now || !now->context || g_unloading) {
+                        return;
+                    }
+                    RunBackgroundAction(now, now->context->column, action);
+                    if (now->context && now->context->flyout) {
+                        now->context->flyout.Hide();
+                    }
+                } catch (...) {
+                    LogHresult(L"background menu");
+                }
+            });
+        state->context->buttonHooks.emplace_back(button, token);
+    };
+
+    // The quick actions.
+    struct Quick {
+        const wchar_t* action;
+        const wchar_t* label;
+        const wchar_t* glyph;
+        const wchar_t* icon;
+        bool enabled;
+    };
+    Quick quick[] = {
+        {L"paste", L"Paste", L"", L"windows.paste", ClipboardHasFiles() && !inArchive},
+        {L"newfolder", L"New folder", L"", L"newfolder", !inArchive},
+        {L"refresh", L"Refresh", L"", L"windows.refresh", true},
+    };
+    muxc::Grid header;
+    int index = 0;
+    for (auto& q : quick) {
+        muxc::ColumnDefinition definition;
+        definition.Width(mux::GridLength{1, mux::GridUnitType::Star});
+        header.ColumnDefinitions().Append(definition);
+        auto button = plainButton();
+        button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
+        button.MinWidth(56);
+        button.Padding(mux::Thickness{1, 3, 1, 3});
+        muxc::StackPanel stack;
+        stack.Orientation(muxc::Orientation::Vertical);
+        stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
+        mux::UIElement icon = OfficialIcon(q.icon, 20);
+        if (!icon) {
+            icon = MakeTwoToneIcon(state, q.glyph, 20, q.enabled);
+        }
+        icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
+        stack.Children().Append(icon);
+        muxc::TextBlock caption;
+        caption.Text(q.label);
+        caption.FontSize(11);
+        caption.Margin(mux::Thickness{0, 4, 0, 0});
+        caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+        caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
+        stack.Children().Append(caption);
+        button.Content(stack);
+        button.IsEnabled(q.enabled);
+        muxc::Grid::SetColumn(button, index++);
+        header.Children().Append(button);
+        onClick(button, q.action);
+    }
+    root.Children().Append(header);
+
+    // The list: the folder's properties.
+    {
+        muxc::Border line;
+        line.Height(1);
+        line.Margin(mux::Thickness{6, 4, 6, 4});
+        line.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{50, 128, 128, 128}));
+        root.Children().Append(line);
+        auto button = plainButton();
+        button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
+        button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
+        button.Padding(mux::Thickness{5, 4, 5, 4});
+        button.IsEnabled(!inArchive);
+        muxc::Grid content;
+        muxc::ColumnDefinition iconColumn, textColumn;
+        iconColumn.Width(mux::GridLength{28, mux::GridUnitType::Pixel});
+        textColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+        content.ColumnDefinitions().Append(iconColumn);
+        content.ColumnDefinitions().Append(textColumn);
+        mux::UIElement icon = OfficialIcon(desktop ? L"Personalize" : L"windows.properties", 18);
+        if (!icon) {
+            icon = MakeTwoToneIcon(state, L"", 18, !inArchive);
+        }
+        muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
+        content.Children().Append(icon);
+        muxc::TextBlock label;
+        label.Text(desktop ? L"Personalize" : L"Folder properties");
+        label.VerticalAlignment(mux::VerticalAlignment::Center);
+        muxc::Grid::SetColumn(label, 1);
+        content.Children().Append(label);
+        button.Content(content);
+        root.Children().Append(button);
+        onClick(button, L"properties");
+    }
+
+    flyout.Content(root);
+    state->context->flyout = flyout;
+    state->context->closedToken = flyout.Closed(
+        [](Inspectable const&, Inspectable const&) {
+            WindowState* state = StateForThisThread(false);
+            if (!state || g_unloading || !state->queue) {
+                return;
+            }
+            try {
+                state->queue.TryEnqueue([]() {
+                    WindowState* state = StateForThisThread(false);
+                    if (state && !g_unloading) {
+                        CloseContextMenu(state);
+                    }
+                });
+            } catch (...) {
+            }
+        });
+    muxc::Primitives::FlyoutShowOptions options;
+    options.Position(args.GetPosition(list));
+    flyout.ShowAt(list, options);
+    Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
 }
 
 void OnRowRightTapped(muxc::ListView const& list,
@@ -9703,7 +9777,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.9.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.9.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
