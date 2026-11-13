@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.22
+// @version         0.3.23
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -100,6 +100,7 @@ Not yet: drag and drop.
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cwchar>
 #include <deque>
@@ -120,6 +121,7 @@ Not yet: drag and drop.
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.h>
@@ -129,6 +131,7 @@ Not yet: drag and drop.
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Windows.UI.h>
 
 namespace mux = winrt::Microsoft::UI::Xaml;
@@ -1349,6 +1352,11 @@ struct WindowState {
     double wheelTarget = 0;             // Where the wheel is scrolling to.
     ULONGLONG wheelAt = 0;              // Tick of the last wheel event.
     muxc::StackPanel strip{nullptr};
+    // The pill that marks the active column, on a layer over the strip.
+    muxc::Canvas overlay{nullptr};
+    muxc::Border pill{nullptr};
+    double pillLeft = -1;      // Where the pill is, or is going.
+    ULONGLONG pillUntil = 0;   // Until when its animation runs.
     std::vector<std::unique_ptr<Column>> columns;
     RECT lastRect{};
     bool building = false;
@@ -1725,6 +1733,85 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
 }
 
 // Marks the column Explorer's own view is in with a light tint.
+// Moves the pill to the active column. A change of column springs: the pill
+// stretches while it travels and overshoots a little, like the indicator of a
+// WinUI NavigationView. A column resized or scrolled sideways only repositions
+// it, with no animation.
+void UpdatePill(WindowState* state, bool animate) {
+    if (!state->pill || !state->strip) {
+        return;
+    }
+    try {
+        int index = state->active;
+        if (index < 0 || index >= (int)state->columns.size() ||
+            !state->columns[index]->list) {
+            state->pill.Opacity(0);
+            return;
+        }
+        auto list = state->columns[index]->list;
+        double left = state->columns[index]->cell.TransformToVisual(state->strip)
+                          .TransformPoint(winrt::Windows::Foundation::Point{0, 0})
+                          .X;
+        double target = left + list.Width() / 2 - 8;
+        ULONGLONG now = GetTickCount64();
+        if (state->pill.Opacity() < 1) {
+            state->pill.Opacity(1);
+            animate = false;
+        }
+        if (std::abs(target - state->pillLeft) < 0.5) {
+            return;
+        }
+        if (!animate || state->pillLeft < 0) {
+            if (now >= state->pillUntil) {
+                muxc::Canvas::SetLeft(state->pill, target);
+            }
+            state->pillLeft = target;
+            return;
+        }
+        namespace anim = mux::Media::Animation;
+        double from = state->pillLeft;
+        muxc::Canvas::SetLeft(state->pill, target);  // Where it stays.
+        state->pillLeft = target;
+        state->pillUntil = now + 450;
+
+        anim::ElasticEase spring;
+        spring.EasingMode(anim::EasingMode::EaseOut);
+        spring.Oscillations(1);
+        spring.Springiness(4);
+        anim::DoubleAnimation travel;
+        travel.From(from);
+        travel.To(target);
+        travel.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(420)));
+        travel.EasingFunction(spring);
+        travel.EnableDependentAnimation(true);
+        travel.FillBehavior(anim::FillBehavior::Stop);
+        anim::Storyboard::SetTarget(travel, state->pill);
+        anim::Storyboard::SetTargetProperty(travel, L"(Canvas.Left)");
+
+        // The stretch: wider while it moves, back to 16 at the end.
+        double distance = std::abs(target - from);
+        anim::CubicEase ease;
+        ease.EasingMode(anim::EasingMode::EaseOut);
+        anim::DoubleAnimation stretch;
+        stretch.From(16.0);
+        stretch.To(16.0 + std::min(distance / 4, 20.0));
+        stretch.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(130)));
+        stretch.AutoReverse(true);
+        stretch.EasingFunction(ease);
+        stretch.EnableDependentAnimation(true);
+        stretch.FillBehavior(anim::FillBehavior::Stop);
+        anim::Storyboard::SetTarget(stretch, state->pill);
+        anim::Storyboard::SetTargetProperty(stretch, L"Width");
+
+        anim::Storyboard board;
+        board.Children().Append(travel);
+        board.Children().Append(stretch);
+        board.Begin();
+    } catch (...) {
+        LogHresult(L"UpdatePill");
+    }
+}
+
 // Scrolls the strip, smoothly, so that column `index` is fully in view. If the
 // column is wider than the view, its left edge wins: the icon and the start of
 // the names must be visible.
@@ -1761,14 +1848,15 @@ void EnsureColumnVisible(WindowState* state, int index) {
 void SetActiveColumn(WindowState* state, int index) {
     state->active = index;
     EnsureColumnVisible(state, index);
+    // The active column is shown by the pill, not by its background. The
+    // transparent brush keeps the empty space clickable.
     for (size_t i = 0; i < state->columns.size(); i++) {
         try {
-            state->columns[i]->list.Background(
-                (int)i == index ? Brush(22, 128, 128, 128)
-                                : Brush(0, 0, 0, 0));
+            state->columns[i]->list.Background(Brush(0, 0, 0, 0));
         } catch (...) {
         }
     }
+    UpdatePill(state, true);
 }
 
 double MeasureText(const std::wstring& text) {
@@ -2139,7 +2227,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
     muxc::ListView list;
     list.Width(g_minWidth);
     list.SelectionMode(muxc::ListViewSelectionMode::Extended);
-    list.Padding(mux::Thickness{0, 4, 0, 4});
+    list.Padding(mux::Thickness{0, 12, 0, 4});
     column->selectionToken = list.SelectionChanged(
         [](Inspectable const& sender,
            muxc::SelectionChangedEventArgs const&) {
@@ -3863,6 +3951,8 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     state->bridge = nullptr;
     state->scroller = nullptr;
     state->strip = nullptr;
+    state->pill = nullptr;
+    state->overlay = nullptr;
     state->lastSeen.reset();
     state->expected.reset();
     state->pendingNav.reset();
@@ -3932,6 +4022,8 @@ void AbandonWindow(WindowState* state) {
     (void)winrt::detach_abi(state->wheelHandler);
     (void)winrt::detach_abi(state->stripWheelHandler);
     (void)winrt::detach_abi(state->strip);
+    (void)winrt::detach_abi(state->pill);
+    (void)winrt::detach_abi(state->overlay);
     (void)winrt::detach_abi(state->menuItem);
     (void)winrt::detach_abi(state->menuItems);
     state->topLevel = nullptr;
@@ -4142,6 +4234,9 @@ void OnTick() {
             }
         }
 
+        // A column resized or moved: the pill follows, without animation.
+        UpdatePill(state, false);
+
         // The clipboard changed: nothing is cut any more.
         if (state->cutFolder && GetClipboardSequenceNumber() != state->cutSeq) {
             state->cutFolder.reset();
@@ -4273,7 +4368,33 @@ void ShowPanel(WindowState* state) {
         scroller.VerticalScrollMode(muxc::ScrollMode::Disabled);
         scroller.VerticalScrollBarVisibility(
             muxc::ScrollBarVisibility::Disabled);
-        scroller.Content(strip);
+        // The strip and, over it, a layer for the pill. The pill scrolls
+        // sideways with the columns and stays at the top when a column scrolls.
+        muxc::Grid content;
+        content.Children().Append(strip);
+        muxc::Canvas overlay;
+        overlay.IsHitTestVisible(false);
+        muxc::Border pill;
+        pill.Width(16);
+        pill.Height(3);
+        pill.CornerRadius(mux::CornerRadius{1.5, 1.5, 1.5, 1.5});
+        pill.Opacity(0);
+        try {
+            auto accent = winrt::Windows::UI::ViewManagement::UISettings().GetColorValue(
+                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+            pill.Background(mux::Media::SolidColorBrush(accent));
+        } catch (...) {
+            pill.Background(Brush(255, 0, 120, 212));
+        }
+        muxc::Canvas::SetTop(pill, 5);
+        muxc::Canvas::SetLeft(pill, 0);
+        overlay.Children().Append(pill);
+        content.Children().Append(overlay);
+        state->overlay = overlay;
+        state->pill = pill;
+        state->pillLeft = -1;
+        state->pillUntil = 0;
+        scroller.Content(content);
 
         muxc::Grid root;
         bool dark = IsDarkMode();
@@ -5072,7 +5193,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.22 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.23 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
