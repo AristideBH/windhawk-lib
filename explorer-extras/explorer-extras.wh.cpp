@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.1
+// @version         0.7.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1557,6 +1557,9 @@ struct WindowState {
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     std::vector<UndoEntry> redo;
+    // After an extraction: the names to select in a column once it has loaded.
+    std::vector<std::wstring> selectNames;
+    Column* selectNamesColumn = nullptr;
     // Open in a new tab: the folder to show, until when to wait, and the tab
     // Explorer made for it.
     Pidl openTabFolder;
@@ -2747,6 +2750,7 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
 // Fills a column's list from freshly loaded data.
 void CancelRename(WindowState* state);
 void BeginRename(WindowState* state, Column* column, size_t entryIndex);
+void OnRowSelected(muxc::ListView const& list);
 
 // Explorer's own in-place rename box: a visible Edit control inside its file
 // view.
@@ -3005,6 +3009,52 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
             }
         }
     }
+    if (!state->selectNames.empty() && state->selectNamesColumn == column) {
+        // Select what was just extracted, and tell the rest (Explorer's view,
+        // the columns) after the column has been laid out.
+        int first = -1;
+        bool wasBuilding = state->building;
+        state->building = true;
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            for (auto& wanted : state->selectNames) {
+                if (_wcsicmp(column->entries[i].name.c_str(), wanted.c_str()) == 0 &&
+                    i < column->entryToRow.size() && column->entryToRow[i] >= 0) {
+                    int row = column->entryToRow[i];
+                    if (first < 0) {
+                        first = row;
+                        column->list.SelectedIndex(row);
+                    } else {
+                        column->list.SelectRange(
+                            winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(row, 1));
+                    }
+                    break;
+                }
+            }
+        }
+        state->building = wasBuilding;
+        state->selectNames.clear();
+        state->selectNamesColumn = nullptr;
+        if (first >= 0 && state->queue) {
+            state->queue.TryEnqueue([column, first]() {
+                WindowState* state = StateForThisThread(false);
+                if (!state || !state->on || g_unloading) {
+                    return;
+                }
+                try {
+                    bool known = false;
+                    for (auto& c : state->columns) {
+                        known = known || c.get() == column;
+                    }
+                    if (known) {
+                        column->list.ScrollIntoView(column->list.Items().GetAt((uint32_t)first));
+                        OnRowSelected(column->list);
+                    }
+                } catch (...) {
+                    LogHresult(L"selecting the extracted items");
+                }
+            });
+        }
+    }
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
         grouped ? (int)data.groupNames.size() : 0,
@@ -3233,9 +3283,18 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     list.Width(g_minWidth);
     if (archive) {
         // The shell reads the archive on the worker thread, which can take a while.
+        // A spinner shows meanwhile; the listing replaces it.
+        muxc::ProgressRing spinner;
+        spinner.IsActive(true);
+        spinner.Width(28);
+        spinner.Height(28);
+        spinner.HorizontalAlignment(mux::HorizontalAlignment::Center);
+        spinner.Margin(mux::Thickness{0, 24, 0, 0});
         muxc::ListViewItem reading;
-        reading.Content(winrt::box_value(L"Reading the archive..."));
-        reading.IsEnabled(false);
+        reading.Content(spinner);
+        reading.IsHitTestVisible(false);
+        reading.IsTabStop(false);
+        reading.HorizontalContentAlignment(mux::HorizontalAlignment::Center);
         list.Items().Append(reading);
     }
     // A list with rows hands the keyboard to its rows. An empty one has none,
@@ -5030,6 +5089,11 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
         }
     }
     Out(L"extract \"%s\": %d item(s), hr=0x%08lX", target.c_str(), copied, hr);
+    if (copied > 0) {
+        const wchar_t* leaf = wcsrchr(target.c_str(), L'\\');
+        state->selectNames.assign(1, leaf ? leaf + 1 : target.c_str());
+        state->selectNamesColumn = column;
+    }
     if (operation) {
         operation->Release();
     }
@@ -5040,6 +5104,100 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
         source->Release();
     }
     RequestLoad(state, column);
+}
+
+// For a column that shows the inside of an archive: the column before the
+// archive, on disk, which holds it. -1 if this column is not inside one.
+int ArchiveParentColumn(WindowState* state, Column* column) {
+    int index = -1;
+    for (size_t i = 0; i < state->columns.size(); i++) {
+        if (state->columns[i].get() == column) {
+            index = (int)i;
+        }
+    }
+    wchar_t path[MAX_PATH] = L"";
+    if (index <= 0 || SHGetPathFromIDListW(column->folder.get(), path)) {
+        return -1;  // On disk, or the first column.
+    }
+    for (int j = index - 1; j >= 0; j--) {
+        Column* before = state->columns[j].get();
+        if (SHGetPathFromIDListW(before->folder.get(), path) && path[0]) {
+            // The column after it must have been opened from an archive row.
+            if (before->selectedChild) {
+                for (auto& entry : before->entries) {
+                    if (entry.archive && ILIsEqual(entry.child.get(), before->selectedChild.get())) {
+                        return j;
+                    }
+                }
+            }
+            return -1;
+        }
+    }
+    return -1;
+}
+
+// Copies the picked items of an archive that is open in a column into the
+// folder that holds the archive, with the shell's own copy, and selects them.
+void ExtractSelected(WindowState* state, Column* column, std::vector<size_t> const& entries) {
+    int parentIndex = ArchiveParentColumn(state, column);
+    if (parentIndex < 0 || entries.empty()) {
+        return;
+    }
+    Column* parent = state->columns[parentIndex].get();
+    IShellFolder* source = nullptr;
+    HRESULT hr = SHBindToObject(nullptr, column->folder.get(), nullptr, IID_PPV_ARGS(&source));
+    IShellItem* destination = nullptr;
+    if (SUCCEEDED(hr) && source) {
+        hr = SHCreateItemFromIDList(parent->folder.get(), IID_PPV_ARGS(&destination));
+    }
+    IFileOperation* operation = nullptr;
+    if (SUCCEEDED(hr) && destination) {
+        hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&operation));
+    }
+    int copied = 0;
+    std::vector<std::wstring> names;
+    if (SUCCEEDED(hr) && operation) {
+        operation->SetOwnerWindow(state->topLevel);
+        operation->SetOperationFlags(FOFX_NOCOPYHOOKS | FOF_NOCONFIRMMKDIR);
+        for (size_t entry : entries) {
+            if (entry >= column->entries.size()) {
+                continue;
+            }
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(SHCreateItemWithParent(nullptr, source, column->entries[entry].child.get(),
+                                                 IID_PPV_ARGS(&item))) &&
+                item) {
+                if (SUCCEEDED(operation->CopyItem(item, destination, nullptr, nullptr))) {
+                    copied++;
+                    // The name the copy will have: the item's own file name.
+                    PWSTR leaf = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_PARENTRELATIVEPARSING, &leaf)) && leaf) {
+                        names.push_back(leaf);
+                        CoTaskMemFree(leaf);
+                    }
+                }
+                item->Release();
+            }
+        }
+        if (copied > 0) {
+            hr = operation->PerformOperations();
+        }
+    }
+    Out(L"extract selected: %d item(s) beside the archive, hr=0x%08lX", copied, hr);
+    if (operation) {
+        operation->Release();
+    }
+    if (destination) {
+        destination->Release();
+    }
+    if (source) {
+        source->Release();
+    }
+    if (copied > 0 && SUCCEEDED(hr)) {
+        state->selectNames = names;
+        state->selectNamesColumn = parent;
+        RequestLoad(state, parent);
+    }
 }
 
 void RunBackgroundAction(WindowState* state, Column* column,
@@ -5223,6 +5381,14 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     WindowState* now = StateForThisThread(false);
                     if (now && !g_unloading) {
                         NewFolderWithSelection(now, column, picked);
+                    }
+                });
+            }
+            if (!onDisk && ArchiveParentColumn(state, column) >= 0) {
+                addItem(L"Extract selected here", [column, picked]() {
+                    WindowState* now = StateForThisThread(false);
+                    if (now && !g_unloading) {
+                        ExtractSelected(now, column, picked);
                     }
                 });
             }
@@ -8420,7 +8586,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
