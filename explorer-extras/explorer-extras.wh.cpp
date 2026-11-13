@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.20
+// @version         0.3.21
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1200,6 +1200,8 @@ struct Column {
     std::vector<int> rowToEntry;         // Entry index per row, -1 for a header.
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
+    std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
+    int hintEntry = -1;  // The entry whose chevron is shown stronger.
     Pidl selectedChild;                 // Restored after a reload.
     unsigned generation = 0;
     bool userSized = false;
@@ -1791,7 +1793,8 @@ void RefreshNames(Column* column) {
 
 muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
                            size_t capacity, muxc::TextBlock* textOut,
-                           muxc::Grid* iconHostOut) {
+                           muxc::Grid* iconHostOut,
+                           muxc::FontIcon* chevronOut) {
     muxc::Grid grid;
     muxc::ColumnDefinition iconColumn, nameColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
@@ -1833,6 +1836,7 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
         chevron.VerticalAlignment(mux::VerticalAlignment::Center);
         muxc::Grid::SetColumn(chevron, 2);
         grid.Children().Append(chevron);
+        *chevronOut = chevron;
     }
 
     muxc::ListViewItem row;
@@ -1905,6 +1909,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->texts.resize(column->entries.size(), muxc::TextBlock{nullptr});
     column->iconHosts.clear();
     column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
+    column->chevrons.clear();
+    column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
+    column->hintEntry = -1;
 
     FitWidth(column);
     size_t capacity = NameCapacity(column);
@@ -1931,7 +1938,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
             selectRow = (int)column->rowToEntry.size();
         }
         items.Append(MakeRow(column->entries[i], rowHeight, capacity,
-                             &column->texts[i], &column->iconHosts[i]));
+                             &column->texts[i], &column->iconHosts[i],
+                             &column->chevrons[i]));
         column->rowToEntry.push_back((int)i);
     }
     if (data.truncated) {
@@ -2438,6 +2446,42 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     state->navDue = GetTickCount64() + 350;
 }
 
+// While the columns to the right of `columnIndex` are stale, the chevron of the
+// folder that leads to them is drawn stronger, a quiet thread of the hierarchy.
+void SetStaleHint(WindowState* state, int columnIndex, bool on) {
+    if (columnIndex < 0 || columnIndex >= (int)state->columns.size()) {
+        return;
+    }
+    Column* column = state->columns[columnIndex].get();
+    try {
+        if (column->hintEntry >= 0 &&
+            column->hintEntry < (int)column->chevrons.size() &&
+            column->chevrons[column->hintEntry]) {
+            column->chevrons[column->hintEntry].Opacity(0.6);
+            column->chevrons[column->hintEntry].FontSize(10);
+        }
+        column->hintEntry = -1;
+        if (!on || columnIndex + 1 >= (int)state->columns.size()) {
+            return;
+        }
+        Pidl leading(ILClone(ILFindLastID(state->columns[columnIndex + 1]->folder.get())));
+        if (!leading) {
+            return;
+        }
+        for (size_t i = 0; i < column->entries.size() && i < column->chevrons.size(); i++) {
+            if (column->chevrons[i] &&
+                ILIsEqual(column->entries[i].child.get(), leading.get())) {
+                column->chevrons[i].Opacity(1.0);
+                column->chevrons[i].FontSize(13);
+                column->hintEntry = (int)i;
+                break;
+            }
+        }
+    } catch (...) {
+        LogHresult(L"SetStaleHint");
+    }
+}
+
 // The entries of the rows selected in a column, in row order. Group headers
 // are left out.
 std::vector<size_t> SelectedEntries(Column* column,
@@ -2477,6 +2521,9 @@ void OnRowSelected(muxc::ListView const& list) {
         for (int j = 0; j <= columnIndex; j++) {
             if (state->columns[j]->cell) {
                 state->columns[j]->cell.Opacity(1.0);
+            }
+            if (j < columnIndex) {
+                SetStaleHint(state, j, false);
             }
         }
         for (int j = columnIndex; j > 0; j--) {
@@ -2529,6 +2576,7 @@ void OnRowSelected(muxc::ListView const& list) {
                     state->columns[j]->cell.Opacity(dim ? 0.5 : 1.0);
                 }
             }
+            SetStaleHint(state, columnIndex, dim);
         };
 
         // Several items selected: no column opens. Explorer's own view gets
@@ -2585,6 +2633,7 @@ void OnRowSelected(muxc::ListView const& list) {
                 state->building = true;
                 RemoveColumnsFrom(state, columnIndex + 1);
                 state->building = false;
+                SetStaleHint(state, columnIndex, false);
                 AddColumn(state, std::move(absolute));
             }
             // The highlight stays here. It moves to the new column when the
@@ -4885,7 +4934,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.20 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.21 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
