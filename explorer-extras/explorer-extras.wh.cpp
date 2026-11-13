@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.18
+// @version         0.4.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1560,10 +1560,6 @@ struct WindowState {
                                  // are rooted elsewhere and never compare equal.
     std::vector<std::wstring> cutPaths;
     DWORD cutSeq = 0;
-    // After a paste Explorer's view may jump to another folder. For a moment
-    // that is ignored and the view is sent back to this one.
-    Pidl pasteReturn;
-    ULONGLONG pasteGuardUntil = 0;
     // The column to keep keyboard focus in, for a moment after a key, since
     // Explorer's own view takes focus when it navigates.
     Column* focusColumn = nullptr;
@@ -4659,16 +4655,6 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
 // own drop target. The "paste" verb of the context menu made Explorer's view
 // jump to another folder afterwards.
 HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
-    // In case Explorer's view jumps anyway, remember where it was.
-    state->pasteReturn.reset();
-    if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
-        Pidl now = CurrentFolder(browser);
-        if (now) {
-            state->pasteReturn.reset(ILClone(now.get()));
-        }
-    }
-    state->pasteGuardUntil = GetTickCount64() + 3000;
-
     IShellFolder* target = nullptr;
     HRESULT hr = ILIsEmpty(folder)
                      ? SHGetDesktopFolder(&target)
@@ -5916,12 +5902,6 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
         return;
     }
     state->expected.reset();
-    if (state->pasteReturn && GetTickCount64() < state->pasteGuardUntil) {
-        Out(L"Explorer moved to \"%s\" right after a paste, sending it back",
-            PathOf(current.get()).c_str());
-        ScheduleNavigation(state, state->pasteReturn.get());
-        return;
-    }
     SyncToFolder(state, current);
 }
 
@@ -7165,7 +7145,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.18 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.19 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
