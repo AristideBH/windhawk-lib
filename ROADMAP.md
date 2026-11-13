@@ -86,9 +86,9 @@ last and are not scheduled.
 
 | Version | Content | Effort | Risk |
 | --- | --- | --- | --- |
-| 0.6.0 | Everyday keys: F5, Escape, Backspace, Menu key and Shift+F10, Ctrl+Shift+N, Ctrl+Shift+C, redo. Live accent colour for the pill. | small | low. Backspace may be taken by Explorer's accelerators, the `TranslateAcceleratorW` hook already exists for the rename box and can be reused. |
+| 0.6.0 | Everyday keys: F5, Escape, Backspace, Menu key and Shift+F10, Ctrl+Shift+N, Ctrl+Shift+C, redo. Live accent colour for the pill and the selection rectangle, following a change of the system accent while the panel is open. | small | low. Backspace may be taken by Explorer's accelerators, the `TranslateAcceleratorW` hook already exists for the rename box and can be reused. |
 | 0.6.1 | Multi-rename: F2 on several items asks one name and numbers the rest like Explorer. Open in new tab from the flyout and middle-click. | medium | low |
-| 0.6.2 | Small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | small each | low |
+| 0.6.2 | Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. Then the small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | medium for archives, small each for the rest | medium for archives: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
 | 0.6.3 | Housekeeping: split the 7000 line source into files per area, joined by a script, as the roadmap planned for the second feature. | medium | low, but every later patch depends on it, so do it before 0.7 |
 | 0.7 | Columns per tab. The state is per window today. Each tab gets its own columns, the tab switch shows the right one. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high: the tab creation hook exists, closing and moving tabs between windows do not |
 | 0.8 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium: a modal menu inside a XAML handler crashed Explorer before |
@@ -103,6 +103,28 @@ Columns per tab is the biggest gap and the biggest change, so it comes after
 the split. Drag and drop and the flyout restyle are polish on a working
 whole. The three low priority items depend on things we don't control: a
 DirectUI hook, another author's mod, a design call.
+
+## Ideas taken from three other mods, 2026-11-13, ideas only
+
+- `luizbizzio/archive-preview` (Apache-2.0): browses archives in the preview
+  pane, through the shell's own archive folders, with no extraction engine of
+  its own, and Extract here, Extract to and Extract selected. Two uses for us.
+  Columns can browse an archive as a folder the same way (0.6.2). And it
+  already works with the columns: a selected archive is selected in Explorer's
+  view, so the preview pane shows its content. Ari tests the two together.
+  Its limits are ours too: local fixed drives, no password prompt, big
+  archives are slow, a few thousand items per request.
+- `krlvm/AccentColorizer-E11`: recolours Explorer's glyphs with the accent
+  colour and follows an accent change while running. For us only the second
+  half: the pill and the selection rectangle read the accent at start, and
+  should follow it (0.6.0). Accent coloured chevrons and placeholder glyphs
+  are a possible setting, low priority.
+- `krlvm/DragDropNormalizer` (GPL-3.0, standalone): restores the translucent
+  drag overlay of Windows 11 21H2, which 22H2 made solid white, by patching
+  the overlay's style in memory. For 0.9: drag with the shell's own drag
+  helper, so the overlay is Explorer's, and don't draw one by hand. An option
+  to make the overlay translucent again is a later idea, written fresh, since
+  the licence forbids copying.
 
 ## Open
 
