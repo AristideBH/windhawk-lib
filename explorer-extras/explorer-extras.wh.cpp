@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.23
+// @version         0.3.24
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1352,6 +1352,11 @@ struct WindowState {
     double wheelTarget = 0;             // Where the wheel is scrolling to.
     ULONGLONG wheelAt = 0;              // Tick of the last wheel event.
     muxc::StackPanel strip{nullptr};
+    // A rebuild keeps the old columns on screen until the new first column has
+    // loaded, then swaps them in one step, so nothing blanks in between.
+    size_t swapOld = 0;
+    unsigned swapGeneration = 0;
+    ULONGLONG swapDeadline = 0;
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
     muxc::Border pill{nullptr};
@@ -1457,6 +1462,7 @@ HANDLE g_worker = nullptr;
 std::atomic<bool> g_workerStop{false};
 
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded);
+void CompleteSwap(WindowState* state);
 
 // ---- Icons and thumbnails, read on the worker thread ----
 
@@ -1772,16 +1778,16 @@ void UpdatePill(WindowState* state, bool animate) {
         double from = state->pillLeft;
         muxc::Canvas::SetLeft(state->pill, target);  // Where it stays.
         state->pillLeft = target;
-        state->pillUntil = now + 450;
+        state->pillUntil = now + 350;
 
-        anim::ElasticEase spring;
+        // A short glide that overshoots only a little.
+        anim::BackEase spring;
         spring.EasingMode(anim::EasingMode::EaseOut);
-        spring.Oscillations(1);
-        spring.Springiness(4);
+        spring.Amplitude(0.35);
         anim::DoubleAnimation travel;
         travel.From(from);
         travel.To(target);
-        travel.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(420)));
+        travel.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(300)));
         travel.EasingFunction(spring);
         travel.EnableDependentAnimation(true);
         travel.FillBehavior(anim::FillBehavior::Stop);
@@ -1794,8 +1800,8 @@ void UpdatePill(WindowState* state, bool animate) {
         ease.EasingMode(anim::EasingMode::EaseOut);
         anim::DoubleAnimation stretch;
         stretch.From(16.0);
-        stretch.To(16.0 + std::min(distance / 4, 20.0));
-        stretch.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(130)));
+        stretch.To(16.0 + std::min(distance / 8, 10.0));
+        stretch.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(110)));
         stretch.AutoReverse(true);
         stretch.EasingFunction(ease);
         stretch.EnableDependentAnimation(true);
@@ -2133,7 +2139,9 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
             try {
                 FillColumn(state, column.get(), std::move(loaded->data));
                 state->scroller.UpdateLayout();
-                if (state->columns.back().get() == column.get()) {
+                if (state->swapOld && column->generation == state->swapGeneration) {
+                    CompleteSwap(state);
+                } else if (state->columns.back().get() == column.get()) {
                     EnsureColumnVisible(state, (int)state->columns.size() - 1);
                 }
             } catch (...) {
@@ -2512,6 +2520,28 @@ void ReloadAll(WindowState* state) {
     }
 }
 
+// Finishes a rebuild: the new first column is shown, the old ones are removed.
+void CompleteSwap(WindowState* state) {
+    if (!state->swapOld) {
+        return;
+    }
+    state->swapOld = 0;
+    try {
+        bool wasBuilding = state->building;
+        state->building = true;
+        RemoveColumnsFrom(state, 1);
+        state->building = wasBuilding;
+        if (!state->columns.empty() && state->columns[0]->cell) {
+            state->columns[0]->cell.Visibility(mux::Visibility::Visible);
+        }
+        state->pillLeft = -1;
+        SetActiveColumn(state, 0);
+        UpdatePill(state, false);
+    } catch (...) {
+        LogHresult(L"CompleteSwap");
+    }
+}
+
 // Starts over with Explorer's current folder as the only column.
 // Is this folder one of the navigation pane's flat entries: Home, Gallery,
 // OneDrive, or a pinned or frequent folder? The expandable tree (This PC,
@@ -2595,15 +2625,29 @@ void RebuildFromExplorer(WindowState* state) {
         Out(L"rebuild: can't read the current folder");
         return;
     }
-    state->building = true;
-    RemoveColumnsFrom(state, 0);
-    state->building = false;
     state->lastSeen.reset(ILClone(current.get()));
     state->expected.reset();
     state->pendingNav.reset();
     state->selectFolder.reset();
     state->selectChild.reset();
-    AddColumn(state, std::move(current));
+    if (state->columns.empty()) {
+        AddColumn(state, std::move(current));
+        return;
+    }
+    // Columns are showing: add the new first column hidden, in front, and let
+    // ApplyLoaded swap the old ones out once it has its rows.
+    if (state->swapOld) {
+        CompleteSwap(state);
+    }
+    size_t old = state->columns.size();
+    AddColumn(state, std::move(current), true);
+    Column* fresh = state->columns[0].get();
+    if (fresh->cell) {
+        fresh->cell.Visibility(mux::Visibility::Collapsed);
+    }
+    state->swapOld = old;
+    state->swapGeneration = fresh->generation;
+    state->swapDeadline = GetTickCount64() + 3000;
 }
 
 // Asks Explorer's own file list to show `folder`, and remembers the request
@@ -4234,6 +4278,11 @@ void OnTick() {
             }
         }
 
+        if (state->swapOld && now >= state->swapDeadline) {
+            Out(L"the new first column didn't load in time, swapping anyway");
+            CompleteSwap(state);
+        }
+
         // A column resized or moved: the pill follows, without animation.
         UpdatePill(state, false);
 
@@ -4370,6 +4419,7 @@ void ShowPanel(WindowState* state) {
             muxc::ScrollBarVisibility::Disabled);
         // The strip and, over it, a layer for the pill. The pill scrolls
         // sideways with the columns and stays at the top when a column scrolls.
+        bool dark = IsDarkMode();
         muxc::Grid content;
         content.Children().Append(strip);
         muxc::Canvas overlay;
@@ -4380,8 +4430,11 @@ void ShowPanel(WindowState* state) {
         pill.CornerRadius(mux::CornerRadius{1.5, 1.5, 1.5, 1.5});
         pill.Opacity(0);
         try {
+            // The accent WinUI itself uses for fills: the lighter shade on a
+            // dark theme, the darker one on a light theme.
             auto accent = winrt::Windows::UI::ViewManagement::UISettings().GetColorValue(
-                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+                dark ? winrt::Windows::UI::ViewManagement::UIColorType::AccentLight2
+                     : winrt::Windows::UI::ViewManagement::UIColorType::AccentDark1);
             pill.Background(mux::Media::SolidColorBrush(accent));
         } catch (...) {
             pill.Background(Brush(255, 0, 120, 212));
@@ -4397,7 +4450,6 @@ void ShowPanel(WindowState* state) {
         scroller.Content(content);
 
         muxc::Grid root;
-        bool dark = IsDarkMode();
         root.Background(dark ? Brush(255, 25, 25, 25)
                              : Brush(255, 255, 255, 255));
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
@@ -5193,7 +5245,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.23 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.24 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
