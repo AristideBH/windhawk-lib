@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.16
+// @version         0.4.17
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1369,6 +1369,7 @@ struct Column {
     bool filled = false;  // Has shown a listing at least once.
     std::shared_ptr<std::atomic<bool>> cancel;  // Set when this column's load is not wanted.
     int scrollStyle = -1;  // The scrollbar style these rows were given.
+    double gutterRight = 10;  // The strip kept free on the right, in px.
     std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
     double rowHeight = 32;
     int animGroup = -1;        // A group that is opening or closing,
@@ -1622,9 +1623,11 @@ void ClearNativeList(WindowState* state, HWND list) {
     if (state->addedLayered) {
         SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED);
     }
-    SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
+    BOOL ok = SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
+    DWORD error = ok ? 0 : GetLastError();
     state->clearedList = list;
-    Out(L"the native file list is made transparent");
+    Out(L"the native file list is made transparent (window %p, %s, result %d, error %lu)",
+        list, ClassNameOf(list).c_str(), ok ? 1 : 0, error);
 }
 
 void RestoreNativeList(WindowState* state) {
@@ -5990,13 +5993,30 @@ void OnTick() {
                     // not be built yet.
                     if (StyleScrollBars(c->list, wanted == 1) > 0) {
                         c->scrollStyle = wanted;
-                        // The bar floats over the right edge when compact, so the
-                        // strip kept free for the selection rectangle is wider
-                        // by the bar's width: 9 px stay free beside it.
-                        c->list.Padding(mux::Thickness{0, 12, wanted == 1 ? 16.0 : 10.0, 4});
+                        c->list.Padding(mux::Thickness{0, 12, 10.0, 4});
+                        c->gutterRight = 10;
                     }
                 } catch (...) {
                     LogHresult(L"scrollbar style");
+                }
+            }
+        }
+
+        // A compact scrollbar floats over the right edge. While it shows, the
+        // free strip for the selection rectangle is 7 px wider, so 10 px stay
+        // free beside it. With no bar there is no extra gap.
+        if (g_compactScroll) {
+            for (auto& c : state->columns) {
+                if (!c->list || !c->filled) {
+                    continue;
+                }
+                auto viewer = FindListScroller(c->list);
+                bool barShown = viewer && viewer.ComputedVerticalScrollBarVisibility() ==
+                                              mux::Visibility::Visible;
+                double wanted = barShown ? 17.0 : 10.0;
+                if (c->gutterRight != wanted) {
+                    c->gutterRight = wanted;
+                    c->list.Padding(mux::Thickness{0, 12, wanted, 4});
                 }
             }
         }
@@ -6021,11 +6041,20 @@ void OnTick() {
             if (fileList && fileList != state->clearedList) {
                 RestoreNativeList(state);
                 ClearNativeList(state, fileList);
-            } else if (fileList && state->clearedList == fileList &&
-                       !(GetWindowLongPtrW(fileList, GWL_EXSTYLE) & WS_EX_LAYERED)) {
-                // Explorer took the style off again while finishing the view.
-                state->clearedList = nullptr;
-                ClearNativeList(state, fileList);
+            } else if (fileList && state->clearedList == fileList) {
+                // The style or the alpha can be put back by Explorer, or by a
+                // mod that fades the view in when the layout changes.
+                BYTE alpha = 255;
+                DWORD flags = 0;
+                bool intact = (GetWindowLongPtrW(fileList, GWL_EXSTYLE) & WS_EX_LAYERED) &&
+                              GetLayeredWindowAttributes(fileList, nullptr, &alpha, &flags) &&
+                              (flags & LWA_ALPHA) && alpha == 0;
+                if (!intact) {
+                    Out(L"the native list was made visible again by something else (alpha %d), clearing it again",
+                        (int)alpha);
+                    state->clearedList = nullptr;
+                    ClearNativeList(state, fileList);
+                }
             }
         } else if (state->clearedList) {
             RestoreNativeList(state);
@@ -7095,7 +7124,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.17 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
