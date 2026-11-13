@@ -109,6 +109,32 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
 - [ ] PARKED: a panel background that blurs like Explorer's (Mica). Not
       reachable with the WinUI headers of this Windhawk build.
 
+## Found in a review of the whole session, 2026-11-13
+
+Keyboard and everyday gaps:
+- [ ] F5 refreshes the columns, Escape clears the selection, Backspace goes to
+      the parent column, the Menu key and Shift+F10 open the item's flyout,
+      Ctrl+Shift+N makes a new folder
+- [ ] Redo (Ctrl+Y) for deletes and renames; only Ctrl+Z exists
+- [ ] Copy as path (Ctrl+Shift+C)
+- [ ] Middle-click opens a folder in a new tab
+- [ ] Space for a quick preview, if Explorer's preview pane can be driven
+
+Structure and polish:
+- [ ] Columns per tab: the panel is per window, so switching tabs rebuilds the
+      columns from the new tab's folder. Each tab should keep its own columns.
+- [ ] The pill's accent colour is read when Columns turns on, so it doesn't
+      follow a live theme or accent change
+- [ ] Icon jobs are not prioritised by what is on screen
+- [ ] Texts are English only for now ("Paste", "New folder", "N more items
+      not shown", group names from the fallback): the string table in 0.6
+- [ ] The Documents icon, a virtual item in the Desktop folder, remote item
+      indicator (all under Open above)
+- [ ] The skills `windhawk-explorer-surfaces` and `windhawk-mod-development`
+      should get what this session proved: the tab creation hook, the
+      navigation pane click signature in `BrowseObject`, the path-versus-pidl
+      rooting, per-window workers, and the local clang syntax check
+
 ## 0.6
 
 - [ ] Drag and drop between columns
