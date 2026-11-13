@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.11
+// @version         0.3.12
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2917,12 +2917,12 @@ HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
     return hr;
 }
 
-// Paste into the column's own folder, through that folder's item in its
+// Paste into a folder, through that folder's item in its
 // parent, which is the route the right-click menu's Paste took.
-HRESULT PasteIntoColumn(WindowState* state, Column* column) {
+HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     IShellFolder* parent = nullptr;
     PCUITEMID_CHILD child = nullptr;
-    HRESULT hr = SHBindToParent(column->folder.get(), IID_PPV_ARGS(&parent),
+    HRESULT hr = SHBindToParent(folder, IID_PPV_ARGS(&parent),
                                 &child);
     if (FAILED(hr) || !parent) {
         return hr;
@@ -3071,8 +3071,15 @@ void OnColumnKey(muxc::ListView const& list,
             return;
         }
         if (ctrl && !alt && key == VirtualKey::V) {
-            HRESULT hr = PasteIntoColumn(state, column);
-            Out(L"Ctrl+V into column %d: hr=0x%08lX", index + 1, hr);
+            // A folder selected in the column takes the paste. Otherwise it
+            // goes into the column's own folder.
+            Pidl target(ILClone(column->folder.get()));
+            if (picked.size() == 1 && column->entries[picked[0]].folder) {
+                target.reset(ILCombine(column->folder.get(),
+                                       column->entries[picked[0]].child.get()));
+            }
+            HRESULT hr = target ? PasteIntoFolder(state, target.get()) : E_FAIL;
+            Out(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
             keep();
             return;
         }
@@ -4315,7 +4322,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
