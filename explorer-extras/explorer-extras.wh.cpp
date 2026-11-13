@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.3
+// @version         0.5.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -4897,22 +4897,10 @@ int HeaderRowAt(Column* column, muxc::ListView const& list,
 }
 
 // One group header in its state: normal, under the pointer, or the one the
-// keyboard is on, which gets a stronger fill and a thin accent edge.
+// keyboard is on, which is tinted a little stronger.
 void PaintHeader(muxc::ListViewItem const& header, bool hover, bool focused) {
-    header.Background(focused ? Brush(120, 150, 150, 150)
+    header.Background(focused ? Brush(96, 150, 150, 150)
                               : hover ? Brush(64, 150, 150, 150) : Brush(0, 0, 0, 0));
-    if (focused) {
-        try {
-            auto accent = winrt::Windows::UI::ViewManagement::UISettings().GetColorValue(
-                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
-            header.BorderBrush(Brush(210, accent.R, accent.G, accent.B));
-        } catch (...) {
-            header.BorderBrush(Brush(210, 0, 120, 212));
-        }
-        header.BorderThickness(mux::Thickness{1, 1, 1, 1});
-    } else {
-        header.BorderThickness(mux::Thickness{0, 0, 0, 0});
-    }
     header.Opacity(focused || hover ? 1.0 : 0.92);
 }
 
@@ -7457,7 +7445,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
