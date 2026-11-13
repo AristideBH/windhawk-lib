@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.12
+// @version         0.3.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1185,6 +1185,10 @@ struct WindowState {
     Pidl cutFolder;
     std::vector<Pidl> cutChildren;
     DWORD cutSeq = 0;
+    // After a paste Explorer's view may jump to another folder. For a moment
+    // that is ignored and the view is sent back to this one.
+    Pidl pasteReturn;
+    ULONGLONG pasteGuardUntil = 0;
     // The column to keep keyboard focus in, for a moment after a key, since
     // Explorer's own view takes focus when it navigates.
     Column* focusColumn = nullptr;
@@ -3078,6 +3082,15 @@ void OnColumnKey(muxc::ListView const& list,
                 target.reset(ILCombine(column->folder.get(),
                                        column->entries[picked[0]].child.get()));
             }
+            // Where Explorer's view is now, to send it back if it jumps.
+            state->pasteReturn.reset();
+            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+                Pidl now = CurrentFolder(browser);
+                if (now) {
+                    state->pasteReturn.reset(ILClone(now.get()));
+                }
+            }
+            state->pasteGuardUntil = GetTickCount64() + 3000;
             HRESULT hr = target ? PasteIntoFolder(state, target.get()) : E_FAIL;
             Out(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
             keep();
@@ -3371,7 +3384,8 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
             return;
         }
     }
-    Out(L"Explorer navigated elsewhere, rebuilding");
+    Out(L"Explorer navigated elsewhere (\"%s\"), rebuilding",
+        PathOf(current.get()).c_str());
     RebuildFromExplorer(state);
     SetActiveColumn(state, 0);
 }
@@ -3384,6 +3398,12 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
         return;
     }
     state->expected.reset();
+    if (state->pasteReturn && GetTickCount64() < state->pasteGuardUntil) {
+        Out(L"Explorer moved to \"%s\" right after a paste, sending it back",
+            PathOf(current.get()).c_str());
+        ScheduleNavigation(state, state->pasteReturn.get());
+        return;
+    }
     SyncToFolder(state, current);
 }
 
@@ -4322,7 +4342,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
