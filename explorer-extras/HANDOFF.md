@@ -12,7 +12,14 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.3.0.
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.3.4.
+- 0.3.1 to 0.3.4, tested by Ari on 2026-11-13: restore waits one tick
+  (shorter flash), the horizontal wheel glides across the columns and never
+  scrolls a column vertically, the vertical wheel scrolls only the hovered
+  column. The wheel handlers are in `ShowPanel` (root and strip) and in
+  `AddColumn` (a handler on each list's row panel, added when the list
+  loads). A scroll viewer inside each list sees the wheel first, so a
+  handler on the list itself is too late.
 - Compiled and tested by Ari up to 0.3.0 on 2026-11-13. Confirmed in 0.3.0:
   the Columns entry is in the View menu when a window opens, new windows
   open in Columns when it was the last layout chosen, also after an Explorer
@@ -34,6 +41,10 @@ For the next session, human or model. Written 2026-11-13.
 - 0.2.4: fix for the crash when an Explorer window closes with the panel on.
   The panel's objects are let go without release, see `AbandonWindow`.
 - 0.2.5: a drag also stops at the minimum width.
+- Todo from Ari: focusing a Control Panel item or another virtual shell item
+  in the Desktop folder, see the roadmap.
+- `Columns Demo` on Ari's Desktop is a test folder: 90 items, 6 levels,
+  several file types, 5 pngs, a 40-file folder, long names.
 - Rest of 0.3 in the roadmap: real icons and thumbnails, then the native
   right-click menu. The menu needs its own probe first, since a modal menu
   inside a XAML handler crashed Explorer before, see the core skill.
