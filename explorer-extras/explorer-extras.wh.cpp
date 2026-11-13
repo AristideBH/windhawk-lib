@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.3
+// @version         0.3.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1102,6 +1102,7 @@ struct WindowState {
     muxc::ScrollViewer scroller{nullptr};
     muxc::Grid rootGrid{nullptr};
     Inspectable wheelHandler{nullptr};  // The boxed handler, for removal.
+    Inspectable stripWheelHandler{nullptr};
     double wheelTarget = 0;             // Where the wheel is scrolling to.
     ULONGLONG wheelAt = 0;              // Tick of the last wheel event.
     muxc::StackPanel strip{nullptr};
@@ -2053,6 +2054,12 @@ void HidePanel(WindowState* state, const wchar_t* why) {
                 mux::UIElement::PointerWheelChangedEvent(),
                 state->wheelHandler);
         }
+        if (state->strip && state->stripWheelHandler) {
+            state->strip.RemoveHandler(
+                mux::UIElement::PointerWheelChangedEvent(),
+                state->stripWheelHandler);
+        }
+        state->stripWheelHandler = nullptr;
         state->rootGrid = nullptr;
         state->wheelHandler = nullptr;
         state->source.Content(nullptr);
@@ -2129,6 +2136,7 @@ void AbandonWindow(WindowState* state) {
     (void)winrt::detach_abi(state->scroller);
     (void)winrt::detach_abi(state->rootGrid);
     (void)winrt::detach_abi(state->wheelHandler);
+    (void)winrt::detach_abi(state->stripWheelHandler);
     (void)winrt::detach_abi(state->strip);
     (void)winrt::detach_abi(state->menuItem);
     (void)winrt::detach_abi(state->menuItems);
@@ -2464,6 +2472,33 @@ void ShowPanel(WindowState* state) {
                         true);
         state->rootGrid = root;
         state->wheelHandler = wheelBoxed;
+
+        // The ordinary wheel only scrolls the column under the pointer. A
+        // column that is already at its end, or has nothing to scroll, passes
+        // the event up, and the strip's scroll viewer would turn it into a
+        // sideways move. This handler sits on the strip, below that scroll
+        // viewer and above every column, and marks vertical turns handled.
+        mux::Input::PointerEventHandler verticalWheel(
+            [](Inspectable const&,
+               mux::Input::PointerRoutedEventArgs const& args) {
+                try {
+                    WindowState* state = StateForThisThread(false);
+                    if (!state || !state->scroller) {
+                        return;
+                    }
+                    if (!args.GetCurrentPoint(state->scroller)
+                             .Properties()
+                             .IsHorizontalMouseWheel()) {
+                        args.Handled(true);
+                    }
+                } catch (...) {
+                    LogHresult(L"vertical wheel");
+                }
+            });
+        Inspectable verticalBoxed = winrt::box_value(verticalWheel);
+        strip.AddHandler(mux::UIElement::PointerWheelChangedEvent(),
+                         verticalBoxed, true);
+        state->stripWheelHandler = verticalBoxed;
 
         step = L"creating the XAML source";
         mux::Hosting::DesktopWindowXamlSource source;
@@ -3108,7 +3143,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

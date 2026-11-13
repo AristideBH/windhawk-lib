@@ -62,6 +62,10 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       columns, and does not scroll vertically inside a column. Sideways works
       in 0.3.1. The column still scrolled vertically, so 0.3.2 marks the
       event handled on each column's row panel. Syntax check only, not run.
+- [ ] The ordinary vertical wheel scrolls only the column under the pointer,
+      and never moves the strip sideways. 0.3.4 marks it handled on the strip.
+      Syntax check only, not run. Horizontal wheel confirmed in 0.3.3: no
+      vertical scroll in columns, smooth sideways glide.
 - [x] Flash shortened: restore waits one tick instead of three. Tested in
       0.3.1, shorter.
 - [ ] Focusing a Control Panel item, or another virtual shell item such as a
