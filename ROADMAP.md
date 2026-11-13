@@ -128,7 +128,7 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column over the limit shows the first items in sort order, with the
       count of those not shown; transparent background mode makes the native
       list invisible; compact scrollbars without the stretched arrows.
-- [ ] (0.5.0, not tested) Rows built only when visible: every entry has a row shell, its content is made as it comes near the screen. Default limit 5000. The item limit can go away later; icons are still read for the first 400 items only. Original note: so the item limit can go away. Today
+- [x] Tested in 0.5.0 and 0.5.1: rows built only when visible, icons for every built row: every entry has a row shell, its content is made as it comes near the screen. Default limit 5000. The item limit can go away later; icons are still read for the first 400 items only. Original note: so the item limit can go away. Today
       every row of a column is built up front: a column of several thousand
       items takes seconds on the UI thread.
 - [ ] Rename several items at once, like Explorer's own.
