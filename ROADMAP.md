@@ -117,6 +117,13 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       SystemBackdrop on islands. Revisit with a newer Windows App SDK, or by
       hiding the native list. A test setting exists since 0.4.7.
 - [ ] (0.4.10, not tested) Selection by drawing a rectangle: from empty space, a group header or the 10 px gutter on the right of each column. Ctrl adds. The list scrolls near its edges.
+- [ ] (0.4.13, not tested) A reader thread per window with cancelled loads; a
+      column over the limit shows the first items in sort order, with the
+      count of those not shown; transparent background mode makes the native
+      list invisible; compact scrollbars without the stretched arrows.
+- [ ] Rows built only when visible (0.5), so the item limit can go away. Today
+      every row of a column is built up front: a column of several thousand
+      items takes seconds on the UI thread.
 - [ ] Rename several items at once, like Explorer's own.
 - [x] Tested in 0.4.0 to 0.4.8: faster column refresh after the user's own actions (rename, new folder,
       delete, paste, move):

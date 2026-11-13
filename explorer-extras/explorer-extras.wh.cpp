@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.12
+// @version         0.4.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -75,7 +75,7 @@ Not yet: drag and drop.
     $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
   - background: explorer
     $name: Panel background
-    $description: Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent shows what is under the panel, for testing only, since Explorer's own list is under it.
+    $description: Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.
     $options:
     - explorer: Explorer's file list colour
     - theme: Theme colour
@@ -746,6 +746,7 @@ struct FolderResult {
     std::vector<int> groupOf;              // Index into groupNames, per entry.
     std::vector<std::wstring> groupNames;  // In display order.
     bool truncated = false;
+    size_t total = 0;  // How many items the folder has, up to the reading cap.
     bool ok = false;
 };
 
@@ -1080,6 +1081,8 @@ void GroupEntries(IShellFolder* folder, const SortSpec& spec,
     ApplyGroups(result, ids, order, names);
 }
 
+constexpr int kReadCap = 20000;  // The most items read from one folder.
+
 // Reads a folder, sorted and grouped as `spec` says. Runs on the worker
 // thread, with shell objects of its own.
 void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
@@ -1105,7 +1108,10 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
     if (hr == S_OK && list) {
         PITEMID_CHILD child = nullptr;
         while (list->Next(1, &child, nullptr) == S_OK && child) {
-            if ((int)result->entries.size() >= maxItems) {
+            // The folder is read whole, up to a safety cap, and cut to the
+            // limit after it is sorted, so the items kept are the first ones
+            // in sort order, not whichever the shell listed first.
+            if ((int)result->entries.size() >= kReadCap) {
                 result->truncated = true;
                 CoTaskMemFree(child);
                 break;
@@ -1177,6 +1183,12 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                          }
                          return false;
                      });
+
+    result->total = result->entries.size();
+    if ((int)result->entries.size() > maxItems) {
+        result->entries.erase(result->entries.begin() + maxItems, result->entries.end());
+        result->truncated = true;
+    }
 
     GroupEntries(folder, spec, result);
     folder->Release();
@@ -1355,6 +1367,7 @@ struct Column {
     winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    std::shared_ptr<std::atomic<bool>> cancel;  // Set when this column's load is not wanted.
     int scrollStyle = -1;  // The scrollbar style these rows were given.
     std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
     double rowHeight = 32;
@@ -1437,13 +1450,19 @@ struct RenameState {
     bool done = false;
 };
 
+struct Worker;
+
 struct WindowState {
+    Worker* worker = nullptr;  // This window's folder and icon reader.
     DWORD thread = 0;
     std::unique_ptr<ContextMenuState> context;
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     int styleVersion = -1;  // The row style the rows were last given.
     bool shownDark = false;  // The theme the panel background was made for.
+    int shownMode = 0;       // And the background mode.
+    HWND clearedList = nullptr;  // The native list made invisible, in transparent mode,
+    bool addedLayered = false;   // and whether this mod gave it the layered style.
     // A click on the name of the item that is already selected starts a
     // rename once the double-click time has passed.
     // After a command of Explorer's own toolbar: read the columns again, and
@@ -1591,6 +1610,39 @@ mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return mux::Media::SolidColorBrush(winrt::Windows::UI::Color{a, r, g, b});
 }
 
+// Transparent mode: Explorer's own file list stays, but is drawn fully
+// transparent, so nothing shows through the panel except the window's backdrop.
+// Undone whenever the panel goes away.
+void ClearNativeList(WindowState* state, HWND list) {
+    if (!list || state->clearedList == list) {
+        return;
+    }
+    LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
+    state->addedLayered = !(ex & WS_EX_LAYERED);
+    if (state->addedLayered) {
+        SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED);
+    }
+    SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
+    state->clearedList = list;
+    Out(L"the native file list is made transparent");
+}
+
+void RestoreNativeList(WindowState* state) {
+    HWND list = state->clearedList;
+    state->clearedList = nullptr;
+    if (!list || !IsWindow(list)) {
+        return;
+    }
+    SetLayeredWindowAttributes(list, 0, 255, LWA_ALPHA);
+    if (state->addedLayered) {
+        LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
+        SetWindowLongPtrW(list, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED);
+    }
+    state->addedLayered = false;
+    RedrawWindow(list, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    Out(L"the native file list is visible again");
+}
+
 // The panel's background, as the setting says.
 mux::Media::SolidColorBrush PanelBackground(HWND fileList, bool dark) {
     int mode = g_backgroundMode;
@@ -1623,13 +1675,23 @@ struct Job {
     bool hidden = false;
     int maxItems = 1500;
     mud::DispatcherQueue queue{nullptr};
+    std::shared_ptr<std::atomic<bool>> cancel;  // The column no longer wants this.
 };
 
-std::mutex g_jobsMutex;
-[[clang::no_destroy]] std::deque<std::unique_ptr<Job>> g_jobs;
-HANDLE g_jobEvent = nullptr;
-HANDLE g_worker = nullptr;
-std::atomic<bool> g_workerStop{false};
+// One reader thread per window, so a slow folder in one window never holds up
+// the folders and icons of another. A worker is stopped when its window's panel
+// goes away and cleaned up later; all of them end when the mod unloads.
+struct Worker {
+    std::mutex mutex;
+    std::deque<std::unique_ptr<Job>> jobs;
+    HANDLE event = nullptr;
+    HANDLE thread = nullptr;
+    std::atomic<bool> stop{false};
+    std::atomic<bool> finished{false};
+};
+
+std::mutex g_workersMutex;
+[[clang::no_destroy]] std::vector<std::unique_ptr<Worker>> g_workers;
 
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded);
 void CompleteSwap(WindowState* state);
@@ -1696,7 +1758,8 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
 // Reads icons, or thumbnails where the shell has one, for the first items of
 // a folder and sends them to the window's UI thread in small batches.
 void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
-               unsigned generation, mud::DispatcherQueue const& queue) {
+               unsigned generation, mud::DispatcherQueue const& queue,
+               std::atomic<bool> const& stop, std::atomic<bool> const* cancel) {
     IShellFolder* folder = nullptr;
     HRESULT hr = ILIsEmpty(folderPidl)
                      ? SHGetDesktopFolder(&folder)
@@ -1720,7 +1783,7 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         batch->generation = generation;
     };
     size_t count = std::min(children.size(), kMaxIcons);
-    for (size_t i = 0; i < count && !g_workerStop; i++) {
+    for (size_t i = 0; i < count && !stop && !(cancel && *cancel); i++) {
         IShellItem* item = nullptr;
         if (FAILED(SHCreateItemWithParent(nullptr, folder, children[i].get(),
                                           IID_PPV_ARGS(&item))) ||
@@ -1751,10 +1814,11 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
     folder->Release();
 }
 
-DWORD WINAPI WorkerProc(LPVOID) {
+DWORD WINAPI WorkerProc(LPVOID param) {
+    Worker* worker = (Worker*)param;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    while (!g_workerStop) {
-        MsgWaitForMultipleObjects(1, &g_jobEvent, FALSE, INFINITE, QS_ALLINPUT);
+    while (!worker->stop) {
+        MsgWaitForMultipleObjects(1, &worker->event, FALSE, INFINITE, QS_ALLINPUT);
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -1763,20 +1827,27 @@ DWORD WINAPI WorkerProc(LPVOID) {
         for (;;) {
             std::unique_ptr<Job> job;
             {
-                std::lock_guard<std::mutex> lock(g_jobsMutex);
-                if (g_jobs.empty()) {
+                std::lock_guard<std::mutex> lock(worker->mutex);
+                if (worker->jobs.empty()) {
                     break;
                 }
-                job = std::move(g_jobs.front());
-                g_jobs.pop_front();
+                job = std::move(worker->jobs.front());
+                worker->jobs.pop_front();
             }
-            if (g_workerStop) {
+            if (worker->stop) {
                 break;
+            }
+            // A column that has been removed or asked again doesn't need this.
+            if (job->cancel && *job->cancel) {
+                continue;
             }
             auto loaded = std::make_shared<Loaded>();
             loaded->generation = job->generation;
             LoadFolder(job->folder.get(), job->spec, job->hidden,
                        job->maxItems, &loaded->data);
+            if (job->cancel && *job->cancel) {
+                continue;
+            }
             // The list moves to the UI thread, so keep copies of the items
             // for the icon pass.
             std::vector<Pidl> children;
@@ -1792,36 +1863,89 @@ DWORD WINAPI WorkerProc(LPVOID) {
             }
             try {
                 LoadIcons(job->folder.get(), children, job->generation,
-                          job->queue);
+                          job->queue, worker->stop, job->cancel.get());
             } catch (...) {
             }
         }
     }
     {
-        std::lock_guard<std::mutex> lock(g_jobsMutex);
-        g_jobs.clear();
+        std::lock_guard<std::mutex> lock(worker->mutex);
+        worker->jobs.clear();
     }
     CoUninitialize();
+    worker->finished = true;
     return 0;
 }
 
-void StartWorker() {
-    g_jobEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    g_worker = CreateThread(nullptr, 0, WorkerProc, nullptr, 0, nullptr);
+// A new worker for a window. Workers that have ended are cleaned up here.
+Worker* CreateWorker() {
+    std::lock_guard<std::mutex> lock(g_workersMutex);
+    for (size_t i = 0; i < g_workers.size();) {
+        Worker* old = g_workers[i].get();
+        if (old->finished && WaitForSingleObject(old->thread, 0) == WAIT_OBJECT_0) {
+            CloseHandle(old->thread);
+            CloseHandle(old->event);
+            g_workers.erase(g_workers.begin() + i);
+        } else {
+            i++;
+        }
+    }
+    auto worker = std::make_unique<Worker>();
+    worker->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    worker->thread = CreateThread(nullptr, 0, WorkerProc, worker.get(), 0, nullptr);
+    Worker* raw = worker.get();
+    g_workers.push_back(std::move(worker));
+    Out(L"a reader thread was started for a window, %d running", (int)g_workers.size());
+    return raw;
 }
 
-void StopWorker() {
-    if (!g_worker) {
+// The window's panel is gone: its worker ends after the job it is on.
+void ReleaseWorker(Worker* worker) {
+    if (!worker) {
         return;
     }
-    g_workerStop = true;
-    SetEvent(g_jobEvent);
-    WaitForSingleObject(g_worker, 10000);
-    CloseHandle(g_worker);
-    g_worker = nullptr;
+    std::lock_guard<std::mutex> lock(g_workersMutex);
+    for (auto& known : g_workers) {
+        if (known.get() == worker) {
+            worker->stop = true;
+            SetEvent(worker->event);
+            break;
+        }
+    }
+}
+
+void StartWorker() {}  // Workers start with the first load of a window.
+
+// At unload: every worker ends, and is waited for.
+void StopWorker() {
+    std::vector<std::unique_ptr<Worker>> all;
+    {
+        std::lock_guard<std::mutex> lock(g_workersMutex);
+        all.swap(g_workers);
+    }
+    for (auto& worker : all) {
+        worker->stop = true;
+        SetEvent(worker->event);
+    }
+    for (auto& worker : all) {
+        WaitForSingleObject(worker->thread, 10000);
+        CloseHandle(worker->thread);
+        CloseHandle(worker->event);
+    }
 }
 
 void RequestLoad(WindowState* state, Column* column) {
+    if (g_unloading) {
+        return;
+    }
+    if (!state->worker) {
+        state->worker = CreateWorker();
+    }
+    // The load this column asked before is not wanted any more.
+    if (column->cancel) {
+        *column->cancel = true;
+    }
+    column->cancel = std::make_shared<std::atomic<bool>>(false);
     column->generation = ++state->nextGeneration;
     auto job = std::make_unique<Job>();
     job->generation = column->generation;
@@ -1830,11 +1954,12 @@ void RequestLoad(WindowState* state, Column* column) {
     job->hidden = ShowHiddenFiles();
     job->maxItems = g_maxItems;
     job->queue = state->queue;
+    job->cancel = column->cancel;
     {
-        std::lock_guard<std::mutex> lock(g_jobsMutex);
-        g_jobs.push_back(std::move(job));
+        std::lock_guard<std::mutex> lock(state->worker->mutex);
+        state->worker->jobs.push_back(std::move(job));
     }
-    SetEvent(g_jobEvent);
+    SetEvent(state->worker->event);
 }
 
 // ---- Columns ----
@@ -1895,6 +2020,9 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
             if (column->notifyId) {
                 SHChangeNotifyDeregister(column->notifyId);
                 column->notifyId = 0;
+            }
+            if (column->cancel) {
+                *column->cancel = true;
             }
             uint32_t count = state->strip.Children().Size();
             if (count > 0) {
@@ -2124,6 +2252,40 @@ int StyleScrollBars(mux::DependencyObject const& root, bool compact, int depth =
     }
     if (auto bar = root.try_as<muxc::Primitives::ScrollBar>()) {
         bool vertical = bar.Orientation() == muxc::Orientation::Vertical;
+        // The little arrow buttons at the ends would be squeezed by the
+        // transform. A compact bar has none: the thumb and the track stay.
+        std::function<void(mux::DependencyObject const&, int)> arrows =
+            [&](mux::DependencyObject const& node, int level) {
+                if (!node || level > 12) {
+                    return;
+                }
+                if (auto element = node.try_as<mux::FrameworkElement>()) {
+                    std::wstring name = element.Name().c_str();
+                    if (name.find(L"SmallDecrease") != std::wstring::npos ||
+                        name.find(L"SmallIncrease") != std::wstring::npos) {
+                        if (compact) {
+                            element.Width(0);
+                            element.Height(0);
+                            element.MinWidth(0);
+                            element.MinHeight(0);
+                            element.Opacity(0);
+                            element.IsHitTestVisible(false);
+                        } else {
+                            element.ClearValue(mux::FrameworkElement::WidthProperty());
+                            element.ClearValue(mux::FrameworkElement::HeightProperty());
+                            element.ClearValue(mux::FrameworkElement::MinWidthProperty());
+                            element.ClearValue(mux::FrameworkElement::MinHeightProperty());
+                            element.Opacity(1);
+                            element.IsHitTestVisible(true);
+                        }
+                    }
+                }
+                int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+                for (int i = 0; i < count; i++) {
+                    arrows(mux::Media::VisualTreeHelper::GetChild(node, i), level + 1);
+                }
+            };
+        arrows(bar, 0);
         if (compact) {
             mux::Media::ScaleTransform scale;
             scale.ScaleX(vertical ? 0.5 : 1.0);
@@ -2462,7 +2624,14 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     }
     if (data.truncated) {
         muxc::ListViewItem more;
-        more.Content(winrt::box_value(L"More items not shown"));
+        size_t hidden = data.total > column->entries.size()
+                            ? data.total - column->entries.size()
+                            : 0;
+        std::wstring text = hidden > 0
+                                ? std::to_wstring(hidden) + (data.total >= (size_t)kReadCap ? L"+" : L"") +
+                                      L" more items not shown"
+                                : std::wstring(L"More items not shown");
+        more.Content(winrt::box_value(winrt::hstring{text}));
         more.IsEnabled(false);
         items.Append(more);
         column->rowToEntry.push_back(-1);
@@ -5420,6 +5589,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    RestoreNativeList(state);
     CancelRename(state);
     CloseContextMenu(state);
     try {
@@ -5449,6 +5619,8 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     } catch (...) {
         LogHresult(L"HidePanel");
     }
+    ReleaseWorker(state->worker);
+    state->worker = nullptr;
     state->source = nullptr;
     state->bridge = nullptr;
     state->scroller = nullptr;
@@ -5491,10 +5663,15 @@ void AbandonWindow(WindowState* state) {
         }
     } catch (...) {
     }
+    ReleaseWorker(state->worker);
+    state->worker = nullptr;
     for (auto& column : state->columns) {
         if (column->notifyId) {
             SHChangeNotifyDeregister(column->notifyId);
             column->notifyId = 0;
+        }
+        if (column->cancel) {
+            *column->cancel = true;
         }
         column.release();  // Never destroyed, on purpose.
     }
@@ -5800,8 +5977,19 @@ void OnTick() {
         }
 
         // The theme changed: take the list's colour again.
+        // Transparent mode: the native list is kept invisible, also after
+        // Explorer replaces it. Any other mode gives it back.
+        if (g_backgroundMode == 2) {
+            if (fileList && fileList != state->clearedList) {
+                RestoreNativeList(state);
+                ClearNativeList(state, fileList);
+            }
+        } else if (state->clearedList) {
+            RestoreNativeList(state);
+        }
         if (state->ticks % 20 == 0 && state->rootGrid && fileList &&
-            IsDarkMode() != state->shownDark) {
+            (IsDarkMode() != state->shownDark || state->shownMode != g_backgroundMode)) {
+            state->shownMode = g_backgroundMode;
             bool nowDark = IsDarkMode();
             state->shownDark = nowDark;
             state->rootGrid.RequestedTheme(nowDark ? mux::ElementTheme::Dark
@@ -6041,6 +6229,7 @@ void ShowPanel(WindowState* state) {
         {
             root.Background(PanelBackground(fileList, dark));
             state->shownDark = dark;
+            state->shownMode = g_backgroundMode;
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);
@@ -6857,7 +7046,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
