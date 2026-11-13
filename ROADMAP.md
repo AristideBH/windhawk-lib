@@ -48,10 +48,15 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 
 ## 0.3
 
-- [ ] Columns present when a window opens, without a click on the command bar
-- [ ] Columns remembered when Explorer or a window is reopened
+- [x] Columns present when a window opens, without a click on the command bar.
+      Tested 2026-11-13 in 0.3.0. Hook: `OnDpiChanged`, see the skill.
+- [x] Columns remembered when Explorer or a window is reopened. Tested in
+      0.3.0, with a short flash of Explorer's own list before the columns
+      appear, about 270 ms.
 - [ ] Real file icons and thumbnails
 - [ ] Native right-click menu
+- [ ] Open in Columns without the flash of Explorer's own list
+- [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
 
 ## 0.3.1
 
