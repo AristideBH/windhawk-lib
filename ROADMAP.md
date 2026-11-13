@@ -112,6 +112,13 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [x] Tested in 0.4.5 to 0.4.8: rename by a slow second click on the name of the
       selected item, like Explorer. Panel background taken from Explorer's own
       file list. Group headers: hover tint, turning chevron.
+- [ ] PARKED, Ari's call 2026-11-13: transparent background mode. It works
+      after a restart, but after a layout switch the native view still shows
+      through even though every visible view window is made transparent
+      (0.4.18). Something else draws it, or the layered style does not reach
+      the DirectUI content. Don't chase it again without a new idea.
+- [x] Compact scrollbars, with a free strip beside the bar for the selection
+      rectangle (0.4.12 to 0.4.18).
 - [ ] Panel background that blurs like Explorer's own (Mica). Not reachable
       with the WinUI headers of this Windhawk build: no MicaBackdrop, no
       SystemBackdrop on islands. Revisit with a newer Windows App SDK, or by
