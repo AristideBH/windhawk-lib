@@ -7,7 +7,7 @@ description: Map of what File Explorer and the desktop are made of, and which Wi
 
 Load `windhawk-mod-development` and `windhawk-recon` first.
 
-No finished mod in this repo targets File Explorer yet. This skill combines a reading of four published mods with a day of probe mods run on Ari's ARM64 laptop on 2026-11-12, Windows build 26100, French. Each statement says which of the two it rests on. Replace each "unconfirmed" with a dated fact as later work settles it.
+`explorer-extras` is the first mod in this repo that targets File Explorer, a Miller columns panel, tested through version 0.7. The section "What explorer-extras confirmed" records what it settled. This skill otherwise combines a reading of four published mods with a day of probe mods run on Ari's ARM64 laptop on 2026-11-12, Windows build 26100, French. Each statement says which of the two it rests on. Replace each "unconfirmed" with a dated fact as later work settles it.
 
 The probe mods are worth keeping as starting points: `probe-explorer-recon`, `probe-explorer-viewmenu`, `probe-desktop-listview`, `probe-desktop-groupby` and `probe-symbols`, in the repo's `probes` folder.
 
@@ -201,6 +201,23 @@ Confirmed on 2026-11-13 with `probes/probe-window-created.wh.cpp` 0.6, ARM64, bu
 - Never treat `this` of a command bar method as a XAML object. Calling `copy_from_abi` and `try_as` on it crashed Explorer twice, once with `0xC0000409` in ucrtbase and once with `0xC0000005` in `Microsoft.UI.Xaml.dll`, and left Explorer on the legacy command bar until it restarted. Take objects only from arguments that are XAML references.
 - `OnCommandBarItemVMsChanged` is no use for this. It takes an observable map and the change arguments, and `this` is the control.
 - A generic hook that forwards four integer registers is safe for methods without floats and without by-value structs. A by-value C++/WinRT object arrives as a pointer to a temporary.
+
+## What explorer-extras confirmed
+
+Confirmed 2026-11-13, ARM64, Windows 11 build 26100.9974, French, with `explorer-extras` 0.7.x. The mod's `HANDOFF.md` and `PLAN.md` hold the detail.
+
+- **Panel.** A `DesktopWindowXamlSource` on the `CabinetWClass` window, over the `SHELLDLL_DefView`, with Explorer's own view left alive underneath. Explorer's view follows the active column through `IShellBrowser::BrowseObject` with `SBSP_ACTIVATE_NOFOCUS`, so the toolbar, panes and status bar act on the selection. Selection is mirrored with `IShellView::SelectItem`.
+- **Window creation.** `OnDpiChanged` in `FileExplorerExtensions.dll` runs when a window is built, see "Reaching a window as it opens". A new tab is seen by hooking `CreateWindowExW` for class `ShellTabWindowClass`.
+- **Navigation pane clicks.** `IShellBrowser::BrowseObject` is vtable slot 11. A call with flags `0x80001` from `SHELL32` and `DUI70` is a sidebar click. The mod flags its own calls with a thread-local so it does not mistake them for one.
+- **Toolbar commands.** Hooking `CommandBarManager::InvokeMenuItem` lets the mod run Cut, Copy, Paste, Delete and Rename on the selected column item.
+- **Keys.** Explorer's accelerator table takes Backspace, Delete, Ctrl+C, Ctrl+V and Ctrl+Shift+N before the panel does. A `TranslateAcceleratorW` hook passes them through while the panel or its rename box has the keyboard.
+- **Folder contents.** Read with `IShellFolder::EnumObjects` on a worker thread, sorted with `CompareIDs` on Explorer's own sort columns and grouped from the group property. Icons come in a first batch of 120, then per row as it is built.
+- **Shortcuts to folders.** A `.lnk` has no `SFGAO_FOLDER`. Resolve it with `IShellItem::BindToHandler(BHID_LinkTargetItem)` and open the target. Treated as a file, it made Explorer open a new window.
+- **Archives.** A zip is a shell folder (`SFGAO_FOLDER` plus `SFGAO_STREAM`) and browses as a column. Extraction through `IFileOperation::CopyItem` works. Properties on an item inside it crashed Explorer with `0xC0000409`.
+- **Virtual items.** The Desktop folder mixes real files with virtual items (This PC, Recycle Bin, Control Panel). `SFGAO_FILESYSTEM` tells them apart. Control Panel is listed twice, as a folder and as an applet launcher.
+- **Cloud and remote items.** A OneDrive placeholder has `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`. A synced file has a reparse tag that equals `0x9000001A` under the mask `0xF000FFFF`. `FILE_ATTRIBUTE_PINNED` (`0x80000`) means always keep on this device. UNC paths and `DRIVE_REMOTE` identify network items. A phone connected through Phone Link shows up under `C:\Users\<name>\CrossDevice`. Detecting MTP devices by their `\\?\usb#` parsing names is unconfirmed.
+- **Undo.** The mod keeps its own stack: Recycle Bin restore through the "undelete" verb, and renames and new folders by path.
+- **Not solved.** A transparent or Mica background behind the panel. Several approaches failed. Parked.
 
 ## Compatibility to check
 

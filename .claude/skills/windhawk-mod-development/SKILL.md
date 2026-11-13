@@ -200,6 +200,20 @@ A C++ exception that escapes into a native callback kills the host. Wrap the who
 
 `catch (...)` does not catch access violations. No file in this repo uses `__try`, so the "crash isolation" promised in the stack design only covers C++ exceptions. Nobody has yet compiled `__try`/`__except` under Windhawk's Clang. Test that before designing around it, and keep each guarded call in its own small function, because structured handling can't share a scope with objects that have destructors.
 
+## Per-window state in a shell mod
+
+Learned building explorer-extras, 0.1 to 0.7:
+
+- One state object per window, touched only on that window's UI thread. One worker thread per window does the slow shell reads and returns results through the window's `DispatcherQueue`. A result carries a generation number or a cancel flag and is dropped when stale.
+- A callback queued to the dispatcher must check that the window and the DLL are still alive (`g_unloading`, the state lookup for this thread, and that the object it captured is still in the state's list) before it touches anything.
+- After the window is destroyed, never release its XAML objects. Abandon them.
+- A pidl made from a path is rooted under This PC, one built from the namespace under the Desktop. They never compare equal with `ILIsEqual`, so compare paths for items on disk.
+- A shell folder inside an archive has a path that looks like a normal one (`C:\x\a.zip\sub`), and `SHGetPathFromIDList` succeeds on it. To tell whether an item is inside an archive, walk the path upward until a part is a file, not a folder.
+- The first column's name can be a library name (`Téléchargements`), not a path. Never find a parent column by comparing display names to a path.
+- A verb or property sheet on an item inside an archive crashed Explorer. Offer Copy only there.
+- A modal loop inside a XAML handler is the usual crash. Prefer a XAML flyout for menus.
+- A call that returns success is not proof the user saw the result. `ShellExecuteEx` returned ok with `hInstApp=42` while no app opened, because the file was a cloud placeholder that the image app could not open. Log the result, then ask what the user saw before changing the call.
+
 ## Process shutdown
 
 Two teardown paths behave differently.
@@ -279,7 +293,7 @@ Ask for the Event Viewer entry, Windows Logs, Application, Event ID 1000. It giv
 | --- | --- |
 | `0xC0000005`, module "unknown", offset 0 | A call through a pointer into unloaded code. Look for a callback that outlived the DLL, or a nested loop under XAML. |
 | `0x20474343`, module KERNELBASE.dll | A C++ exception thrown by Clang or GCC code that nothing caught. The bytes spell "GCC". Look for a handler without a `try`. |
-| `0xC0000409` | A fail-fast, often a stack overflow guard or Control Flow Guard. Look for recursion first. |
+| `0xC0000409` | A fail-fast, often a stack overflow guard or Control Flow Guard. Look for recursion first. In explorer-extras the same code and the same offset came back twice, from the shell's Properties verb on an item inside a browsed zip. An identical offset on a repeat means the first fix did not touch the cause: confirm from the log that the code path you restricted is the one that ran. |
 
 The Start button PLAN.md calls `0x20474343` a Control Flow Guard failure. That reading is wrong, though the fix it led to was right.
 
@@ -290,6 +304,14 @@ A crash can also hide other evidence. "No log line appeared" proves nothing if t
 ## The build and test loop
 
 Ari compiles and tests on his own Windows machine. You usually can't run the mod.
+
+Run Windhawk's own clang over the file before every handover, and prove the check ran:
+
+- The compiler is `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`. It is not on PATH in the Bash tool. A call to `clang++` fails with "command not found", and a pipe into `grep error` then prints nothing, which looks like a clean result. Call the full path, and count matches (`grep -cE "error|warning"`) or read the exit code.
+- The flags are in `explorer-extras/HANDOFF.md`, "Compile check without the Windhawk editor". The check does not link, so a missing `-l` flag shows only in Windhawk.
+- When a patch is applied with a Python script inside a Bash heredoc, backslashes in the replacement text get halved: a char literal for a backslash ends up in the file with one backslash and does not compile. Build such strings with `chr(92)`, or use the Edit tool. After a patch, grep the lines you touched.
+- Every handover bumps `@version` and the version in the start log line, copies the file to `C:/ProgramData/Windhawk/EditorWorkspace/mod.wh.cpp` and compares the two with `cmp`. The editor sometimes shows an old version, so check `grep @version` there too.
+- Read the mod's own log before guessing. It tells which path ran: a restricted menu that still showed ten entries, and an archive column the mod did not recognise, were both found by reading one log line.
 
 1. Hand over the full file, never a fragment to merge by hand.
 2. He replaces the editor source, compiles with Ctrl+B and checks the compiler output.

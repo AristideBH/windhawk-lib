@@ -12,8 +12,8 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.5.1,
-  compiled and tested by Ari on 2026-11-13. `ROADMAP.md` says what is done.
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.7.11,
+  compiled by Ari on 2026-11-13 (0.7.1 to 0.7.9 tested). `ROADMAP.md` says what is done.
   The version history is in `git log`.
 - Architecture in one paragraph. One WinUI panel per Explorer window, hosted
   as a `DesktopWindowXamlSource` over the file list, with a per-window
