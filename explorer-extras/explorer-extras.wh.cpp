@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.6
+// @version         0.7.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - desktopRealOnly: false
+    $name: Desktop column shows only real items
+    $description: Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.
   - archives: false
     $name: Browse archives in columns
     $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
@@ -176,6 +179,7 @@ std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
+std::atomic<bool> g_desktopRealOnly{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -1202,6 +1206,15 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 child = nullptr;
                 continue;
             }
+            if (g_desktopRealOnly && ILIsEmpty(folderPidl)) {
+                SFGAOF real = SFGAO_FILESYSTEM;
+                if (FAILED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&child, &real)) ||
+                    !(real & SFGAO_FILESYSTEM)) {
+                    CoTaskMemFree(child);
+                    child = nullptr;
+                    continue;
+                }
+            }
             Entry entry;
             entry.name = DisplayName(folder, child);
             entry.folder = IsFolderItem(folder, child);
@@ -1885,7 +1898,9 @@ struct IconBatch {
 
 void ApplyIcons(std::shared_ptr<IconBatch> const& batch);
 
-constexpr size_t kMaxIcons = 400;
+// Icons read with the first load. The rows beyond are asked for when they are
+// built, so the ones on screen come first even far down a long folder.
+constexpr size_t kMaxIcons = 120;
 constexpr size_t kIconBatch = 16;
 
 // Copies a shell bitmap's pixels. False if it can't be read.
@@ -8605,6 +8620,7 @@ void LoadSettings() {
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
+    g_desktopRealOnly = Wh_GetIntSetting(L"columns.desktopRealOnly") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
         g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
@@ -8639,7 +8655,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
