@@ -78,6 +78,52 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
+## Where we stopped, 2026-11-14 (version 0.13.6)
+
+Done and tested by Ari: everything in the plan table through 0.12.3 (columns
+per tab, menus, per-folder memory with three toggles, drag between columns,
+Ctrl copy into the same folder). 0.13.x, drag out of the panel: works to the
+desktop (a plain drag moves, Ctrl copies, Ctrl may be let go up to 400 ms
+before the button). Everything below is open.
+
+Open, most useful first:
+
+1. Drag out onto Explorer's navigation pane does nothing (released on the
+   Downloads entry with README.txt: no move, no log error). The log said
+   `SysTreeView32 "Volet de navigation"`, effect offered 7, result effect 0, and
+   no file moved. Find out why: log which tree item is under the pointer, try
+   `DragEnter`/`DragOver` on the target ourselves, try a drop onto another
+   Explorer window's file list and onto a folder in a second window.
+2. `dragOut` is off by default after the first test hung Explorer. The hang
+   was not reproduced (it came right after the mod was replaced while a window
+   was in Columns). When it is switched on and works for a while, make it
+   default on.
+3. Drops coming in from other windows and apps onto the panel are not
+   handled. WinUI: `AllowDrop` on the lists, `DragOver` and `Drop`, read the
+   storage items, do the move or copy with `IFileOperation` to the folder row or
+   column under the pointer.
+4. While dragging: no auto-scroll at the edges of a column or the strip;
+   dragging out of an archive column is refused.
+5. The folder (background) menu and the item menu build their rows with
+   similar code that should be shared; their visuals get a dedicated pass
+   (spacing, icon sizes, the Windows icon files in
+   `C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\
+   FileExplorerExtensions\Assets\images\contrast-standard\theme-dark|light`).
+6. Parked: a click should stop a scroll that is still gliding (tried four
+   ways in 0.7.12 to 0.7.15, none worked with a mouse click).
+7. Small: focusing virtual shell items on the Desktop (Ari never described what
+   fails), a syncing state for OneDrive marks, MTP/phone detection is a guess,
+   the remote marks log lines.
+8. Toward 1.0: strings in a table for translation, remove the test settings
+   (transparent and Mica background), the README, the pull request to
+   windhawk-mods, update the skills one last time.
+9. Ideas not started: Paste in the item menu (Ari said no need), labels,
+   toolbar customization, Home page overhaul, details columns auto-fit, GPU
+   Explorer view compatibility (Ari tests that himself).
+
+Branches: work happens on `claude/version-0-3-continuation-1f97fb`;
+`wip/drag-0.12` is an old side branch already merged and can be deleted.
+
 ## Plan for the next versions, drawn up 2026-11-13
 
 Order is by value for daily use, then risk. Low priority, by Ari: Home page
@@ -95,6 +141,8 @@ last and are not scheduled.
 | 0.9 | Done in 0.9.7 (menus tested, visual tuning left for a dedicated pass): the item menu and the folder (background) menu are custom flyouts: an icon row on top with labels, the rest listed below, Windows' own two-tone icons read from the File Explorer package, Show more options for the shell's other entries. Known debt: the two menus build their rows with similar code that could be shared. | medium | medium |
 | 0.10 | Done and tested in 0.12.3: drag rows to a folder row or to another column (Ctrl copies, also into the same folder, Shift moves, Alt links, Escape cancels), the drop goes through the folder's own drop target. Not done: dragging out to other windows and apps, auto-scroll while dragging, dragging out of an archive. | large | medium |
 | 0.11 | Done and tested in 0.11.0: per-folder memory kept across restarts (the last 150 folders): each column has its own sort and group (a toolbar Sort or Group change applies to the active column, and the sort Explorer has for a folder is taken when the column becomes active), the width of a resized column, and whether a folder is shown in Columns (choosing another layout in a folder, or Columns in it, is remembered; navigating to a remembered folder switches the tab). Limits: the Columns-per-folder switch only works while some tab is in Columns, and each Explorer process keeps its own copy of the memory. | medium | low |
+| 0.12 | Done and tested: drag and drop between columns (0.12.3), three toggles for the per-folder memory (`rememberSort`, `rememberWidth`, `rememberLayout`). | | |
+| 0.13 | Drag out of the panel with the shell's drag, setting `dragOut` (off by default). Works onto the desktop for move and copy (0.13.6). Does not work onto the navigation pane. | | |
 | 1.0 | Release: strings in a table for translation, settings cleaned of test options, README, the pull request to windhawk-mods. | medium | low |
 | later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Labels, toolbar customization. | | |
 

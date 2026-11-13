@@ -167,3 +167,78 @@ Read on 2026-11-13, the first 200 KB of a 2.3 MB source and its README.
 - An optimistic destination: the view shows the target folder before
   Explorer has built its own view. The same idea can remove the first-column
   flash when a window opens in Columns.
+
+## Findings from 0.7 to 0.13, 2026-11-13 and 14
+
+Tabs and Columns per tab (0.8):
+- The visible `ShellTabWindowClass` identifies a tab. The tick notices a
+  switch, saves the old tab's snapshot (folders, selected child, widths, active
+  column, vertical scroll of each column) and restores the new tab's, or starts
+  from Explorer's folder. A tab seen for the first time takes the layout chosen
+  last. The panel is hidden (`bridge.Hide()`) while a tab that is not in
+  Columns shows. A tab made after the panel is a window above it and covers it,
+  so the panel is raised again whenever a window is above it.
+- Pending navigation, selection mirroring and the focus column belong to the
+  tab that left, and are dropped at a switch.
+
+Per-folder memory (0.11):
+- One string value `folderMemory` in the mod's storage: lines of
+  `path TAB sort TAB width TAB columns`, 150 folders, lowercased path key. Sort
+  and group are saved as `{guid},pid,direction;...` and the group key.
+  Explorer's own per-folder sort is authoritative for the active column: when a
+  column becomes active, the sort Explorer shows for that folder is read and
+  taken. Columns per folder: choosing another layout marks the folder 0,
+  choosing Columns marks it 1 (also when the panel is built from scratch, a bug
+  fixed in 0.11.1). Going to a folder marked 0 turns Columns off for the tab,
+  going to one marked 1 from a tab not in Columns turns it on.
+
+Menus (0.9):
+- The item and folder menus are custom `Flyout`s with a header row of icon
+  buttons with labels and a list of rows, not `MenuFlyout`s: a `CommandBarFlyout`
+  cannot draw two-tone icons. The shell's entries come from
+  `IContextMenu::QueryContextMenu`, are classified by verb, and everything that
+  is not listed is under "Show more options" (a `MenuFlyout` filled by
+  `FillFlyoutItems` with a skip list).
+- The two-tone icons are the SVG files Windows ships in the File Explorer
+  package (path in the roadmap), loaded with
+  `SvgImageSource(Uri("file:///C:/Windows/SystemApps/..."))`. Light grey plus a
+  fixed blue (`#4CC2FF` in dark theme). They work from Explorer.
+- Verbs seen: `cut`, `copy`, `rename`, `delete`, `openas`, `properties`,
+  `pintohomefile`, `copyaspath`, `link`, `Windows.ModernShare`, `Windows.Share`
+  (a submenu), `PreviousVersions`. Compress to and the other new Windows 11
+  entries are not in `QueryContextMenu`.
+
+Drag and drop (0.10, 0.12, 0.13):
+- Between columns the mod follows the pointer itself (a label in the overlay
+  canvas, a tint on the target row or column) and gives the dragged items to
+  the target folder's `IDropTarget` (`DragEnter`, `DragOver`, `Drop`), so the
+  shell does the work and shows its own dialogs. The items' `IDataObject` comes
+  from `IShellFolder::GetUIObjectOf(IID_IDataObject)`. Keys: Ctrl copy, Shift
+  move, Alt link; the shell chooses a move on the same drive and a copy to
+  another.
+- A move done by the target returns effect 0. Copy returns 1.
+- A row marks its own press handled, so the drag starts from the handler
+  registered with `handledEventsToo`.
+- Dragging out: when the pointer leaves the panel's root grid, the panel's drag
+  ends and `SHDoDragDrop` starts (after the event, through the dispatcher
+  queue) with a data object from the same call and an own `IDropSource` that
+  logs what the target offered and where the button went up. The key state the
+  drag loop gives (`MK_CONTROL` and so on) is correct, but a key let go just
+  before the button must still count, so the last time each was seen is kept
+  and `Preferred DropEffect` is set in the data at the moment of release.
+  Works onto the desktop (`Progman`, `SysListView32`) and for a move or a
+  copy. Does not work onto the navigation pane (`SysTreeView32`). The Windows 11
+  window has an invisible resize border of about 6 px: a release inside it is
+  over the Explorer window, not the desktop.
+
+Cloud and remote marks (0.7.8 to 0.7.11):
+- OneDrive placeholder: `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`; downloaded
+  cloud file: reparse tag `0x9000001A` (mask `0xF000FFFF`); always kept:
+  `FILE_ATTRIBUTE_PINNED` (0x80000). A OneDrive image that cannot be opened is
+  not the mod's doing (it fails from Explorer's own view too).
+
+Not solved, parked:
+- A click stopping a scroll that glides (mouse): the glide is probably a stream
+  of wheel events. Tried ChangeView to the same offset, a nudge, toggling the
+  scroll mode and inertia, scrolling the vertical wheel in the mod and dropping
+  turns after a press.

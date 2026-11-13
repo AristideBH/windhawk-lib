@@ -211,6 +211,11 @@ Learned building explorer-extras, 0.1 to 0.7:
 - A shell folder inside an archive has a path that looks like a normal one (`C:\x\a.zip\sub`), and `SHGetPathFromIDList` succeeds on it. To tell whether an item is inside an archive, walk the path upward until a part is a file, not a folder.
 - The first column's name can be a library name (`Téléchargements`), not a path. Never find a parent column by comparing display names to a path.
 - A verb or property sheet on an item inside an archive crashed Explorer. Offer Copy only there.
+- A `$name` or `$description` in the settings block must not contain a colon followed by a space ("Off: all columns" broke the whole block, twice). Scan every description for `: ` before a handover.
+- A mod of several thousand lines is kept in numbered parts and joined by a script into the one file Windhawk takes (`explorer-extras/src/*.cpp`, `explorer-extras/build.py`). Edit the parts, never the generated file, and check with `build.py --check`.
+- Replacing a mod while an Explorer window has its panel can hang or crash that window (a callback of the old DLL), and the first start after a reload is slow. After a reload, test in a new window.
+- When a drag, a menu or a dialog hangs the host, add a log line before each blocking call, so the next log shows the last step reached. Do not guess from a log that has nothing after the event.
+- A shell target that did a move reports effect 0. Do not read it as a failure.
 - A modal loop inside a XAML handler is the usual crash. Prefer a XAML flyout for menus.
 - A call that returns success is not proof the user saw the result. `ShellExecuteEx` returned ok with `hInstApp=42` while no app opened, because the file was a cloud placeholder that the image app could not open. Log the result, then ask what the user saw before changing the call.
 
