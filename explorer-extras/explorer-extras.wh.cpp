@@ -2,12 +2,12 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.5
+// @version         0.3.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -1724,10 +1724,12 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
 }
 
 // The pixel buffer of a WriteableBitmap, as a byte pointer.
-struct __declspec(uuid("905a0fef-bc53-11df-8c49-001e4fc686da"))
-    IBufferByteAccessLocal : ::IUnknown {
+struct IBufferByteAccessLocal : ::IUnknown {
     virtual HRESULT STDMETHODCALLTYPE Buffer(uint8_t** value) = 0;
 };
+const GUID kIidBufferByteAccess = {
+    0x905a0fef, 0xbc53, 0x11df,
+    {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
 
 // Runs on the window's UI thread when the worker has read some icons.
 void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
@@ -1751,7 +1753,7 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
                 winrt::com_ptr<IBufferByteAccessLocal> access;
                 winrt::check_hresult(
                     ((::IUnknown*)winrt::get_abi(buffer))
-                        ->QueryInterface(__uuidof(IBufferByteAccessLocal),
+                        ->QueryInterface(kIidBufferByteAccess,
                                          access.put_void()));
                 uint8_t* pixels = nullptr;
                 winrt::check_hresult(access->Buffer(&pixels));
@@ -3607,7 +3609,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
