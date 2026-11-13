@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.25
+// @version         0.3.26
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1768,9 +1768,12 @@ void UpdatePill(WindowState* state, bool animate) {
             return;
         }
         if (!animate || state->pillLeft < 0) {
-            if (now >= state->pillUntil) {
-                muxc::Canvas::SetLeft(state->pill, target);
+            // While a move is animating, wait: the next tick tries again.
+            // Remembering the target now would leave the pill where it was.
+            if (now < state->pillUntil) {
+                return;
             }
+            muxc::Canvas::SetLeft(state->pill, target);
             state->pillLeft = target;
             return;
         }
@@ -5245,7 +5248,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.25 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.26 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
