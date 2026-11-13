@@ -94,3 +94,27 @@ extraction flow, toolbar customization, small tweaks.
   the modal-loop crash class. Send to and Open with submenus may be empty
   (`HandleMenuMsg` is not called). Next retest: right-click a file and a
   folder, try Copy, Properties and Delete.
+
+## Probe results, 2026-11-13 (`probes/probe-tabs-virtual.wh.cpp`)
+
+New tabs:
+- A "+" tab creates, on the window's own UI thread, `SHELLDLL_DefView`, then
+  `DUIViewWndClassName`, then the `ShellTabWindowClass` itself, parent
+  `CabinetWClass`. A hook on `CreateWindowExW` sees the tab window only after
+  the call returns, with its children already there. A new window shows the
+  same sequence and then `CabinetWClass`. So a post-call hook on class
+  `ShellTabWindowClass` is a creation hook for tabs, on the same thread as
+  the command bar, where `StateForThisThread` works.
+- `SHELLDLL_DefView` is also created again on navigation inside a tab, so it
+  is not a tab-creation signal.
+
+Desktop and Control Panel items, root of the namespace (27 items):
+- Virtual folders bind and enumerate: This PC, Recycle Bin, Control Panel
+  (`::{26EE0668-...}`), Libraries, Linux, Gallery, Network, Home. They are
+  `FOLDER` and not `FILESYSTEM`, so `IsFolderItem` is true for them.
+- The Desktop's own "Control Panel" entry (`::{5399E694-...}`) and about 15
+  Control Panel applets (Mouse, Keyboard, Region, ...) are neither `FOLDER`
+  nor `STREAM` and don't bind. They are launchers: the column shows them as
+  files, and they should be opened with the shell rather than navigated into.
+- Recycle Bin items have the original path as their display name and a
+  `$Recycle.Bin` path as parsing name.
