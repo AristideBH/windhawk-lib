@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.14
+// @version         0.7.15
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1619,6 +1619,10 @@ struct Column {
     winrt::event_token loadedToken{};
     winrt::event_token panelWheelToken{};
     mux::UIElement panel{nullptr};  // The list's row panel, for the wheel.
+    // Vertical wheel turns are scrolled by this mod, so a press can end a glide.
+    ULONGLONG lastWheelAt = 0;
+    bool wheelSuppress = false;  // After a press: wheel turns are dropped until a gap.
+    double wheelTarget = 0;
     winrt::event_token gripPressedToken{};
     winrt::event_token gripMovedToken{};
     winrt::event_token gripReleasedToken{};
@@ -3538,6 +3542,16 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             try {
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
+                    WindowState* pressState = StateForThisThread(false);
+                    if (pressState) {
+                        int at = ColumnIndexOfList(pressState, list);
+                        if (at >= 0) {
+                            Column* c = pressState->columns[at].get();
+                            // Turns that keep coming right after the press are a glide.
+                            c->wheelSuppress = GetTickCount64() - c->lastWheelAt < 600;
+                            c->wheelTarget = scroller ? scroller.VerticalOffset() : 0;
+                        }
+                    }
                     if (scroller) {
                         double offset = scroller.VerticalOffset();
                         // Move by half a pixel and back, without animation: a change to
@@ -3627,11 +3641,52 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                        mux::Input::PointerRoutedEventArgs const& args) {
                         try {
                             auto element = source.try_as<mux::UIElement>();
-                            if (element &&
-                                args.GetCurrentPoint(element)
-                                    .Properties()
-                                    .IsHorizontalMouseWheel()) {
+                            if (!element) {
+                                return;
+                            }
+                            auto props = args.GetCurrentPoint(element).Properties();
+                            if (props.IsHorizontalMouseWheel()) {
                                 args.Handled(true);
+                                return;
+                            }
+                            // A vertical turn: scrolled here, not by the list, so that a
+                            // press can stop it. A touchpad keeps sending turns while it
+                            // glides, and a press ends that by dropping the turns until
+                            // there is a pause.
+                            WindowState* state = StateForThisThread(false);
+                            if (!state || !state->on || g_unloading) {
+                                return;
+                            }
+                            for (auto& c : state->columns) {
+                                if (c->panel != element) {
+                                    continue;
+                                }
+                                auto scroller = FindListScroller(c->list, 0);
+                                if (!scroller) {
+                                    return;
+                                }
+                                ULONGLONG now = GetTickCount64();
+                                if (c->wheelSuppress) {
+                                    if (now - c->lastWheelAt > 120) {
+                                        c->wheelSuppress = false;
+                                    } else {
+                                        c->lastWheelAt = now;
+                                        args.Handled(true);
+                                        return;
+                                    }
+                                }
+                                int delta = props.MouseWheelDelta();
+                                bool notch = delta % 120 == 0;
+                                double from = (notch && now - c->lastWheelAt < 300)
+                                                  ? c->wheelTarget
+                                                  : scroller.VerticalOffset();
+                                double target = from - delta * 0.8;
+                                target = std::max(0.0, std::min(target, scroller.ScrollableHeight()));
+                                c->wheelTarget = target;
+                                c->lastWheelAt = now;
+                                scroller.ChangeView(nullptr, target, nullptr, !notch);
+                                args.Handled(true);
+                                return;
                             }
                         } catch (...) {
                             LogHresult(L"column wheel");
@@ -8842,7 +8897,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
