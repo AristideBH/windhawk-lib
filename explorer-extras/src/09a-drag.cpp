@@ -206,7 +206,9 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         d.pending = false;
         d.active = true;
         state->slowRenameAt = 0;
+        Out(L"drag: moved far enough, taking the pointer");
         list.CapturePointer(args.Pointer());
+        Out(L"drag: pointer taken, making the label");
         // The label that follows the pointer.
         muxc::Border ghost;
         ghost.Background(Brush(235, 40, 40, 40));
@@ -386,7 +388,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         return;
     }
     DWORD effect = DROPEFFECT_NONE;
-    Out(L"drag out: %d item(s) leave the panel", (int)children.size());
+    Out(L"drag out: %d item(s) leave the panel, starting the shell's drag", (int)children.size());
     hr = SHDoDragDrop(state->topLevel, data, nullptr,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     Out(L"drag out ended: effect %lu, hr=0x%08lX", (unsigned long)effect, hr);
@@ -406,6 +408,7 @@ void StartOutDrag(WindowState* state) {
             children.emplace_back(ILClone(d.column->entries[index].child.get()));
         }
     }
+    Out(L"drag out: the pointer left the panel, ending the panel's own drag");
     DragEnd(state);
     if (children.empty()) {
         return;

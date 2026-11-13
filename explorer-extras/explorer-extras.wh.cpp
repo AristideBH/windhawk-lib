@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.13.0
+// @version         0.13.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -82,9 +82,9 @@ Not yet: drag and drop.
   - rememberLayout: true
     $name: Remember Columns per folder
     $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
-  - dragOut: true
+  - dragOut: false
     $name: Drag items out of the panel
-    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. If dragging out ever causes trouble, turn this off.
+    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Experimental: it ran a modal drag loop inside the panel and hung Explorer in the first test, so it is off by default.
   - archives: false
     $name: Browse archives in columns
     $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
@@ -195,7 +195,7 @@ std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
-std::atomic<bool> g_dragOut{true};
+std::atomic<bool> g_dragOut{false};
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
@@ -9680,7 +9680,9 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         d.pending = false;
         d.active = true;
         state->slowRenameAt = 0;
+        Out(L"drag: moved far enough, taking the pointer");
         list.CapturePointer(args.Pointer());
+        Out(L"drag: pointer taken, making the label");
         // The label that follows the pointer.
         muxc::Border ghost;
         ghost.Background(Brush(235, 40, 40, 40));
@@ -9860,7 +9862,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         return;
     }
     DWORD effect = DROPEFFECT_NONE;
-    Out(L"drag out: %d item(s) leave the panel", (int)children.size());
+    Out(L"drag out: %d item(s) leave the panel, starting the shell's drag", (int)children.size());
     hr = SHDoDragDrop(state->topLevel, data, nullptr,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     Out(L"drag out ended: effect %lu, hr=0x%08lX", (unsigned long)effect, hr);
@@ -9880,6 +9882,7 @@ void StartOutDrag(WindowState* state) {
             children.emplace_back(ILClone(d.column->entries[index].child.get()));
         }
     }
+    Out(L"drag out: the pointer left the panel, ending the panel's own drag");
     DragEnd(state);
     if (children.empty()) {
         return;
@@ -10687,7 +10690,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.13.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.13.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
