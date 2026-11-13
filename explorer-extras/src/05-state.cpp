@@ -137,6 +137,19 @@ struct RenameState {
 
 struct Worker;
 
+// The columns of a tab that is not showing, kept to put back when it is.
+struct TabColumnSnapshot {
+    Pidl folder;
+    Pidl selected;
+    double width = 0;
+    bool userSized = false;
+};
+struct TabSnapshot {
+    HWND tab = nullptr;
+    std::vector<TabColumnSnapshot> columns;
+    int active = 0;
+};
+
 struct WindowState {
     Worker* worker = nullptr;  // This window's folder and icon reader.
     DWORD thread = 0;
@@ -178,6 +191,9 @@ struct WindowState {
     size_t slowRenameEntry = 0;
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
+    // Columns per tab: the tab that is showing, and the stacks of the others.
+    HWND currentTab = nullptr;
+    std::vector<TabSnapshot> tabSnapshots;
 
     // View menu entry.
     ItemsVector menuItems{nullptr};

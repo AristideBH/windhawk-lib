@@ -1246,6 +1246,93 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
     SyncToFolder(state, current);
 }
 
+// The columns of the tab that is leaving are kept, so they come back with it.
+void SaveTabSnapshot(WindowState* state, HWND tab) {
+    // Tabs that were closed are forgotten.
+    for (size_t i = 0; i < state->tabSnapshots.size();) {
+        if (!IsWindow(state->tabSnapshots[i].tab) || state->tabSnapshots[i].tab == tab) {
+            state->tabSnapshots.erase(state->tabSnapshots.begin() + i);
+        } else {
+            i++;
+        }
+    }
+    if (!tab || !IsWindow(tab) || state->columns.empty()) {
+        return;
+    }
+    TabSnapshot snapshot;
+    snapshot.tab = tab;
+    snapshot.active = state->active;
+    for (auto& column : state->columns) {
+        TabColumnSnapshot saved;
+        saved.folder.reset(ILClone(column->folder.get()));
+        if (column->selectedChild) {
+            saved.selected.reset(ILClone(column->selectedChild.get()));
+        }
+        saved.width = column->list ? column->list.Width() : 0;
+        saved.userSized = column->userSized;
+        snapshot.columns.push_back(std::move(saved));
+    }
+    Out(L"tab left: %d column(s) kept", (int)snapshot.columns.size());
+    state->tabSnapshots.push_back(std::move(snapshot));
+}
+
+// Puts the columns of a tab back, when Explorer's view of that tab is still
+// on the folder its active column showed. Returns false if there is nothing
+// to put back, so the caller builds the columns from Explorer's folder.
+bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
+                        Pidl const& current) {
+    for (size_t i = 0; i < state->tabSnapshots.size(); i++) {
+        if (state->tabSnapshots[i].tab != tab) {
+            continue;
+        }
+        TabSnapshot snapshot = std::move(state->tabSnapshots[i]);
+        state->tabSnapshots.erase(state->tabSnapshots.begin() + i);
+        if (snapshot.columns.empty() || snapshot.active < 0 ||
+            snapshot.active >= (int)snapshot.columns.size() ||
+            !snapshot.columns[0].folder || FolderGone(snapshot.columns[0].folder.get())) {
+            return false;
+        }
+        auto& activeFolder = snapshot.columns[snapshot.active].folder;
+        if (!ILIsEqual(activeFolder.get(), current.get()) &&
+            _wcsicmp(PathOf(activeFolder.get()).c_str(), PathOf(current.get()).c_str()) != 0) {
+            Out(L"tab shown again, but its folder changed: the columns start over");
+            return false;
+        }
+        state->lastSeen.reset(ILClone(current.get()));
+        state->expected.reset();
+        state->pendingNav.reset();
+        state->selectFolder.reset();
+        state->selectChild.reset();
+        {
+            SortSpec fresh;
+            if (ReadSortSpec(browser, &fresh)) {
+                state->spec = fresh;
+            }
+        }
+        if (state->swapOld) {
+            CompleteSwap(state);
+        }
+        state->building = true;
+        RemoveColumnsFrom(state, 0);
+        state->building = false;
+        for (auto& saved : snapshot.columns) {
+            AddColumn(state, std::move(saved.folder));
+            Column* column = state->columns.back().get();
+            if (saved.selected) {
+                column->selectedChild = std::move(saved.selected);
+            }
+            if (saved.userSized && saved.width > 0 && column->list) {
+                column->list.Width(saved.width);
+                column->userSized = true;
+            }
+        }
+        SetActiveColumn(state, snapshot.active);
+        Out(L"tab shown again: %d column(s) put back", (int)state->columns.size());
+        return true;
+    }
+    return false;
+}
+
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
@@ -1642,6 +1729,23 @@ void OnTick() {
             }
         } else {
             state->focusColumn = nullptr;
+        }
+
+        // Columns per tab: another tab came to the front. The old tab's columns
+        // are kept, and the new tab's are put back if it had any.
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        if (tab && tab != state->currentTab) {
+            HWND old = state->currentTab;
+            state->currentTab = tab;
+            if (old) {
+                SaveTabSnapshot(state, old);
+                IShellBrowser* switched = BrowserOf(state->topLevel);
+                Pidl shown = switched ? CurrentFolder(switched) : Pidl();
+                if (shown && RestoreTabSnapshot(state, tab, switched, shown)) {
+                    state->lastFileList = fileList;
+                    return;
+                }
+            }
         }
 
         // Ask the shell where Explorer is only when something suggests a
