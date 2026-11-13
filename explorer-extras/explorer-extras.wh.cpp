@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.8
+// @version         0.5.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,7 +67,7 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
-  - doubleClickUp: true
+  - doubleClickUp: false
     $name: Double-click on empty space goes up
     $description: A double-click on the empty space of a column goes up one folder, as in the "Explorer double-click up" mod. In the first column the parent folder is added in front.
   - compactScrollbars: false
@@ -167,7 +167,7 @@ std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_compactScroll{false};
-std::atomic<bool> g_doubleClickUp{true};
+std::atomic<bool> g_doubleClickUp{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -7590,7 +7590,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

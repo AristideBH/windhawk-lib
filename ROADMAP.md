@@ -140,7 +140,7 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization
 - [x] Double-click on empty space goes up one column, in Columns only (0.5.5
-      to 0.5.8), a setting, on by default. For the other layouts keep the
+      to 0.5.8), a setting, off by default since 0.5.9. For the other layouts keep the
       Windhawk mod `explorer-double-click-up` enabled: it acts on Explorer's
       own list, which sits under the panel and never sees a click on it. Ari's
       call: not built in, too much for the gain.
