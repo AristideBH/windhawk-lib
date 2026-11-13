@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.12
+// @version         0.5.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2309,9 +2309,11 @@ void CenterColumn(WindowState* state, int index) {
     }
 }
 
-void SetActiveColumn(WindowState* state, int index) {
+void SetActiveColumn(WindowState* state, int index, bool ensureVisible = true) {
     state->active = index;
-    EnsureColumnVisible(state, index);
+    if (ensureVisible) {
+        EnsureColumnVisible(state, index);
+    }
     // The active column is shown by the pill, not by its background. The
     // transparent brush keeps the empty space clickable.
     for (size_t i = 0; i < state->columns.size(); i++) {
@@ -2876,6 +2878,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
         column->list.SelectedIndex(selectRow);
     }
     column->filled = true;
+    column->list.IsTabStop(column->entries.empty());
     if (!state->cutPaths.empty()) {
         ApplyCutState(state);
     }
@@ -2952,10 +2955,16 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 // strip back to the last column, which undid the centring of
                 // the column Explorer's Up had just gone to.
                 bool firstListing = !column->filled;
-                if (!SameListing(loaded->data, *column)) {
+                bool changed = !SameListing(loaded->data, *column);
+                if (changed) {
                     FillColumn(state, column.get(), std::move(loaded->data));
                 }
-                state->scroller.UpdateLayout();
+                // A synchronous layout pass, so only when something changed:
+                // the reloads after a toolbar command came in the middle of a
+                // scroll and made it stutter.
+                if (changed || firstListing) {
+                    state->scroller.UpdateLayout();
+                }
                 if (state->swapOld && column->generation == state->swapGeneration) {
                     CompleteSwap(state);
                 } else if (firstListing && state->columns.back().get() == column.get()) {
@@ -3067,6 +3076,12 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
 
     muxc::ListView list;
     list.Width(g_minWidth);
+    // A list with rows hands the keyboard to its rows. An empty one has none,
+    // so it takes the keyboard itself, without a focus outline.
+    list.IsTabStop(true);
+    list.UseSystemFocusVisuals(false);
+    list.FocusVisualPrimaryThickness(mux::Thickness{0, 0, 0, 0});
+    list.FocusVisualSecondaryThickness(mux::Thickness{0, 0, 0, 0});
     list.SelectionMode(muxc::ListViewSelectionMode::Extended);
     list.Padding(mux::Thickness{0, 12, 10, 4});
     column->selectionToken = list.SelectionChanged(
@@ -5500,13 +5515,12 @@ void OnEmptyDoubleTapped(muxc::ListView const& list,
         if (from > 0) {
             Column* previous = state->columns[from - 1].get();
             LiftStale(state, from - 1);
-            SetActiveColumn(state, from - 1);
+            SetActiveColumn(state, from - 1, false);
             ScheduleNavigation(state, previous->folder.get());
             state->focusColumn = previous;
             state->focusUntil = GetTickCount64() + 1500;
             previous->list.Focus(mux::FocusState::Pointer);
             // The active column goes to the middle of the view.
-            state->scroller.UpdateLayout();
             CenterColumn(state, from - 1);
             state->cursorFixUntil = GetTickCount64() + 2500;
             Out(L"double-click on empty space: back to column %d", from);
@@ -6195,11 +6209,12 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
         if (ILIsEqual(current.get(), state->columns[i]->folder.get())) {
             Out(L"Explorer moved to column %d", (int)i + 1);
             LiftStale(state, (int)i);
-            SetActiveColumn(state, (int)i);
+            // One scroll only, to the middle: a second one started by
+            // SetActiveColumn would cut the first short and make it stutter.
+            SetActiveColumn(state, (int)i, false);
             MirrorColumnSelection(state, state->columns[i].get());
             // Up and Back in the toolbar: the column Explorer went to is put
             // in the middle of the view, like a double-click up does.
-            state->scroller.UpdateLayout();
             CenterColumn(state, (int)i);
             return;
         }
@@ -7614,7 +7629,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
