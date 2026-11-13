@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.3
+// @version         0.4.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - focusRect: true
+    $name: Show the focus outline on the active item
+    $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
   - sidebarRoot: false
     $name: Sidebar sets the first column
     $description: A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.
@@ -147,6 +150,8 @@ std::atomic<bool> g_follow{true};
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
+std::atomic<bool> g_focusRect{true};
+std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
 std::atomic<int> g_maxItems{1500};
@@ -902,6 +907,10 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
     for (int id : order) {
         names.push_back(id >= 0 && id < (int)texts.size() ? texts[id] : L"");
     }
+    if (names.size() == 1 && names[0] == L"Unspecified") {
+        Out(L"group fallback: the key gives no values here, not grouping");
+        return;
+    }
     ApplyGroups(result, ids, order, names);
     Out(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
         (int)order.size(), isDate ? 1 : 0, isSize ? 1 : 0, isName ? 1 : 0,
@@ -1256,6 +1265,12 @@ struct Column {
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
     int hintEntry = -1;  // The entry whose chevron is shown stronger.
     bool filled = false;  // Has shown a listing at least once.
+    // Groups: the group of each row (a header has its own), the group titles,
+    // the chevron of each header row, and the titles collapsed by the user.
+    std::vector<int> rowGroup;
+    std::vector<std::wstring> groupTitles;
+    std::vector<muxc::FontIcon> headerIcons;
+    std::vector<std::wstring> collapsed;
     Pidl selectedChild;                 // Restored after a reload.
     unsigned generation = 0;
     bool userSized = false;
@@ -1330,6 +1345,7 @@ struct WindowState {
     std::unique_ptr<ContextMenuState> context;
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
+    int styleVersion = -1;  // The row style the rows were last given.
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
 
@@ -1951,6 +1967,17 @@ void RefreshNames(Column* column) {
     }
 }
 
+// The focus outline around the item under the keyboard cursor, shown or not
+// as the setting says.
+void ApplyFocusStyle(muxc::ListViewItem const& row) {
+    bool show = g_focusRect;
+    row.UseSystemFocusVisuals(show);
+    row.FocusVisualPrimaryThickness(mux::Thickness{show ? 2.0 : 0.0, show ? 2.0 : 0.0,
+                                                    show ? 2.0 : 0.0, show ? 2.0 : 0.0});
+    row.FocusVisualSecondaryThickness(mux::Thickness{show ? 1.0 : 0.0, show ? 1.0 : 0.0,
+                                                      show ? 1.0 : 0.0, show ? 1.0 : 0.0});
+}
+
 muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
                            size_t capacity, muxc::TextBlock* textOut,
                            muxc::Grid* iconHostOut,
@@ -2004,21 +2031,40 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
     row.MinHeight(rowHeight);
     row.Height(rowHeight);
     row.Padding(mux::Thickness{10, 0, 8, 0});
+    ApplyFocusStyle(row);
     row.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
     // The full name, for names that were cut.
     muxc::ToolTipService::SetToolTip(row, winrt::box_value(winrt::hstring{entry.name}));
     return row;
 }
 
-muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight) {
+// The chevron of a group header: down when open, right when collapsed.
+const wchar_t* HeaderGlyph(bool collapsed) {
+    return collapsed ? L"\uE76C" : L"\uE70D";
+}
+
+muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
+                                 bool collapsed, muxc::FontIcon* iconOut) {
     muxc::TextBlock text;
     text.Text(title);
     text.FontSize(12);
     text.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     text.Opacity(0.75);
     text.VerticalAlignment(mux::VerticalAlignment::Bottom);
+    muxc::FontIcon chevron;
+    chevron.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+    chevron.Glyph(HeaderGlyph(collapsed));
+    chevron.FontSize(9);
+    chevron.Opacity(0.7);
+    chevron.Margin(mux::Thickness{0, 0, 6, 2});
+    chevron.VerticalAlignment(mux::VerticalAlignment::Bottom);
+    *iconOut = chevron;
+    muxc::StackPanel line;
+    line.Orientation(muxc::Orientation::Horizontal);
+    line.Children().Append(chevron);
+    line.Children().Append(text);
     muxc::ListViewItem row;
-    row.Content(text);
+    row.Content(line);
     row.MinHeight(rowHeight);
     row.Height(rowHeight + 4);
     row.Padding(mux::Thickness{10, 0, 8, 2});
@@ -2072,6 +2118,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
     column->hintEntry = -1;
+    column->rowGroup.clear();
+    column->headerIcons.clear();
+    column->groupTitles = data.groupNames;
 
     FitWidth(column);
     size_t capacity = NameCapacity(column);
@@ -2081,26 +2130,54 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
 
     auto items = column->list.Items();
     items.Clear();
+    auto isCollapsed = [&](int group) {
+        return grouped && group >= 0 && group < (int)data.groupNames.size() &&
+               std::find(column->collapsed.begin(), column->collapsed.end(),
+                         data.groupNames[group]) != column->collapsed.end();
+    };
+    // The selected item's group is opened: a selection can't be hidden.
+    if (grouped && column->selectedChild) {
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            if (ILIsEqual(column->entries[i].child.get(),
+                          column->selectedChild.get()) &&
+                isCollapsed(data.groupOf[i])) {
+                auto at = std::find(column->collapsed.begin(),
+                                    column->collapsed.end(),
+                                    data.groupNames[data.groupOf[i]]);
+                column->collapsed.erase(at);
+                break;
+            }
+        }
+    }
     int selectRow = -1;
     for (size_t i = 0; i < column->entries.size(); i++) {
+        int group = grouped ? data.groupOf[i] : -1;
         if (grouped && (i == 0 || data.groupOf[i] != data.groupOf[i - 1])) {
-            int group = data.groupOf[i];
             std::wstring title =
                 group >= 0 && group < (int)data.groupNames.size()
                     ? data.groupNames[group]
                     : L"";
-            items.Append(MakeHeaderRow(title, rowHeight));
+            muxc::FontIcon icon{nullptr};
+            items.Append(MakeHeaderRow(title, rowHeight, isCollapsed(group), &icon));
             column->rowToEntry.push_back(-1);
+            column->rowGroup.push_back(group);
+            column->headerIcons.push_back(icon);
         }
         if (column->selectedChild &&
             ILIsEqual(column->entries[i].child.get(),
                       column->selectedChild.get())) {
             selectRow = (int)column->rowToEntry.size();
         }
-        items.Append(MakeRow(column->entries[i], rowHeight, capacity,
-                             &column->texts[i], &column->iconHosts[i],
-                             &column->chevrons[i]));
+        auto row = MakeRow(column->entries[i], rowHeight, capacity,
+                           &column->texts[i], &column->iconHosts[i],
+                           &column->chevrons[i]);
+        if (isCollapsed(group)) {
+            row.Visibility(mux::Visibility::Collapsed);
+        }
+        items.Append(row);
         column->rowToEntry.push_back((int)i);
+        column->rowGroup.push_back(group);
+        column->headerIcons.push_back(muxc::FontIcon{nullptr});
     }
     if (data.truncated) {
         muxc::ListViewItem more;
@@ -2108,6 +2185,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
         more.IsEnabled(false);
         items.Append(more);
         column->rowToEntry.push_back(-1);
+        column->rowGroup.push_back(-1);
+        column->headerIcons.push_back(muxc::FontIcon{nullptr});
     }
     if (selectRow >= 0) {
         column->list.SelectedIndex(selectRow);
@@ -2680,6 +2759,17 @@ void RebuildFromExplorer(WindowState* state) {
     state->pendingNav.reset();
     state->selectFolder.reset();
     state->selectChild.reset();
+    // The new first folder brings its own sort and grouping. Without this, a
+    // group key of the old folder (Home groups by its own property) put every
+    // item of the new one in "Unspecified".
+    {
+        SortSpec fresh;
+        if (ReadSortSpec(browser, &fresh)) {
+            state->spec = fresh;
+            Out(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
+                fresh.grouped ? 1 : 0);
+        }
+    }
     if (state->columns.empty()) {
         AddColumn(state, std::move(current));
         return;
@@ -2840,7 +2930,8 @@ std::vector<size_t> SelectedEntries(Column* column,
             continue;
         }
         auto item = items.GetAt(r).try_as<muxc::ListViewItem>();
-        if (item && item.IsSelected()) {
+        if (item && item.IsSelected() &&
+            item.Visibility() == mux::Visibility::Visible) {
             result.push_back((size_t)entry);
         }
     }
@@ -2869,10 +2960,15 @@ void OnRowSelected(muxc::ListView const& list) {
             state->building = true;
             for (uint32_t r = 0; r < items.Size() && r < column->rowToEntry.size();
                  r++) {
-                if (column->rowToEntry[r] >= 0) {
-                    continue;
-                }
                 auto object = items.GetAt(r);
+                bool hidden = false;
+                if (column->rowToEntry[r] >= 0) {
+                    auto item = object.try_as<muxc::ListViewItem>();
+                    hidden = item && item.Visibility() == mux::Visibility::Collapsed;
+                    if (!hidden) {
+                        continue;
+                    }
+                }
                 uint32_t at = 0;
                 if (selected.IndexOf(object, at)) {
                     selected.RemoveAt(at);
@@ -4045,6 +4141,48 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 // A click on the empty space of a column makes it the active one: Explorer's
 // own view moves to its folder, so Paste and the panes act there. The columns
 // to its right stay.
+// Opens or collapses the group of a header row.
+void ToggleGroup(WindowState* state, Column* column, int headerRow) {
+    if (headerRow < 0 || headerRow >= (int)column->rowGroup.size()) {
+        return;
+    }
+    int group = column->rowGroup[headerRow];
+    if (group < 0 || group >= (int)column->groupTitles.size()) {
+        return;
+    }
+    const std::wstring& title = column->groupTitles[group];
+    auto at = std::find(column->collapsed.begin(), column->collapsed.end(), title);
+    bool collapse = at == column->collapsed.end();
+    if (collapse) {
+        column->collapsed.push_back(title);
+    } else {
+        column->collapsed.erase(at);
+    }
+    auto items = column->list.Items();
+    auto selected = column->list.SelectedItems();
+    bool wasBuilding = state->building;
+    state->building = true;
+    for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
+        if (column->rowGroup[r] != group || column->rowToEntry[r] < 0) {
+            continue;
+        }
+        auto object = items.GetAt((uint32_t)r);
+        if (auto item = object.try_as<muxc::ListViewItem>()) {
+            item.Visibility(collapse ? mux::Visibility::Collapsed
+                                     : mux::Visibility::Visible);
+        }
+        uint32_t index = 0;
+        if (collapse && selected.IndexOf(object, index)) {
+            selected.RemoveAt(index);  // A hidden row can't stay selected.
+        }
+    }
+    state->building = wasBuilding;
+    if (headerRow < (int)column->headerIcons.size() && column->headerIcons[headerRow]) {
+        column->headerIcons[headerRow].Glyph(HeaderGlyph(collapse));
+    }
+    Out(L"group \"%s\" %s", title.c_str(), collapse ? L"collapsed" : L"opened");
+}
+
 void OnColumnBackgroundTapped(muxc::ListView const& list,
                               mux::Input::TappedRoutedEventArgs const& args) {
     WindowState* state = StateForThisThread(false);
@@ -4052,6 +4190,33 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
         return;
     }
     try {
+        // A click on a group header opens or collapses it.
+        {
+            int hit = ColumnIndexOfList(state, list);
+            if (hit >= 0) {
+                Column* column = state->columns[hit].get();
+                auto at = args.GetPosition(list);
+                auto items = list.Items();
+                for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
+                    if (column->rowToEntry[r] >= 0 || column->rowGroup[r] < 0) {
+                        continue;
+                    }
+                    auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
+                    if (!header) {
+                        continue;
+                    }
+                    auto bounds = header.TransformToVisual(list).TransformBounds(
+                        winrt::Windows::Foundation::Rect{
+                            0, 0, (float)header.ActualWidth(),
+                            (float)header.ActualHeight()});
+                    if (at.X >= bounds.X && at.X <= bounds.X + bounds.Width &&
+                        at.Y >= bounds.Y && at.Y <= bounds.Y + bounds.Height) {
+                        ToggleGroup(state, column, (int)r);
+                        return;
+                    }
+                }
+            }
+        }
         mux::DependencyObject node =
             args.OriginalSource().try_as<mux::DependencyObject>();
         for (int i = 0; node && i < 20; i++) {
@@ -4113,6 +4278,11 @@ void TypeToJump(Column* column, muxc::ListView const& list, WindowState* state,
         int entry = column->rowToEntry[row];
         if (entry < 0) {
             continue;
+        }
+        if (auto item = list.Items().GetAt(row).try_as<muxc::ListViewItem>()) {
+            if (item.Visibility() == mux::Visibility::Collapsed) {
+                continue;
+            }
         }
         if (StrCmpNIW(column->entries[entry].name.c_str(), needle.c_str(),
                       (int)needle.size()) == 0) {
@@ -4614,6 +4784,19 @@ void OnTick() {
         if (state->swapOld && now >= state->swapDeadline) {
             Out(L"the new first column didn't load in time, swapping anyway");
             CompleteSwap(state);
+        }
+
+        // A changed setting that affects rows already on screen.
+        if (state->styleVersion != g_styleVersion) {
+            state->styleVersion = g_styleVersion;
+            for (auto& c : state->columns) {
+                auto rows = c->list.Items();
+                for (uint32_t r = 0; r < rows.Size(); r++) {
+                    if (auto item = rows.GetAt(r).try_as<muxc::ListViewItem>()) {
+                        ApplyFocusStyle(item);
+                    }
+                }
+            }
         }
 
         // A column resized or moved: the pill follows, without animation.
@@ -5554,6 +5737,8 @@ void LoadSettings() {
     g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
     g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
     g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
+    g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
+    g_styleVersion++;
     int minWidth = Wh_GetIntSetting(L"columns.minWidth");
     int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
     minWidth = minWidth < 80 ? 80 : (minWidth > 800 ? 800 : minWidth);
@@ -5578,7 +5763,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
