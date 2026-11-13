@@ -2660,7 +2660,7 @@ void* XamlRootFromArgument(void* arg) {
     return ours ? object : nullptr;
 }
 
-BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {
+BOOL CALLBACK FindAnyCabinetOnThread(HWND hwnd, LPARAM lParam) {
     wchar_t cls[64];
     if (GetClassNameW(hwnd, cls, ARRAYSIZE(cls)) &&
         wcscmp(cls, L"CabinetWClass") == 0) {
@@ -2672,7 +2672,7 @@ BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {
 
 HWND TopLevelOfThisThread() {
     HWND top = nullptr;
-    EnumThreadWindows(GetCurrentThreadId(), FindCabinetOnThread, (LPARAM)&top);
+    EnumThreadWindows(GetCurrentThreadId(), FindAnyCabinetOnThread, (LPARAM)&top);
     return top;
 }
 
