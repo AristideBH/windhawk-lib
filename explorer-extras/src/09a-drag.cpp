@@ -362,6 +362,27 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     ReloadAll(state);
 }
 
+// Puts the effect a target of the shell takes when no key says otherwise into the
+// dragged data.
+void SetPreferredEffect(IDataObject* data, DWORD effect) {
+    static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+    if (!memory) {
+        return;
+    }
+    if (DWORD* value = (DWORD*)GlobalLock(memory)) {
+        *value = effect;
+        GlobalUnlock(memory);
+    }
+    FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium = {};
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = memory;
+    if (FAILED(data->SetData(&wanted, &medium, TRUE))) {
+        GlobalFree(memory);
+    }
+}
+
 // The drag source of a real drag. It ends the drag on Escape or when the button
 // goes up, and notes what the target under the pointer last offered and which
 // window it was, for the log.
@@ -369,6 +390,8 @@ struct OutDropSource : IDropSource {
     LONG refs = 1;
     DWORD lastEffect = 0;
     DWORD dropKeys = 0;
+    IDataObject* data = nullptr;  // The dragged data, not owned.
+    ULONGLONG ctrlAt = 0, shiftAt = 0, altAt = 0;  // When each key was last seen down.
     HWND dropWindow = nullptr;
     POINT dropPoint{};
     STDMETHODIMP QueryInterface(REFIID id, void** out) override {
@@ -392,7 +415,33 @@ struct OutDropSource : IDropSource {
         if (escape) {
             return DRAGDROP_S_CANCEL;
         }
+        ULONGLONG now = GetTickCount64();
+        if (keys & MK_CONTROL) {
+            ctrlAt = now;
+        }
+        if (keys & MK_SHIFT) {
+            shiftAt = now;
+        }
+        if (keys & MK_ALT) {
+            altAt = now;
+        }
         if (!(keys & MK_LBUTTON)) {
+            // A key let go a moment before the button still counts: the two
+            // rarely come up in the same instant, and the wrong one would turn
+            // a copy into a move.
+            const ULONGLONG grace = 400;
+            DWORD wanted = DROPEFFECT_NONE;
+            if (now - altAt < grace) {
+                wanted = DROPEFFECT_LINK;
+            } else if (now - ctrlAt < grace && now - shiftAt >= grace) {
+                wanted = DROPEFFECT_COPY;
+            } else if (now - shiftAt < grace) {
+                wanted = DROPEFFECT_MOVE;
+            }
+            if (wanted != DROPEFFECT_NONE && data) {
+                SetPreferredEffect(data, wanted);
+                Out(L"drag out: the keys of a moment ago ask for effect %lu", (unsigned long)wanted);
+            }
             POINT cursor;
             GetCursorPos(&cursor);
             dropPoint = cursor;
@@ -439,25 +488,12 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     // target of the shell reads it from the data when no key says otherwise. The
     // drag loop does not see a key pressed after it has started.
     if (preferred != DROPEFFECT_NONE) {
-        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
-        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
-        if (memory) {
-            if (DWORD* value = (DWORD*)GlobalLock(memory)) {
-                *value = preferred;
-                GlobalUnlock(memory);
-            }
-            FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-            STGMEDIUM medium = {};
-            medium.tymed = TYMED_HGLOBAL;
-            medium.hGlobal = memory;
-            if (FAILED(data->SetData(&wanted, &medium, TRUE))) {
-                GlobalFree(memory);
-            }
-        }
+        SetPreferredEffect(data, preferred);
     }
     Out(L"drag out: %d item(s) leave the panel, starting the shell's drag, default effect %lu",
         (int)children.size(), (unsigned long)preferred);
     OutDropSource* dropSource = new OutDropSource();
+    dropSource->data = data;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     {
