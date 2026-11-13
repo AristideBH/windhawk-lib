@@ -96,6 +96,11 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Keep the columns of a folder while focus moves to a file in the same
       column, until a different folder is chosen in that column or a parent.
       Keep the focused column smoothly in view, no jump.
+- [ ] Collapsible group headers, like Explorer's: a chevron on the header,
+      a click hides or shows the group's rows. Collapsed groups are kept per
+      column across reloads. Collapsed rows must not be reachable by Shift
+      range selection, type to jump or the arrow keys. Keyboard collapse is
+      not planned for the first version, headers are not focusable.
 - [ ] Rename several items at once, like Explorer's own.
 - [ ] Faster column refresh after the user's own actions (rename, new folder,
       delete, paste, move):
