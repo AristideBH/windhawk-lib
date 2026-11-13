@@ -104,12 +104,12 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Keep the columns of a folder while focus moves to a file in the same
       column, until a different folder is chosen in that column or a parent.
       Keep the focused column smoothly in view, no jump.
-- [ ] (0.4.4, not tested) Collapsible group headers, like Explorer's: a chevron on the header,
+- [x] Tested in 0.4.4 to 0.4.8: collapsible group headers, animated, like Explorer's: a chevron on the header,
       a click hides or shows the group's rows. Collapsed groups are kept per
       column across reloads. Collapsed rows must not be reachable by Shift
       range selection, type to jump or the arrow keys. Keyboard collapse is
       not planned for the first version, headers are not focusable.
-- [ ] (0.4.5, not tested) Rename by a slow second click on the name of the
+- [x] Tested in 0.4.5 to 0.4.8: rename by a slow second click on the name of the
       selected item, like Explorer. Panel background taken from Explorer's own
       file list. Group headers: hover tint, turning chevron.
 - [ ] Panel background that blurs like Explorer's own (Mica). Not reachable
@@ -117,7 +117,7 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       SystemBackdrop on islands. Revisit with a newer Windows App SDK, or by
       hiding the native list. A test setting exists since 0.4.7.
 - [ ] Rename several items at once, like Explorer's own.
-- [ ] (0.4.0, not tested) Faster column refresh after the user's own actions (rename, new folder,
+- [x] Tested in 0.4.0 to 0.4.8: faster column refresh after the user's own actions (rename, new folder,
       delete, paste, move):
       1. reload the column right after the action, not on the folder's change
          notification, which waits up to 2 s;
