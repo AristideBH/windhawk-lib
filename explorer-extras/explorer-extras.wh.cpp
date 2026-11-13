@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.0
+// @version         0.4.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -3706,6 +3706,10 @@ HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
         invoke.hwnd = state->topLevel;
         invoke.lpVerb = verb;
         invoke.nShow = SW_SHOWNORMAL;
+        // Shift+Delete deletes for good, with its confirmation.
+        if (GetKeyState(VK_SHIFT) & 0x8000) {
+            invoke.fMask |= CMIC_MASK_SHIFT_DOWN;
+        }
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);
@@ -3738,6 +3742,52 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
         invoke.cbSize = sizeof(invoke);
         invoke.hwnd = state->topLevel;
         invoke.lpVerb = verb;
+        invoke.nShow = SW_SHOWNORMAL;
+        hr = menu->InvokeCommand(&invoke);
+    }
+    DestroyMenu(hmenu);
+    menu->Release();
+    return hr;
+}
+
+// Undo or redo the last file operation, through the folder's background menu,
+// which offers "Undo Delete" and the like when there is something to undo.
+// The verbs it offers are logged once, to see what this Windows names them.
+HRESULT UndoRedoInFolder(WindowState* state, PCIDLIST_ABSOLUTE folder, bool redo) {
+    IShellFolder* target = nullptr;
+    HRESULT hr = ILIsEmpty(folder)
+                     ? SHGetDesktopFolder(&target)
+                     : SHBindToObject(nullptr, folder, nullptr,
+                                      IID_PPV_ARGS(&target));
+    if (FAILED(hr) || !target) {
+        return hr;
+    }
+    IContextMenu* menu = nullptr;
+    hr = target->CreateViewObject(state->topLevel, IID_PPV_ARGS(&menu));
+    target->Release();
+    if (FAILED(hr) || !menu) {
+        return hr;
+    }
+    HMENU hmenu = CreatePopupMenu();
+    hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL);
+    if (SUCCEEDED(hr)) {
+        static bool listed = false;
+        if (!listed) {
+            listed = true;
+            for (int i = 0; i < GetMenuItemCount(hmenu); i++) {
+                UINT id = GetMenuItemID(hmenu, i);
+                wchar_t verb[64] = L"";
+                if (id >= 1 && id < 0x7FFF) {
+                    menu->GetCommandString(id - 1, GCS_VERBW, nullptr, (char*)verb,
+                                           ARRAYSIZE(verb));
+                    Out(L"background menu item %d: id=%u verb=\"%s\"", i, id, verb);
+                }
+            }
+        }
+        CMINVOKECOMMANDINFO invoke = {};
+        invoke.cbSize = sizeof(invoke);
+        invoke.hwnd = state->topLevel;
+        invoke.lpVerb = redo ? "redo" : "undo";
         invoke.nShow = SW_SHOWNORMAL;
         hr = menu->InvokeCommand(&invoke);
     }
@@ -3975,8 +4025,15 @@ void OnColumnKey(muxc::ListView const& list,
             return;
         }
         if (ctrl && !alt && (key == VirtualKey::Z || key == VirtualKey::Y)) {
-            // Explorer's own view owns the undo stack. Pass the key to it.
-            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+            // The folder's own menu is asked first. If it doesn't act, the key
+            // goes to Explorer's view.
+            HRESULT undone = UndoRedoInFolder(state, column->folder.get(),
+                                              key == VirtualKey::Y);
+            Out(L"%s through the folder's menu: hr=0x%08lX",
+                key == VirtualKey::Z ? L"Undo" : L"Redo", undone);
+            if (SUCCEEDED(undone)) {
+                ReloadAll(state);
+            } else if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
                 IShellView* view = nullptr;
                 if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
                     MSG msg = {};
@@ -5345,7 +5402,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
