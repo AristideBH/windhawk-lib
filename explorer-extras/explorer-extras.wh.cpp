@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.10
+// @version         0.3.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2288,12 +2288,19 @@ void OnRowSelected(muxc::ListView const& list) {
         int entryIndex = row >= 0 && row < (int)column->rowToEntry.size()
                              ? column->rowToEntry[row]
                              : -1;
-        state->building = true;
-        RemoveColumnsFrom(state, columnIndex + 1);
-        state->building = false;
         state->selectFolder.reset();
         state->selectChild.reset();
         state->selectExtra.clear();
+
+        // The columns to the right stay while the selection is a file, several
+        // items or nothing, dimmed, until another folder is chosen here.
+        auto dimAfter = [&](bool dim) {
+            for (size_t j = columnIndex + 1; j < state->columns.size(); j++) {
+                if (state->columns[j]->cell) {
+                    state->columns[j]->cell.Opacity(dim ? 0.5 : 1.0);
+                }
+            }
+        };
 
         // Several items selected: no column opens. Explorer's own view gets
         // the same selection, so the preview pane, status bar and command
@@ -2312,6 +2319,7 @@ void OnRowSelected(muxc::ListView const& list) {
             }
             state->selectTries = 0;
             ScheduleNavigation(state, column->folder.get());
+            dimAfter(true);
             Out(L"%d items selected in column %d", (int)picked.size(),
                 columnIndex + 1);
             return;
@@ -2321,6 +2329,7 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         if (entryIndex < 0) {
             column->selectedChild.reset();
+            dimAfter(true);
             return;
         }
         const Entry& entry = column->entries[entryIndex];
@@ -2331,11 +2340,22 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         if (entry.folder) {
             ScheduleNavigation(state, absolute.get());
-            AddColumn(state, std::move(absolute));
+            if (columnIndex + 1 < (int)state->columns.size() &&
+                ILIsEqual(state->columns[columnIndex + 1]->folder.get(),
+                          absolute.get())) {
+                // Back on the folder whose columns are still there.
+                dimAfter(false);
+            } else {
+                state->building = true;
+                RemoveColumnsFrom(state, columnIndex + 1);
+                state->building = false;
+                AddColumn(state, std::move(absolute));
+            }
             // The highlight stays here. It moves to the new column when the
             // user enters it.
             SetActiveColumn(state, columnIndex);
         } else {
+            dimAfter(true);
             SetActiveColumn(state, columnIndex);
             // A file: Explorer shows the file's folder with the file selected.
             state->selectFolder.reset(ILClone(column->folder.get()));
@@ -4295,7 +4315,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
