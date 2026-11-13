@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.0
+// @version         0.5.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1377,6 +1377,8 @@ struct Column {
     // Rows are built when they come near the screen. Every entry has a row
     // shell from the start; its content is made later.
     std::vector<int> entryToRow;   // The row of each entry.
+    std::vector<char> iconAsked;   // Per entry: an icon was asked for beyond the first batch.
+    std::vector<size_t> iconWanted;  // Entries built since, waiting to be asked for.
     std::vector<char> built;       // Per entry: the row has its content.
     std::map<size_t, std::shared_ptr<IconBits>> pendingIcons;  // Icons that came before their row.
     muxc::ScrollViewer viewer{nullptr};  // The list's own scroller, watched for scrolling.
@@ -1743,6 +1745,10 @@ struct Job {
     int maxItems = 1500;
     mud::DispatcherQueue queue{nullptr};
     std::shared_ptr<std::atomic<bool>> cancel;  // The column no longer wants this.
+    // A job for icons only: rows that came on screen after the first batch.
+    bool iconsOnly = false;
+    std::vector<size_t> iconIndices;
+    std::vector<Pidl> iconChildren;
 };
 
 // One reader thread per window, so a slow folder in one window never holds up
@@ -1825,6 +1831,7 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
 // Reads icons, or thumbnails where the shell has one, for the first items of
 // a folder and sends them to the window's UI thread in small batches.
 void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
+               std::vector<size_t> const& indices, size_t limit,
                unsigned generation, mud::DispatcherQueue const& queue,
                std::atomic<bool> const& stop, std::atomic<bool> const* cancel) {
     IShellFolder* folder = nullptr;
@@ -1849,7 +1856,7 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         batch = std::make_shared<IconBatch>();
         batch->generation = generation;
     };
-    size_t count = std::min(children.size(), kMaxIcons);
+    size_t count = std::min(std::min(children.size(), indices.size()), limit);
     for (size_t i = 0; i < count && !stop && !(cancel && *cancel); i++) {
         IShellItem* item = nullptr;
         if (FAILED(SHCreateItemWithParent(nullptr, folder, children[i].get(),
@@ -1864,7 +1871,7 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
             if (SUCCEEDED(factory->GetImage(SIZE{32, 32}, 0, &bitmap)) &&
                 bitmap) {
                 IconBits bits;
-                bits.index = i;
+                bits.index = indices[i];
                 if (ReadBitmapBits(bitmap, &bits)) {
                     batch->icons.push_back(std::move(bits));
                 }
@@ -1908,6 +1915,15 @@ DWORD WINAPI WorkerProc(LPVOID param) {
             if (job->cancel && *job->cancel) {
                 continue;
             }
+            if (job->iconsOnly) {
+                try {
+                    LoadIcons(job->folder.get(), job->iconChildren, job->iconIndices,
+                              job->iconChildren.size(), job->generation, job->queue,
+                              worker->stop, job->cancel.get());
+                } catch (...) {
+                }
+                continue;
+            }
             auto loaded = std::make_shared<Loaded>();
             loaded->generation = job->generation;
             LoadFolder(job->folder.get(), job->spec, job->hidden,
@@ -1929,8 +1945,13 @@ DWORD WINAPI WorkerProc(LPVOID param) {
             } catch (...) {
             }
             try {
-                LoadIcons(job->folder.get(), children, job->generation,
-                          job->queue, worker->stop, job->cancel.get());
+                std::vector<size_t> indices(children.size());
+                for (size_t i = 0; i < indices.size(); i++) {
+                    indices[i] = i;
+                }
+                LoadIcons(job->folder.get(), children, indices, kMaxIcons,
+                          job->generation, job->queue, worker->stop,
+                          job->cancel.get());
             } catch (...) {
             }
         }
@@ -2022,6 +2043,34 @@ void RequestLoad(WindowState* state, Column* column) {
     job->maxItems = g_maxItems;
     job->queue = state->queue;
     job->cancel = column->cancel;
+    {
+        std::lock_guard<std::mutex> lock(state->worker->mutex);
+        state->worker->jobs.push_back(std::move(job));
+    }
+    SetEvent(state->worker->event);
+}
+
+// Asks the worker for the icons of rows that were built after the first batch.
+void RequestIcons(WindowState* state, Column* column) {
+    if (g_unloading || !state->worker || column->iconWanted.empty() ||
+        !column->cancel) {
+        return;
+    }
+    auto job = std::make_unique<Job>();
+    job->iconsOnly = true;
+    job->generation = column->generation;
+    job->folder.reset(ILClone(column->folder.get()));
+    job->queue = state->queue;
+    job->cancel = column->cancel;
+    size_t take = std::min<size_t>(column->iconWanted.size(), 200);
+    for (size_t i = 0; i < take; i++) {
+        size_t entry = column->iconWanted[i];
+        if (entry < column->entries.size()) {
+            job->iconIndices.push_back(entry);
+            job->iconChildren.emplace_back(ILClone(column->entries[entry].child.get()));
+        }
+    }
+    column->iconWanted.erase(column->iconWanted.begin(), column->iconWanted.begin() + take);
     {
         std::lock_guard<std::mutex> lock(state->worker->mutex);
         state->worker->jobs.push_back(std::move(job));
@@ -2468,6 +2517,12 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     // the first time the pointer is on the row.
     muxc::ToolTipService::SetToolTip(row, winrt::box_value(winrt::hstring{entry.name}));
     column->built[entryIndex] = 1;
+    // Beyond the first batch the worker reads icons for the rows that get built.
+    if (entryIndex >= kMaxIcons && entryIndex < column->iconAsked.size() &&
+        !column->iconAsked[entryIndex]) {
+        column->iconAsked[entryIndex] = 1;
+        column->iconWanted.push_back(entryIndex);
+    }
     auto pending = column->pendingIcons.find(entryIndex);
     if (pending != column->pendingIcons.end()) {
         ApplyIconBits(column, *pending->second);
@@ -2692,6 +2747,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->iconHosts.clear();
     column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
     column->entryToRow.assign(column->entries.size(), -1);
+    column->iconAsked.assign(column->entries.size(), 0);
+    column->iconWanted.clear();
     column->built.assign(column->entries.size(), 0);
     column->pendingIcons.clear();
     column->chevrons.clear();
@@ -6168,6 +6225,7 @@ void OnTick() {
                 }
             }
             BuildVisibleRows(c.get());
+            RequestIcons(state, c.get());
         }
 
         // A compact scrollbar floats over the right edge. While it shows, the
@@ -7275,7 +7333,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
