@@ -30,7 +30,7 @@ For the next session, human or model. Written 2026-11-13.
   navigation trace and the sidebar click. See `PLAN.md` and the skill.
 - Settings: enabled, minimum and maximum width, follow active column,
   restore on open, maximum items (default 5000), sidebar sets the first
-  column, keyboard on headers (off), double-click up (off), focus outline, compact scrollbars, panel background (a test
+  column, archives (off), keyboard on headers (off), double-click up (off), focus outline, compact scrollbars, panel background (a test
   setting), debug log.
 - Things that cost time and are worth knowing:
   - The unexplained jumps of Explorer's view were navigation pane clicks and

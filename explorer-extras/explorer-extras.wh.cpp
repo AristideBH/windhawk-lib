@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.0
+// @version         0.7.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - archives: false
+    $name: Browse archives in columns
+    $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
   - headerKeyboard: false
     $name: Keyboard on group headers
     $description: Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.
@@ -172,6 +175,7 @@ std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
+std::atomic<bool> g_archives{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -432,6 +436,9 @@ struct Entry {
     // Neither a folder nor a file: a Control Panel applet or the Desktop's
     // Control Panel entry. It can't be opened as a column, only run.
     bool launcher = false;
+    // A zip or the like, browsed as a folder when the setting is on. It is a
+    // folder to the columns (entry.folder is true) and a file to everything else.
+    bool archive = false;
 };
 
 // ---- Who navigates Explorer's view? ----
@@ -645,6 +652,48 @@ Pidl CurrentFolder(IShellBrowser* browser) {
     }
     folderView->Release();
     return result;
+}
+
+// A file the shell can open as a folder, that is small enough and on a local
+// fixed drive: such archives are read in the next column.
+bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::wstring& name) {
+    if (!g_archives) {
+        return false;
+    }
+    SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
+    if (FAILED(folder->GetAttributesOf(1, &child, &attributes)) ||
+        !(attributes & SFGAO_FOLDER) || !(attributes & SFGAO_STREAM)) {
+        return false;
+    }
+    size_t dot = name.rfind(L'.');
+    if (dot == std::wstring::npos) {
+        return false;
+    }
+    static const wchar_t* kinds[] = {L".zip", L".7z", L".rar", L".tar", L".tgz",
+                                     L".gz", L".bz2", L".tbz", L".xz", L".zst"};
+    bool known = false;
+    for (auto kind : kinds) {
+        known = known || _wcsicmp(name.c_str() + dot, kind) == 0;
+    }
+    if (!known) {
+        return false;
+    }
+    STRRET text = {};
+    wchar_t path[MAX_PATH] = L"";
+    if (FAILED(folder->GetDisplayNameOf(child, SHGDN_FORPARSING, &text)) ||
+        FAILED(StrRetToBufW(&text, child, path, MAX_PATH)) || !path[0] || path[1] != L':') {
+        return false;  // Not a plain local path.
+    }
+    wchar_t root[4] = {path[0], L':', L'\\', 0};
+    if (GetDriveTypeW(root) != DRIVE_FIXED) {
+        return false;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA info;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &info)) {
+        return false;
+    }
+    ULONGLONG size = ((ULONGLONG)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+    return size <= 512ULL * 1024 * 1024;
 }
 
 bool IsFolderItem(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -1156,6 +1205,10 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             Entry entry;
             entry.name = DisplayName(folder, child);
             entry.folder = IsFolderItem(folder, child);
+            if (!entry.folder && IsBrowsableArchive(folder, child, entry.name)) {
+                entry.folder = true;
+                entry.archive = true;
+            }
             entry.launcher = !entry.folder && IsLauncherItem(folder, child);
             entry.child.reset(child);
             result->entries.push_back(std::move(entry));
@@ -3007,7 +3060,7 @@ bool FolderGone(PCIDLIST_ABSOLUTE folder) {
     if (!folder || ILIsEmpty(folder) || !SHGetPathFromIDListW(folder, path) || !path[0]) {
         return false;
     }
-    return !PathIsDirectoryW(path);
+    return !PathFileExistsW(path);
 }
 
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
@@ -3171,13 +3224,20 @@ void OnColumnKey(muxc::ListView const& list,
 
 // Adds an empty column for `folder` at the right end and asks the worker to
 // read it. Takes ownership of `folder`.
-void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
+void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archive = false) {
     auto column = std::make_unique<Column>();
     column->folder = std::move(folder);
     column->notifyId = WatchFolder(state->notifyWindow, column->folder.get());
 
     muxc::ListView list;
     list.Width(g_minWidth);
+    if (archive) {
+        // The shell reads the archive on the worker thread, which can take a while.
+        muxc::ListViewItem reading;
+        reading.Content(winrt::box_value(L"Reading the archive..."));
+        reading.IsEnabled(false);
+        list.Items().Append(reading);
+    }
     // A list with rows hands the keyboard to its rows. An empty one has none,
     // so it takes the keyboard itself, without a focus outline.
     list.IsTabStop(true);
@@ -3949,7 +4009,7 @@ void OnRowSelected(muxc::ListView const& list) {
                 RemoveColumnsFrom(state, columnIndex + 1);
                 state->building = false;
                 SetStaleHint(state, columnIndex, false);
-                AddColumn(state, std::move(absolute));
+                AddColumn(state, std::move(absolute), false, entry.archive);
             }
             // The highlight stays here. It moves to the new column when the
             // user enters it.
@@ -4912,6 +4972,76 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     Out(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
 }
 
+// Extracts an archive into a folder next to it, named like the archive, with the
+// shell's own copy: conflicts and progress behave as in Explorer.
+void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
+    if (entryIndex >= column->entries.size() || !column->entries[entryIndex].archive) {
+        return;
+    }
+    Pidl archive(ILCombine(column->folder.get(), column->entries[entryIndex].child.get()));
+    std::wstring archivePath = FilePathOf(column->folder.get(), column->entries[entryIndex].child.get());
+    if (!archive || archivePath.empty()) {
+        return;
+    }
+    std::wstring target = archivePath;
+    size_t dot = target.rfind(L'.');
+    if (dot != std::wstring::npos && dot > target.rfind(L'\\')) {
+        target.resize(dot);
+    }
+    for (int i = 2; PathFileExistsW(target.c_str()) && i < 100; i++) {
+        target = archivePath.substr(0, archivePath.rfind(L'.')) + L" (" + std::to_wstring(i) + L")";
+    }
+    if (!CreateDirectoryW(target.c_str(), nullptr)) {
+        Out(L"extract: can't make \"%s\", gle=%lu", target.c_str(), GetLastError());
+        return;
+    }
+    IShellFolder* source = nullptr;
+    HRESULT hr = SHBindToObject(nullptr, archive.get(), nullptr, IID_PPV_ARGS(&source));
+    IShellItem* destination = nullptr;
+    if (SUCCEEDED(hr) && source) {
+        hr = SHCreateItemFromParsingName(target.c_str(), nullptr, IID_PPV_ARGS(&destination));
+    }
+    IFileOperation* operation = nullptr;
+    if (SUCCEEDED(hr) && destination) {
+        hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&operation));
+    }
+    int copied = 0;
+    if (SUCCEEDED(hr) && operation) {
+        operation->SetOwnerWindow(state->topLevel);
+        operation->SetOperationFlags(FOFX_NOCOPYHOOKS | FOF_NOCONFIRMMKDIR);
+        IEnumIDList* list = nullptr;
+        if (source->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &list) == S_OK && list) {
+            PITEMID_CHILD child = nullptr;
+            while (list->Next(1, &child, nullptr) == S_OK && child) {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(SHCreateItemWithParent(nullptr, source, child, IID_PPV_ARGS(&item))) && item) {
+                    if (SUCCEEDED(operation->CopyItem(item, destination, nullptr, nullptr))) {
+                        copied++;
+                    }
+                    item->Release();
+                }
+                CoTaskMemFree(child);
+                child = nullptr;
+            }
+            list->Release();
+        }
+        if (copied > 0) {
+            hr = operation->PerformOperations();
+        }
+    }
+    Out(L"extract \"%s\": %d item(s), hr=0x%08lX", target.c_str(), copied, hr);
+    if (operation) {
+        operation->Release();
+    }
+    if (destination) {
+        destination->Release();
+    }
+    if (source) {
+        source->Release();
+    }
+    RequestLoad(state, column);
+}
+
 void RunBackgroundAction(WindowState* state, Column* column,
                          const std::wstring& action) {
     bool known = false;
@@ -5093,6 +5223,14 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     WindowState* now = StateForThisThread(false);
                     if (now && !g_unloading) {
                         NewFolderWithSelection(now, column, picked);
+                    }
+                });
+            }
+            if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
+                addItem(L"Extract here", [column, picked]() {
+                    WindowState* now = StateForThisThread(false);
+                    if (now && !g_unloading) {
+                        ExtractHere(now, column, picked[0]);
                     }
                 });
             }
@@ -8247,6 +8385,7 @@ void LoadSettings() {
     g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
+    g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
         g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
@@ -8281,7 +8420,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
