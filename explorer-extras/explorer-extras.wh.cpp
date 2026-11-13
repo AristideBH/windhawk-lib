@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.7
+// @version         0.4.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1347,6 +1347,10 @@ struct Column {
     winrt::event_token moveToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    double rowHeight = 32;
+    int animGroup = -1;        // A group that is opening or closing,
+    bool animCollapse = false; // which way,
+    ULONGLONG animDoneAt = 0;  // and when the tick finishes it.
     ULONGLONG selectionChangedAt = 0;  // When the selection last changed.
     // Groups: the group of each row (a header has its own), the group titles,
     // the chevron of each header row, and the titles collapsed by the user.
@@ -1507,6 +1511,8 @@ struct WindowState {
     std::vector<Pidl> selectExtra;  // More items to add to that selection.
     // Cut items, dimmed until the clipboard changes.
     Pidl cutFolder;
+    std::wstring cutFolderPath;  // The same, as a path. Pidls built from a path
+                                 // are rooted elsewhere and never compare equal.
     std::vector<std::wstring> cutPaths;
     DWORD cutSeq = 0;
     // After a paste Explorer's view may jump to another folder. For a moment
@@ -2227,6 +2233,7 @@ HWND FindNativeRenameBox(HWND topLevel) {
 void ApplyCutState(WindowState* state);
 void SyncCutFromClipboard(WindowState* state) {
     state->cutFolder.reset();
+    state->cutFolderPath.clear();
     state->cutPaths.clear();
     IDataObject* data = nullptr;
     if (SUCCEEDED(OleGetClipboard(&data)) && data) {
@@ -2259,10 +2266,7 @@ void SyncCutFromClipboard(WindowState* state) {
                 PathRemoveFileSpecW(folder);
                 if (parentPath.empty()) {
                     parentPath = folder;
-                    PIDLIST_ABSOLUTE parentPidl = ILCreateFromPathW(folder);
-                    if (parentPidl) {
-                        state->cutFolder.reset(parentPidl);
-                    }
+                    state->cutFolderPath = folder;
                 }
                 if (_wcsicmp(parentPath.c_str(), folder) == 0) {
                     state->cutPaths.push_back(path);
@@ -2280,8 +2284,12 @@ void SyncCutFromClipboard(WindowState* state) {
 // Dims the rows that were cut, in every column that shows their folder.
 void ApplyCutState(WindowState* state) {
     for (auto& column : state->columns) {
-        bool same = state->cutFolder && !state->cutPaths.empty() &&
-                    ILIsEqual(column->folder.get(), state->cutFolder.get());
+        bool same = false;
+        if (!state->cutFolderPath.empty() && !state->cutPaths.empty()) {
+            wchar_t shown[MAX_PATH] = L"";
+            same = SHGetPathFromIDListW(column->folder.get(), shown) &&
+                   _wcsicmp(shown, state->cutFolderPath.c_str()) == 0;
+        }
         IShellFolder* folder = nullptr;
         if (same) {
             HRESULT hr = ILIsEmpty(column->folder.get())
@@ -2332,6 +2340,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
     column->hintEntry = -1;
+    column->animGroup = -1;
+    column->animDoneAt = 0;
     column->rowGroup.clear();
     column->headerIcons.clear();
     column->groupTitles = data.groupNames;
@@ -2339,6 +2349,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     FitWidth(column);
     size_t capacity = NameCapacity(column);
     double rowHeight = IsCompactMode() ? 24 : 32;
+    column->rowHeight = rowHeight;
     bool grouped = data.groupOf.size() == column->entries.size() &&
                    !data.groupNames.empty();
 
@@ -2406,7 +2417,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
         column->list.SelectedIndex(selectRow);
     }
     column->filled = true;
-    if (state->cutFolder) {
+    if (!state->cutPaths.empty()) {
         ApplyCutState(state);
     }
     if (!state->renameName.empty() && state->renameColumn == column) {
@@ -3286,7 +3297,12 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         if (entry.folder) {
-            ScheduleNavigation(state, absolute.get());
+            // Explorer's view shows this column's folder with the item
+            // selected, so the toolbar and the panes act on the folder.
+            state->selectFolder.reset(ILClone(column->folder.get()));
+            state->selectChild.reset(ILClone(entry.child.get()));
+            state->selectTries = 0;
+            ScheduleNavigation(state, column->folder.get());
             if (columnIndex + 1 < (int)state->columns.size() &&
                 ILIsEqual(state->columns[columnIndex + 1]->folder.get(),
                           absolute.get())) {
@@ -3731,7 +3747,12 @@ bool CopyOrCut(WindowState* state, Column* column,
     if (SUCCEEDED(hr)) {
         state->cutPaths.clear();
         state->cutFolder.reset();
+        state->cutFolderPath.clear();
         if (cut) {
+            wchar_t folderPath[MAX_PATH] = L"";
+            if (SHGetPathFromIDListW(column->folder.get(), folderPath)) {
+                state->cutFolderPath = folderPath;
+            }
             state->cutFolder.reset(ILClone(column->folder.get()));
             for (PCUITEMID_CHILD child : children) {
                 std::wstring path = FilePathOf(column->folder.get(), child);
@@ -4473,7 +4494,39 @@ void OnColumnPointerExited(muxc::ListView const& list) {
 }
 
 // Opens or collapses the group of a header row.
+// The end of an opening or closing group: closed rows are taken out of the
+// layout, and every row gets its normal height back.
+void FinishGroupAnimation(Column* column) {
+    if (column->animGroup < 0) {
+        return;
+    }
+    int group = column->animGroup;
+    bool collapse = column->animCollapse;
+    column->animGroup = -1;
+    column->animDoneAt = 0;
+    try {
+        auto items = column->list.Items();
+        for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
+            if (column->rowGroup[r] != group || column->rowToEntry[r] < 0) {
+                continue;
+            }
+            if (auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+                item.Visibility(collapse ? mux::Visibility::Collapsed
+                                         : mux::Visibility::Visible);
+                item.MinHeight(column->rowHeight);
+                item.Height(column->rowHeight);
+                item.Opacity(1.0);
+            }
+        }
+    } catch (...) {
+        LogHresult(L"FinishGroupAnimation");
+    }
+}
+
 void ToggleGroup(WindowState* state, Column* column, int headerRow) {
+    if (column->animGroup >= 0) {
+        FinishGroupAnimation(column);  // The last one first.
+    }
     if (headerRow < 0 || headerRow >= (int)column->rowGroup.size()) {
         return;
     }
@@ -4481,7 +4534,7 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
     if (group < 0 || group >= (int)column->groupTitles.size()) {
         return;
     }
-    const std::wstring& title = column->groupTitles[group];
+    const std::wstring title = column->groupTitles[group];
     auto at = std::find(column->collapsed.begin(), column->collapsed.end(), title);
     bool collapse = at == column->collapsed.end();
     if (collapse) {
@@ -4491,6 +4544,7 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
     }
     auto items = column->list.Items();
     auto selected = column->list.SelectedItems();
+    std::vector<muxc::ListViewItem> rows;
     bool wasBuilding = state->building;
     state->building = true;
     for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
@@ -4499,8 +4553,7 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
         }
         auto object = items.GetAt((uint32_t)r);
         if (auto item = object.try_as<muxc::ListViewItem>()) {
-            item.Visibility(collapse ? mux::Visibility::Collapsed
-                                     : mux::Visibility::Visible);
+            rows.push_back(item);
         }
         uint32_t index = 0;
         if (collapse && selected.IndexOf(object, index)) {
@@ -4508,13 +4561,71 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
         }
     }
     state->building = wasBuilding;
+
+    // The rows slide shut or open and fade. A very large group just switches.
+    namespace anim = mux::Media::Animation;
+    bool animate = !rows.empty() && rows.size() <= 60;
+    if (!animate) {
+        for (auto& item : rows) {
+            item.Visibility(collapse ? mux::Visibility::Collapsed
+                                     : mux::Visibility::Visible);
+        }
+    } else {
+        try {
+            anim::CubicEase ease;
+            ease.EasingMode(anim::EasingMode::EaseInOut);
+            auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(200));
+            anim::Storyboard board;
+            double full = column->rowHeight;
+            for (auto& item : rows) {
+                // Where the row ends up, so the animation can stop on it.
+                item.MinHeight(0);
+                item.Visibility(mux::Visibility::Visible);
+                item.Height(collapse ? 0.0 : full);
+                item.Opacity(collapse ? 0.0 : 1.0);
+
+                anim::DoubleAnimation height;
+                height.From(collapse ? full : 0.0);
+                height.To(collapse ? 0.0 : full);
+                height.Duration(length);
+                height.EasingFunction(ease);
+                height.EnableDependentAnimation(true);
+                height.FillBehavior(anim::FillBehavior::Stop);
+                anim::Storyboard::SetTarget(height, item);
+                anim::Storyboard::SetTargetProperty(height, L"Height");
+                board.Children().Append(height);
+
+                anim::DoubleAnimation fade;
+                fade.From(collapse ? 1.0 : 0.0);
+                fade.To(collapse ? 0.0 : 1.0);
+                fade.Duration(length);
+                fade.FillBehavior(anim::FillBehavior::Stop);
+                anim::Storyboard::SetTarget(fade, item);
+                anim::Storyboard::SetTargetProperty(fade, L"Opacity");
+                board.Children().Append(fade);
+            }
+            board.Begin();
+            column->animGroup = group;
+            column->animCollapse = collapse;
+            column->animDoneAt = GetTickCount64() + 260;
+        } catch (...) {
+            LogHresult(L"animating a group");
+            for (auto& item : rows) {
+                item.Visibility(collapse ? mux::Visibility::Collapsed
+                                         : mux::Visibility::Visible);
+                item.MinHeight(column->rowHeight);
+                item.Height(column->rowHeight);
+                item.Opacity(1.0);
+            }
+        }
+    }
+
     if (headerRow < (int)column->headerIcons.size() && column->headerIcons[headerRow]) {
         try {
             auto turn = column->headerIcons[headerRow]
                             .RenderTransform()
                             .try_as<mux::Media::RotateTransform>();
             if (turn) {
-                namespace anim = mux::Media::Animation;
                 double from = turn.Angle();
                 double to = collapse ? 0.0 : 90.0;
                 turn.Angle(to);  // Where it stays.
@@ -5212,6 +5323,13 @@ void OnTick() {
                 if (seq != state->cutSeq) {
                     SyncCutFromClipboard(state);
                 }
+            }
+        }
+
+        // A group that finished opening or closing.
+        for (auto& c : state->columns) {
+            if (c->animGroup >= 0 && now >= c->animDoneAt) {
+                FinishGroupAnimation(c.get());
             }
         }
 
@@ -6222,7 +6340,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -112,6 +112,10 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] (0.4.5, not tested) Rename by a slow second click on the name of the
       selected item, like Explorer. Panel background taken from Explorer's own
       file list. Group headers: hover tint, turning chevron.
+- [ ] Panel background that blurs like Explorer's own (Mica). Not reachable
+      with the WinUI headers of this Windhawk build: no MicaBackdrop, no
+      SystemBackdrop on islands. Revisit with a newer Windows App SDK, or by
+      hiding the native list. A test setting exists since 0.4.7.
 - [ ] Rename several items at once, like Explorer's own.
 - [ ] (0.4.0, not tested) Faster column refresh after the user's own actions (rename, new folder,
       delete, paste, move):
