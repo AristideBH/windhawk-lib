@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.8.0
+// @version         0.8.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -8011,6 +8011,16 @@ void OnTick() {
         if (tab && tab != state->currentTab) {
             HWND old = state->currentTab;
             state->currentTab = tab;
+            // What was pending belongs to the tab that left: a navigation after a
+            // pause, a selection to mirror, a folder Explorer was asked to open.
+            // Left alone, it would act on the tab that is showing now.
+            state->pendingNav.reset();
+            state->expected.reset();
+            state->selectFolder.reset();
+            state->selectChild.reset();
+            state->selectExtra.clear();
+            state->focusColumn = nullptr;
+            Out(L"tab switch: %p to %p", old, tab);
             if (old) {
                 SaveTabSnapshot(state, old);
                 IShellBrowser* switched = BrowserOf(state->topLevel);
@@ -9017,7 +9027,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.8.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.8.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

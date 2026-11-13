@@ -1737,6 +1737,16 @@ void OnTick() {
         if (tab && tab != state->currentTab) {
             HWND old = state->currentTab;
             state->currentTab = tab;
+            // What was pending belongs to the tab that left: a navigation after a
+            // pause, a selection to mirror, a folder Explorer was asked to open.
+            // Left alone, it would act on the tab that is showing now.
+            state->pendingNav.reset();
+            state->expected.reset();
+            state->selectFolder.reset();
+            state->selectChild.reset();
+            state->selectExtra.clear();
+            state->focusColumn = nullptr;
+            Out(L"tab switch: %p to %p", old, tab);
             if (old) {
                 SaveTabSnapshot(state, old);
                 IShellBrowser* switched = BrowserOf(state->topLevel);
