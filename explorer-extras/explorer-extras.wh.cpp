@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.7
+// @version         0.7.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -70,6 +70,9 @@ Not yet: drag and drop.
   - desktopRealOnly: false
     $name: Desktop column shows only real items
     $description: Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.
+  - remoteMarks: true
+    $name: Mark cloud, network and device items
+    $description: A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.
   - archives: false
     $name: Browse archives in columns
     $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
@@ -179,6 +182,7 @@ std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
+std::atomic<bool> g_remoteMarks{true};
 std::atomic<bool> g_desktopRealOnly{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
@@ -443,6 +447,9 @@ struct Entry {
     // A zip or the like, browsed as a folder when the setting is on. It is a
     // folder to the columns (entry.folder is true) and a file to everything else.
     bool archive = false;
+    // Where the item really is: 0 here, 1 a cloud file not on this disk,
+    // 2 on a network location, 3 on a device such as a phone.
+    int remote = 0;
 };
 
 // ---- Who navigates Explorer's view? ----
@@ -733,6 +740,44 @@ bool IsInControlPanel(PCIDLIST_ABSOLUTE pidl) {
                   StrStrIW(name, L"{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}");
     CoTaskMemFree(name);
     return inside;
+}
+
+// Whether an item is not plainly on this disk: a cloud file that is not
+// downloaded, a network location, or a phone or camera. Read on the worker thread.
+int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
+    std::wstring name = ParsingName(folder, child);
+    if (name.empty()) {
+        return 0;
+    }
+    if (StrStrIW(name.c_str(), L"\\\\?\\usb#") || StrStrIW(name.c_str(), L"\\\\?\\swd#") ||
+        StrStrIW(name.c_str(), L"\\\\?\\wpdbusenum")) {
+        return 3;
+    }
+    if (name.size() > 2 && name[0] == L'\\' && name[1] == L'\\') {
+        return 2;
+    }
+    if (name.size() > 2 && name[1] == L':') {
+        static std::atomic<int> kinds[26];  // 0 unknown, 1 local, 2 remote
+        wchar_t letter = (wchar_t)towupper(name[0]);
+        if (letter >= L'A' && letter <= L'Z') {
+            int kind = kinds[letter - L'A'];
+            if (!kind) {
+                wchar_t root[4] = {letter, L':', L'\\', 0};
+                kind = GetDriveTypeW(root) == DRIVE_REMOTE ? 2 : 1;
+                kinds[letter - L'A'] = kind;
+            }
+            if (kind == 2) {
+                return 2;
+            }
+        }
+        DWORD attributes = GetFileAttributesW(name.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN |
+                           FILE_ATTRIBUTE_OFFLINE))) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 bool IsLauncherItem(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -1223,6 +1268,9 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 entry.archive = true;
             }
             entry.launcher = !entry.folder && IsLauncherItem(folder, child);
+            if (g_remoteMarks) {
+                entry.remote = RemoteKind(folder, child);
+            }
             entry.child.reset(child);
             result->entries.push_back(std::move(entry));
             child = nullptr;
@@ -2622,12 +2670,14 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     const Entry& entry = column->entries[entryIndex];
     size_t capacity = NameCapacity(column);
     muxc::Grid grid;
-    muxc::ColumnDefinition iconColumn, nameColumn, chevronColumn;
+    muxc::ColumnDefinition iconColumn, nameColumn, markColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
     nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
     chevronColumn.Width(mux::GridLength{16, mux::GridUnitType::Pixel});
     grid.ColumnDefinitions().Append(iconColumn);
+    markColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
     grid.ColumnDefinitions().Append(nameColumn);
+    grid.ColumnDefinitions().Append(markColumn);
     grid.ColumnDefinitions().Append(chevronColumn);
 
     // Stand-in glyphs until real file icons are drawn.
@@ -2652,6 +2702,17 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     grid.Children().Append(name);
     column->texts[entryIndex] = name;
 
+    if (entry.remote) {
+        muxc::FontIcon mark;
+        mark.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+        mark.Glyph(entry.remote == 1 ? L"\uE753" : entry.remote == 2 ? L"\uE839" : L"\uE8EA");
+        mark.FontSize(11);
+        mark.Opacity(0.6);
+        mark.Margin(mux::Thickness{6, 0, 4, 0});
+        mark.VerticalAlignment(mux::VerticalAlignment::Center);
+        muxc::Grid::SetColumn(mark, 2);
+        grid.Children().Append(mark);
+    }
     if (entry.folder) {
         muxc::FontIcon chevron;
         chevron.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
@@ -2660,7 +2721,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         chevron.Opacity(0.6);
         chevron.HorizontalAlignment(mux::HorizontalAlignment::Right);
         chevron.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(chevron, 2);
+        muxc::Grid::SetColumn(chevron, 3);
         grid.Children().Append(chevron);
         column->chevrons[entryIndex] = chevron;
     }
@@ -8620,6 +8681,7 @@ void LoadSettings() {
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
+    g_remoteMarks = Wh_GetIntSetting(L"columns.remoteMarks") != 0;
     g_desktopRealOnly = Wh_GetIntSetting(L"columns.desktopRealOnly") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
@@ -8655,7 +8717,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
