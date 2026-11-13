@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.8
+// @version         0.7.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -450,6 +450,8 @@ struct Entry {
     // Where the item really is: 0 here, 1 a cloud file not on this disk,
     // 2 on a network location, 3 on a device such as a phone.
     int remote = 0;
+    // A shortcut to a folder: it opens as that folder, in the next column.
+    Pidl linkTarget;
 };
 
 // ---- Who navigates Explorer's view? ----
@@ -778,6 +780,34 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
         }
     }
     return 0;
+}
+
+// For a shortcut to a folder: the folder it points to, as an absolute pidl.
+Pidl FolderLinkTarget(IShellFolder* folder, PCUITEMID_CHILD child) {
+    Pidl result;
+    SFGAOF attributes = SFGAO_LINK | SFGAO_FOLDER;
+    if (FAILED(folder->GetAttributesOf(1, &child, &attributes)) ||
+        !(attributes & SFGAO_LINK) || (attributes & SFGAO_FOLDER)) {
+        return result;
+    }
+    IShellItem* item = nullptr;
+    if (SUCCEEDED(SHCreateItemWithParent(nullptr, folder, child, IID_PPV_ARGS(&item))) && item) {
+        IShellItem* target = nullptr;
+        if (SUCCEEDED(item->BindToHandler(nullptr, BHID_LinkTargetItem, IID_PPV_ARGS(&target))) &&
+            target) {
+            SFGAOF kind = 0;
+            if (SUCCEEDED(target->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM, &kind)) &&
+                (kind & SFGAO_FOLDER) && !(kind & SFGAO_STREAM)) {
+                PIDLIST_ABSOLUTE pidl = nullptr;
+                if (SUCCEEDED(SHGetIDListFromObject(target, &pidl)) && pidl) {
+                    result.reset(pidl);
+                }
+            }
+            target->Release();
+        }
+        item->Release();
+    }
+    return result;
 }
 
 bool IsLauncherItem(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -1267,6 +1297,12 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 entry.folder = true;
                 entry.archive = true;
             }
+            if (!entry.folder) {
+                entry.linkTarget = FolderLinkTarget(folder, child);
+                if (entry.linkTarget) {
+                    entry.folder = true;
+                }
+            }
             entry.launcher = !entry.folder && IsLauncherItem(folder, child);
             if (g_remoteMarks) {
                 entry.remote = RemoteKind(folder, child);
@@ -1278,6 +1314,15 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         list->Release();
     }
     result->ok = SUCCEEDED(hr);
+    if (g_remoteMarks) {
+        int marked = 0;
+        for (auto& entry : result->entries) {
+            marked += entry.remote != 0;
+        }
+        if (marked) {
+            Out(L"load: %d item(s) marked as cloud, network or device", marked);
+        }
+    }
 
     // Sort with the shell's own comparison, one sort column after the other.
     struct Key {
@@ -4123,7 +4168,8 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         const Entry& entry = column->entries[entryIndex];
         column->selectedChild.reset(ILClone(entry.child.get()));
-        Pidl absolute(ILCombine(column->folder.get(), entry.child.get()));
+        Pidl absolute(entry.linkTarget ? ILClone(entry.linkTarget.get())
+                                       : ILCombine(column->folder.get(), entry.child.get()));
         if (!absolute) {
             return;
         }
@@ -5533,8 +5579,10 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 addItem(L"Open in new tab", [column, picked]() {
                     WindowState* now = StateForThisThread(false);
                     if (now && !g_unloading) {
-                        Pidl target(ILCombine(column->folder.get(),
-                                              column->entries[picked[0]].child.get()));
+                        auto& picked0 = column->entries[picked[0]];
+                        Pidl target(picked0.linkTarget
+                                        ? ILClone(picked0.linkTarget.get())
+                                        : ILCombine(column->folder.get(), picked0.child.get()));
                         OpenFolderInNewTab(now, target.get());
                     }
                 });
@@ -6204,8 +6252,10 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                                         ? column->rowToEntry[rowIndex]
                                         : -1;
                         if (entry >= 0 && column->entries[entry].folder) {
-                            Pidl target(ILCombine(column->folder.get(),
-                                                  column->entries[entry].child.get()));
+                            auto& hit = column->entries[entry];
+                            Pidl target(hit.linkTarget
+                                            ? ILClone(hit.linkTarget.get())
+                                            : ILCombine(column->folder.get(), hit.child.get()));
                             OpenFolderInNewTab(state, target.get());
                             args.Handled(true);
                         }
@@ -6942,8 +6992,10 @@ void OnColumnKey(muxc::ListView const& list,
             // goes into the column's own folder.
             Pidl target(ILClone(column->folder.get()));
             if (picked.size() == 1 && column->entries[picked[0]].folder) {
-                target.reset(ILCombine(column->folder.get(),
-                                       column->entries[picked[0]].child.get()));
+                auto& into = column->entries[picked[0]];
+                target.reset(into.linkTarget
+                                 ? ILClone(into.linkTarget.get())
+                                 : ILCombine(column->folder.get(), into.child.get()));
             }
             HRESULT hr = target ? PasteIntoFolder(state, target.get()) : E_FAIL;
             Out(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
@@ -8717,7 +8769,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
