@@ -308,7 +308,7 @@ void RequestLoad(WindowState* state, Column* column) {
     auto job = std::make_unique<Job>();
     job->generation = column->generation;
     job->folder.reset(ILClone(column->folder.get()));
-    job->spec = state->spec;
+    job->spec = column->hasSpec ? column->spec : state->spec;
     job->hidden = ShowHiddenFiles();
     job->maxItems = g_maxItems;
     job->queue = state->queue;

@@ -58,6 +58,8 @@ struct Column {
     std::vector<muxc::FontIcon> headerIcons;
     std::vector<std::wstring> collapsed;
     Pidl selectedChild;                 // Restored after a reload.
+    SortSpec spec;                      // This folder's own sort and group,
+    bool hasSpec = false;               // when it has one. Otherwise the window's.
     double restoreScroll = -1;          // A scroll offset to put back once the rows are in.
     unsigned generation = 0;
     bool userSized = false;
@@ -196,6 +198,8 @@ struct WindowState {
     mud::DispatcherQueue queue{nullptr};
     // Columns per tab: the tab that is showing, and the stacks of the others.
     HWND currentTab = nullptr;
+    ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
+    std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
     std::vector<TabSnapshot> tabSnapshots;
     // Which tabs show Columns. The panel is one per window, so it is hidden
     // while a tab that is not in Columns is showing.

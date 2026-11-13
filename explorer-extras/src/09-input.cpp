@@ -977,6 +977,9 @@ void OnColumnKey(muxc::ListView const& list,
     }
 }
 
+void ChooseColumns(WindowState* state);
+void LeaveColumns(WindowState* state);
+
 void HidePanel(WindowState* state, const wchar_t* why) {
     if (!state->source) {
         state->on = false;
@@ -1218,6 +1221,11 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
             return;
         }
     }
+    if (RememberedColumns(PathOf(current.get())) == 0) {
+        Out(L"Explorer went to a folder that was left in its own layout, Columns off for the tab");
+        LeaveColumns(state);
+        return;
+    }
     Out(L"Explorer navigated elsewhere (\"%s\"), rebuilding",
         PathOf(current.get()).c_str());
     RebuildFromExplorer(state);
@@ -1227,6 +1235,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
 // What Explorer's own view shows changed.
 void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
     state->lastSeen.reset(ILClone(current.get()));
+    state->specSyncDue = GetTickCount64() + 700;
     // A click on a flat entry of the navigation pane starts the columns over
     // at that folder, even when it is inside the current chain.
     if (g_panePidl) {
@@ -1238,6 +1247,11 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
             Out(L"sidebar click: \"%s\" becomes the first column",
                 PathOf(current.get()).c_str());
             state->expected.reset();
+            if (RememberedColumns(PathOf(current.get())) == 0) {
+                Out(L"this folder was left in Explorer's own layout, Columns off for the tab");
+                LeaveColumns(state);
+                return;
+            }
             RebuildFromExplorer(state);
             SetActiveColumn(state, 0);
             return;
@@ -1293,6 +1307,11 @@ void SoftHidePanel(WindowState* state) {
     }
     state->softHidden = true;
     g_panelWindow = nullptr;
+    {
+        IShellBrowser* browser = BrowserOf(state->topLevel);
+        Pidl where = browser ? CurrentFolder(browser) : Pidl();
+        state->hiddenFolder = where ? PathOf(where.get()) : std::wstring();
+    }
     Out(L"panel hidden: this tab is not in Columns");
 }
 
@@ -1491,7 +1510,23 @@ void OnTick() {
             return;
         }
         if (state->softHidden) {
-            return;  // This tab is not in Columns: nothing to keep up.
+            // This tab is not in Columns. Only watch where it goes: a folder that
+            // was last shown in Columns turns Columns on again.
+            if (state->ticks % 4 == 0) {
+                IShellBrowser* hiddenBrowser = BrowserOf(state->topLevel);
+                Pidl where = hiddenBrowser ? CurrentFolder(hiddenBrowser) : Pidl();
+                if (where) {
+                    std::wstring path = PathOf(where.get());
+                    if (_wcsicmp(path.c_str(), state->hiddenFolder.c_str()) != 0) {
+                        state->hiddenFolder = path;
+                        if (RememberedColumns(path) == 1) {
+                            Out(L"this folder was shown in Columns last time, Columns on for the tab");
+                            ChooseColumns(state);
+                        }
+                    }
+                }
+            }
+            return;
         }
 
         // A tab made after the panel is a window above it, and covers it: the
@@ -1620,13 +1655,52 @@ void OnTick() {
             }
             IShellBrowser* browser = BrowserOf(state->topLevel);
             SortSpec after;
+            Column* activeColumn = state->active >= 0 && state->active < (int)state->columns.size()
+                                       ? state->columns[state->active].get()
+                                       : nullptr;
+            SortSpec const& effective =
+                activeColumn && activeColumn->hasSpec ? activeColumn->spec : state->spec;
             if (browser && ReadSortSpec(browser, &after) &&
-                !SameSpec(after, state->specBeforeMenu) &&
-                !SameSpec(after, state->spec)) {
+                !SameSpec(after, state->specBeforeMenu) && !SameSpec(after, effective)) {
                 Out(L"sort or group changed in the Sort menu: %d sort columns, grouped=%d",
                     (int)after.columns.size(), after.grouped ? 1 : 0);
-                state->spec = after;
-                ReloadAll(state);
+                if (activeColumn) {
+                    // Only the column the user is in changes, and it is remembered.
+                    activeColumn->spec = after;
+                    activeColumn->hasSpec = true;
+                    RememberFolderSpec(PathOf(activeColumn->folder.get()), after);
+                    RequestLoad(state, activeColumn);
+                } else {
+                    state->spec = after;
+                    ReloadAll(state);
+                }
+            }
+        }
+
+        // Explorer showed the active column's folder a moment ago: its sort
+        // for that folder is the one to show, and to remember.
+        if (state->specSyncDue && now >= state->specSyncDue) {
+            state->specSyncDue = 0;
+            Column* activeColumn = state->active >= 0 && state->active < (int)state->columns.size()
+                                       ? state->columns[state->active].get()
+                                       : nullptr;
+            IShellBrowser* browser = BrowserOf(state->topLevel);
+            if (activeColumn && browser) {
+                Pidl shown = CurrentFolder(browser);
+                SortSpec read;
+                std::wstring path = PathOf(activeColumn->folder.get());
+                if (shown && _wcsicmp(PathOf(shown.get()).c_str(), path.c_str()) == 0 &&
+                    ReadSortSpec(browser, &read)) {
+                    SortSpec const& effective =
+                        activeColumn->hasSpec ? activeColumn->spec : state->spec;
+                    if (!SameSpec(read, effective)) {
+                        Out(L"column \"%s\" takes the sort Explorer has for it", path.c_str());
+                        activeColumn->spec = read;
+                        activeColumn->hasSpec = true;
+                        RequestLoad(state, activeColumn);
+                    }
+                    RememberFolderSpec(path, read);
+                }
             }
         }
 
@@ -2191,6 +2265,9 @@ void ChooseColumns(WindowState* state) {
     SoftShowPanel(state);
     RebuildFromExplorer(state);
     SetActiveColumn(state, 0);
+    if (state->lastSeen) {
+        RememberFolderColumns(PathOf(state->lastSeen.get()), 1);
+    }
     if (state->menuItem) {
         state->menuItem.IsChecked(true);
     }
@@ -2198,6 +2275,13 @@ void ChooseColumns(WindowState* state) {
 
 // One of Explorer's own layouts chosen for the tab that is showing.
 void LeaveColumns(WindowState* state) {
+    {
+        IShellBrowser* browser = BrowserOf(state->topLevel);
+        Pidl where = browser ? CurrentFolder(browser) : Pidl();
+        if (where) {
+            RememberFolderColumns(PathOf(where.get()), 0);
+        }
+    }
     HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
     TabListRemove(state->columnsTabs, tab);
     for (size_t i = 0; i < state->tabSnapshots.size();) {

@@ -1170,6 +1170,17 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
 
     muxc::ListView list;
     list.Width(g_minWidth);
+    {
+        FolderMemory memory = GetFolderMemory(PathOf(column->folder.get()));
+        if (memory.hasSpec) {
+            column->spec = memory.spec;
+            column->hasSpec = true;
+        }
+        if (memory.width >= g_minWidth && memory.width <= g_maxWidth) {
+            list.Width(memory.width);
+            column->userSized = true;
+        }
+    }
     if (archive) {
         // The shell reads the archive on the worker thread, which can take a while.
         // A spinner shows meanwhile; the listing replaces it.
@@ -1529,6 +1540,8 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     state->columns[index]->pill.Opacity(0);
                 }
                 RefreshNames(state->columns[index].get());
+                RememberFolderWidth(PathOf(state->columns[index]->folder.get()),
+                                    state->columns[index]->list.Width());
                 Out(L"column %d resized to %d", index + 1,
                     (int)state->columns[index]->list.Width());
             }
@@ -1729,6 +1742,7 @@ void RebuildFromExplorer(WindowState* state) {
         SortSpec fresh;
         if (ReadSortSpec(browser, &fresh)) {
             state->spec = fresh;
+            RememberFolderSpec(PathOf(current.get()), fresh);
             Out(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
                 fresh.grouped ? 1 : 0);
         }
@@ -1790,6 +1804,8 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     if (FAILED(hr)) {
         Out(L"BrowseObject failed, hr=0x%08lX", hr);
         state->expected.reset();
+    } else {
+        state->specSyncDue = GetTickCount64() + 700;
     }
 }
 
