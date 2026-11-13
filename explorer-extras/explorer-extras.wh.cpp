@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.9
+// @version         0.7.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -448,7 +448,8 @@ struct Entry {
     // folder to the columns (entry.folder is true) and a file to everything else.
     bool archive = false;
     // Where the item really is: 0 here, 1 a cloud file not on this disk,
-    // 2 on a network location, 3 on a device such as a phone.
+    // 2 on a network location, 3 on a device such as a phone, 4 a cloud file
+    // kept on this device, 5 a cloud file that is downloaded.
     int remote = 0;
     // A shortcut to a folder: it opens as that folder, in the next column.
     Pidl linkTarget;
@@ -772,11 +773,25 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
                 return 2;
             }
         }
-        DWORD attributes = GetFileAttributesW(name.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN |
-                           FILE_ATTRIBUTE_OFFLINE))) {
-            return 1;
+        // A synced (OneDrive style) item: not downloaded, always kept, or
+        // downloaded. The reparse tag tells a cloud file from a plain link.
+        WIN32_FIND_DATAW found;
+        HANDLE find = FindFirstFileW(name.c_str(), &found);
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+            DWORD attributes = found.dwFileAttributes;
+            bool cloud = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+                         (found.dwReserved0 & 0xF000FFFF) == 0x9000001A;
+            if (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN |
+                              FILE_ATTRIBUTE_OFFLINE)) {
+                return 1;
+            }
+            if (cloud && (attributes & 0x00080000)) {  // FILE_ATTRIBUTE_PINNED
+                return 4;
+            }
+            if (cloud && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                return 5;
+            }
         }
     }
     return 0;
@@ -2759,7 +2774,16 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     if (entry.remote) {
         muxc::FontIcon mark;
         mark.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-        mark.Glyph(entry.remote == 1 ? L"\uE753" : entry.remote == 2 ? L"\uE839" : L"\uE8EA");
+        // Cloud, network, device, always kept (green check), downloaded (check).
+        mark.Glyph(entry.remote == 1   ? L"\uE753"
+                   : entry.remote == 2 ? L"\uE839"
+                   : entry.remote == 3 ? L"\uE8EA"
+                                       : L"\uE73E");
+        if (entry.remote == 4) {
+            mark.Foreground(mux::Media::SolidColorBrush(
+                winrt::Windows::UI::ColorHelper::FromArgb(255, 16, 124, 16)));
+            mark.Opacity(1.0);
+        }
         mark.FontSize(11);
         mark.Opacity(0.6);
         mark.Margin(mux::Thickness{6, 0, 4, 0});
@@ -8778,7 +8802,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
