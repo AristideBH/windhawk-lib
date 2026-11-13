@@ -108,7 +108,7 @@ struct ContextMenuState {
     muxc::Primitives::FlyoutBase flyout{nullptr};
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
-    std::vector<std::pair<muxc::AppBarButton, winrt::event_token>> buttonHooks;
+    std::vector<std::pair<muxc::Button, winrt::event_token>> buttonHooks;
 };
 
 // What the user did in the columns that Ctrl+Z can take back. Explorer's own
