@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.7
+// @version         0.5.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1477,6 +1477,7 @@ struct WindowState {
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     int styleVersion = -1;  // The row style the rows were last given.
+    ULONGLONG cursorFixUntil = 0;  // While Explorer navigates, a busy cursor over the panel is put right.
     bool shownDark = false;  // The theme the panel background was made for.
     int shownMode = 0;       // And the background mode.
     // The native lists made invisible, in transparent mode, and whether this mod
@@ -3560,6 +3561,7 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
             state->focusUntil = GetTickCount64() + 2500;
         }
     }
+    state->cursorFixUntil = GetTickCount64() + 2500;
     g_ourBrowse = true;
     HRESULT hr = browser->BrowseObject(folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
     g_ourBrowse = false;
@@ -5501,6 +5503,7 @@ void OnEmptyDoubleTapped(muxc::ListView const& list,
             // The active column goes to the middle of the view.
             state->scroller.UpdateLayout();
             CenterColumn(state, from - 1);
+            state->cursorFixUntil = GetTickCount64() + 2500;
             Out(L"double-click on empty space: back to column %d", from);
             return;
         }
@@ -6322,6 +6325,22 @@ void OnTick() {
             state->lastReload = now;
             Out(L"a column's folder changed, reloading");
             ReloadAll(state);
+        }
+
+        // Explorer shows its busy cursor while it navigates, and a pointer that
+        // stands still over the panel keeps it. Put the arrow back.
+        if (state->cursorFixUntil && now < state->cursorFixUntil) {
+            CURSORINFO info = {sizeof(info)};
+            if (GetCursorInfo(&info) && (info.flags & CURSOR_SHOWING) &&
+                (info.hCursor == LoadCursorW(nullptr, IDC_APPSTARTING) ||
+                 info.hCursor == LoadCursorW(nullptr, IDC_WAIT))) {
+                HWND under = WindowFromPoint(info.ptScreenPos);
+                if (under && GetAncestor(under, GA_ROOT) == state->topLevel) {
+                    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                }
+            }
+        } else {
+            state->cursorFixUntil = 0;
         }
 
         // The resize handle appears once the pointer has rested on an edge. It
@@ -7571,7 +7590,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

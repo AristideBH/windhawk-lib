@@ -139,8 +139,11 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
 - [ ] Better archive extraction flow
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization
-- [ ] (0.5.5, not tested) Double-click on empty space goes up one folder, a
-      setting, on by default (built-in `explorer-double-click-up`)
+- [x] Double-click on empty space goes up one column, in Columns only (0.5.5
+      to 0.5.8), a setting, on by default. For the other layouts keep the
+      Windhawk mod `explorer-double-click-up` enabled: it acts on Explorer's
+      own list, which sits under the panel and never sees a click on it. Ari's
+      call: not built in, too much for the gain.
 - [ ] Details view columns fit their content (built-in
       `file-explorer-details-autofit-columns`)
 - [ ] Small tweaks
