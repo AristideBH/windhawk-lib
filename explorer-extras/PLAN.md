@@ -140,3 +140,30 @@ Desktop and Control Panel items, root of the namespace (27 items):
   to be told apart from the flat items. A pure-input check can't separate a
   pane click from the jump after a paste, so the paste guard stays until the
   cause is known.
+
+## Ideas from reading DarkionAvey/windhawk-gpu-accelerated-explorer-view (GPL-2.0, ideas only)
+
+Read on 2026-11-13, the first 200 KB of a 2.3 MB source and its README.
+- Workers: per-tab private thread pools, each worker with its own COM
+  apartment, interfaces never leaving it. Workers return plain pixels and the
+  UI thread uploads them. Requests carry a cancel flag, and a memory budget
+  caps the image cache. Ours has one worker shared by all windows: a slow
+  folder blocks every window's icons. Split per window, and make icon jobs
+  cancellable when a column goes away.
+- Details arrive after names: names first, expensive properties later as
+  "enrichment". Matches how our icons arrive. Use the same for tooltip
+  details.
+- Stale results are dropped by generation. We do that already.
+- File changes: a burst is coalesced (first and last change time) before the
+  diff runs, and the folder listing is diffed instead of replaced.
+  Planned for 0.5 with item-level change events.
+- Selection: captured on the owning thread, checked against item identities
+  before it is applied, and a failed import blocks file commands instead of
+  acting on a wrong selection. Worth copying for Delete and Cut.
+- Re-entrancy: counters on every hook and callback, drained at unload;
+  scoped flags stop a nested message from starting a second transaction;
+  each key press is consumed once. Our guards are per feature, a common
+  scoped-depth helper would be cleaner.
+- An optimistic destination: the view shows the target folder before
+  Explorer has built its own view. The same idea can remove the first-column
+  flash when a window opens in Columns.
