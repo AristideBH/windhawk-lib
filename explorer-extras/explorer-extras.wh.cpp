@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.12
+// @version         0.7.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -3539,7 +3539,18 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
                     if (scroller) {
-                        scroller.ChangeView(nullptr, scroller.VerticalOffset(), nullptr, true);
+                        double offset = scroller.VerticalOffset();
+                        scroller.ChangeView(nullptr, offset, nullptr, true);
+                        // A ChangeView to where the list already is can be ignored
+                        // while it glides. Turning vertical scrolling off and on
+                        // again ends the glide.
+                        auto mode = scroller.VerticalScrollMode();
+                        scroller.VerticalScrollMode(muxc::ScrollMode::Disabled);
+                        scroller.VerticalScrollMode(mode);
+                        static int logged = 0;
+                        if (logged++ < 6) {
+                            Out(L"a press stops the scroll of a list, offset %.1f", offset);
+                        }
                     }
                 }
             } catch (...) {
@@ -8824,7 +8835,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
