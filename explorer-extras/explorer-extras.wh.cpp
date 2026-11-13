@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.2
+// @version         0.4.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2785,6 +2785,48 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
     }
 }
 
+// Working in a column, by choosing an item in it or clicking its empty space,
+// lifts the stale look of it and of the columns before it, and puts the
+// selection of the earlier columns back on the folders that lead here. The
+// columns after it stay lit only while the selection here still leads to them.
+void LiftStale(WindowState* state, int columnIndex) {
+    for (int j = 0; j <= columnIndex; j++) {
+        if (state->columns[j]->cell) {
+            state->columns[j]->cell.Opacity(1.0);
+        }
+        if (j < columnIndex) {
+            SetStaleHint(state, j, false);
+        }
+    }
+    for (int j = columnIndex; j > 0; j--) {
+        Column* previous = state->columns[j - 1].get();
+        Column* here = state->columns[j].get();
+        if (!ILIsParent(previous->folder.get(), here->folder.get(), TRUE)) {
+            break;
+        }
+        Pidl leading(ILClone(ILFindLastID(here->folder.get())));
+        if (leading &&
+            (!previous->selectedChild ||
+             !ILIsEqual(previous->selectedChild.get(), leading.get()))) {
+            SelectChildInColumn(state, previous, leading.get());
+        }
+    }
+    // The columns after this one: lit while the chain holds.
+    bool chain = true;
+    for (size_t k = columnIndex + 1; k < state->columns.size(); k++) {
+        Column* previous = state->columns[k - 1].get();
+        Column* here = state->columns[k].get();
+        Pidl leading(ILClone(ILFindLastID(here->folder.get())));
+        chain = chain && previous->selectedChild && leading &&
+                ILIsParent(previous->folder.get(), here->folder.get(), TRUE) &&
+                ILIsEqual(previous->selectedChild.get(), leading.get());
+        if (here->cell) {
+            here->cell.Opacity(chain ? 1.0 : 0.5);
+        }
+    }
+    SetStaleHint(state, columnIndex, false);
+}
+
 // The entries of the rows selected in a column, in row order. Group headers
 // are left out.
 std::vector<size_t> SelectedEntries(Column* column,
@@ -2817,31 +2859,7 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         Column* column = state->columns[columnIndex].get();
 
-        // Working in a column lifts the stale look of it and of the columns
-        // before it, and puts the selection in the earlier columns back on the
-        // folders that lead here. That is what happens when an item of a
-        // stale column is chosen.
-        for (int j = 0; j <= columnIndex; j++) {
-            if (state->columns[j]->cell) {
-                state->columns[j]->cell.Opacity(1.0);
-            }
-            if (j < columnIndex) {
-                SetStaleHint(state, j, false);
-            }
-        }
-        for (int j = columnIndex; j > 0; j--) {
-            Column* previous = state->columns[j - 1].get();
-            Column* here = state->columns[j].get();
-            if (!ILIsParent(previous->folder.get(), here->folder.get(), TRUE)) {
-                break;
-            }
-            Pidl leading(ILClone(ILFindLastID(here->folder.get())));
-            if (leading &&
-                (!previous->selectedChild ||
-                 !ILIsEqual(previous->selectedChild.get(), leading.get()))) {
-                SelectChildInColumn(state, previous, leading.get());
-            }
-        }
+        LiftStale(state, columnIndex);
 
         // Group headers and the "more items" row can't be selected, as when
         // Shift-click selects a range across them.
@@ -4047,6 +4065,7 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
             return;
         }
         Column* column = state->columns[index].get();
+        LiftStale(state, index);
         state->building = true;
         list.SelectedItems().Clear();
         state->building = false;
@@ -5559,7 +5578,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
