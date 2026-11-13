@@ -2,7 +2,7 @@
 // @id              probe-window-created
 // @name            Probe: File Explorer window created
 // @description     Diagnostic only. Finds the earliest hook in the command bar that runs when an Explorer window opens, and when the View flyout appears after it.
-// @version         0.2
+// @version         0.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -15,21 +15,27 @@
 /*
 # Probe: File Explorer window created
 
-Diagnostic for Explorer Extras 0.3. Version 0.2 hooks at most three methods
-of the command bar, and only ones whose signature it can check is safe. It
-logs the full symbol of each, so the next version can use the exact type.
+Diagnostic for Explorer Extras 0.3. It hooks a few command bar methods behind
+a signature check and logs the full symbol of each.
 
-Run it in two steps, with no recompile between them:
+Version 0.2 crashed Explorer inside Microsoft.UI.Xaml.dll when it treated
+`this` of a command bar method as a XAML object. Version 0.3 never does that.
+It takes the control from the `sender` argument of
+`OnCommandBarItemVMsChanged`, which is a real XAML reference, and checks that
+the object's code lives in FileExplorerExtensions.dll or Microsoft.UI.Xaml.dll
+before it touches it.
 
-1. "Inspect objects" at 0. Open one new window and one new tab. This only
-   logs timing and window state.
-2. Set "Inspect objects" to 1. Open one new window. After the command bar
-   loads, the probe looks for the View flyout at 0, 100, 300, 700, 1500 and
-   3000 ms and logs what it finds.
+Run it in three steps, with no recompile between them. Open one new window
+for each:
 
-Version 0.1 crashed Explorer. A line "about to inspect" is written before
-each look, so a crash shows where it happened. Send back
-`probes\logs\probe-window-created.log`.
+1. "Inspect objects" at 0. Logs timing and which argument holds the control.
+2. Set it to 2. Timers fire after the window opens and log only that they
+   fired. This tells timers apart from object access if something crashes.
+3. Set it to 1. The probe looks for the View flyout at 0, 100, 300, 700, 1500
+   and 3000 ms and logs what it finds.
+
+A line "about to inspect" is written before each look. Send back
+`probes\logs\probe-window-created.log` after each step if Explorer crashes.
 */
 // ==/WindhawkModReadme==
 
@@ -37,7 +43,7 @@ each look, so a crash shows where it happened. Send back
 /*
 - inspect: 0
   $name: Inspect objects
-  $description: 0 logs timing only. 1 also looks for the View flyout after the command bar loads.
+  $description: 0 logs timing only. 2 adds timers that touch no objects. 1 looks for the View flyout after the command bar loads.
 */
 // ==/WindhawkModSettings==
 
@@ -228,6 +234,11 @@ void RunLook(Look* look) {
             look->delay);
         return;
     }
+    if (g_inspect.load() == 2) {
+        Out(L"  timer +%d ms fired (real +%llu ms), no object touched",
+            look->delay, GetTickCount64() - look->since);
+        return;
+    }
     Out(L"  about to inspect +%d ms", look->delay);
     try {
         winrt::Windows::Foundation::IInspectable control{nullptr};
@@ -257,10 +268,10 @@ void RunLook(Look* look) {
     }
 }
 
-void ScheduleLooks(void* thisPtr) {
+void ScheduleLooks(void* controlPtr) {
     try {
         winrt::Windows::Foundation::IInspectable control{nullptr};
-        winrt::copy_from_abi(control, thisPtr);
+        winrt::copy_from_abi(control, controlPtr);
         auto queue = mud::DispatcherQueue::GetForCurrentThread();
         if (!queue) {
             Out(L"  no dispatcher queue on this thread");
@@ -288,12 +299,67 @@ void ScheduleLooks(void* thisPtr) {
 
 std::wstring g_slotNames[kMaxSlots];
 bool g_slotLooks[kMaxSlots];
+bool g_slotStatic[kMaxSlots];
 std::atomic<int> g_slotEnters[kMaxSlots];
 std::atomic<int> g_slotCount{0};
 std::atomic<int> g_callSeq{0};
 thread_local ULONGLONG t_firstCall = 0;
 
 using Generic_t = void*(WINAPI*)(void*, void*, void*, void*);
+
+// ---- Telling a real XAML reference from anything else ----
+
+bool Readable(const void* p, size_t size) {
+    if (!p) {
+        return false;
+    }
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery(p, &info, sizeof(info))) {
+        return false;
+    }
+    if (info.State != MEM_COMMIT ||
+        (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || info.Protect == 0) {
+        return false;
+    }
+    return (const char*)p + size <=
+           (const char*)info.BaseAddress + info.RegionSize;
+}
+
+// The first code address of the object's table must lie in one of the two
+// modules that make the command bar.
+bool OwnedByCommandBarModules(const void* object) {
+    if (!Readable(object, sizeof(void*))) {
+        return false;
+    }
+    const void* vtable = *(const void* const*)object;
+    if (!Readable(vtable, sizeof(void*) * 3)) {
+        return false;
+    }
+    const void* first = *(const void* const*)vtable;
+    HMODULE module = nullptr;
+    if (!first || !GetModuleHandleExW(
+                      GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                      (LPCWSTR)first, &module)) {
+        return false;
+    }
+    wchar_t path[MAX_PATH];
+    if (!GetModuleFileNameW(module, path, ARRAYSIZE(path))) {
+        return false;
+    }
+    return StrStrIW(path, L"FileExplorerExtensions.dll") ||
+           StrStrIW(path, L"Microsoft.UI.Xaml.dll");
+}
+
+// `arg` is a reference to a projected object, so it points at a slot that
+// holds the object's pointer. Returns that pointer or null.
+void* ControlFromReference(void* arg) {
+    if (!Readable(arg, sizeof(void*))) {
+        return nullptr;
+    }
+    void* object = *(void**)arg;
+    return OwnedByCommandBarModules(object) ? object : nullptr;
+}
 
 void Enter(int slot) {
     if (g_unloading) {
@@ -310,15 +376,35 @@ void Enter(int slot) {
     }
 }
 
-void Leave(int slot, void* a0) {
-    if (g_unloading || !g_slotLooks[slot] || g_inspect.load() < 1) {
+thread_local void* t_lastControl = nullptr;
+
+// Static or not, the arguments are laid out differently, so every register is
+// tried. `this` of a non-static method is skipped: treating it as an object
+// crashed version 0.2.
+void Leave(int slot, void* a0, void* a1, void* a2, void* a3, bool isStatic) {
+    if (g_unloading || !g_slotLooks[slot]) {
         return;
     }
     if (g_slotEnters[slot] > kMaxEnterLogsPerSlot) {
         return;
     }
-    Out(L"LEAVE %s, scheduling looks at the control", g_slotNames[slot].c_str());
-    ScheduleLooks(a0);
+    void* args[4] = {a0, a1, a2, a3};
+    void* control = nullptr;
+    int which = -1;
+    for (int i = isStatic ? 0 : 1; i < 4 && !control; i++) {
+        control = ControlFromReference(args[i]);
+        if (control) {
+            which = i;
+        }
+    }
+    Out(L"LEAVE %s, args=%p %p %p %p, control %s (argument %d)",
+        g_slotNames[slot].c_str(), a0, a1, a2, a3,
+        control ? L"found" : L"not found", which);
+    if (!control || g_inspect.load() < 1 || control == t_lastControl) {
+        return;
+    }
+    t_lastControl = control;
+    ScheduleLooks(control);
 }
 
 // Four register arguments are enough on both x64 and ARM64. The signature
@@ -329,7 +415,7 @@ struct Slot {
     static void* WINAPI Hook(void* a0, void* a1, void* a2, void* a3) {
         Enter(N);
         void* result = original(a0, a1, a2, a3);
-        Leave(N, a0);
+        Leave(N, a0, a1, a2, a3, g_slotStatic[N]);
         return result;
     }
     static bool Install(void* address) {
@@ -429,10 +515,10 @@ struct Target {
 };
 
 const Target kTargets[] = {
-    {L"CommandBarControl", L"OnApplyTemplate", true},
-    {L"CommandBarControl_Wave1", L"OnApplyTemplate", true},
-    {L"CommandBarFlyout", L"CreateSortAndGroupMenu", false},
-    {L"CommandBarFlyout", L"CreateNewItemMenu", false},
+    {L"CommandBarControl_Wave1", L"OnCommandBarItemVMsChanged", true},
+    {L"CommandBarControl", L"OnCommandBarItemVMsChanged", true},
+    {L"CommandBarControl_Wave1", L"OnApplyTemplate", false},
+    {L"CommandBarControl_Wave1", L"OnDpiChanged", false},
 };
 
 void HookModule(HMODULE module) {
@@ -478,6 +564,7 @@ void HookModule(HMODULE module) {
             int slot = g_slotCount;
             g_slotNames[slot] = std::wstring(target.cls) + L"::" + target.method;
             g_slotLooks[slot] = target.looks;
+            g_slotStatic[slot] = Contains(text, L"static ");
             if (installers[slot](symbol.address)) {
                 g_slotCount++;
                 Out(L"  HOOKED as slot %d", slot);
