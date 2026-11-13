@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.2
+// @version         0.3.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1102,6 +1102,8 @@ struct WindowState {
     muxc::ScrollViewer scroller{nullptr};
     muxc::Grid rootGrid{nullptr};
     Inspectable wheelHandler{nullptr};  // The boxed handler, for removal.
+    double wheelTarget = 0;             // Where the wheel is scrolling to.
+    ULONGLONG wheelAt = 0;              // Tick of the last wheel event.
     muxc::StackPanel strip{nullptr};
     std::vector<std::unique_ptr<Column>> columns;
     RECT lastRect{};
@@ -2438,9 +2440,20 @@ void ShowPanel(WindowState* state) {
                     if (!props.IsHorizontalMouseWheel()) {
                         return;
                     }
-                    double offset = state->scroller.HorizontalOffset() +
-                                    props.MouseWheelDelta();
-                    state->scroller.ChangeView(offset, nullptr, nullptr, true);
+                    // Turns that come close together add up and glide to
+                    // one target. Starting from the current offset on every
+                    // turn would restart the glide each time and look
+                    // jerky. After a pause, start from where the strip is.
+                    ULONGLONG now = GetTickCount64();
+                    double from = (now - state->wheelAt < 300)
+                                      ? state->wheelTarget
+                                      : state->scroller.HorizontalOffset();
+                    double target = from + props.MouseWheelDelta();
+                    double maxOffset = state->scroller.ScrollableWidth();
+                    target = target < 0 ? 0 : (target > maxOffset ? maxOffset : target);
+                    state->wheelTarget = target;
+                    state->wheelAt = now;
+                    state->scroller.ChangeView(target, nullptr, nullptr, false);
                     args.Handled(true);
                 } catch (...) {
                     LogHresult(L"horizontal wheel");
@@ -3095,7 +3108,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
