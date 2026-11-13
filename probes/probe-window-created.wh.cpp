@@ -2,7 +2,7 @@
 // @id              probe-window-created
 // @name            Probe: File Explorer window created
 // @description     Diagnostic only. Finds the earliest hook in the command bar that runs when an Explorer window opens, and when the View flyout appears after it.
-// @version         0.3
+// @version         0.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -243,7 +243,16 @@ void RunLook(Look* look) {
     try {
         winrt::Windows::Foundation::IInspectable control{nullptr};
         winrt::copy_from_abi(control, look->control);
-        auto dep = control.try_as<mux::DependencyObject>();
+        mux::DependencyObject dep{nullptr};
+        if (auto xamlRoot = control.try_as<mux::XamlRoot>()) {
+            // The whole island's content, which holds the command bar.
+            dep = xamlRoot.Content().try_as<mux::DependencyObject>();
+            Out(L"  object is a XamlRoot, size=%.0fx%.0f scale=%.2f",
+                xamlRoot.Size().Width, xamlRoot.Size().Height,
+                xamlRoot.RasterizationScale());
+        } else {
+            dep = control.try_as<mux::DependencyObject>();
+        }
         if (!dep) {
             Out(L"  look +%d ms: not a DependencyObject", look->delay);
             return;
@@ -499,7 +508,18 @@ bool SignatureIsSafe(const std::wstring& params, std::wstring* why) {
                            one == L"unsigned __int64" || one == L"char" ||
                            one == L"unsigned char" || one == L"short" ||
                            one == L"unsigned short";
-            if (!byRef && !integer) {
+            // A C++/WinRT object passed by value is one pointer wide and
+            // arrives as a pointer to a temporary. Plain value types such as
+            // Size or Rect are not, so they stay excluded.
+            bool winrtObject =
+                one.find(L"struct winrt::") == 0 &&
+                !Contains(one, L"::Size") && !Contains(one, L"::Rect") &&
+                !Contains(one, L"::Point") && !Contains(one, L"::Thickness") &&
+                !Contains(one, L"::CornerRadius") &&
+                !Contains(one, L"::TimeSpan") && !Contains(one, L"::DateTime") &&
+                !Contains(one, L"::Color") && !Contains(one, L"::GridLength") &&
+                !Contains(one, L"::Duration") && !Contains(one, L"::Vector");
+            if (!byRef && !integer && !winrtObject) {
                 *why = L"parameter by value: " + one.substr(0, 80);
                 return false;
             }
@@ -515,11 +535,33 @@ struct Target {
 };
 
 const Target kTargets[] = {
-    {L"CommandBarControl_Wave1", L"OnCommandBarItemVMsChanged", true},
-    {L"CommandBarControl", L"OnCommandBarItemVMsChanged", true},
+    {L"CommandBarControl_Wave1", L"OnDpiChanged", true},
     {L"CommandBarControl_Wave1", L"OnApplyTemplate", false},
-    {L"CommandBarControl_Wave1", L"OnDpiChanged", false},
 };
+
+// Methods of the command bar classes that take a XAML object, listed in full
+// so the next version can pick a better hook. Nothing is hooked from this.
+void ListXamlMethods(const std::wstring& text) {
+    static int listed = 0;
+    if (listed >= 60 || !Contains(text, L"implementation::CommandBar") ||
+        Contains(text, L"winrt::impl::") || Contains(text, L"`vcall'") ||
+        Contains(text, L"$_") || Contains(text, L"~")) {
+        return;
+    }
+    size_t open = text.find(L'(', text.find(L"implementation::"));
+    if (open == std::wstring::npos) {
+        return;
+    }
+    std::wstring tail = text.substr(open);
+    if (Contains(tail, L"Xaml::XamlRoot") ||
+        Contains(tail, L"Xaml::UIElement") ||
+        Contains(tail, L"Xaml::FrameworkElement") ||
+        Contains(tail, L"Xaml::DependencyObject") ||
+        Contains(tail, L"Xaml::RoutedEventArgs")) {
+        Out(L"xaml-method: %.500s", text.c_str());
+        listed++;
+    }
+}
 
 void HookModule(HMODULE module) {
     static const auto installers =
@@ -540,6 +582,7 @@ void HookModule(HMODULE module) {
             Contains(text, L"std::")) {
             continue;
         }
+        ListXamlMethods(text);
         for (const Target& target : kTargets) {
             std::wstring needle = std::wstring(L"implementation::") +
                                   target.cls + L"::" + target.method + L"(";
@@ -602,7 +645,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 BOOL Wh_ModInit() {
     g_inspect = Wh_GetIntSetting(L"inspect");
     OutInit();
-    Out(L"PROBE START probe-window-created v0.2, inspect=%d",
+    Out(L"PROBE START probe-window-created v0.4, inspect=%d",
         g_inspect.load());
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
