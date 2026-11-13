@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.13
+// @version         0.3.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -340,6 +340,9 @@ struct Entry {
     Pidl child;
     std::wstring name;
     bool folder = false;
+    // Neither a folder nor a file: a Control Panel applet or the Desktop's
+    // Control Panel entry. It can't be opened as a column, only run.
+    bool launcher = false;
 };
 
 // Asks the visible tab for its shell browser. The pointer is not AddRef'd and
@@ -395,6 +398,14 @@ bool IsFolderItem(IShellFolder* folder, PCUITEMID_CHILD child) {
     }
     // Zip files and the like report both. Treat them as files.
     return (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
+}
+
+bool IsLauncherItem(IShellFolder* folder, PCUITEMID_CHILD child) {
+    SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM;
+    if (FAILED(folder->GetAttributesOf(1, &child, &attributes))) {
+        return false;
+    }
+    return !(attributes & (SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM));
 }
 
 std::wstring DisplayName(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -844,6 +855,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             Entry entry;
             entry.name = DisplayName(folder, child);
             entry.folder = IsFolderItem(folder, child);
+            entry.launcher = !entry.folder && IsLauncherItem(folder, child);
             entry.child.reset(child);
             result->entries.push_back(std::move(entry));
             child = nullptr;
@@ -1147,6 +1159,7 @@ struct WindowState {
     bool entryStopped = false;
     int entryTries = 0;
     int restoreSettle = 0;
+    HWND armTab = nullptr;  // A new tab to wait for before restoring Columns.
 
     // Panel.
     bool on = false;
@@ -1634,7 +1647,7 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
     // Stand-in glyphs until real file icons are drawn.
     muxc::FontIcon icon;
     icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-    icon.Glyph(entry.folder ? L"" : L"");
+    icon.Glyph(entry.launcher ? L"\uE713" : entry.folder ? L"" : L"");
     icon.FontSize(14);
     icon.HorizontalAlignment(mux::HorizontalAlignment::Left);
     icon.VerticalAlignment(mux::VerticalAlignment::Center);
@@ -2340,6 +2353,13 @@ void OnRowSelected(muxc::ListView const& list) {
         column->selectedChild.reset(ILClone(entry.child.get()));
         Pidl absolute(ILCombine(column->folder.get(), entry.child.get()));
         if (!absolute) {
+            return;
+        }
+        if (entry.launcher) {
+            // Nothing to show in Explorer's view or in a column. Enter or a
+            // double-click runs it.
+            dimAfter(true);
+            SetActiveColumn(state, columnIndex);
             return;
         }
         if (entry.folder) {
@@ -4018,6 +4038,7 @@ HWND TopLevelOfThisThread() {
 // own tick.
 void StopEntry(WindowState* state) {
     state->entryStopped = true;
+    state->armTab = nullptr;
     try {
         if (state->entryTimer) {
             state->entryTimer.Stop();
@@ -4071,6 +4092,17 @@ void EntryTick() {
             StopEntry(state);
             return;
         }
+        // A new tab: wait until it is the visible one, so the panel isn't
+        // built on the tab that was showing before.
+        if (state->armTab &&
+            FindVisibleChild(state->topLevel, L"ShellTabWindowClass") !=
+                state->armTab) {
+            if (state->entryTries >= 100) {
+                Out(L"the new tab never became visible, not restoring Columns");
+                StopEntry(state);
+            }
+            return;
+        }
         HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
         RECT rect;
         if (fileList && FileListRect(state->topLevel, fileList, &rect)) {
@@ -4093,6 +4125,66 @@ void EntryTick() {
         LogHresult(L"EntryTick");
         StopEntry(state);
     }
+}
+
+// A new tab was created in a window this mod already knows. If Columns was the
+// last layout chosen and this window isn't showing it, turn it on for the tab
+// once the tab is visible.
+void OnTabCreated(HWND tab) {
+    if (g_unloading || !g_enabled || !g_restore) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->topLevel || !IsWindow(state->topLevel) ||
+        GetAncestor(tab, GA_PARENT) != state->topLevel || state->on ||
+        !state->queue || !LastLayoutWasColumns()) {
+        return;
+    }
+    state->armTab = tab;
+    state->entryTries = 0;
+    state->restoreSettle = 0;
+    if (state->entryTimer && !state->entryStopped) {
+        return;  // Still running. It waits for this tab now.
+    }
+    try {
+        auto timer = state->entryTimer ? state->entryTimer
+                                       : state->queue.CreateTimer();
+        timer.Interval(std::chrono::milliseconds(50));
+        state->entryToken = timer.Tick(
+            [](mud::DispatcherQueueTimer const&, Inspectable const&) {
+                EntryTick();
+            });
+        state->entryStopped = false;
+        timer.Start();
+        state->entryTimer = timer;
+        Out(L"new tab %p, waiting for it to show Columns", tab);
+    } catch (...) {
+        LogHresult(L"OnTabCreated");
+        state->entryStopped = true;
+    }
+}
+
+using CreateWindowExW_t = HWND(WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int,
+                                        int, int, HWND, HMENU, HINSTANCE,
+                                        LPVOID);
+CreateWindowExW_t CreateWindowExW_Original;
+HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, LPCWSTR className,
+                                 LPCWSTR title, DWORD style, int x, int y,
+                                 int w, int h, HWND parent, HMENU menu,
+                                 HINSTANCE instance, LPVOID param) {
+    HWND hwnd = CreateWindowExW_Original(exStyle, className, title, style, x, y,
+                                         w, h, parent, menu, instance, param);
+    // The tab window is returned after its views exist, on the window's own
+    // thread. Confirmed with probes/probe-tabs-virtual.wh.cpp on 2026-11-13.
+    if (hwnd && parent && className && !IS_INTRESOURCE(className) &&
+        !g_unloading && wcscmp(className, L"ShellTabWindowClass") == 0) {
+        try {
+            OnTabCreated(hwnd);
+        } catch (...) {
+            LogHresult(L"CreateWindowExW hook");
+        }
+    }
+    return hwnd;
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
@@ -4221,6 +4313,10 @@ void HookExtensions(HMODULE module) {
          InvokeMenuItem_Hook,
          true},
     };
+    if (!Wh_SetFunctionHook((void*)CreateWindowExW, (void*)CreateWindowExW_Hook,
+                            (void**)&CreateWindowExW_Original)) {
+        Out(L"could not hook CreateWindowExW, new tabs won't open in Columns");
+    }
     bool ok = WindhawkUtils::HookSymbols(module, hooks, ARRAYSIZE(hooks));
     Out(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
         ok ? 1 : 0, (void*)PointerPressed_Original,
@@ -4342,7 +4438,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

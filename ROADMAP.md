@@ -61,8 +61,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       what Microsoft changed in the context menu.
 - [ ] Polish pass: open in Columns without the flash of Explorer's own list.
       Fine for now, per Ari.
-- [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
-      Probed together with the Desktop virtual items, see below.
+- [ ] A new tab opens in Columns. Written in 0.3.14, not tested: a hook on
+      the tab window's creation, found with the probe, waits until the new tab
+      is the visible one.
 - [x] Mouse horizontal scroll wheel scrolls the strip sideways across the
       columns, and does not scroll vertically inside a column. Tested in
       0.3.3: sideways glide, no vertical scroll. 0.3.2 marks the event
@@ -72,6 +73,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       strip.
 - [x] Flash shortened: restore waits one tick instead of three. Tested in
       0.3.1, shorter.
+- [ ] (0.3.14, not tested: Control Panel applets and the Desktop's Control
+      Panel entry are launchers, shown with a gear, not mirrored into
+      Explorer's view, opened with Enter or a double-click.)
 - [ ] Focusing a Control Panel item, or another virtual shell item such as a
       link, in the Desktop folder. These aren't real folders on disk, so the
       column logic needs a way to open and focus them. Not looked at yet.
