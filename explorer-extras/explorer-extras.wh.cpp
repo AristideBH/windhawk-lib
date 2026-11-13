@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.0
+// @version         0.3.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1097,6 +1097,8 @@ struct WindowState {
     mud::DispatcherQueueTimer timer{nullptr};
     winrt::event_token tickToken{};
     muxc::ScrollViewer scroller{nullptr};
+    muxc::Grid rootGrid{nullptr};
+    Inspectable wheelHandler{nullptr};  // The boxed handler, for removal.
     muxc::StackPanel strip{nullptr};
     std::vector<std::unique_ptr<Column>> columns;
     RECT lastRect{};
@@ -1994,6 +1996,13 @@ void HidePanel(WindowState* state, const wchar_t* why) {
         state->building = true;
         RemoveColumnsFrom(state, 0);
         state->building = false;
+        if (state->rootGrid && state->wheelHandler) {
+            state->rootGrid.RemoveHandler(
+                mux::UIElement::PointerWheelChangedEvent(),
+                state->wheelHandler);
+        }
+        state->rootGrid = nullptr;
+        state->wheelHandler = nullptr;
         state->source.Content(nullptr);
         state->source.Close();
     } catch (...) {
@@ -2066,6 +2075,8 @@ void AbandonWindow(WindowState* state) {
     (void)winrt::detach_abi(state->source);
     (void)winrt::detach_abi(state->bridge);
     (void)winrt::detach_abi(state->scroller);
+    (void)winrt::detach_abi(state->rootGrid);
+    (void)winrt::detach_abi(state->wheelHandler);
     (void)winrt::detach_abi(state->strip);
     (void)winrt::detach_abi(state->menuItem);
     (void)winrt::detach_abi(state->menuItems);
@@ -2360,6 +2371,36 @@ void ShowPanel(WindowState* state) {
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);
         root.Children().Append(scroller);
+
+        // The horizontal mouse wheel scrolls the strip sideways, across the
+        // columns. Registered to also see events a column already handled, so
+        // the columns' own vertical scrolling can't take it.
+        mux::Input::PointerEventHandler wheel(
+            [](Inspectable const&,
+               mux::Input::PointerRoutedEventArgs const& args) {
+                try {
+                    WindowState* state = StateForThisThread(false);
+                    if (!state || !state->scroller) {
+                        return;
+                    }
+                    auto props =
+                        args.GetCurrentPoint(state->scroller).Properties();
+                    if (!props.IsHorizontalMouseWheel()) {
+                        return;
+                    }
+                    double offset = state->scroller.HorizontalOffset() +
+                                    props.MouseWheelDelta();
+                    state->scroller.ChangeView(offset, nullptr, nullptr, true);
+                    args.Handled(true);
+                } catch (...) {
+                    LogHresult(L"horizontal wheel");
+                }
+            });
+        Inspectable wheelBoxed = winrt::box_value(wheel);
+        root.AddHandler(mux::UIElement::PointerWheelChangedEvent(), wheelBoxed,
+                        true);
+        state->rootGrid = root;
+        state->wheelHandler = wheelBoxed;
 
         step = L"creating the XAML source";
         mux::Hosting::DesktopWindowXamlSource source;
@@ -2737,9 +2778,9 @@ void EntryTick() {
         HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
         RECT rect;
         if (fileList && FileListRect(state->topLevel, fileList, &rect)) {
-            // Three ticks with a visible file list, so Explorer has had time
-            // to open the folder.
-            if (++state->restoreSettle >= 3) {
+            // One tick with a visible file list. Three ticks in 0.3.0 left
+            // Explorer's own list showing for about 270 ms.
+            if (++state->restoreSettle >= 1) {
                 Out(L"restoring Columns, window=%p, tick %d", state->topLevel,
                     state->entryTries);
                 ShowPanel(state);
@@ -3004,7 +3045,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
