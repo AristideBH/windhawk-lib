@@ -1260,11 +1260,24 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     // A click stops a scroll that is still gliding. A row marks its own press as
     // handled, so this is added to see handled presses too.
     column->stopScrollHandler = mux::Input::PointerEventHandler(
-        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& pressArgs) {
             try {
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
                     WindowState* pressState = StateForThisThread(false);
+                    // A row marks its own press as handled, so the list's ordinary
+                    // press handler never sees it. A drag of rows starts here.
+                    if (pressState && pressState->on && !g_unloading && !pressState->rename) {
+                        mux::DependencyObject node =
+                            pressArgs.OriginalSource().try_as<mux::DependencyObject>();
+                        for (int i = 0; node && i < 20; i++) {
+                            if (auto row = node.try_as<muxc::ListViewItem>()) {
+                                OnDragPressed(pressState, list, row, pressArgs);
+                                break;
+                            }
+                            node = mux::Media::VisualTreeHelper::GetParent(node);
+                        }
+                    }
                     if (pressState) {
                         int at = ColumnIndexOfList(pressState, list);
                         if (at >= 0) {

@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.12.1
+// @version         0.12.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -3877,11 +3877,24 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     // A click stops a scroll that is still gliding. A row marks its own press as
     // handled, so this is added to see handled presses too.
     column->stopScrollHandler = mux::Input::PointerEventHandler(
-        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& pressArgs) {
             try {
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
                     WindowState* pressState = StateForThisThread(false);
+                    // A row marks its own press as handled, so the list's ordinary
+                    // press handler never sees it. A drag of rows starts here.
+                    if (pressState && pressState->on && !g_unloading && !pressState->rename) {
+                        mux::DependencyObject node =
+                            pressArgs.OriginalSource().try_as<mux::DependencyObject>();
+                        for (int i = 0; node && i < 20; i++) {
+                            if (auto row = node.try_as<muxc::ListViewItem>()) {
+                                OnDragPressed(pressState, list, row, pressArgs);
+                                break;
+                            }
+                            node = mux::Media::VisualTreeHelper::GetParent(node);
+                        }
+                    }
                     if (pressState) {
                         int at = ColumnIndexOfList(pressState, list);
                         if (at >= 0) {
@@ -9625,6 +9638,10 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     d.column = column;
     d.pressedEntry = entry;
     d.start = args.GetCurrentPoint(list).Position();
+    static int logged = 0;
+    if (logged++ < 6) {
+        Out(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
+    }
 }
 
 // Moves of the pointer. True while a drag is under way, so the hover code
@@ -10585,7 +10602,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.12.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.12.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

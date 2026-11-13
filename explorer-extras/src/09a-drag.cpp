@@ -169,6 +169,10 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     d.column = column;
     d.pressedEntry = entry;
     d.start = args.GetCurrentPoint(list).Position();
+    static int logged = 0;
+    if (logged++ < 6) {
+        Out(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
+    }
 }
 
 // Moves of the pointer. True while a drag is under way, so the hover code
