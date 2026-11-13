@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.19
+// @version         0.3.20
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1673,8 +1673,42 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
 }
 
 // Marks the column Explorer's own view is in with a light tint.
+// Scrolls the strip, smoothly, so that column `index` is fully in view. If the
+// column is wider than the view, its left edge wins: the icon and the start of
+// the names must be visible.
+void EnsureColumnVisible(WindowState* state, int index) {
+    if (!state->scroller || !state->strip || index < 0 ||
+        index >= (int)state->columns.size() || !state->columns[index]->cell) {
+        return;
+    }
+    try {
+        auto cell = state->columns[index]->cell;
+        double left = cell.TransformToVisual(state->strip)
+                          .TransformPoint(winrt::Windows::Foundation::Point{0, 0})
+                          .X;
+        double width = cell.ActualWidth();
+        double offset = state->scroller.HorizontalOffset();
+        double view = state->scroller.ViewportWidth();
+        double target = offset;
+        if (left + width > offset + view) {
+            target = left + width - view;
+        }
+        if (left < target) {
+            target = left;  // Also when the column is wider than the view.
+        }
+        if (target < 0) {
+            target = 0;
+        }
+        if (target != offset) {
+            state->scroller.ChangeView(target, nullptr, nullptr, false);
+        }
+    } catch (...) {
+    }
+}
+
 void SetActiveColumn(WindowState* state, int index) {
     state->active = index;
+    EnsureColumnVisible(state, index);
     for (size_t i = 0; i < state->columns.size(); i++) {
         try {
             state->columns[i]->list.Background(
@@ -1953,8 +1987,9 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
             try {
                 FillColumn(state, column.get(), std::move(loaded->data));
                 state->scroller.UpdateLayout();
-                state->scroller.ChangeView(state->scroller.ScrollableWidth(),
-                                           nullptr, nullptr);
+                if (state->columns.back().get() == column.get()) {
+                    EnsureColumnVisible(state, (int)state->columns.size() - 1);
+                }
             } catch (...) {
                 LogHresult(L"filling a column");
             }
@@ -2434,6 +2469,29 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+
+        // Working in a column lifts the stale look of it and of the columns
+        // before it, and puts the selection in the earlier columns back on the
+        // folders that lead here. That is what happens when an item of a
+        // stale column is chosen.
+        for (int j = 0; j <= columnIndex; j++) {
+            if (state->columns[j]->cell) {
+                state->columns[j]->cell.Opacity(1.0);
+            }
+        }
+        for (int j = columnIndex; j > 0; j--) {
+            Column* previous = state->columns[j - 1].get();
+            Column* here = state->columns[j].get();
+            if (!ILIsParent(previous->folder.get(), here->folder.get(), TRUE)) {
+                break;
+            }
+            Pidl leading(ILClone(ILFindLastID(here->folder.get())));
+            if (leading &&
+                (!previous->selectedChild ||
+                 !ILIsEqual(previous->selectedChild.get(), leading.get()))) {
+                SelectChildInColumn(state, previous, leading.get());
+            }
+        }
 
         // Group headers and the "more items" row can't be selected, as when
         // Shift-click selects a range across them.
@@ -4827,7 +4885,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.19 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.20 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
