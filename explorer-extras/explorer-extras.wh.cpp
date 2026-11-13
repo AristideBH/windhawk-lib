@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.17
+// @version         0.4.18
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1462,8 +1462,10 @@ struct WindowState {
     int styleVersion = -1;  // The row style the rows were last given.
     bool shownDark = false;  // The theme the panel background was made for.
     int shownMode = 0;       // And the background mode.
-    HWND clearedList = nullptr;  // The native list made invisible, in transparent mode,
-    bool addedLayered = false;   // and whether this mod gave it the layered style.
+    // The native lists made invisible, in transparent mode, and whether this mod
+    // gave each the layered style. A tab can hold more than one view window
+    // after layouts change, so every visible one is cleared.
+    std::vector<std::pair<HWND, bool>> cleared;
     // A click on the name of the item that is already selected starts a
     // rename once the double-click time has passed.
     // After a command of Explorer's own toolbar: read the columns again, and
@@ -1614,36 +1616,92 @@ mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
 // Transparent mode: Explorer's own file list stays, but is drawn fully
 // transparent, so nothing shows through the panel except the window's backdrop.
 // Undone whenever the panel goes away.
-void ClearNativeList(WindowState* state, HWND list) {
-    if (!list || state->clearedList == list) {
-        return;
+BOOL CALLBACK CollectViewsProc(HWND hwnd, LPARAM lParam) {
+    wchar_t name[32];
+    if (GetClassNameW(hwnd, name, ARRAYSIZE(name)) &&
+        wcscmp(name, L"SHELLDLL_DefView") == 0 && IsWindowVisible(hwnd)) {
+        ((std::vector<HWND>*)lParam)->push_back(hwnd);
     }
+    return TRUE;
+}
+
+void ClearOne(WindowState* state, HWND list) {
     LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-    state->addedLayered = !(ex & WS_EX_LAYERED);
-    if (state->addedLayered) {
+    bool added = !(ex & WS_EX_LAYERED);
+    if (added) {
         SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED);
     }
     BOOL ok = SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
     DWORD error = ok ? 0 : GetLastError();
-    state->clearedList = list;
+    bool known = false;
+    for (auto& entry : state->cleared) {
+        if (entry.first == list) {
+            entry.second = entry.second || added;
+            known = true;
+        }
+    }
+    if (!known) {
+        state->cleared.emplace_back(list, added);
+    }
     Out(L"the native file list is made transparent (window %p, %s, result %d, error %lu)",
         list, ClassNameOf(list).c_str(), ok ? 1 : 0, error);
 }
 
+// Every visible view window of this window is made transparent, and one that
+// something else made visible again is cleared again.
+void ClearNativeLists(WindowState* state) {
+    std::vector<HWND> views;
+    EnumChildWindows(state->topLevel, CollectViewsProc, (LPARAM)&views);
+    for (HWND view : views) {
+        bool known = false;
+        for (auto& entry : state->cleared) {
+            known = known || entry.first == view;
+        }
+        if (!known) {
+            ClearOne(state, view);
+            continue;
+        }
+        // The style or the alpha can be put back by Explorer, or by a mod that
+        // fades the view in when the layout changes.
+        BYTE alpha = 255;
+        DWORD flags = 0;
+        bool intact = (GetWindowLongPtrW(view, GWL_EXSTYLE) & WS_EX_LAYERED) &&
+                      GetLayeredWindowAttributes(view, nullptr, &alpha, &flags) &&
+                      (flags & LWA_ALPHA) && alpha == 0;
+        if (!intact) {
+            Out(L"the native list %p was made visible again by something else (alpha %d), clearing it again",
+                view, (int)alpha);
+            ClearOne(state, view);
+        }
+    }
+    // Windows that are gone are forgotten.
+    for (size_t i = 0; i < state->cleared.size();) {
+        if (!IsWindow(state->cleared[i].first)) {
+            state->cleared.erase(state->cleared.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
 void RestoreNativeList(WindowState* state) {
-    HWND list = state->clearedList;
-    state->clearedList = nullptr;
-    if (!list || !IsWindow(list)) {
-        return;
+    auto cleared = std::move(state->cleared);
+    state->cleared.clear();
+    for (auto& entry : cleared) {
+        HWND list = entry.first;
+        if (!list || !IsWindow(list)) {
+            continue;
+        }
+        SetLayeredWindowAttributes(list, 0, 255, LWA_ALPHA);
+        if (entry.second) {
+            LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
+            SetWindowLongPtrW(list, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED);
+        }
+        RedrawWindow(list, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
-    SetLayeredWindowAttributes(list, 0, 255, LWA_ALPHA);
-    if (state->addedLayered) {
-        LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-        SetWindowLongPtrW(list, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED);
+    if (!cleared.empty()) {
+        Out(L"the native file list is visible again");
     }
-    state->addedLayered = false;
-    RedrawWindow(list, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    Out(L"the native file list is visible again");
 }
 
 // The panel's background, as the setting says.
@@ -6013,7 +6071,7 @@ void OnTick() {
                 auto viewer = FindListScroller(c->list);
                 bool barShown = viewer && viewer.ComputedVerticalScrollBarVisibility() ==
                                               mux::Visibility::Visible;
-                double wanted = barShown ? 17.0 : 10.0;
+                double wanted = barShown ? 23.0 : 10.0;  // 7 for the bar, 16 free beside it
                 if (c->gutterRight != wanted) {
                     c->gutterRight = wanted;
                     c->list.Padding(mux::Thickness{0, 12, wanted, 4});
@@ -6038,25 +6096,8 @@ void OnTick() {
         // Transparent mode: the native list is kept invisible, also after
         // Explorer replaces it. Any other mode gives it back.
         if (g_backgroundMode == 2) {
-            if (fileList && fileList != state->clearedList) {
-                RestoreNativeList(state);
-                ClearNativeList(state, fileList);
-            } else if (fileList && state->clearedList == fileList) {
-                // The style or the alpha can be put back by Explorer, or by a
-                // mod that fades the view in when the layout changes.
-                BYTE alpha = 255;
-                DWORD flags = 0;
-                bool intact = (GetWindowLongPtrW(fileList, GWL_EXSTYLE) & WS_EX_LAYERED) &&
-                              GetLayeredWindowAttributes(fileList, nullptr, &alpha, &flags) &&
-                              (flags & LWA_ALPHA) && alpha == 0;
-                if (!intact) {
-                    Out(L"the native list was made visible again by something else (alpha %d), clearing it again",
-                        (int)alpha);
-                    state->clearedList = nullptr;
-                    ClearNativeList(state, fileList);
-                }
-            }
-        } else if (state->clearedList) {
+            ClearNativeLists(state);
+        } else if (!state->cleared.empty()) {
             RestoreNativeList(state);
         }
         if (state->rootGrid && fileList &&
@@ -6306,7 +6347,7 @@ void ShowPanel(WindowState* state) {
             // Transparent mode: the native list is cleared before the panel
             // shows, so it never flashes.
             if (g_backgroundMode == 2) {
-                ClearNativeList(state, fileList);
+                ClearNativeLists(state);
             }
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
@@ -7124,7 +7165,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.17 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.18 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
