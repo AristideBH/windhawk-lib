@@ -194,6 +194,11 @@ struct WindowState {
     // Columns per tab: the tab that is showing, and the stacks of the others.
     HWND currentTab = nullptr;
     std::vector<TabSnapshot> tabSnapshots;
+    // Which tabs show Columns. The panel is one per window, so it is hidden
+    // while a tab that is not in Columns is showing.
+    std::vector<HWND> columnsTabs;
+    std::vector<HWND> seenTabs;
+    bool softHidden = false;
 
     // View menu entry.
     ItemsVector menuItems{nullptr};

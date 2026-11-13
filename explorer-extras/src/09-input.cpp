@@ -1030,6 +1030,11 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     state->pendingNav.reset();
     state->selectFolder.reset();
     state->selectChild.reset();
+    state->columnsTabs.clear();
+    state->seenTabs.clear();
+    state->tabSnapshots.clear();
+    state->currentTab = nullptr;
+    state->softHidden = false;
     if (state->notifyWindow) {
         DestroyWindow(state->notifyWindow);
         state->notifyWindow = nullptr;
@@ -1246,6 +1251,72 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
     SyncToFolder(state, current);
 }
 
+bool LastLayoutWasColumns();
+
+bool TabListHas(std::vector<HWND> const& tabs, HWND tab) {
+    return std::find(tabs.begin(), tabs.end(), tab) != tabs.end();
+}
+
+void TabListRemove(std::vector<HWND>& tabs, HWND tab) {
+    tabs.erase(std::remove(tabs.begin(), tabs.end(), tab), tabs.end());
+}
+
+// Tabs that were closed are forgotten.
+void PruneTabs(WindowState* state) {
+    for (auto* list : {&state->columnsTabs, &state->seenTabs}) {
+        for (size_t i = 0; i < list->size();) {
+            if (!IsWindow((*list)[i])) {
+                list->erase(list->begin() + i);
+            } else {
+                i++;
+            }
+        }
+    }
+}
+
+// The panel is one per window. It is hidden, not torn down, while a tab that
+// is not in Columns is showing.
+void SoftHidePanel(WindowState* state) {
+    if (!state->bridge || state->softHidden) {
+        return;
+    }
+    CancelRename(state);
+    CloseContextMenu(state);
+    RestoreNativeList(state);
+    try {
+        state->bridge.Hide();
+        if (state->menuItem) {
+            state->menuItem.IsChecked(false);
+        }
+    } catch (...) {
+        LogHresult(L"SoftHidePanel");
+    }
+    state->softHidden = true;
+    g_panelWindow = nullptr;
+    Out(L"panel hidden: this tab is not in Columns");
+}
+
+void SoftShowPanel(WindowState* state) {
+    if (!state->bridge || !state->softHidden) {
+        return;
+    }
+    try {
+        state->bridge.Show();
+        HWND bridgeWindow = (HWND)state->bridge.WindowId().Value;
+        SetWindowPos(bridgeWindow, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        g_panelWindow = bridgeWindow;
+        if (state->menuItem) {
+            state->menuItem.IsChecked(true);
+        }
+    } catch (...) {
+        LogHresult(L"SoftShowPanel");
+    }
+    state->softHidden = false;
+    state->lastRect = {};  // The tick places it again.
+    Out(L"panel shown again: this tab is in Columns");
+}
+
 // The columns of the tab that is leaving are kept, so they come back with it.
 void SaveTabSnapshot(WindowState* state, HWND tab) {
     // Tabs that were closed are forgotten.
@@ -1333,6 +1404,57 @@ bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
     return false;
 }
 
+// Another tab came to the front. Returns true when the tick has nothing more to
+// do for this round.
+bool HandleTabSwitch(WindowState* state, HWND tab, HWND fileList) {
+    HWND old = state->currentTab;
+    state->currentTab = tab;
+    // What was pending belongs to the tab that left: a navigation after a
+    // pause, a selection to mirror, a folder Explorer was asked to open.
+    state->pendingNav.reset();
+    state->expected.reset();
+    state->selectFolder.reset();
+    state->selectChild.reset();
+    state->selectExtra.clear();
+    state->focusColumn = nullptr;
+    PruneTabs(state);
+    bool known = TabListHas(state->seenTabs, tab);
+    if (!known) {
+        state->seenTabs.push_back(tab);
+        // A tab seen for the first time takes the layout chosen last.
+        if (g_restore && LastLayoutWasColumns()) {
+            state->columnsTabs.push_back(tab);
+        }
+    }
+    bool newIsColumns = TabListHas(state->columnsTabs, tab);
+    Out(L"tab switch: %p to %p (%s)", old, tab, newIsColumns ? L"columns" : L"not columns");
+    if (old && TabListHas(state->columnsTabs, old) && !state->softHidden) {
+        SaveTabSnapshot(state, old);
+    }
+    if (!newIsColumns) {
+        SoftHidePanel(state);
+        return true;
+    }
+    bool wasHidden = state->softHidden;
+    if (wasHidden) {
+        SoftShowPanel(state);
+    }
+    IShellBrowser* browser = BrowserOf(state->topLevel);
+    Pidl shown = browser ? CurrentFolder(browser) : Pidl();
+    if (shown && RestoreTabSnapshot(state, tab, browser, shown)) {
+        state->lastFileList = fileList;
+        return true;
+    }
+    if (wasHidden || !known) {
+        // No columns kept for this tab: start from the folder it shows.
+        RebuildFromExplorer(state);
+        SetActiveColumn(state, 0);
+        state->lastFileList = fileList;
+        return true;
+    }
+    return false;
+}
+
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
@@ -1354,8 +1476,18 @@ void OnTick() {
         state->ticks++;
         ULONGLONG now = GetTickCount64();
 
-        // Keep the panel on the file list. Plain Win32, cheap.
         HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+
+        // Columns per tab: another tab came to the front.
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        if (tab && tab != state->currentTab && HandleTabSwitch(state, tab, fileList)) {
+            return;
+        }
+        if (state->softHidden) {
+            return;  // This tab is not in Columns: nothing to keep up.
+        }
+
+        // Keep the panel on the file list. Plain Win32, cheap.
         RECT rect;
         if (fileList && FileListRect(state->topLevel, fileList, &rect) &&
             !EqualRect(&rect, &state->lastRect)) {
@@ -1731,33 +1863,6 @@ void OnTick() {
             state->focusColumn = nullptr;
         }
 
-        // Columns per tab: another tab came to the front. The old tab's columns
-        // are kept, and the new tab's are put back if it had any.
-        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
-        if (tab && tab != state->currentTab) {
-            HWND old = state->currentTab;
-            state->currentTab = tab;
-            // What was pending belongs to the tab that left: a navigation after a
-            // pause, a selection to mirror, a folder Explorer was asked to open.
-            // Left alone, it would act on the tab that is showing now.
-            state->pendingNav.reset();
-            state->expected.reset();
-            state->selectFolder.reset();
-            state->selectChild.reset();
-            state->selectExtra.clear();
-            state->focusColumn = nullptr;
-            Out(L"tab switch: %p to %p", old, tab);
-            if (old) {
-                SaveTabSnapshot(state, old);
-                IShellBrowser* switched = BrowserOf(state->topLevel);
-                Pidl shown = switched ? CurrentFolder(switched) : Pidl();
-                if (shown && RestoreTabSnapshot(state, tab, switched, shown)) {
-                    state->lastFileList = fileList;
-                    return;
-                }
-            }
-        }
-
         // Ask the shell where Explorer is only when something suggests a
         // change: the file list window was replaced, a request is pending,
         // or as a slow safety net.
@@ -2014,6 +2119,16 @@ void ShowPanel(WindowState* state) {
         state->scroller = scroller;
         state->strip = strip;
         state->on = true;
+        state->softHidden = false;
+        state->currentTab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        if (state->currentTab) {
+            if (!TabListHas(state->columnsTabs, state->currentTab)) {
+                state->columnsTabs.push_back(state->currentTab);
+            }
+            if (!TabListHas(state->seenTabs, state->currentTab)) {
+                state->seenTabs.push_back(state->currentTab);
+            }
+        }
 
         step = L"reading the folder";
         RebuildFromExplorer(state);
@@ -2036,3 +2151,45 @@ void ShowPanel(WindowState* state) {
     }
 }
 
+// "Columns" chosen in the View menu of the tab that is showing.
+void ChooseColumns(WindowState* state) {
+    if (!state->source) {
+        ShowPanel(state);
+        return;
+    }
+    HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+    if (tab) {
+        if (!TabListHas(state->columnsTabs, tab)) {
+            state->columnsTabs.push_back(tab);
+        }
+        if (!TabListHas(state->seenTabs, tab)) {
+            state->seenTabs.push_back(tab);
+        }
+    }
+    state->currentTab = tab;
+    SoftShowPanel(state);
+    RebuildFromExplorer(state);
+    SetActiveColumn(state, 0);
+    if (state->menuItem) {
+        state->menuItem.IsChecked(true);
+    }
+}
+
+// One of Explorer's own layouts chosen for the tab that is showing.
+void LeaveColumns(WindowState* state) {
+    HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+    TabListRemove(state->columnsTabs, tab);
+    for (size_t i = 0; i < state->tabSnapshots.size();) {
+        if (state->tabSnapshots[i].tab == tab) {
+            state->tabSnapshots.erase(state->tabSnapshots.begin() + i);
+        } else {
+            i++;
+        }
+    }
+    PruneTabs(state);
+    if (state->columnsTabs.empty()) {
+        HidePanel(state, L"another layout chosen");
+    } else {
+        SoftHidePanel(state);
+    }
+}

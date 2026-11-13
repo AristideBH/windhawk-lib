@@ -65,7 +65,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
                 WindowState* state = StateForThisThread(false);
                 if (state && !g_unloading) {
                     Out(L"Columns chosen in the View menu");
-                    ShowPanel(state);
+                    ChooseColumns(state);
                     if (state->on) {
                         RememberColumns(true);
                     }
@@ -84,7 +84,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
                 [](Inspectable const&, mux::RoutedEventArgs const&) {
                     WindowState* state = StateForThisThread(false);
                     if (state && state->on) {
-                        HidePanel(state, L"another layout chosen");
+                        LeaveColumns(state);
                     }
                     RememberColumns(false);
                 });
