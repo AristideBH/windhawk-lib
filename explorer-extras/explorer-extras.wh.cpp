@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.10
+// @version         0.4.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -4904,8 +4904,9 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
     // The rectangle on screen, in the strip's coordinates.
     try {
         double width = list.ActualWidth(), height = list.ActualHeight();
-        double x0 = std::max(0.0, std::min(band.start.X, (double)at.X));
-        double x1 = std::min(width, std::max(band.start.X, (double)at.X));
+        double startX = band.start.X, nowX = at.X;
+        double x0 = std::max(0.0, std::min(startX, nowX));
+        double x1 = std::min(width, std::max(startX, nowX));
         double y0 = std::max(0.0, std::min(startY - offset, (double)at.Y));
         double y1 = std::min(height, std::max(startY - offset, (double)at.Y));
         auto origin = list.TransformToVisual(state->strip)
@@ -6803,7 +6804,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

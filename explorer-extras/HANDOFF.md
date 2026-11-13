@@ -12,7 +12,7 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.4.10, not
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.4.11, not
   compiled yet. 0.3.5 adds icons and thumbnails (`LoadIcons`, `ApplyIcons`)
   and the right-click flyout (`OnRowRightTapped`) on top of 0.3.4, written
   without a compiler: expect compile errors, read `compiler_errors.log`.
@@ -106,3 +106,19 @@ For the next session, human or model. Written 2026-11-13.
 - When grouping is on, the group's property is also the first sort column.
 - Two interfaces of one XAML object don't compare equal. Convert to the
   same type before comparing.
+
+## Compile check without the Windhawk editor
+
+Windhawk's own clang is at `C:\Program Files\Windhawk\Compiler\bin\clang++.exe`.
+A syntax-only pass over the whole mod finds the compile errors in seconds:
+
+```
+clang++ -x c++ -std=c++23 -target x86_64-w64-mingw32 -DUNICODE -D_UNICODE \
+  -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 -D_WIN32_IE=0x0A00 -DNTDDI_VERSION=0x0A000008 \
+  -D__USE_MINGW_ANSI_STDIO=0 -DWH_MOD '-DWH_MOD_ID=L"explorer-extras"' \
+  '-DWH_MOD_VERSION=L"X.Y.Z"' -include windhawk_api.h -Wno-unused-parameter \
+  -Wno-missing-field-initializers -Wno-cast-function-type-mismatch -fsyntax-only \
+  -I"C:/Program Files/Windhawk/Compiler/include" explorer-extras/explorer-extras.wh.cpp
+```
+Run it before every handover. It does not link, so missing `-l` flags still
+show up only in Windhawk.
