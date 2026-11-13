@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.13
+// @version         0.4.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2286,15 +2286,24 @@ int StyleScrollBars(mux::DependencyObject const& root, bool compact, int depth =
                 }
             };
         arrows(bar, 0);
+        // A narrower bar, not a squeezed one: the thumb keeps its round corners.
         if (compact) {
-            mux::Media::ScaleTransform scale;
-            scale.ScaleX(vertical ? 0.5 : 1.0);
-            scale.ScaleY(vertical ? 1.0 : 0.5);
-            bar.RenderTransformOrigin(winrt::Windows::Foundation::Point{
-                vertical ? 1.0f : 0.5f, vertical ? 0.5f : 1.0f});
-            bar.RenderTransform(scale);
+            bar.RenderTransform(nullptr);
+            if (vertical) {
+                bar.Width(7);
+                bar.HorizontalAlignment(mux::HorizontalAlignment::Right);
+            } else {
+                bar.Height(7);
+                bar.VerticalAlignment(mux::VerticalAlignment::Bottom);
+            }
         } else {
             bar.RenderTransform(nullptr);
+            bar.ClearValue(mux::FrameworkElement::WidthProperty());
+            bar.ClearValue(mux::FrameworkElement::HeightProperty());
+            bar.HorizontalAlignment(vertical ? mux::HorizontalAlignment::Right
+                                             : mux::HorizontalAlignment::Stretch);
+            bar.VerticalAlignment(vertical ? mux::VerticalAlignment::Stretch
+                                           : mux::VerticalAlignment::Bottom);
         }
         return 1;
     }
@@ -5987,8 +5996,9 @@ void OnTick() {
         } else if (state->clearedList) {
             RestoreNativeList(state);
         }
-        if (state->ticks % 20 == 0 && state->rootGrid && fileList &&
-            (IsDarkMode() != state->shownDark || state->shownMode != g_backgroundMode)) {
+        if (state->rootGrid && fileList &&
+            (state->shownMode != g_backgroundMode ||
+             (state->ticks % 20 == 0 && IsDarkMode() != state->shownDark))) {
             state->shownMode = g_backgroundMode;
             bool nowDark = IsDarkMode();
             state->shownDark = nowDark;
@@ -6230,6 +6240,11 @@ void ShowPanel(WindowState* state) {
             root.Background(PanelBackground(fileList, dark));
             state->shownDark = dark;
             state->shownMode = g_backgroundMode;
+            // Transparent mode: the native list is cleared before the panel
+            // shows, so it never flashes.
+            if (g_backgroundMode == 2) {
+                ClearNativeList(state, fileList);
+            }
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);
@@ -7046,7 +7061,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
