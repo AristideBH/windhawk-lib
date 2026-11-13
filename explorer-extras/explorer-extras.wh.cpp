@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.4
+// @version         0.7.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -5161,11 +5161,12 @@ int ArchiveParentColumn(WindowState* state, Column* column) {
     if (archive.empty()) {
         return -1;
     }
-    std::wstring directory = archive.substr(0, archive.rfind(L'\\'));
-    for (int j = index - 1; j >= 0; j--) {
-        std::wstring before = PathOf(state->columns[j]->folder.get());
-        if (_wcsicmp(before.c_str(), directory.c_str()) == 0) {
-            return j;
+    // The column that shows the archive itself; the one before it holds the
+    // archive (its own name can be a library name, not a path).
+    for (int j = index; j >= 1; j--) {
+        std::wstring shown = PathOf(state->columns[j]->folder.get());
+        if (_wcsicmp(shown.c_str(), archive.c_str()) == 0) {
+            return j - 1;
         }
     }
     return -1;
@@ -8625,7 +8626,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
