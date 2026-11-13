@@ -916,6 +916,34 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
             });
         }
     }
+    if (column->restoreScroll >= 0 && state->queue) {
+        // A tab shown again: the column goes back to where it was scrolled.
+        double wanted = column->restoreScroll;
+        column->restoreScroll = -1;
+        state->queue.TryEnqueue([column, wanted]() {
+            WindowState* state = StateForThisThread(false);
+            if (!state || !state->on || g_unloading) {
+                return;
+            }
+            try {
+                bool known = false;
+                for (auto& c : state->columns) {
+                    known = known || c.get() == column;
+                }
+                if (!known) {
+                    return;
+                }
+                column->list.UpdateLayout();
+                auto scroller = FindListScroller(column->list, 0);
+                if (scroller) {
+                    scroller.ChangeView(nullptr, std::min(wanted, scroller.ScrollableHeight()),
+                                        nullptr, true);
+                }
+            } catch (...) {
+                LogHresult(L"restoring a column's scroll");
+            }
+        });
+    }
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
         grouped ? (int)data.groupNames.size() : 0,

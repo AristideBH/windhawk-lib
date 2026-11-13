@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.8.3
+// @version         0.8.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1607,6 +1607,7 @@ struct Column {
     std::vector<muxc::FontIcon> headerIcons;
     std::vector<std::wstring> collapsed;
     Pidl selectedChild;                 // Restored after a reload.
+    double restoreScroll = -1;          // A scroll offset to put back once the rows are in.
     unsigned generation = 0;
     bool userSized = false;
     double charWidth = 7;
@@ -1688,6 +1689,7 @@ struct Worker;
 
 // The columns of a tab that is not showing, kept to put back when it is.
 struct TabColumnSnapshot {
+    double scroll = 0;  // The column's vertical scroll offset.
     Pidl folder;
     Pidl selected;
     double width = 0;
@@ -3253,6 +3255,34 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                 }
             });
         }
+    }
+    if (column->restoreScroll >= 0 && state->queue) {
+        // A tab shown again: the column goes back to where it was scrolled.
+        double wanted = column->restoreScroll;
+        column->restoreScroll = -1;
+        state->queue.TryEnqueue([column, wanted]() {
+            WindowState* state = StateForThisThread(false);
+            if (!state || !state->on || g_unloading) {
+                return;
+            }
+            try {
+                bool known = false;
+                for (auto& c : state->columns) {
+                    known = known || c.get() == column;
+                }
+                if (!known) {
+                    return;
+                }
+                column->list.UpdateLayout();
+                auto scroller = FindListScroller(column->list, 0);
+                if (scroller) {
+                    scroller.ChangeView(nullptr, std::min(wanted, scroller.ScrollableHeight()),
+                                        nullptr, true);
+                }
+            } catch (...) {
+                LogHresult(L"restoring a column's scroll");
+            }
+        });
     }
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
@@ -7620,6 +7650,10 @@ void SaveTabSnapshot(WindowState* state, HWND tab) {
         }
         saved.width = column->list ? column->list.Width() : 0;
         saved.userSized = column->userSized;
+        {
+            auto scroller = column->list ? FindListScroller(column->list, 0) : nullptr;
+            saved.scroll = scroller ? scroller.VerticalOffset() : 0;
+        }
         snapshot.columns.push_back(std::move(saved));
     }
     Out(L"tab left: %d column(s) kept", (int)snapshot.columns.size());
@@ -7671,6 +7705,7 @@ bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
             if (saved.selected) {
                 column->selectedChild = std::move(saved.selected);
             }
+            column->restoreScroll = saved.scroll;
             if (saved.userSized && saved.width > 0 && column->list) {
                 column->list.Width(saved.width);
                 column->userSized = true;
@@ -7724,14 +7759,16 @@ bool HandleTabSwitch(WindowState* state, HWND tab, HWND fileList) {
         state->lastFileList = fileList;
         return true;
     }
-    if (wasHidden || !known) {
-        // No columns kept for this tab: start from the folder it shows.
-        RebuildFromExplorer(state);
-        SetActiveColumn(state, 0);
-        state->lastFileList = fileList;
-        return true;
-    }
-    return false;
+    // No columns kept for this tab: start from the folder it shows. The old
+    // columns are cleared first, since a rebuild would keep them on screen
+    // until the new ones are in, and they belong to another tab.
+    state->building = true;
+    RemoveColumnsFrom(state, 0);
+    state->building = false;
+    RebuildFromExplorer(state);
+    SetActiveColumn(state, 0);
+    state->lastFileList = fileList;
+    return true;
 }
 
 void OnTick() {
@@ -8429,7 +8466,7 @@ void ShowPanel(WindowState* state) {
 
         step = L"starting the timer";
         auto timer = state->queue.CreateTimer();
-        timer.Interval(std::chrono::milliseconds(120));
+        timer.Interval(std::chrono::milliseconds(60));
         state->tickToken = timer.Tick(
             [](mud::DispatcherQueueTimer const&, Inspectable const&) {
                 OnTick();
@@ -9203,7 +9240,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.8.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.8.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -58,6 +58,7 @@ struct Column {
     std::vector<muxc::FontIcon> headerIcons;
     std::vector<std::wstring> collapsed;
     Pidl selectedChild;                 // Restored after a reload.
+    double restoreScroll = -1;          // A scroll offset to put back once the rows are in.
     unsigned generation = 0;
     bool userSized = false;
     double charWidth = 7;
@@ -139,6 +140,7 @@ struct Worker;
 
 // The columns of a tab that is not showing, kept to put back when it is.
 struct TabColumnSnapshot {
+    double scroll = 0;  // The column's vertical scroll offset.
     Pidl folder;
     Pidl selected;
     double width = 0;

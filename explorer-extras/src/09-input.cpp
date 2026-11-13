@@ -1341,6 +1341,10 @@ void SaveTabSnapshot(WindowState* state, HWND tab) {
         }
         saved.width = column->list ? column->list.Width() : 0;
         saved.userSized = column->userSized;
+        {
+            auto scroller = column->list ? FindListScroller(column->list, 0) : nullptr;
+            saved.scroll = scroller ? scroller.VerticalOffset() : 0;
+        }
         snapshot.columns.push_back(std::move(saved));
     }
     Out(L"tab left: %d column(s) kept", (int)snapshot.columns.size());
@@ -1392,6 +1396,7 @@ bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
             if (saved.selected) {
                 column->selectedChild = std::move(saved.selected);
             }
+            column->restoreScroll = saved.scroll;
             if (saved.userSized && saved.width > 0 && column->list) {
                 column->list.Width(saved.width);
                 column->userSized = true;
@@ -1445,14 +1450,16 @@ bool HandleTabSwitch(WindowState* state, HWND tab, HWND fileList) {
         state->lastFileList = fileList;
         return true;
     }
-    if (wasHidden || !known) {
-        // No columns kept for this tab: start from the folder it shows.
-        RebuildFromExplorer(state);
-        SetActiveColumn(state, 0);
-        state->lastFileList = fileList;
-        return true;
-    }
-    return false;
+    // No columns kept for this tab: start from the folder it shows. The old
+    // columns are cleared first, since a rebuild would keep them on screen
+    // until the new ones are in, and they belong to another tab.
+    state->building = true;
+    RemoveColumnsFrom(state, 0);
+    state->building = false;
+    RebuildFromExplorer(state);
+    SetActiveColumn(state, 0);
+    state->lastFileList = fileList;
+    return true;
 }
 
 void OnTick() {
@@ -2150,7 +2157,7 @@ void ShowPanel(WindowState* state) {
 
         step = L"starting the timer";
         auto timer = state->queue.CreateTimer();
-        timer.Interval(std::chrono::milliseconds(120));
+        timer.Interval(std::chrono::milliseconds(60));
         state->tickToken = timer.Tick(
             [](mud::DispatcherQueueTimer const&, Inspectable const&) {
                 OnTick();
