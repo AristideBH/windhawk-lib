@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.16
+// @version         0.3.17
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2902,12 +2902,23 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
         const wchar_t* text;
         bool enabled;
     };
+    // The Desktop's properties are the Personalization page of Settings.
+    bool desktop = ILIsEmpty(column->folder.get());
+    if (!desktop) {
+        PIDLIST_ABSOLUTE known = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_Desktop, 0, nullptr,
+                                             &known)) &&
+            known) {
+            desktop = ILIsEqual(known, column->folder.get());
+            CoTaskMemFree(known);
+        }
+    }
     Item items[] = {
         {L"paste", L"Paste", ClipboardHasFiles()},
         {L"newfolder", L"New folder", true},
         {nullptr, nullptr, false},
         {L"refresh", L"Refresh", true},
-        {L"properties", L"Properties", true},
+        {L"properties", desktop ? L"Personalize" : L"Properties", true},
     };
     for (auto& item : items) {
         if (!item.id) {
@@ -3197,8 +3208,79 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
     return hr;
 }
 
+// Paste the clipboard into a folder the way a drop does, through the folder's
+// own drop target. The "paste" verb of the context menu made Explorer's view
+// jump to another folder afterwards.
 HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
-    return InvokeVerbOnFolder(state, folder, "paste");
+    // In case Explorer's view jumps anyway, remember where it was.
+    state->pasteReturn.reset();
+    if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+        Pidl now = CurrentFolder(browser);
+        if (now) {
+            state->pasteReturn.reset(ILClone(now.get()));
+        }
+    }
+    state->pasteGuardUntil = GetTickCount64() + 3000;
+
+    IShellFolder* target = nullptr;
+    HRESULT hr = ILIsEmpty(folder)
+                     ? SHGetDesktopFolder(&target)
+                     : SHBindToObject(nullptr, folder, nullptr,
+                                      IID_PPV_ARGS(&target));
+    if (FAILED(hr) || !target) {
+        return hr;
+    }
+    IDropTarget* drop = nullptr;
+    hr = target->CreateViewObject(state->topLevel, IID_PPV_ARGS(&drop));
+    target->Release();
+    IDataObject* data = nullptr;
+    if (SUCCEEDED(hr) && drop) {
+        hr = OleGetClipboard(&data);
+    }
+    if (FAILED(hr) || !drop || !data) {
+        if (drop) {
+            drop->Release();
+        }
+        if (data) {
+            data->Release();
+        }
+        Out(L"paste: no drop target or clipboard (hr=0x%08lX), using the verb", hr);
+        return InvokeVerbOnFolder(state, folder, "paste");
+    }
+
+    // Cut items move, copied items copy.
+    DWORD effect = DROPEFFECT_COPY;
+    static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+    FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1,
+                        TYMED_HGLOBAL};
+    STGMEDIUM medium = {};
+    if (data->GetData(&wanted, &medium) == S_OK) {
+        if (medium.hGlobal) {
+            if (DWORD* value = (DWORD*)GlobalLock(medium.hGlobal)) {
+                if (*value & DROPEFFECT_MOVE) {
+                    effect = DROPEFFECT_MOVE;
+                }
+                GlobalUnlock(medium.hGlobal);
+            }
+        }
+        ReleaseStgMedium(&medium);
+    }
+    POINTL where = {0, 0};
+    DWORD allowed = effect;
+    hr = drop->DragEnter(data, MK_LBUTTON, where, &allowed);
+    if (SUCCEEDED(hr) && allowed != DROPEFFECT_NONE) {
+        hr = drop->Drop(data, 0, where, &allowed);
+        if (SUCCEEDED(hr) && effect == DROPEFFECT_MOVE) {
+            OleSetClipboard(nullptr);
+        }
+    } else {
+        drop->DragLeave();
+    }
+    Out(L"paste as %s: hr=0x%08lX", effect == DROPEFFECT_MOVE ? L"move" : L"copy",
+        hr);
+    data->Release();
+    drop->Release();
+    return hr;
 }
 
 // A click on the empty space of a column makes it the active one: Explorer's
@@ -3330,15 +3412,6 @@ void OnColumnKey(muxc::ListView const& list,
                 target.reset(ILCombine(column->folder.get(),
                                        column->entries[picked[0]].child.get()));
             }
-            // Where Explorer's view is now, to send it back if it jumps.
-            state->pasteReturn.reset();
-            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
-                Pidl now = CurrentFolder(browser);
-                if (now) {
-                    state->pasteReturn.reset(ILClone(now.get()));
-                }
-            }
-            state->pasteGuardUntil = GetTickCount64() + 3000;
             HRESULT hr = target ? PasteIntoFolder(state, target.get()) : E_FAIL;
             Out(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
             keep();
@@ -3695,7 +3768,7 @@ void OnTick() {
 
         // A watched folder changed on disk: read the columns again.
         // At most one reload every two seconds, however busy the folder is.
-        if (state->reloadDue && now >= state->reloadDue &&
+        if (state->reloadDue && now >= state->reloadDue && !state->rename &&
             now - state->lastReload >= 2000) {
             state->reloadDue = 0;
             state->lastReload = now;
@@ -4666,7 +4739,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.17 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -97,6 +97,12 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column, until a different folder is chosen in that column or a parent.
       Keep the focused column smoothly in view, no jump.
 - [ ] Rename several items at once, like Explorer's own.
+- [ ] A click on an item of the navigation pane (Home, Gallery, pinned and
+      cloud folders, not the expandable tree) makes that folder the first
+      column. A setting, off by default. Needs a short recon first: how to
+      tell a pane click from Explorer following a column, Back or Up. Today
+      the column view is rebuilt with that folder when it is outside the
+      current chain, and re-expands the chain when it is inside it.
 - [ ] Selection by drawing a rectangle: click and drag from the empty space
       of a column. Also when the column is full to the bottom, so it needs a
       strip that is always empty, such as a gutter beside the rows or a
