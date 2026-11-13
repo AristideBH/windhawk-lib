@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.26
+// @version         0.3.27
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1744,7 +1744,9 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
 // WinUI NavigationView. A column resized or scrolled sideways only repositions
 // it, with no animation.
 void UpdatePill(WindowState* state, bool animate) {
-    if (!state->pill || !state->strip) {
+    // During a rebuild the new first column is hidden and not yet fitted:
+    // leave the pill where it is until the swap, which moves it once.
+    if (!state->pill || !state->strip || state->swapOld) {
         return;
     }
     try {
@@ -2419,6 +2421,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
                 Column* column = state->columns[index].get();
                 column->userSized = true;
                 column->list.Width(width);
+                UpdatePill(state, false);  // Follows the drag, frame by frame.
             } catch (...) {
                 LogHresult(L"resizing a column");
             }
@@ -2465,6 +2468,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
                 column->userSized = false;
                 FitWidth(column);
                 RefreshNames(column);
+                UpdatePill(state, false);
                 Out(L"column %d refitted to %d", index + 1,
                     (int)column->list.Width());
             } catch (...) {
@@ -2537,9 +2541,8 @@ void CompleteSwap(WindowState* state) {
         if (!state->columns.empty() && state->columns[0]->cell) {
             state->columns[0]->cell.Visibility(mux::Visibility::Visible);
         }
-        state->pillLeft = -1;
+        // The pill glides from where it was to the new first column.
         SetActiveColumn(state, 0);
-        UpdatePill(state, false);
     } catch (...) {
         LogHresult(L"CompleteSwap");
     }
@@ -5248,7 +5251,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.26 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.27 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
