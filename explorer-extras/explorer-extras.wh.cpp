@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.5
+// @version         0.7.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2751,6 +2751,7 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
 // Fills a column's list from freshly loaded data.
 void CancelRename(WindowState* state);
 void BeginRename(WindowState* state, Column* column, size_t entryIndex);
+muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth = 0);
 void OnRowSelected(muxc::ListView const& list);
 
 // Explorer's own in-place rename box: a visible Edit control inside its file
@@ -3048,6 +3049,18 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                     }
                     if (known) {
                         column->list.ScrollIntoView(column->list.Items().GetAt((uint32_t)first));
+                        // Then centre the first extracted row in the column.
+                        column->list.UpdateLayout();
+                        auto scroller = FindListScroller(column->list, 0);
+                        auto container = column->list.ContainerFromIndex(first)
+                                             .try_as<mux::FrameworkElement>();
+                        if (scroller && container) {
+                            double top = container.TransformToVisual(scroller)
+                                             .TransformPoint({0, 0}).Y;
+                            double offset = scroller.VerticalOffset() + top -
+                                            (scroller.ViewportHeight() - container.ActualHeight()) / 2;
+                            scroller.ChangeView(nullptr, std::max(0.0, offset), nullptr, false);
+                        }
                         OnRowSelected(column->list);
                     }
                 } catch (...) {
@@ -5993,7 +6006,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
 
 // ---- Selection by a rectangle ----
 
-muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth = 0) {
+muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth) {
     if (!node || depth > 8) {
         return nullptr;
     }
@@ -8626,7 +8639,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
