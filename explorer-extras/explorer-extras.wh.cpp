@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.8
+// @version         0.3.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1088,6 +1088,7 @@ struct Column {
     winrt::event_token gripEnteredToken{};
     winrt::event_token gripExitedToken{};
     winrt::event_token rightTapToken{};
+    winrt::event_token tapToken{};
     muxc::Border pill{nullptr};
     ULONGLONG hoverSince = 0;
     ULONG notifyId = 0;
@@ -1180,6 +1181,14 @@ struct WindowState {
     Pidl selectFolder;  // A file to select in Explorer's view,
     Pidl selectChild;   // once it shows that folder.
     std::vector<Pidl> selectExtra;  // More items to add to that selection.
+    // Cut items, dimmed until the clipboard changes.
+    Pidl cutFolder;
+    std::vector<Pidl> cutChildren;
+    DWORD cutSeq = 0;
+    // The column to keep keyboard focus in, for a moment after a key, since
+    // Explorer's own view takes focus when it navigates.
+    Column* focusColumn = nullptr;
+    ULONGLONG focusUntil = 0;
     std::wstring typed;     // Type to jump: what has been typed,
     ULONGLONG typedAt = 0;  // and when the last key came.
     int selectTries = 0;
@@ -1486,6 +1495,7 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->list.SelectionChanged(column->selectionToken);
                 column->list.DoubleTapped(column->doubleTapToken);
                 column->list.RightTapped(column->rightTapToken);
+                column->list.Tapped(column->tapToken);
                 column->list.PreviewKeyDown(column->keyToken);
                 column->list.Loaded(column->loadedToken);
             }
@@ -1682,6 +1692,34 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight) {
 // Fills a column's list from freshly loaded data.
 void CancelRename(WindowState* state);
 
+// Dims the rows that were cut, in every column that shows their folder.
+void ApplyCutState(WindowState* state) {
+    for (auto& column : state->columns) {
+        bool same = state->cutFolder &&
+                    ILIsEqual(column->folder.get(), state->cutFolder.get());
+        auto items = column->list.Items();
+        for (size_t r = 0; r < column->rowToEntry.size() && r < items.Size();
+             r++) {
+            int entry = column->rowToEntry[r];
+            if (entry < 0) {
+                continue;
+            }
+            bool cut = false;
+            if (same) {
+                for (auto& child : state->cutChildren) {
+                    if (ILIsEqual(child.get(), column->entries[entry].child.get())) {
+                        cut = true;
+                        break;
+                    }
+                }
+            }
+            if (auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+                item.Opacity(cut ? 0.45 : 1.0);
+            }
+        }
+    }
+}
+
 void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     if (state->rename && state->rename->column == column) {
         CancelRename(state);
@@ -1730,6 +1768,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     }
     if (selectRow >= 0) {
         column->list.SelectedIndex(selectRow);
+    }
+    if (state->cutFolder) {
+        ApplyCutState(state);
     }
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
@@ -1828,6 +1869,8 @@ void OnRowSelected(muxc::ListView const& list);
 void OnRowDoubleTapped(muxc::ListView const& list);
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args);
+void OnColumnBackgroundTapped(muxc::ListView const& list,
+                              mux::Input::TappedRoutedEventArgs const& args);
 void OnColumnKey(muxc::ListView const& list,
                  mux::Input::KeyRoutedEventArgs const& args);
 
@@ -1854,6 +1897,14 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
            mux::Input::DoubleTappedRoutedEventArgs const&) {
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnRowDoubleTapped(list);
+            }
+        });
+    // The empty space is hit-testable, so a click on it can pick the column.
+    list.Background(Brush(0, 0, 0, 0));
+    column->tapToken = list.Tapped(
+        [](Inspectable const& sender, mux::Input::TappedRoutedEventArgs const& args) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnColumnBackgroundTapped(list, args);
             }
         });
     column->rightTapToken = list.RightTapped(
@@ -2201,6 +2252,27 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+
+        // Group headers and the "more items" row can't be selected, as when
+        // Shift-click selects a range across them.
+        {
+            auto items = list.Items();
+            auto selected = list.SelectedItems();
+            state->building = true;
+            for (uint32_t r = 0; r < items.Size() && r < column->rowToEntry.size();
+                 r++) {
+                if (column->rowToEntry[r] >= 0) {
+                    continue;
+                }
+                auto object = items.GetAt(r);
+                uint32_t at = 0;
+                if (selected.IndexOf(object, at)) {
+                    selected.RemoveAt(at);
+                }
+            }
+            state->building = false;
+        }
+
         int row = list.SelectedIndex();
         int entryIndex = row >= 0 && row < (int)column->rowToEntry.size()
                              ? column->rowToEntry[row]
@@ -2455,6 +2527,18 @@ bool CopyOrCut(WindowState* state, Column* column,
     }
     hr = OleSetClipboard(data);
     data->Release();
+    if (SUCCEEDED(hr)) {
+        state->cutChildren.clear();
+        state->cutFolder.reset();
+        if (cut) {
+            state->cutFolder.reset(ILClone(column->folder.get()));
+            for (PCUITEMID_CHILD child : children) {
+                state->cutChildren.emplace_back(ILClone(child));
+            }
+        }
+        state->cutSeq = GetClipboardSequenceNumber();
+        ApplyCutState(state);
+    }
     Out(L"%s %d item(s): hr=0x%08lX", cut ? L"cut" : L"copy",
         (int)children.size(), hr);
     return SUCCEEDED(hr);
@@ -2758,6 +2842,124 @@ void OnRowDoubleTapped(muxc::ListView const& list) {
     }
 }
 
+// Runs a shell verb such as "delete" or "properties" on items of a column.
+HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
+                          std::vector<size_t> const& entries,
+                          const char* verb) {
+    IShellFolder* parent = nullptr;
+    HRESULT hr = ILIsEmpty(column->folder.get())
+                     ? SHGetDesktopFolder(&parent)
+                     : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                      IID_PPV_ARGS(&parent));
+    if (FAILED(hr) || !parent) {
+        return hr;
+    }
+    std::vector<PCUITEMID_CHILD> children;
+    for (size_t entry : entries) {
+        if (entry < column->entries.size()) {
+            children.push_back(column->entries[entry].child.get());
+        }
+    }
+    IContextMenu* menu = nullptr;
+    hr = children.empty()
+             ? E_INVALIDARG
+             : parent->GetUIObjectOf(state->topLevel, (UINT)children.size(),
+                                     children.data(), IID_IContextMenu, nullptr,
+                                     (void**)&menu);
+    parent->Release();
+    if (FAILED(hr) || !menu) {
+        return hr;
+    }
+    HMENU hmenu = CreatePopupMenu();
+    hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF,
+                                CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME);
+    if (SUCCEEDED(hr)) {
+        CMINVOKECOMMANDINFO invoke = {};
+        invoke.cbSize = sizeof(invoke);
+        invoke.hwnd = state->topLevel;
+        invoke.lpVerb = verb;
+        invoke.nShow = SW_SHOWNORMAL;
+        hr = menu->InvokeCommand(&invoke);
+    }
+    DestroyMenu(hmenu);
+    menu->Release();
+    return hr;
+}
+
+// Paste into the column's own folder, through that folder's item in its
+// parent, which is the route the right-click menu's Paste took.
+HRESULT PasteIntoColumn(WindowState* state, Column* column) {
+    IShellFolder* parent = nullptr;
+    PCUITEMID_CHILD child = nullptr;
+    HRESULT hr = SHBindToParent(column->folder.get(), IID_PPV_ARGS(&parent),
+                                &child);
+    if (FAILED(hr) || !parent) {
+        return hr;
+    }
+    IContextMenu* menu = nullptr;
+    hr = parent->GetUIObjectOf(state->topLevel, 1, &child, IID_IContextMenu,
+                               nullptr, (void**)&menu);
+    parent->Release();
+    if (FAILED(hr) || !menu) {
+        return hr;
+    }
+    HMENU hmenu = CreatePopupMenu();
+    hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXPLORE);
+    if (SUCCEEDED(hr)) {
+        CMINVOKECOMMANDINFO invoke = {};
+        invoke.cbSize = sizeof(invoke);
+        invoke.hwnd = state->topLevel;
+        invoke.lpVerb = "paste";
+        invoke.nShow = SW_SHOWNORMAL;
+        hr = menu->InvokeCommand(&invoke);
+    }
+    DestroyMenu(hmenu);
+    menu->Release();
+    return hr;
+}
+
+// A click on the empty space of a column makes it the active one: Explorer's
+// own view moves to its folder, so Paste and the panes act there. The columns
+// to its right stay.
+void OnColumnBackgroundTapped(muxc::ListView const& list,
+                              mux::Input::TappedRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        mux::DependencyObject node =
+            args.OriginalSource().try_as<mux::DependencyObject>();
+        for (int i = 0; node && i < 20; i++) {
+            if (node.try_as<muxc::ListViewItem>()) {
+                return;  // A row. The selection handler deals with it.
+            }
+            node = mux::Media::VisualTreeHelper::GetParent(node);
+        }
+        int index = ColumnIndexOfList(state, list);
+        if (index < 0) {
+            return;
+        }
+        Column* column = state->columns[index].get();
+        state->building = true;
+        list.SelectedItems().Clear();
+        state->building = false;
+        column->selectedChild.reset();
+        state->selectFolder.reset();
+        state->selectChild.reset();
+        state->selectExtra.clear();
+        SetActiveColumn(state, index);
+        ScheduleNavigation(state, column->folder.get());
+        state->focusColumn = column;
+        state->focusUntil = GetTickCount64() + 1500;
+        list.Focus(mux::FocusState::Pointer);
+        Out(L"column %d chosen by a click on its empty space", index + 1);
+    } catch (...) {
+        state->building = false;
+        LogHresult(L"OnColumnBackgroundTapped");
+    }
+}
+
 // Selects the next item whose name starts with what was just typed. Typing
 // the same letter again steps through the items with that letter.
 void TypeToJump(Column* column, muxc::ListView const& list, WindowState* state,
@@ -2821,6 +3023,64 @@ void OnColumnKey(muxc::ListView const& list,
                         : -1;
         bool onFolder = entry >= 0 && column->entries[entry].folder;
 
+        // Standard file shortcuts, on the selected items.
+        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+        std::vector<size_t> picked = SelectedEntries(column, list);
+        auto keep = [&]() {
+            state->focusColumn = column;
+            state->focusUntil = GetTickCount64() + 1500;
+            args.Handled(true);
+        };
+        if (ctrl && !alt && (key == VirtualKey::C || key == VirtualKey::X)) {
+            if (!picked.empty()) {
+                CopyOrCut(state, column, picked, key == VirtualKey::X);
+            }
+            keep();
+            return;
+        }
+        if (ctrl && !alt && key == VirtualKey::V) {
+            HRESULT hr = PasteIntoColumn(state, column);
+            Out(L"Ctrl+V into column %d: hr=0x%08lX", index + 1, hr);
+            keep();
+            return;
+        }
+        if (key == VirtualKey::Delete && !picked.empty()) {
+            HRESULT hr = InvokeVerbOnItems(state, column, picked, "delete");
+            Out(L"Delete %d item(s): hr=0x%08lX", (int)picked.size(), hr);
+            keep();
+            return;
+        }
+        if (key == VirtualKey::F2 && picked.size() == 1) {
+            BeginRename(state, column, picked[0]);
+            args.Handled(true);
+            return;
+        }
+        if (alt && key == VirtualKey::Enter && !picked.empty()) {
+            InvokeVerbOnItems(state, column, picked, "properties");
+            args.Handled(true);
+            return;
+        }
+        if (ctrl && !alt && (key == VirtualKey::Z || key == VirtualKey::Y)) {
+            // Explorer's own view owns the undo stack. Pass the key to it.
+            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+                IShellView* view = nullptr;
+                if (SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
+                    MSG msg = {};
+                    msg.hwnd = state->topLevel;
+                    msg.message = WM_KEYDOWN;
+                    msg.wParam = (WPARAM)(key == VirtualKey::Z ? 'Z' : 'Y');
+                    msg.lParam = 1;
+                    HRESULT hr = view->TranslateAccelerator(&msg);
+                    Out(L"%s passed to Explorer's view: hr=0x%08lX",
+                        key == VirtualKey::Z ? L"Undo" : L"Redo", hr);
+                    view->Release();
+                }
+            }
+            keep();
+            return;
+        }
+
         // Letters and digits jump to a name. Ctrl and Alt shortcuts are left
         // alone.
         int code = (int)key;
@@ -2833,7 +3093,7 @@ void OnColumnKey(muxc::ListView const& list,
         if (typedChar && !(GetKeyState(VK_CONTROL) & 0x8000) &&
             !(GetKeyState(VK_MENU) & 0x8000)) {
             TypeToJump(column, list, state, typedChar);
-            args.Handled(true);
+            keep();
             return;
         }
 
@@ -2841,6 +3101,8 @@ void OnColumnKey(muxc::ListView const& list,
             if (index > 0) {
                 SetActiveColumn(state, index - 1);
                 state->columns[index - 1]->list.Focus(mux::FocusState::Keyboard);
+                state->focusColumn = state->columns[index - 1].get();
+                state->focusUntil = GetTickCount64() + 1500;
                 args.Handled(true);
             }
             return;
@@ -2864,6 +3126,8 @@ void OnColumnKey(muxc::ListView const& list,
             }
             SetActiveColumn(state, index + 1);
             child->list.Focus(mux::FocusState::Keyboard);
+            state->focusColumn = child;
+            state->focusUntil = GetTickCount64() + 1500;
             args.Handled(true);
         }
     } catch (...) {
@@ -3165,6 +3429,27 @@ void OnTick() {
                 state->spec = after;
                 ReloadAll(state);
             }
+        }
+
+        // The clipboard changed: nothing is cut any more.
+        if (state->cutFolder && GetClipboardSequenceNumber() != state->cutSeq) {
+            state->cutFolder.reset();
+            state->cutChildren.clear();
+            ApplyCutState(state);
+        }
+        // Explorer's view takes focus when it follows a column. Keep it in
+        // the column the user is typing in.
+        if (state->focusColumn && GetTickCount64() < state->focusUntil &&
+            !state->rename && !state->context) {
+            bool known = false;
+            for (auto& c : state->columns) {
+                known = known || c.get() == state->focusColumn;
+            }
+            if (known) {
+                state->focusColumn->list.Focus(mux::FocusState::Programmatic);
+            }
+        } else {
+            state->focusColumn = nullptr;
         }
 
         // Ask the shell where Explorer is only when something suggests a
@@ -3991,7 +4276,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
