@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.9
+// @version         0.4.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -129,6 +129,7 @@ Not yet: drag and drop.
 #include <winrt/Microsoft.UI.Text.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Data.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
@@ -1345,6 +1346,9 @@ struct Column {
     int hintEntry = -1;  // The entry whose chevron is shown stronger.
     int hoverHeader = -1;  // The group header under the pointer.
     winrt::event_token moveToken{};
+    winrt::event_token pressToken{};
+    winrt::event_token releaseToken{};
+    winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
     std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
@@ -1485,6 +1489,19 @@ struct WindowState {
     size_t swapOld = 0;
     unsigned swapGeneration = 0;
     ULONGLONG swapDeadline = 0;
+    // Selection by a rectangle, drawn on the layer over the strip.
+    struct Band {
+        bool pending = false;  // Pressed on empty space, not yet moved far.
+        bool active = false;   // Dragging.
+        bool additive = false; // Ctrl was down: keep what was selected.
+        Column* column = nullptr;
+        winrt::Windows::Foundation::Point start{};  // List coordinates.
+        double startOffset = 0;                     // Scroll offset at the press.
+        std::vector<double> top, bottom;            // Row extents, content coordinates.
+        std::vector<int> base;                      // Rows selected at the start.
+        int first = -1, last = -1;                  // The rows the rectangle covers.
+    } band;
+    muxc::Border bandBox{nullptr};
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
     muxc::Border pill{nullptr};
@@ -1852,6 +1869,9 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->list.Tapped(column->tapToken);
                 column->list.PointerMoved(column->moveToken);
                 column->list.PointerExited(column->exitToken);
+                column->list.PointerPressed(column->pressToken);
+                column->list.PointerReleased(column->releaseToken);
+                column->list.PointerCaptureLost(column->captureLostToken);
                 column->list.PreviewKeyDown(column->keyToken);
                 column->list.Loaded(column->loadedToken);
             }
@@ -2029,7 +2049,7 @@ double MeasureText(const std::wstring& text) {
 
 // Space a row uses besides the name: icon, chevron, padding and the list's
 // own margins.
-const double kRowChrome = 24 + 16 + 18 + 22;
+const double kRowChrome = 24 + 16 + 18 + 22 + 10;  // The last 10 is the gutter.
 
 // Sets the column's width from its longest names, unless the user sized it.
 void FitWidth(Column* column) {
@@ -2580,6 +2600,8 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
 void OnColumnPointerMoved(muxc::ListView const& list,
                           mux::Input::PointerRoutedEventArgs const& args);
 void OnColumnPointerExited(muxc::ListView const& list);
+void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArgs const& args);
+void OnBandReleased(muxc::ListView const& list);
 void OnColumnKey(muxc::ListView const& list,
                  mux::Input::KeyRoutedEventArgs const& args);
 
@@ -2593,7 +2615,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
     muxc::ListView list;
     list.Width(g_minWidth);
     list.SelectionMode(muxc::ListViewSelectionMode::Extended);
-    list.Padding(mux::Thickness{0, 12, 0, 4});
+    list.Padding(mux::Thickness{0, 12, 10, 4});
     column->selectionToken = list.SelectionChanged(
         [](Inspectable const& sender,
            muxc::SelectionChangedEventArgs const&) {
@@ -2635,6 +2657,24 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
         [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnColumnPointerMoved(list, args);
+            }
+        });
+    column->pressToken = list.PointerPressed(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnBandPressed(list, args);
+            }
+        });
+    column->releaseToken = list.PointerReleased(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnBandReleased(list);
+            }
+        });
+    column->captureLostToken = list.PointerCaptureLost(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnBandReleased(list);
             }
         });
     column->exitToken = list.PointerExited(
@@ -4460,6 +4500,8 @@ void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
 }
 
 muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex);
+bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
+                 mux::Input::PointerRoutedEventArgs const& args);
 
 void OnColumnPointerMoved(muxc::ListView const& list,
                           mux::Input::PointerRoutedEventArgs const& args) {
@@ -4473,6 +4515,9 @@ void OnColumnPointerMoved(muxc::ListView const& list,
             return;
         }
         Column* column = state->columns[index].get();
+        if (OnBandMoved(state, column, list, args)) {
+            return;  // A rectangle is being drawn.
+        }
         if (column->rowGroup.empty()) {
             return;
         }
@@ -4590,7 +4635,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
     name.Text(entry.name);
     name.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     name.TextWrapping(mux::TextWrapping::Wrap);
-    name.MaxWidth(380);
+    name.MaxWidth(323);
     panel.Children().Append(name);
     if (!lines.empty()) {
         muxc::Grid grid;
@@ -4615,7 +4660,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
             value.FontSize(12);
             value.Margin(mux::Thickness{0, 1, 0, 1});
             value.TextWrapping(mux::TextWrapping::Wrap);
-            value.MaxWidth(260);
+            value.MaxWidth(221);
             muxc::Grid::SetRow(value, (int)i);
             muxc::Grid::SetColumn(value, 1);
             grid.Children().Append(label);
@@ -4626,6 +4671,269 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
     muxc::ToolTip tip;
     tip.Content(panel);
     return tip;
+}
+
+// ---- Selection by a rectangle ----
+
+muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth = 0) {
+    if (!node || depth > 8) {
+        return nullptr;
+    }
+    if (auto viewer = node.try_as<muxc::ScrollViewer>()) {
+        return viewer;
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = FindListScroller(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// Where each row sits in the list's scrolled content. Computed from the row
+// heights and corrected by a row that is on screen, since rows off screen may
+// not have been laid out.
+void MeasureRows(Column* column, muxc::ListView const& list, double offset,
+                 std::vector<double>* top, std::vector<double>* bottom) {
+    auto items = list.Items();
+    size_t count = std::min<size_t>(items.Size(), column->rowToEntry.size());
+    std::vector<double> cumulative(count + 1, 0.0);
+    std::vector<char> shown(count, 0);
+    for (size_t r = 0; r < count; r++) {
+        double height = 0;
+        if (auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+            if (item.Visibility() == mux::Visibility::Visible) {
+                shown[r] = 1;
+                height = column->rowToEntry[r] >= 0 ? column->rowHeight
+                         : column->rowGroup[r] >= 0 ? column->rowHeight + 4
+                                                    : column->rowHeight;
+            }
+        }
+        cumulative[r + 1] = cumulative[r] + height;
+    }
+    double base = 12;  // The list's top padding, if no row can be measured.
+    for (size_t r = 0; r < count; r++) {
+        auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
+        if (item && shown[r] && item.ActualHeight() > 0) {
+            double y = item.TransformToVisual(list)
+                           .TransformPoint(winrt::Windows::Foundation::Point{0, 0})
+                           .Y;
+            base = y + offset - cumulative[r];
+            break;
+        }
+    }
+    top->assign(count, 0);
+    bottom->assign(count, 0);
+    for (size_t r = 0; r < count; r++) {
+        (*top)[r] = shown[r] ? base + cumulative[r] : -1;
+        (*bottom)[r] = shown[r] ? base + cumulative[r + 1] : -1;
+    }
+}
+
+void EndBand(WindowState* state, bool apply) {
+    auto& band = state->band;
+    bool wasActive = band.active;
+    Column* column = band.column;
+    band.pending = false;
+    band.active = false;
+    band.column = nullptr;
+    band.top.clear();
+    band.bottom.clear();
+    band.base.clear();
+    if (state->bandBox) {
+        state->bandBox.Opacity(0);
+    }
+    if (wasActive && apply) {
+        for (size_t i = 0; i < state->columns.size(); i++) {
+            if (state->columns[i].get() == column) {
+                // Now that the selection is settled, tell the rest: Explorer's
+                // view, the stale look, the new column.
+                column->list.ReleasePointerCaptures();
+                OnRowSelected(column->list);
+                break;
+            }
+        }
+    }
+}
+
+void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading || state->rename) {
+        return;
+    }
+    try {
+        auto point = args.GetCurrentPoint(list);
+        if (!point.Properties().IsLeftButtonPressed()) {
+            return;
+        }
+        // On a row, the list selects as usual. Empty space, the gutter and
+        // group headers start a rectangle.
+        mux::DependencyObject node =
+            args.OriginalSource().try_as<mux::DependencyObject>();
+        for (int i = 0; node && i < 20; i++) {
+            if (node.try_as<muxc::ListViewItem>()) {
+                return;
+            }
+            node = mux::Media::VisualTreeHelper::GetParent(node);
+        }
+        int index = ColumnIndexOfList(state, list);
+        if (index < 0) {
+            return;
+        }
+        Column* column = state->columns[index].get();
+        auto scroller = FindListScroller(list);
+        auto& band = state->band;
+        band.pending = true;
+        band.active = false;
+        band.additive = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        band.column = column;
+        band.start = point.Position();
+        band.startOffset = scroller ? scroller.VerticalOffset() : 0;
+        band.first = band.last = -1;
+    } catch (...) {
+        LogHresult(L"OnBandPressed");
+    }
+}
+
+// Returns true while a rectangle is being drawn, so the hover code stands aside.
+bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
+                 mux::Input::PointerRoutedEventArgs const& args) {
+    auto& band = state->band;
+    if (!band.pending && !band.active) {
+        return false;
+    }
+    if (band.column != column) {
+        return band.active;
+    }
+    auto point = args.GetCurrentPoint(list);
+    if (!point.Properties().IsLeftButtonPressed()) {
+        EndBand(state, band.active);
+        return false;
+    }
+    auto at = point.Position();
+    if (band.pending) {
+        double moved = std::abs(at.X - band.start.X) + std::abs(at.Y - band.start.Y);
+        if (moved < 6) {
+            return false;  // Still a click.
+        }
+        // A drag: take the pointer, remember the rows, start from the selection
+        // the user wants to keep.
+        band.pending = false;
+        band.active = true;
+        list.CapturePointer(args.Pointer());
+        auto scroller = FindListScroller(list);
+        MeasureRows(column, list, scroller ? scroller.VerticalOffset() : 0, &band.top, &band.bottom);
+        band.base.clear();
+        auto items = list.Items();
+        for (uint32_t r = 0; r < items.Size(); r++) {
+            auto item = items.GetAt(r).try_as<muxc::ListViewItem>();
+            if (band.additive && item && item.IsSelected()) {
+                band.base.push_back((int)r);
+            }
+        }
+        if (!band.additive) {
+            bool wasBuilding = state->building;
+            state->building = true;
+            list.SelectedItems().Clear();
+            state->building = wasBuilding;
+        }
+        LiftStale(state, ColumnIndexOfList(state, list));
+        SetActiveColumn(state, ColumnIndexOfList(state, list));
+        Out(L"selection rectangle started in column %d", ColumnIndexOfList(state, list) + 1);
+    }
+
+    auto scroller = FindListScroller(list);
+    double offset = scroller ? scroller.VerticalOffset() : 0;
+    double view = scroller ? scroller.ViewportHeight() : list.ActualHeight();
+    // Near the top or bottom edge the list scrolls.
+    if (scroller) {
+        if (at.Y < 24 && offset > 0) {
+            scroller.ChangeView(nullptr, std::max(0.0, offset - 22), nullptr, true);
+        } else if (at.Y > view - 24) {
+            scroller.ChangeView(nullptr, offset + 22, nullptr, true);
+        }
+    }
+    // The rectangle in content coordinates, and the rows it touches.
+    double startY = band.start.Y + band.startOffset;
+    double nowY = at.Y + offset;
+    double yMin = std::min(startY, nowY), yMax = std::max(startY, nowY);
+    int first = -1, last = -1;
+    for (size_t r = 0; r < band.top.size(); r++) {
+        if (band.top[r] < 0 || band.bottom[r] <= yMin || band.top[r] >= yMax) {
+            continue;
+        }
+        if (column->rowToEntry[r] < 0) {
+            continue;  // Headers and the "more items" row are not selected.
+        }
+        if (first < 0) {
+            first = (int)r;
+        }
+        last = (int)r;
+    }
+    if (first != band.first || last != band.last) {
+        bool wasBuilding = state->building;
+        state->building = true;
+        auto items = list.Items();
+        // Between the first and last covered row, the rows that are items.
+        auto selected = list.SelectedItems();
+        if (!band.additive) {
+            selected.Clear();
+        } else {
+            selected.Clear();
+            for (int r : band.base) {
+                list.SelectRange(winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(r, 1));
+            }
+        }
+        if (first >= 0) {
+            list.SelectRange(winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(
+                first, (uint32_t)(last - first + 1)));
+            // Headers inside the range are dropped again.
+            for (int r = first; r <= last; r++) {
+                if (column->rowToEntry[r] < 0 || items.GetAt(r).try_as<muxc::ListViewItem>().Visibility() !=
+                                                      mux::Visibility::Visible) {
+                    list.DeselectRange(winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(r, 1));
+                }
+            }
+        }
+        state->building = wasBuilding;
+        band.first = first;
+        band.last = last;
+    }
+
+    // The rectangle on screen, in the strip's coordinates.
+    try {
+        double width = list.ActualWidth(), height = list.ActualHeight();
+        double x0 = std::max(0.0, std::min(band.start.X, (double)at.X));
+        double x1 = std::min(width, std::max(band.start.X, (double)at.X));
+        double y0 = std::max(0.0, std::min(startY - offset, (double)at.Y));
+        double y1 = std::min(height, std::max(startY - offset, (double)at.Y));
+        auto origin = list.TransformToVisual(state->strip)
+                          .TransformPoint(winrt::Windows::Foundation::Point{(float)x0, (float)y0});
+        muxc::Canvas::SetLeft(state->bandBox, origin.X);
+        muxc::Canvas::SetTop(state->bandBox, origin.Y);
+        state->bandBox.Width(std::max(1.0, x1 - x0));
+        state->bandBox.Height(std::max(1.0, y1 - y0));
+        state->bandBox.Opacity(1);
+    } catch (...) {
+        LogHresult(L"drawing the selection rectangle");
+    }
+    return true;
+}
+
+void OnBandReleased(muxc::ListView const& list) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        if (state->band.pending || state->band.active) {
+            EndBand(state, state->band.active);
+        }
+    } catch (...) {
+        state->band = {};
+        LogHresult(L"OnBandReleased");
+    }
 }
 
 // Opens or collapses the group of a header row.
@@ -5112,6 +5420,8 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     state->strip = nullptr;
     state->pill = nullptr;
     state->overlay = nullptr;
+    state->bandBox = nullptr;
+    state->band = {};
     state->lastSeen.reset();
     state->expected.reset();
     state->pendingNav.reset();
@@ -5184,6 +5494,7 @@ void AbandonWindow(WindowState* state) {
     (void)winrt::detach_abi(state->strip);
     (void)winrt::detach_abi(state->pill);
     (void)winrt::detach_abi(state->overlay);
+    (void)winrt::detach_abi(state->bandBox);
     (void)winrt::detach_abi(state->menuItem);
     (void)winrt::detach_abi(state->menuItems);
     state->topLevel = nullptr;
@@ -5649,6 +5960,23 @@ void ShowPanel(WindowState* state) {
         muxc::Canvas::SetTop(pill, 5);
         muxc::Canvas::SetLeft(pill, 0);
         overlay.Children().Append(pill);
+        // The selection rectangle: a soft accent fill with a thin edge.
+        muxc::Border bandBox;
+        bandBox.IsHitTestVisible(false);
+        bandBox.Opacity(0);
+        bandBox.CornerRadius(mux::CornerRadius{3, 3, 3, 3});
+        bandBox.BorderThickness(mux::Thickness{1, 1, 1, 1});
+        try {
+            auto accent = winrt::Windows::UI::ViewManagement::UISettings().GetColorValue(
+                winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+            bandBox.Background(Brush(48, accent.R, accent.G, accent.B));
+            bandBox.BorderBrush(Brush(170, accent.R, accent.G, accent.B));
+        } catch (...) {
+            bandBox.Background(Brush(48, 0, 120, 212));
+            bandBox.BorderBrush(Brush(170, 0, 120, 212));
+        }
+        overlay.Children().Append(bandBox);
+        state->bandBox = bandBox;
         content.Children().Append(overlay);
         state->overlay = overlay;
         state->pill = pill;
@@ -6475,7 +6803,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
