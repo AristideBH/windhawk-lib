@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.5
+// @version         0.4.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -420,6 +420,22 @@ struct Entry {
 // mod shows up there by its file name. Only with the debug log on.
 
 thread_local bool g_ourBrowse = false;  // True while this mod itself navigates.
+
+// True while the rename box of a column has the keyboard. Explorer's accelerator
+// table would take Backspace, Delete and Ctrl+C or V for the files, so the keys
+// are let through to the box.
+thread_local bool g_renaming = false;
+
+using TranslateAcceleratorW_t = int(WINAPI*)(HWND, HACCEL, LPMSG);
+TranslateAcceleratorW_t TranslateAcceleratorW_Original;
+int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
+    if (g_renaming && msg &&
+        (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP ||
+         msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
+        return 0;  // Not translated: the message goes on to the focused control.
+    }
+    return TranslateAcceleratorW_Original(hwnd, accel, msg);
+}
 
 // A navigation made by the navigation pane (sidebar), seen in the BrowseObject
 // hook: its target, kept until the tick sees Explorer arrive there. Per
@@ -1408,6 +1424,12 @@ struct WindowState {
     bool shownDark = false;  // The theme the panel background was made for.
     // A click on the name of the item that is already selected starts a
     // rename once the double-click time has passed.
+    // After a command of Explorer's own toolbar: read the columns again, and
+    // watch for Explorer opening its own rename box, which the panel hides.
+    ULONGLONG postActionAt = 0;
+    ULONGLONG postActionAt2 = 0;
+    ULONGLONG watchEditUntil = 0;
+    DWORD clipSeen = 0;
     ULONGLONG slowRenameAt = 0;
     ULONGLONG slowRenameBlockUntil = 0;
     Column* slowRenameColumn = nullptr;
@@ -2150,6 +2172,81 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
 // Fills a column's list from freshly loaded data.
 void CancelRename(WindowState* state);
 void BeginRename(WindowState* state, Column* column, size_t entryIndex);
+
+// Explorer's own in-place rename box: a visible Edit control inside its file
+// view.
+BOOL CALLBACK FindEditProc(HWND hwnd, LPARAM lParam) {
+    wchar_t name[32];
+    if (GetClassNameW(hwnd, name, ARRAYSIZE(name)) && wcscmp(name, L"Edit") == 0 &&
+        IsWindowVisible(hwnd)) {
+        for (HWND up = GetParent(hwnd); up; up = GetParent(up)) {
+            if (GetClassNameW(up, name, ARRAYSIZE(name)) &&
+                wcscmp(name, L"SHELLDLL_DefView") == 0) {
+                *(HWND*)lParam = hwnd;
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+HWND FindNativeRenameBox(HWND topLevel) {
+    HWND found = nullptr;
+    EnumChildWindows(topLevel, FindEditProc, (LPARAM)&found);
+    return found;
+}
+
+// The rows that are cut follow the clipboard: a Cut from anywhere shows the
+// items dimmed, as long as they are all in one folder.
+void ApplyCutState(WindowState* state);
+void SyncCutFromClipboard(WindowState* state) {
+    state->cutFolder.reset();
+    state->cutChildren.clear();
+    IDataObject* data = nullptr;
+    if (SUCCEEDED(OleGetClipboard(&data)) && data) {
+        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        bool move = false;
+        FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1,
+                            TYMED_HGLOBAL};
+        STGMEDIUM medium = {};
+        if (data->GetData(&wanted, &medium) == S_OK) {
+            if (medium.hGlobal) {
+                if (DWORD* value = (DWORD*)GlobalLock(medium.hGlobal)) {
+                    move = (*value & DROPEFFECT_MOVE) != 0;
+                    GlobalUnlock(medium.hGlobal);
+                }
+            }
+            ReleaseStgMedium(&medium);
+        }
+        FORMATETC files = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        if (move && data->GetData(&files, &medium) == S_OK) {
+            HDROP drop = (HDROP)medium.hGlobal;
+            UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            for (UINT i = 0; i < count && i < 500; i++) {
+                wchar_t path[MAX_PATH] = L"";
+                if (!DragQueryFileW(drop, i, path, MAX_PATH)) {
+                    continue;
+                }
+                PIDLIST_ABSOLUTE absolute = ILCreateFromPathW(path);
+                if (!absolute) {
+                    continue;
+                }
+                Pidl parent(ILClone(absolute));
+                ILRemoveLastID(parent.get());
+                if (!state->cutFolder) {
+                    state->cutFolder.reset(ILClone(parent.get()));
+                }
+                if (ILIsEqual(state->cutFolder.get(), parent.get())) {
+                    state->cutChildren.emplace_back(ILClone(ILFindLastID(absolute)));
+                }
+                ILFree(absolute);
+            }
+            ReleaseStgMedium(&medium);
+        }
+        data->Release();
+    }
+    ApplyCutState(state);
+}
 
 // Dims the rows that were cut, in every column that shows their folder.
 void ApplyCutState(WindowState* state) {
@@ -3172,6 +3269,7 @@ void CancelRename(WindowState* state) {
     }
     auto rename = std::move(state->rename);
     rename->done = true;
+    g_renaming = false;
     try {
         if (rename->box) {
             rename->box.KeyDown(rename->keyToken);
@@ -3481,6 +3579,7 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
     text.Visibility(mux::Visibility::Collapsed);
     grid.Children().Append(box);
     state->rename = std::move(rename);
+    g_renaming = true;
     box.Focus(mux::FocusState::Programmatic);
     size_t dot = name.rfind(L'.');
     bool keepExtension = !column->entries[entryIndex].folder &&
@@ -4731,6 +4830,7 @@ void AbandonWindow(WindowState* state) {
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
     (void)state->rename.release();
+    g_renaming = false;
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -5046,11 +5146,48 @@ void OnTick() {
         // A column resized or moved: the pill follows, without animation.
         UpdatePill(state, false);
 
-        // The clipboard changed: nothing is cut any more.
-        if (state->cutFolder && GetClipboardSequenceNumber() != state->cutSeq) {
-            state->cutFolder.reset();
-            state->cutChildren.clear();
-            ApplyCutState(state);
+        // The clipboard changed, by this mod or from outside (Cut in Explorer's
+        // toolbar): the dimmed rows follow what is on it.
+        {
+            DWORD seq = GetClipboardSequenceNumber();
+            if (seq != state->clipSeen) {
+                state->clipSeen = seq;
+                if (seq != state->cutSeq) {
+                    SyncCutFromClipboard(state);
+                }
+            }
+        }
+
+        // After a toolbar command: read again, once soon and once later.
+        if (state->postActionAt && now >= state->postActionAt) {
+            state->postActionAt = 0;
+            ReloadAll(state);
+        }
+        if (state->postActionAt2 && now >= state->postActionAt2) {
+            state->postActionAt2 = 0;
+            ReloadAll(state);
+        }
+
+        // Explorer's own rename box, started from the toolbar, sits under the
+        // panel where nobody sees it. Close it and rename in the column.
+        if (state->watchEditUntil) {
+            if (now >= state->watchEditUntil) {
+                state->watchEditUntil = 0;
+            } else if (HWND edit = FindNativeRenameBox(state->topLevel)) {
+                state->watchEditUntil = 0;
+                SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE, 0);
+                SendMessageW(edit, WM_KEYUP, VK_ESCAPE, 0);
+                if (state->active >= 0 && state->active < (int)state->columns.size() &&
+                    !state->rename) {
+                    Column* column = state->columns[state->active].get();
+                    std::vector<size_t> picked = SelectedEntries(column, column->list);
+                    Out(L"Explorer's own rename box found, renaming in the column instead (%d selected)",
+                        (int)picked.size());
+                    if (picked.size() == 1) {
+                        BeginRename(state, column, picked[0]);
+                    }
+                }
+            }
         }
         // Explorer's view takes focus when it follows a column. Keep it in
         // the column the user is typing in.
@@ -5864,7 +6001,12 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
     }
     InvokeMenuItem_Original(pThis, menuItem);
     if (state && state->on) {
-        state->specCheckAt = GetTickCount64() + 300;
+        ULONGLONG now = GetTickCount64();
+        state->specCheckAt = now + 300;
+        state->postActionAt = now + 150;
+        state->postActionAt2 = now + 800;
+        state->watchEditUntil = now + 1500;
+        Out(L"toolbar command invoked");
     }
 }
 
@@ -5889,6 +6031,11 @@ void HookExtensions(HMODULE module) {
          InvokeMenuItem_Hook,
          true},
     };
+    if (!Wh_SetFunctionHook((void*)TranslateAcceleratorW,
+                            (void*)TranslateAcceleratorW_Hook,
+                            (void**)&TranslateAcceleratorW_Original)) {
+        Out(L"could not hook TranslateAcceleratorW, Backspace in the rename box may not work");
+    }
     if (!Wh_SetFunctionHook((void*)CreateWindowExW, (void*)CreateWindowExW_Hook,
                             (void**)&CreateWindowExW_Original)) {
         Out(L"could not hook CreateWindowExW, new tabs won't open in Columns");
@@ -6017,7 +6164,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
