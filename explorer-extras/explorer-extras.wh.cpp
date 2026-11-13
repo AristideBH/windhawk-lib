@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.10
+// @version         0.5.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -6192,6 +6192,10 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
             LiftStale(state, (int)i);
             SetActiveColumn(state, (int)i);
             MirrorColumnSelection(state, state->columns[i].get());
+            // Up and Back in the toolbar: the column Explorer went to is put
+            // in the middle of the view, like a double-click up does.
+            state->scroller.UpdateLayout();
+            CenterColumn(state, (int)i);
             return;
         }
     }
@@ -7605,7 +7609,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
