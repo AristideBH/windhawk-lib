@@ -152,6 +152,7 @@ struct DragState {
     Column* targetColumn = nullptr;
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
+    bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
     muxc::ListViewItem litRow{nullptr};
     mux::Media::Brush litRowBrush{nullptr};
     Column* litColumn = nullptr;

@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.12.2
+// @version         0.12.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1946,6 +1946,7 @@ struct DragState {
     Column* targetColumn = nullptr;
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
+    bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
     muxc::ListViewItem litRow{nullptr};
     mux::Media::Brush litRowBrush{nullptr};
     Column* litColumn = nullptr;
@@ -9540,8 +9541,8 @@ bool DragTargetAllowed(WindowState* state, Column* column, int entry) {
             return false;  // A folder onto itself.
         }
     } else {
-        if (column == d.column) {
-            return false;  // Already there.
+        if (column == d.column && !(GetKeyState(VK_CONTROL) & 0x8000)) {
+            return false;  // Already there. With Ctrl it is a copy in the same folder.
         }
         if (ArchiveParentColumn(state, column) >= 0) {
             return false;
@@ -9721,7 +9722,9 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     } catch (...) {
         LogHresult(L"finding the drop target");
     }
-    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry) {
+    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry ||
+        ctrl != d.lastCtrl) {
+        d.lastCtrl = ctrl;
         DragClearTarget(state);
         if (found) {
             d.targetColumn = targetColumn;
@@ -9829,7 +9832,8 @@ bool OnDragReleased(WindowState* state) {
     Column* sourceColumn = d.column;
     Column* targetColumn = d.targetColumn;
     int targetEntry = d.targetEntry;
-    bool ok = d.targetOk;
+    // Judged again with the keys as they are at the release.
+    bool ok = d.targetColumn && DragTargetAllowed(state, d.targetColumn, d.targetEntry);
     std::vector<size_t> entries = d.entries;
     DragEnd(state);
     if (!ok || !targetColumn || !sourceColumn) {
@@ -10602,7 +10606,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.12.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.12.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

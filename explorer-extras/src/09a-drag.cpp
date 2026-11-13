@@ -71,8 +71,8 @@ bool DragTargetAllowed(WindowState* state, Column* column, int entry) {
             return false;  // A folder onto itself.
         }
     } else {
-        if (column == d.column) {
-            return false;  // Already there.
+        if (column == d.column && !(GetKeyState(VK_CONTROL) & 0x8000)) {
+            return false;  // Already there. With Ctrl it is a copy in the same folder.
         }
         if (ArchiveParentColumn(state, column) >= 0) {
             return false;
@@ -252,7 +252,9 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     } catch (...) {
         LogHresult(L"finding the drop target");
     }
-    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry) {
+    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry ||
+        ctrl != d.lastCtrl) {
+        d.lastCtrl = ctrl;
         DragClearTarget(state);
         if (found) {
             d.targetColumn = targetColumn;
@@ -360,7 +362,8 @@ bool OnDragReleased(WindowState* state) {
     Column* sourceColumn = d.column;
     Column* targetColumn = d.targetColumn;
     int targetEntry = d.targetEntry;
-    bool ok = d.targetOk;
+    // Judged again with the keys as they are at the release.
+    bool ok = d.targetColumn && DragTargetAllowed(state, d.targetColumn, d.targetEntry);
     std::vector<size_t> entries = d.entries;
     DragEnd(state);
     if (!ok || !targetColumn || !sourceColumn) {
