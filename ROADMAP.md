@@ -131,7 +131,7 @@ DirectUI hook, another author's mod, a design call.
 - [x] Keyboard on group headers (0.5.2, a setting, off by default since
       0.5.16): Up from the first item of a group goes to its header, Left and
       Right collapse and open it, Enter toggles, Up and Down move on.
-- [ ] (0.6.2, not tested) Rename several items at once: F2 or the toolbar on several selected items, one name, numbered like Explorer. Ctrl+Z takes back a new folder or a group of renames.
+- [x] Tested in 0.6.3: rename several items at once (F2 or the toolbar, one name, numbered like Explorer). Ctrl+Z takes back a new folder or a group of renames.
 - [ ] Focusing a virtual shell item, such as a link, in the Desktop folder
 - [ ] Open in Columns without the flash of Explorer's own list. Fine for now.
 - [ ] The Documents folder icon shows small. Maybe the icon cache.
@@ -160,11 +160,11 @@ DirectUI hook, another author's mod, a design call.
 ## Found in a review of the whole session, 2026-11-13
 
 Keyboard and everyday gaps:
-- [ ] (0.6.0, not tested) F5 refreshes the columns, Escape clears the
+- [x] Tested through 0.6.3 (Backspace, F5, Menu key still to confirm): F5 refreshes the columns, Escape clears the
       selection, Backspace goes to the parent column, the Menu key and
       Shift+F10 open the item's flyout, Ctrl+Shift+N makes a new folder,
       Ctrl+Shift+C copies the paths, Ctrl+Y redoes a delete or a rename
-- [ ] (0.6.0, not tested) The pill and the selection rectangle follow a
+- [x] The pill and the selection rectangle follow a
       change of the system accent or theme
 - [ ] Middle-click opens a folder in a new tab
 - [ ] Space for a quick preview, if Explorer's preview pane can be driven
