@@ -71,6 +71,11 @@ On 2026-11-12 Ari's laptop ran 26H2, build 26300.9974, and the server answered 4
 
 The cause is the update of 2026-11-10, KB5132061, and it isn't limited to preview builds. Microsoft had not yet published symbol files for that update's System32 modules. Users on 24H2 and 25H2, build 26100.9974, reported the same failure in Windhawk issue 1193, and a per-build listing of `taskbar.dll` showed every build from that update as missing on the server while all earlier builds were present. Expect this to recur after any Windows update, for days at a time, and to clear without a change on the mod's side. Run `probes/probe-symbols.wh.cpp` again to see whether it has cleared.
 
+Update 2026-11-13, from Ari: Microsoft published the symbol files for that
+update's System32 modules later the same day, and every mod that had stopped
+working came back. So the gap lasted about three days. The advice below still
+holds for the next update.
+
 What follows from that:
 
 - A `HookSymbols` call into a System32 module can fail for days after a Windows update, on any machine. Every such hook needs a fallback and one clear log line.
