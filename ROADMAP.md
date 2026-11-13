@@ -109,6 +109,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column across reloads. Collapsed rows must not be reachable by Shift
       range selection, type to jump or the arrow keys. Keyboard collapse is
       not planned for the first version, headers are not focusable.
+- [ ] (0.4.5, not tested) Rename by a slow second click on the name of the
+      selected item, like Explorer. Panel background taken from Explorer's own
+      file list. Group headers: hover tint, turning chevron.
 - [ ] Rename several items at once, like Explorer's own.
 - [ ] (0.4.0, not tested) Faster column refresh after the user's own actions (rename, new folder,
       delete, paste, move):

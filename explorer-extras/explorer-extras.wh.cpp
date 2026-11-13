@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.4
+// @version         0.4.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -327,6 +327,61 @@ bool IsCompactMode() {
     return ReadExplorerDword(
                L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
                L"UseCompactMode", 0) != 0;
+}
+
+// The colour of the empty part of Explorer's own file list, read from the
+// native view that sits under the panel. Explorer's colours can be changed by
+// other mods, so the panel takes whatever the list really shows. CLR_INVALID if
+// it can't be read.
+COLORREF SampleListBackground(HWND fileList) {
+    RECT client;
+    if (!fileList || !GetClientRect(fileList, &client)) {
+        return CLR_INVALID;
+    }
+    int width = client.right, height = client.bottom;
+    if (width < 80 || height < 80 || width > 8000 || height > 8000) {
+        return CLR_INVALID;
+    }
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height);
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    COLORREF result = CLR_INVALID;
+    if (PrintWindow(fileList, memory, 0x2 /* PW_RENDERFULLCONTENT */)) {
+        // A row of points along the bottom edge, where a list is usually
+        // empty. The colour seen most often wins.
+        COLORREF seen[7];
+        int count[7] = {};
+        int kinds = 0;
+        for (int i = 0; i < 7; i++) {
+            COLORREF c = GetPixel(memory, width * (10 + i * 13) / 100, height - 4);
+            if (c == CLR_INVALID) {
+                continue;
+            }
+            int at = 0;
+            while (at < kinds && seen[at] != c) {
+                at++;
+            }
+            if (at == kinds) {
+                seen[kinds++] = c;
+            }
+            count[at]++;
+        }
+        int best = -1;
+        for (int i = 0; i < kinds; i++) {
+            if (best < 0 || count[i] > count[best]) {
+                best = i;
+            }
+        }
+        if (best >= 0 && seen[best] != RGB(0, 0, 0)) {
+            result = seen[best];
+        }
+    }
+    SelectObject(memory, old);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    return result;
 }
 
 bool IsDarkMode() {
@@ -1264,7 +1319,11 @@ struct Column {
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
     int hintEntry = -1;  // The entry whose chevron is shown stronger.
+    int hoverHeader = -1;  // The group header under the pointer.
+    winrt::event_token moveToken{};
+    winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    ULONGLONG selectionChangedAt = 0;  // When the selection last changed.
     // Groups: the group of each row (a header has its own), the group titles,
     // the chevron of each header row, and the titles collapsed by the user.
     std::vector<int> rowGroup;
@@ -1346,6 +1405,13 @@ struct WindowState {
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     int styleVersion = -1;  // The row style the rows were last given.
+    bool shownDark = false;  // The theme the panel background was made for.
+    // A click on the name of the item that is already selected starts a
+    // rename once the double-click time has passed.
+    ULONGLONG slowRenameAt = 0;
+    ULONGLONG slowRenameBlockUntil = 0;
+    Column* slowRenameColumn = nullptr;
+    size_t slowRenameEntry = 0;
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
 
@@ -1729,6 +1795,8 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
                 column->list.DoubleTapped(column->doubleTapToken);
                 column->list.RightTapped(column->rightTapToken);
                 column->list.Tapped(column->tapToken);
+                column->list.PointerMoved(column->moveToken);
+                column->list.PointerExited(column->exitToken);
                 column->list.PreviewKeyDown(column->keyToken);
                 column->list.Loaded(column->loadedToken);
             }
@@ -2039,8 +2107,9 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
 }
 
 // The chevron of a group header: down when open, right when collapsed.
-const wchar_t* HeaderGlyph(bool collapsed) {
-    return collapsed ? L"\uE76C" : L"\uE70D";
+// One right-pointing chevron, turned to point down when the group is open.
+const wchar_t* HeaderGlyph() {
+    return L"\uE76C";
 }
 
 muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
@@ -2053,7 +2122,11 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
     text.VerticalAlignment(mux::VerticalAlignment::Bottom);
     muxc::FontIcon chevron;
     chevron.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-    chevron.Glyph(HeaderGlyph(collapsed));
+    chevron.Glyph(HeaderGlyph());
+    chevron.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+    mux::Media::RotateTransform turn;
+    turn.Angle(collapsed ? 0.0 : 90.0);
+    chevron.RenderTransform(turn);
     chevron.FontSize(9);
     chevron.Opacity(0.7);
     chevron.Margin(mux::Thickness{0, 0, 6, 2});
@@ -2070,6 +2143,7 @@ muxc::ListViewItem MakeHeaderRow(const std::wstring& title, double rowHeight,
     row.Padding(mux::Thickness{10, 0, 8, 2});
     row.IsHitTestVisible(false);
     row.IsTabStop(false);
+    row.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
     return row;
 }
 
@@ -2350,6 +2424,9 @@ void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args);
 void OnColumnBackgroundTapped(muxc::ListView const& list,
                               mux::Input::TappedRoutedEventArgs const& args);
+void OnColumnPointerMoved(muxc::ListView const& list,
+                          mux::Input::PointerRoutedEventArgs const& args);
+void OnColumnPointerExited(muxc::ListView const& list);
 void OnColumnKey(muxc::ListView const& list,
                  mux::Input::KeyRoutedEventArgs const& args);
 
@@ -2384,6 +2461,18 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
         [](Inspectable const& sender, mux::Input::TappedRoutedEventArgs const& args) {
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnColumnBackgroundTapped(list, args);
+            }
+        });
+    column->moveToken = list.PointerMoved(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnColumnPointerMoved(list, args);
+            }
+        });
+    column->exitToken = list.PointerExited(
+        [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const&) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnColumnPointerExited(list);
             }
         });
     column->rightTapToken = list.RightTapped(
@@ -2949,6 +3038,8 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+        column->selectionChangedAt = GetTickCount64();
+        state->slowRenameAt = 0;
 
         LiftStale(state, columnIndex);
 
@@ -3958,6 +4049,8 @@ void OnRowDoubleTapped(muxc::ListView const& list) {
     if (!state || !state->on || g_unloading) {
         return;
     }
+    state->slowRenameAt = 0;
+    state->slowRenameBlockUntil = GetTickCount64() + 600;
     try {
         int columnIndex = ColumnIndexOfList(state, list);
         int row = list.SelectedIndex();
@@ -4141,6 +4234,83 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 // A click on the empty space of a column makes it the active one: Explorer's
 // own view moves to its folder, so Paste and the panes act there. The columns
 // to its right stay.
+// The row of the group header at a point of the list, or -1.
+int HeaderRowAt(Column* column, muxc::ListView const& list,
+                winrt::Windows::Foundation::Point at) {
+    auto items = list.Items();
+    for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
+        if (column->rowToEntry[r] >= 0 || column->rowGroup[r] < 0) {
+            continue;
+        }
+        auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
+        if (!header) {
+            continue;
+        }
+        auto bounds = header.TransformToVisual(list).TransformBounds(
+            winrt::Windows::Foundation::Rect{0, 0, (float)header.ActualWidth(),
+                                              (float)header.ActualHeight()});
+        if (at.X >= bounds.X && at.X <= bounds.X + bounds.Width &&
+            at.Y >= bounds.Y && at.Y <= bounds.Y + bounds.Height) {
+            return (int)r;
+        }
+    }
+    return -1;
+}
+
+// Hover on the group headers: the one under the pointer is tinted.
+void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
+    if (row == column->hoverHeader) {
+        return;
+    }
+    auto items = list.Items();
+    auto paint = [&](int r, bool on) {
+        if (r >= 0 && r < (int)items.Size()) {
+            if (auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+                header.Background(on ? Brush(26, 128, 128, 128) : Brush(0, 0, 0, 0));
+            }
+        }
+    };
+    paint(column->hoverHeader, false);
+    column->hoverHeader = row;
+    paint(row, true);
+}
+
+void OnColumnPointerMoved(muxc::ListView const& list,
+                          mux::Input::PointerRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        int index = ColumnIndexOfList(state, list);
+        if (index < 0) {
+            return;
+        }
+        Column* column = state->columns[index].get();
+        if (column->rowGroup.empty()) {
+            return;
+        }
+        SetHeaderHover(column, list, HeaderRowAt(column, list,
+                                                 args.GetCurrentPoint(list).Position()));
+    } catch (...) {
+        LogHresult(L"header hover");
+    }
+}
+
+void OnColumnPointerExited(muxc::ListView const& list) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        int index = ColumnIndexOfList(state, list);
+        if (index >= 0) {
+            SetHeaderHover(state->columns[index].get(), list, -1);
+        }
+    } catch (...) {
+    }
+}
+
 // Opens or collapses the group of a header row.
 void ToggleGroup(WindowState* state, Column* column, int headerRow) {
     if (headerRow < 0 || headerRow >= (int)column->rowGroup.size()) {
@@ -4178,7 +4348,33 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
     }
     state->building = wasBuilding;
     if (headerRow < (int)column->headerIcons.size() && column->headerIcons[headerRow]) {
-        column->headerIcons[headerRow].Glyph(HeaderGlyph(collapse));
+        try {
+            auto turn = column->headerIcons[headerRow]
+                            .RenderTransform()
+                            .try_as<mux::Media::RotateTransform>();
+            if (turn) {
+                namespace anim = mux::Media::Animation;
+                double from = turn.Angle();
+                double to = collapse ? 0.0 : 90.0;
+                turn.Angle(to);  // Where it stays.
+                anim::CubicEase ease;
+                ease.EasingMode(anim::EasingMode::EaseOut);
+                anim::DoubleAnimation spin;
+                spin.From(from);
+                spin.To(to);
+                spin.Duration(mux::DurationHelper::FromTimeSpan(
+                    std::chrono::milliseconds(180)));
+                spin.EasingFunction(ease);
+                spin.FillBehavior(anim::FillBehavior::Stop);
+                anim::Storyboard::SetTarget(spin, turn);
+                anim::Storyboard::SetTargetProperty(spin, L"Angle");
+                anim::Storyboard board;
+                board.Children().Append(spin);
+                board.Begin();
+            }
+        } catch (...) {
+            LogHresult(L"turning a group chevron");
+        }
     }
     Out(L"group \"%s\" %s", title.c_str(), collapse ? L"collapsed" : L"opened");
 }
@@ -4195,33 +4391,48 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
             int hit = ColumnIndexOfList(state, list);
             if (hit >= 0) {
                 Column* column = state->columns[hit].get();
-                auto at = args.GetPosition(list);
-                auto items = list.Items();
-                for (size_t r = 0; r < column->rowGroup.size() && r < items.Size(); r++) {
-                    if (column->rowToEntry[r] >= 0 || column->rowGroup[r] < 0) {
-                        continue;
-                    }
-                    auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
-                    if (!header) {
-                        continue;
-                    }
-                    auto bounds = header.TransformToVisual(list).TransformBounds(
-                        winrt::Windows::Foundation::Rect{
-                            0, 0, (float)header.ActualWidth(),
-                            (float)header.ActualHeight()});
-                    if (at.X >= bounds.X && at.X <= bounds.X + bounds.Width &&
-                        at.Y >= bounds.Y && at.Y <= bounds.Y + bounds.Height) {
-                        ToggleGroup(state, column, (int)r);
-                        return;
-                    }
+                int header = HeaderRowAt(column, list, args.GetPosition(list));
+                if (header >= 0) {
+                    ToggleGroup(state, column, header);
+                    return;
                 }
             }
         }
         mux::DependencyObject node =
             args.OriginalSource().try_as<mux::DependencyObject>();
         for (int i = 0; node && i < 20; i++) {
-            if (node.try_as<muxc::ListViewItem>()) {
-                return;  // A row. The selection handler deals with it.
+            if (auto row = node.try_as<muxc::ListViewItem>()) {
+                // A row. The selection handler deals with a new selection. A
+                // click on the name of the item that was already the only
+                // selected one starts a rename, after the double-click time.
+                int at = ColumnIndexOfList(state, list);
+                if (at >= 0) {
+                    Column* column = state->columns[at].get();
+                    int rowIndex = list.IndexFromContainer(row);
+                    int entry = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
+                                    ? column->rowToEntry[rowIndex]
+                                    : -1;
+                    ULONGLONG now = GetTickCount64();
+                    bool onName = false;
+                    if (entry >= 0 && (size_t)entry < column->texts.size() &&
+                        column->texts[entry]) {
+                        auto hitText = args.OriginalSource().try_as<muxc::TextBlock>();
+                        onName = hitText && hitText == column->texts[entry];
+                    }
+                    if (entry >= 0 && onName && !state->rename &&
+                        now >= state->slowRenameBlockUntil &&
+                        now - column->selectionChangedAt > 350 &&
+                        !(GetKeyState(VK_CONTROL) & 0x8000) &&
+                        !(GetKeyState(VK_SHIFT) & 0x8000)) {
+                        std::vector<size_t> picked = SelectedEntries(column, list);
+                        if (picked.size() == 1 && picked[0] == (size_t)entry) {
+                            state->slowRenameAt = now + GetDoubleClickTime() + 120;
+                            state->slowRenameColumn = column;
+                            state->slowRenameEntry = (size_t)entry;
+                        }
+                    }
+                }
+                return;
             }
             node = mux::Media::VisualTreeHelper::GetParent(node);
         }
@@ -4304,6 +4515,7 @@ void OnColumnKey(muxc::ListView const& list,
     if (state->rename) {
         return;  // Typing into the rename box.
     }
+    state->slowRenameAt = 0;
     try {
         int index = ColumnIndexOfList(state, list);
         if (index < 0) {
@@ -4786,6 +4998,22 @@ void OnTick() {
             CompleteSwap(state);
         }
 
+        // The slow second click on a selected name: time to rename.
+        if (state->slowRenameAt && now >= state->slowRenameAt) {
+            state->slowRenameAt = 0;
+            Column* column = state->slowRenameColumn;
+            bool known = false;
+            for (auto& c : state->columns) {
+                known = known || c.get() == column;
+            }
+            if (known && !state->rename) {
+                std::vector<size_t> picked = SelectedEntries(column, column->list);
+                if (picked.size() == 1 && picked[0] == state->slowRenameEntry) {
+                    BeginRename(state, column, picked[0]);
+                }
+            }
+        }
+
         // A changed setting that affects rows already on screen.
         if (state->styleVersion != g_styleVersion) {
             state->styleVersion = g_styleVersion;
@@ -4797,6 +5025,22 @@ void OnTick() {
                     }
                 }
             }
+        }
+
+        // The theme changed: take the list's colour again.
+        if (state->ticks % 20 == 0 && state->rootGrid && fileList &&
+            IsDarkMode() != state->shownDark) {
+            bool nowDark = IsDarkMode();
+            state->shownDark = nowDark;
+            COLORREF sampled = SampleListBackground(fileList);
+            state->rootGrid.RequestedTheme(nowDark ? mux::ElementTheme::Dark
+                                                   : mux::ElementTheme::Light);
+            state->rootGrid.Background(
+                sampled != CLR_INVALID
+                    ? Brush(255, GetRValue(sampled), GetGValue(sampled), GetBValue(sampled))
+                : nowDark ? Brush(255, 25, 25, 25)
+                          : Brush(255, 255, 255, 255));
+            Out(L"theme changed, panel background taken again");
         }
 
         // A column resized or moved: the pill follows, without animation.
@@ -4966,8 +5210,18 @@ void ShowPanel(WindowState* state) {
         scroller.Content(content);
 
         muxc::Grid root;
-        root.Background(dark ? Brush(255, 25, 25, 25)
-                             : Brush(255, 255, 255, 255));
+        {
+            COLORREF sampled = SampleListBackground(fileList);
+            Out(L"panel background: %s", sampled == CLR_INVALID
+                                              ? L"not readable, using the theme colour"
+                                              : L"taken from Explorer's file list");
+            root.Background(
+                sampled != CLR_INVALID
+                    ? Brush(255, GetRValue(sampled), GetGValue(sampled), GetBValue(sampled))
+                : dark ? Brush(255, 25, 25, 25)
+                       : Brush(255, 255, 255, 255));
+            state->shownDark = dark;
+        }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);
         root.Children().Append(scroller);
@@ -5763,7 +6017,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
