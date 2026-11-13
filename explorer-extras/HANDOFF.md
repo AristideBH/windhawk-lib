@@ -12,57 +12,41 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.5.1, not
-  compiled yet. 0.3.5 adds icons and thumbnails (`LoadIcons`, `ApplyIcons`)
-  and the right-click flyout (`OnRowRightTapped`) on top of 0.3.4, written
-  without a compiler: expect compile errors, read `compiler_errors.log`.
-  Last tested version: 0.3.4.
-- 0.3.1 to 0.3.4, tested by Ari on 2026-11-13: restore waits one tick
-  (shorter flash), the horizontal wheel glides across the columns and never
-  scrolls a column vertically, the vertical wheel scrolls only the hovered
-  column. The wheel handlers are in `ShowPanel` (root and strip) and in
-  `AddColumn` (a handler on each list's row panel, added when the list
-  loads). A scroll viewer inside each list sees the wheel first, so a
-  handler on the list itself is too late.
-- Compiled and tested by Ari up to 0.3.0 on 2026-11-13. Confirmed in 0.3.0:
-  the Columns entry is in the View menu when a window opens, new windows
-  open in Columns when it was the last layout chosen, also after an Explorer
-  restart, choosing another layout turns that off, no crash on closing a
-  window with columns on. Confirmed in 0.2.5: minimum and maximum width on
-  drag, arrow keys between columns, sort inside groups.
-- 0.3.0: hook on `CommandBarControl_Wave1::OnDpiChanged` gives the window's
-  `XamlRoot`, a 50 ms timer finds the View flyout and inserts the entry, and
-  the flag `lastLayoutColumns` in Windhawk's per-mod storage records the
-  last layout. Found with `probes/probe-window-created.wh.cpp`, see the
-  skill for the facts and the two crashes on the way.
-- Open in 0.3.0: Explorer's own list shows for about 270 ms before the
-  columns, because the panel waits for three ticks with a visible file
-  list. A new tab in a window without columns doesn't open in Columns.
-  Changing layout from a keyboard shortcut doesn't clear the flag. These
-  three are untested ideas, not bugs seen in a log.
-- 0.2.3: order inside groups, maximum width on drag, highlight stays on the
-  current column, Left, Right and Enter move between columns.
-- 0.2.4: fix for the crash when an Explorer window closes with the panel on.
-  The panel's objects are let go without release, see `AbandonWindow`.
-- 0.2.5: a drag also stops at the minimum width.
-- Todo from Ari: focusing a Control Panel item or another virtual shell item
-  in the Desktop folder, see the roadmap.
-- `Columns Demo` on Ari's Desktop is a test folder: 90 items, 6 levels,
-  several file types, 5 pngs, a 40-file folder, long names.
-- Rest of 0.3 in the roadmap: real icons and thumbnails, then the native
-  right-click menu. The menu needs its own probe first, since a modal menu
-  inside a XAML handler crashed Explorer before, see the core skill.
-- Not done from 0.2: rows built only when visible. Every row is still built
-  up front.
-- Open: group names from the fallback are English. Explorer's own
-  categorizer returns no category for these folders,
-  `GetCategoryForSCID` gives `S_FALSE`.
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.5.1,
+  compiled and tested by Ari on 2026-11-13. `ROADMAP.md` says what is done.
+  The version history is in `git log`.
+- Architecture in one paragraph. One WinUI panel per Explorer window, hosted
+  as a `DesktopWindowXamlSource` over the file list, with a per-window
+  `WindowState` used only on that window's UI thread. Folders and icons are
+  read by one worker thread per window, results come back through the
+  window's dispatcher queue and are dropped by generation or by a cancel flag.
+  Each entry has a row shell at once and its content is built as the row comes
+  near the screen. Explorer's own view stays under the panel and follows the
+  active column, so the toolbar, panes and status bar act on the selection.
+- Hooks: `FileExplorerExtensions.dll` command bar handlers (pointer press,
+  `OnDpiChanged` for window creation, `InvokeMenuItem` for toolbar commands),
+  `CreateWindowExW` for new tabs, `TranslateAcceleratorW` while the rename box
+  has the keyboard, and `IShellBrowser::BrowseObject` (vtable slot 11) for the
+  navigation trace and the sidebar click. See `PLAN.md` and the skill.
+- Settings: enabled, minimum and maximum width, follow active column,
+  restore on open, maximum items (default 5000), sidebar sets the first
+  column, focus outline, compact scrollbars, panel background (a test
+  setting), debug log.
+- Things that cost time and are worth knowing:
+  - The unexplained jumps of Explorer's view were navigation pane clicks and
+    the shell's own "paste" verb. A paste now goes through the folder's drop
+    target and the guard is gone.
+  - Pidls made from a path are rooted under This PC, the columns' pidls under
+    the Desktop. They never compare equal, so compare paths for files and
+    folders on disk.
+  - A column's stale state is lifted by working in it, see `LiftStale`.
+  - Never release XAML objects after their window is destroyed, see
+    `AbandonWindow`.
+- Parked, don't chase without a new idea: the transparent background mode and
+  a blurred panel background (see the roadmap).
+- `Columns Demo` on Ari's Desktop is a test folder, rebuilt by
+  `explorer-extras/make-columns-demo.ps1`.
 - `explorer-columns/` holds 0.1 and can be deleted.
-- The editor's compile errors are not always in `compiler_errors.log`. The
-  Windhawk clang at `C:\Program Files\Windhawk\Compilerin\clang++.exe`
-  does a syntax check of the editor file for ARM64 with `-fsyntax-only`,
-  `-target aarch64-w64-mingw32`, the flags in `compile_flags.txt` and
-  `-DWH_MOD_ID=L"explorer-extras"`. It found the 0.3.0 error.
 
 ## How the work loop runs
 
@@ -81,9 +65,8 @@ For the next session, human or model. Written 2026-11-13.
 - Copying a changed file from a cloud session to the PC has sent a stale
   copy several times. Use a new staged file name for each version and
   compare checksums on the PC before writing to the editor.
-- The non-WinUI part of the mod compiles outside Windhawk with
-  `-DMOD_NO_WINRT`, using zig's mingw and stubs for the `Wh_` functions.
-  The WinUI part can only be compiled by Windhawk.
+- The whole file, WinUI part included, can be syntax-checked with Windhawk's
+  own clang, see the last section. Linking is still Windhawk's job.
 - Test in a new Explorer tab opened with "+", and close it afterwards.
   Never navigate Ari's own tabs.
 - The PowerToys command palette can count as the front window and block
