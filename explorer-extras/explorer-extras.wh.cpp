@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.6
+// @version         0.5.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -6324,12 +6324,51 @@ void OnTick() {
             ReloadAll(state);
         }
 
-        // The resize handle appears once the pointer has rested on an edge.
-        for (auto& column : state->columns) {
-            if (column->hoverSince && now - column->hoverSince >= 350 &&
-                column->pill) {
-                column->pill.Opacity(1);
-                column->hoverSince = 0;
+        // The resize handle appears once the pointer has rested on an edge. It
+        // goes away when the pointer is no longer on that edge, also when the
+        // columns moved under a pointer that stood still, which sends no event.
+        {
+            HWND bridgeWindow = state->bridge ? (HWND)state->bridge.WindowId().Value : nullptr;
+            POINT cursor = {};
+            bool haveCursor = bridgeWindow && GetCursorPos(&cursor) &&
+                              ScreenToClient(bridgeWindow, &cursor);
+            double scale = 1.0;
+            try {
+                if (state->rootGrid && state->rootGrid.XamlRoot()) {
+                    scale = state->rootGrid.XamlRoot().RasterizationScale();
+                }
+            } catch (...) {
+            }
+            for (auto& column : state->columns) {
+                if (!column->pill || !column->grip) {
+                    continue;
+                }
+                bool shown = column->pill.Opacity() > 0 || column->hoverSince != 0;
+                if (!shown || state->dragColumn >= 0) {
+                    continue;
+                }
+                bool over = false;
+                if (haveCursor && scale > 0) {
+                    try {
+                        auto box = column->grip.TransformToVisual(state->rootGrid)
+                                       .TransformBounds(winrt::Windows::Foundation::Rect{
+                                           0, 0, (float)column->grip.ActualWidth(),
+                                           (float)column->grip.ActualHeight()});
+                        double x = cursor.x / scale, y = cursor.y / scale;
+                        over = x >= box.X && x <= box.X + box.Width && y >= box.Y &&
+                               y <= box.Y + box.Height;
+                    } catch (...) {
+                    }
+                }
+                if (!over) {
+                    column->pill.Opacity(0);
+                    column->hoverSince = 0;
+                    continue;
+                }
+                if (column->hoverSince && now - column->hoverSince >= 350) {
+                    column->pill.Opacity(1);
+                    column->hoverSince = 0;
+                }
             }
         }
 
@@ -7532,7 +7571,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
