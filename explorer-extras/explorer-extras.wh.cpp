@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.17
+// @version         0.3.18
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -345,6 +345,88 @@ struct Entry {
     bool launcher = false;
 };
 
+// ---- Who navigates Explorer's view? ----
+//
+// Explorer's view jumped to another folder after a paste, in a way this mod
+// didn't ask for. To find out who asks, IShellBrowser::BrowseObject is hooked
+// once, and every call is logged with the modules on its call stack. A Windhawk
+// mod shows up there by its file name. Only with the debug log on.
+
+thread_local bool g_ourBrowse = false;  // True while this mod itself navigates.
+
+using BrowseObject_t = HRESULT(STDMETHODCALLTYPE*)(IShellBrowser*,
+                                                   PCUIDLIST_RELATIVE, UINT);
+BrowseObject_t BrowseObject_Original;
+
+std::wstring ModuleAt(void* address) {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)address, &module) ||
+        !module) {
+        return L"?";
+    }
+    wchar_t path[MAX_PATH] = L"";
+    GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t* name = wcsrchr(path, L'\\');
+    wchar_t text[MAX_PATH + 24];
+    swprintf(text, ARRAYSIZE(text), L"%s+0x%llX", name ? name + 1 : path,
+             (unsigned long long)((char*)address - (char*)module));
+    return text;
+}
+
+HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
+                                            PCUIDLIST_RELATIVE pidl,
+                                            UINT flags) {
+    if (g_debugLog) {
+        std::wstring target = L"(relative or special)";
+        if ((flags & SBSP_ABSOLUTE) && pidl) {
+            PWSTR name = nullptr;
+            if (SUCCEEDED(SHGetNameFromIDList((PCIDLIST_ABSOLUTE)pidl,
+                                              SIGDN_DESKTOPABSOLUTEPARSING,
+                                              &name)) &&
+                name) {
+                target = name;
+                CoTaskMemFree(name);
+            }
+        }
+        void* frames[14] = {};
+        USHORT count = CaptureStackBackTrace(1, ARRAYSIZE(frames), frames, nullptr);
+        std::wstring stack;
+        for (USHORT i = 0; i < count; i++) {
+            if (i) {
+                stack += L" < ";
+            }
+            stack += ModuleAt(frames[i]);
+        }
+        Out(L"BrowseObject %s flags=0x%X to \"%s\" from: %s",
+            g_ourBrowse ? L"(this mod)" : L"(not this mod)", flags,
+            target.c_str(), stack.c_str());
+    }
+    return BrowseObject_Original(self, pidl, flags);
+}
+
+// Hooks BrowseObject through the vtable of a live shell browser, once. Every
+// tab's browser is the same class and shares that vtable.
+void InstallBrowseTrace(IShellBrowser* browser) {
+    static std::atomic<bool> tried{false};
+    if (!g_debugLog || !browser || tried.exchange(true)) {
+        return;
+    }
+    void** vtable = *(void***)browser;
+    // IUnknown 0-2, IOleWindow 3-4, then InsertMenusSB, SetMenuSB,
+    // RemoveMenusSB, SetStatusTextSB, EnableModelessSB, TranslateAcceleratorSB,
+    // and BrowseObject at slot 11.
+    void* target = vtable[11];
+    BOOL ok = Wh_SetFunctionHook(target, (void*)BrowseObject_Hook,
+                                 (void**)&BrowseObject_Original);
+    if (ok) {
+        Wh_ApplyHookOperations();
+    }
+    Out(L"BrowseObject trace installed: %d, target=%s", ok ? 1 : 0,
+        ModuleAt(target).c_str());
+}
+
 // Asks the visible tab for its shell browser. The pointer is not AddRef'd and
 // belongs to this thread.
 IShellBrowser* BrowserOf(HWND topLevel) {
@@ -358,6 +440,7 @@ IShellBrowser* BrowserOf(HWND topLevel) {
                              SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &result)) {
         return nullptr;
     }
+    InstallBrowseTrace((IShellBrowser*)result);
     return (IShellBrowser*)result;
 }
 
@@ -2291,7 +2374,9 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
             state->focusUntil = GetTickCount64() + 2500;
         }
     }
+    g_ourBrowse = true;
     HRESULT hr = browser->BrowseObject(folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
+    g_ourBrowse = false;
     if (FAILED(hr)) {
         Out(L"BrowseObject failed, hr=0x%08lX", hr);
         state->expected.reset();
@@ -2918,7 +3003,7 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
         {L"newfolder", L"New folder", true},
         {nullptr, nullptr, false},
         {L"refresh", L"Refresh", true},
-        {L"properties", desktop ? L"Personalize" : L"Properties", true},
+        {L"properties", desktop ? L"Personalize" : L"Folder properties", true},
     };
     for (auto& item : items) {
         if (!item.id) {
@@ -4739,7 +4824,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.17 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.18 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
