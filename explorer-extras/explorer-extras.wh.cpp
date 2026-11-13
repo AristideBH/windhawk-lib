@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.24
+// @version         0.3.25
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1778,16 +1778,16 @@ void UpdatePill(WindowState* state, bool animate) {
         double from = state->pillLeft;
         muxc::Canvas::SetLeft(state->pill, target);  // Where it stays.
         state->pillLeft = target;
-        state->pillUntil = now + 350;
+        state->pillUntil = now + 430;
 
         // A short glide that overshoots only a little.
         anim::BackEase spring;
         spring.EasingMode(anim::EasingMode::EaseOut);
-        spring.Amplitude(0.35);
+        spring.Amplitude(0.15);
         anim::DoubleAnimation travel;
         travel.From(from);
         travel.To(target);
-        travel.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(300)));
+        travel.Duration(mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(380)));
         travel.EasingFunction(spring);
         travel.EnableDependentAnimation(true);
         travel.FillBehavior(anim::FillBehavior::Stop);
@@ -5245,7 +5245,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.24 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.25 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
