@@ -82,6 +82,14 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       link, in the Desktop folder. These aren't real folders on disk, so the
       column logic needs a way to open and focus them. Not looked at yet.
 
+## 0.3 polish, done in 0.3.5 to 0.3.27, tested
+
+- [x] Icons, thumbnails, right-click menu, rename in place, Copy, Cut, Paste,
+      Delete, F2, multiple selection, type to jump, background menu with
+      Paste and New folder, new tabs, Control Panel, stale columns with a
+      stronger chevron, active column pill with a gentle glide, sidebar
+      sets the first column.
+
 ## 0.4
 
 - [ ] Keyboard shortcuts in a column: Delete, Ctrl+C, Ctrl+X, Ctrl+V, F2
@@ -113,9 +121,10 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       Changes from outside the mod keep the full reload until 0.5, where
       item-level change events can update single rows, together with rows
       built only when visible.
-- [ ] (0.3.22, not tested: setting "Sidebar sets the first column", off by
-      default; flat entries only: Home, Gallery, OneDrive, known and Quick
-      access folders.) A click on an item of the navigation pane (Home, Gallery, pinned and
+- [x] Tested in 0.3.22 to 0.3.27: setting "Sidebar sets the first column",
+      off by default; flat entries only: Home, Gallery, OneDrive, known and
+      Quick access folders. Rebuilds swap the new first column in without a
+      blank. A click on an item of the navigation pane (Home, Gallery, pinned and
       cloud folders, not the expandable tree) makes that folder the first
       column. A setting, off by default. Needs a short recon first: how to
       tell a pane click from Explorer following a column, Back or Up. Today
