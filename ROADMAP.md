@@ -113,7 +113,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       Changes from outside the mod keep the full reload until 0.5, where
       item-level change events can update single rows, together with rows
       built only when visible.
-- [ ] A click on an item of the navigation pane (Home, Gallery, pinned and
+- [ ] (0.3.22, not tested: setting "Sidebar sets the first column", off by
+      default; flat entries only: Home, Gallery, OneDrive, known and Quick
+      access folders.) A click on an item of the navigation pane (Home, Gallery, pinned and
       cloud folders, not the expandable tree) makes that folder the first
       column. A setting, off by default. Needs a short recon first: how to
       tell a pane click from Explorer following a column, Back or Up. Today

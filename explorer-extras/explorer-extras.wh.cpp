@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.21
+// @version         0.3.22
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - sidebarRoot: false
+    $name: Sidebar sets the first column
+    $description: A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.
   - minWidth: 160
     $name: Minimum column width
   - maxWidth: 420
@@ -140,6 +143,7 @@ std::atomic<bool> g_debugLog{true};
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
+std::atomic<bool> g_sidebarRoot{false};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
 std::atomic<int> g_maxItems{1500};
@@ -354,6 +358,40 @@ struct Entry {
 
 thread_local bool g_ourBrowse = false;  // True while this mod itself navigates.
 
+// A navigation made by the navigation pane (sidebar), seen in the BrowseObject
+// hook: its target, kept until the tick sees Explorer arrive there. Per
+// thread, like the window.
+thread_local ITEMIDLIST* g_panePidl = nullptr;
+thread_local ULONGLONG g_paneAt = 0;
+
+// Is the pointer over the navigation pane of this thread's Explorer window,
+// and was there input a moment ago? The pane is the area left of the file list.
+bool PointerOverNavigationPane() {
+    LASTINPUTINFO input = {sizeof(input)};
+    if (!GetLastInputInfo(&input) || GetTickCount() - input.dwTime > 800) {
+        return false;
+    }
+    POINT cursor;
+    if (!GetCursorPos(&cursor)) {
+        return false;
+    }
+    HWND over = WindowFromPoint(cursor);
+    HWND top = over ? GetAncestor(over, GA_ROOT) : nullptr;
+    if (!top || GetWindowThreadProcessId(top, nullptr) != GetCurrentThreadId()) {
+        return false;
+    }
+    HWND fileList = FindVisibleChild(top, L"SHELLDLL_DefView");
+    RECT list;
+    if (!fileList || !FileListRect(top, fileList, &list)) {
+        return false;
+    }
+    ScreenToClient(top, &cursor);
+    RECT client;
+    GetClientRect(top, &client);
+    return cursor.x >= 0 && cursor.x < list.left && cursor.y >= list.top &&
+           cursor.y < client.bottom;
+}
+
 using BrowseObject_t = HRESULT(STDMETHODCALLTYPE*)(IShellBrowser*,
                                                    PCUIDLIST_RELATIVE, UINT);
 BrowseObject_t BrowseObject_Original;
@@ -406,6 +444,18 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
             g_ourBrowse ? L"(this mod)" : L"(not this mod)", flags,
             target.c_str(), stack.c_str());
     }
+    // A click in the navigation pane: remember where it goes.
+    if (g_sidebarRoot && !g_ourBrowse && pidl &&
+        (flags & SBSP_ACTIVATE_NOFOCUS) &&
+        !(flags & (SBSP_RELATIVE | SBSP_PARENT | SBSP_NAVIGATEBACK |
+                   SBSP_NAVIGATEFORWARD)) &&
+        PointerOverNavigationPane()) {
+        if (g_panePidl) {
+            CoTaskMemFree(g_panePidl);
+        }
+        g_panePidl = ILClone((PCIDLIST_ABSOLUTE)pidl);
+        g_paneAt = GetTickCount64();
+    }
     return BrowseObject_Original(self, pidl, flags);
 }
 
@@ -413,7 +463,7 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
 // tab's browser is the same class and shares that vtable.
 void InstallBrowseTrace(IShellBrowser* browser) {
     static std::atomic<bool> tried{false};
-    if (!g_debugLog || !browser || tried.exchange(true)) {
+    if ((!g_debugLog && !g_sidebarRoot) || !browser || tried.exchange(true)) {
         return;
     }
     void** vtable = *(void***)browser;
@@ -2375,6 +2425,77 @@ void ReloadAll(WindowState* state) {
 }
 
 // Starts over with Explorer's current folder as the only column.
+// Is this folder one of the navigation pane's flat entries: Home, Gallery,
+// OneDrive, or a pinned or frequent folder? The expandable tree (This PC,
+// drives, Network) is not.
+bool IsFlatSidebarTarget(PCIDLIST_ABSOLUTE folder) {
+    PWSTR parsing = nullptr;
+    if (FAILED(SHGetNameFromIDList(folder, SIGDN_DESKTOPABSOLUTEPARSING,
+                                   &parsing)) ||
+        !parsing) {
+        return false;
+    }
+    std::wstring target = parsing;
+    CoTaskMemFree(parsing);
+    if (_wcsicmp(target.c_str(), L"::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}") == 0 ||
+        _wcsicmp(target.c_str(), L"::{E88865EA-0E1C-4E20-9AA6-EDCD0212C87C}") == 0) {
+        return true;  // Home, Gallery.
+    }
+    // OneDrive and the user's known folders.
+    const KNOWNFOLDERID* known[] = {&FOLDERID_Desktop,   &FOLDERID_Downloads,
+                                    &FOLDERID_Documents, &FOLDERID_Pictures,
+                                    &FOLDERID_Music,     &FOLDERID_Videos};
+    for (auto id : known) {
+        PWSTR path = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(*id, 0, nullptr, &path)) && path) {
+            bool same = _wcsicmp(path, target.c_str()) == 0;
+            CoTaskMemFree(path);
+            if (same) {
+                return true;
+            }
+        }
+    }
+    wchar_t oneDrive[MAX_PATH] = L"";
+    if (GetEnvironmentVariableW(L"OneDrive", oneDrive, MAX_PATH) &&
+        _wcsicmp(oneDrive, target.c_str()) == 0) {
+        return true;
+    }
+    // Pinned and frequent folders, from Quick access.
+    bool found = false;
+    PIDLIST_ABSOLUTE quick = nullptr;
+    if (SUCCEEDED(SHParseDisplayName(L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}",
+                                     nullptr, &quick, 0, nullptr)) &&
+        quick) {
+        IShellFolder* folder = nullptr;
+        if (SUCCEEDED(SHBindToObject(nullptr, quick, nullptr,
+                                     IID_PPV_ARGS(&folder))) &&
+            folder) {
+            IEnumIDList* list = nullptr;
+            if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS, &list) == S_OK &&
+                list) {
+                PITEMID_CHILD child = nullptr;
+                int count = 0;
+                while (!found && count++ < 100 &&
+                       list->Next(1, &child, nullptr) == S_OK && child) {
+                    STRRET text = {};
+                    wchar_t path[MAX_PATH] = L"";
+                    if (SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_FORPARSING,
+                                                           &text)) &&
+                        SUCCEEDED(StrRetToBufW(&text, child, path, MAX_PATH))) {
+                        found = _wcsicmp(path, target.c_str()) == 0;
+                    }
+                    CoTaskMemFree(child);
+                    child = nullptr;
+                }
+                list->Release();
+            }
+            folder->Release();
+        }
+        CoTaskMemFree(quick);
+    }
+    return found;
+}
+
 void RebuildFromExplorer(WindowState* state) {
     IShellBrowser* browser = BrowserOf(state->topLevel);
     if (!browser) {
@@ -3909,6 +4030,22 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
 // What Explorer's own view shows changed.
 void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
     state->lastSeen.reset(ILClone(current.get()));
+    // A click on a flat entry of the navigation pane starts the columns over
+    // at that folder, even when it is inside the current chain.
+    if (g_panePidl) {
+        bool arrived = GetTickCount64() - g_paneAt < 3000 &&
+                       ILIsEqual(current.get(), g_panePidl);
+        CoTaskMemFree(g_panePidl);
+        g_panePidl = nullptr;
+        if (arrived && g_sidebarRoot && IsFlatSidebarTarget(current.get())) {
+            Out(L"sidebar click: \"%s\" becomes the first column",
+                PathOf(current.get()).c_str());
+            state->expected.reset();
+            RebuildFromExplorer(state);
+            SetActiveColumn(state, 0);
+            return;
+        }
+    }
     if (state->expected && ILIsEqual(current.get(), state->expected.get())) {
         state->expected.reset();
         return;
@@ -4910,6 +5047,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 void LoadSettings() {
     g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
     g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
+    g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
     int minWidth = Wh_GetIntSetting(L"columns.minWidth");
     int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
     minWidth = minWidth < 80 ? 80 : (minWidth > 800 ? 800 : minWidth);
@@ -4934,7 +5072,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.21 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.22 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
