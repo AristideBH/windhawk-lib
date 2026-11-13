@@ -53,9 +53,12 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [x] Columns remembered when Explorer or a window is reopened. Tested in
       0.3.0, with a short flash of Explorer's own list before the columns
       appear, about 270 ms.
-- [ ] Real file icons and thumbnails. Written in 0.3.5, not compiled yet.
-- [ ] Native right-click menu. Written in 0.3.5, not compiled yet: the shell
-      menu is copied into a XAML flyout, no modal loop.
+- [x] Real file icons and thumbnails. Tested in 0.3.7. The Documents folder
+      icon still shows small, maybe the icon cache, look again later.
+- [x] Right-click menu works: shell commands in a XAML flyout, Copy, Cut,
+      Rename in place, Properties, Delete. Tested in 0.3.7. Paste and the
+      native look are left for later: visual pass on the flyout, and check
+      what Microsoft changed in the context menu.
 - [ ] Polish pass: open in Columns without the flash of Explorer's own list.
       Fine for now, per Ari.
 - [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
