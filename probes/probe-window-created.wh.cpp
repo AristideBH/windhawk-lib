@@ -2,7 +2,7 @@
 // @id              probe-window-created
 // @name            Probe: File Explorer window created
 // @description     Diagnostic only. Finds the earliest hook in the command bar that runs when an Explorer window opens, and when the View flyout appears after it.
-// @version         0.4
+// @version         0.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -357,7 +357,34 @@ bool OwnedByCommandBarModules(const void* object) {
         return false;
     }
     return StrStrIW(path, L"FileExplorerExtensions.dll") ||
-           StrStrIW(path, L"Microsoft.UI.Xaml.dll");
+           StrStrIW(path, L"Microsoft.UI.Xaml.dll") ||
+           StrStrIW(path, L"\\WindowsApps\\");
+}
+
+// What an argument looks like, for the log. Reads only memory that is
+// readable.
+void DescribeArgument(int index, void* arg) {
+    if (!Readable(arg, sizeof(void*))) {
+        Out(L"  arg%d %p: not readable", index, arg);
+        return;
+    }
+    void* object = *(void**)arg;
+    if (!Readable(object, sizeof(void*))) {
+        Out(L"  arg%d %p: slot holds %p, not readable", index, arg, object);
+        return;
+    }
+    void* vtable = *(void**)object;
+    void* first = Readable(vtable, sizeof(void*)) ? *(void**)vtable : nullptr;
+    wchar_t path[MAX_PATH] = L"?";
+    HMODULE module = nullptr;
+    if (first && GetModuleHandleExW(
+                     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                     (LPCWSTR)first, &module)) {
+        GetModuleFileNameW(module, path, ARRAYSIZE(path));
+    }
+    Out(L"  arg%d %p: slot=%p vtable=%p first=%p module=%s", index, arg, object,
+        vtable, first, path);
 }
 
 // `arg` is a reference to a projected object, so it points at a slot that
@@ -409,6 +436,11 @@ void Leave(int slot, void* a0, void* a1, void* a2, void* a3, bool isStatic) {
     Out(L"LEAVE %s, args=%p %p %p %p, control %s (argument %d)",
         g_slotNames[slot].c_str(), a0, a1, a2, a3,
         control ? L"found" : L"not found", which);
+    if (!control && g_slotEnters[slot] <= 3) {
+        for (int i = isStatic ? 0 : 1; i < 4; i++) {
+            DescribeArgument(i, args[i]);
+        }
+    }
     if (!control || g_inspect.load() < 1 || control == t_lastControl) {
         return;
     }
@@ -645,7 +677,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 BOOL Wh_ModInit() {
     g_inspect = Wh_GetIntSetting(L"inspect");
     OutInit();
-    Out(L"PROBE START probe-window-created v0.4, inspect=%d",
+    Out(L"PROBE START probe-window-created v0.5, inspect=%d",
         g_inspect.load());
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
