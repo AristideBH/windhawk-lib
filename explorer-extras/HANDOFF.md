@@ -12,7 +12,11 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.3.4.
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.3.5, not
+  compiled yet. 0.3.5 adds icons and thumbnails (`LoadIcons`, `ApplyIcons`)
+  and the right-click flyout (`OnRowRightTapped`) on top of 0.3.4, written
+  without a compiler: expect compile errors, read `compiler_errors.log`.
+  Last tested version: 0.3.4.
 - 0.3.1 to 0.3.4, tested by Ari on 2026-11-13: restore waits one tick
   (shorter flash), the horizontal wheel glides across the columns and never
   scrolls a column vertically, the vertical wheel scrolls only the hovered

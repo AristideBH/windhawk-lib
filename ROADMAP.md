@@ -53,8 +53,9 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [x] Columns remembered when Explorer or a window is reopened. Tested in
       0.3.0, with a short flash of Explorer's own list before the columns
       appear, about 270 ms.
-- [ ] Real file icons and thumbnails
-- [ ] Native right-click menu
+- [ ] Real file icons and thumbnails. Written in 0.3.5, not compiled yet.
+- [ ] Native right-click menu. Written in 0.3.5, not compiled yet: the shell
+      menu is copied into a XAML flyout, no modal loop.
 - [ ] Polish pass: open in Columns without the flash of Explorer's own list.
       Fine for now, per Ari.
 - [ ] A new tab opens in Columns. No creation hook for tabs is known yet.

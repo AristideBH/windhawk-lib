@@ -83,3 +83,14 @@ extraction flow, toolbar customization, small tweaks.
   single `.wh.cpp` by a small script, since Windhawk compiles one file.
 - Cost: a crash in one feature takes the others down. Each feature guards its
   entry points and can be switched off without a recompile.
+
+## 0.3.5 notes, unverified live
+
+- Icons: the worker reads 32 px `IShellItemImageFactory` images for the first
+  400 items after the list is delivered, in batches of 16, matched by column
+  generation, shown in a 20 px Image over the glyph placeholder.
+- Right-click: `IContextMenu::QueryContextMenu` into a hidden HMENU, copied
+  into a `MenuFlyout`, run with `InvokeCommand`. No TrackPopupMenu, because of
+  the modal-loop crash class. Send to and Open with submenus may be empty
+  (`HandleMenuMsg` is not called). Next retest: right-click a file and a
+  folder, try Copy, Properties and Delete.

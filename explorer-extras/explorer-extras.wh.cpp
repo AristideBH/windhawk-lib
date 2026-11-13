@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.4
+// @version         0.3.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -47,7 +47,11 @@ no click on the command bar needed. When Columns was the last layout you
 chose, new windows open in it, also after Explorer restarts. Turn this off
 with "Open new windows in Columns".
 
-Not yet: real file icons, right-click menus, and drag and drop.
+Also in 0.3: real file icons and thumbnails, read on a background thread (a
+glyph shows until each icon arrives), and a right-click menu that shows the
+shell's own commands for the item as a flyout.
+
+Not yet: multiple selection, drag and drop, type to jump.
 */
 // ==/WindhawkModReadme==
 
@@ -110,12 +114,14 @@ Not yet: real file icons, right-click menus, and drag and drop.
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
 
@@ -1044,7 +1050,8 @@ struct Column {
     std::vector<Entry> entries;
     std::vector<int> rowToEntry;         // Entry index per row, -1 for a header.
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
-    Pidl selectedChild;                  // Restored after a reload.
+    std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
+    Pidl selectedChild;                 // Restored after a reload.
     unsigned generation = 0;
     bool userSized = false;
     double charWidth = 7;
@@ -1064,6 +1071,7 @@ struct Column {
     winrt::event_token gripDoubleToken{};
     winrt::event_token gripEnteredToken{};
     winrt::event_token gripExitedToken{};
+    winrt::event_token rightTapToken{};
     muxc::Border pill{nullptr};
     ULONGLONG hoverSince = 0;
     ULONG notifyId = 0;
@@ -1074,8 +1082,22 @@ struct SiblingHook {
     winrt::event_token token{};
 };
 
+// The shell's context menu for one item, shown as a XAML flyout. A native
+// popup would run a modal loop inside a XAML handler, which crashed Explorer
+// before, so the shell's items are copied into a MenuFlyout instead.
+struct ContextMenuState {
+    IContextMenu* menu = nullptr;
+    HMENU hmenu = nullptr;
+    UINT idFirst = 1;
+    HWND owner = nullptr;
+    muxc::MenuFlyout flyout{nullptr};
+    winrt::event_token closedToken{};
+    std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
+};
+
 struct WindowState {
     DWORD thread = 0;
+    std::unique_ptr<ContextMenuState> context;
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
 
@@ -1192,6 +1214,124 @@ std::atomic<bool> g_workerStop{false};
 
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded);
 
+// ---- Icons and thumbnails, read on the worker thread ----
+
+struct IconBits {
+    size_t index = 0;  // Index into the column's entries.
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> bgra;  // Premultiplied, top-down.
+};
+
+struct IconBatch {
+    unsigned generation = 0;
+    std::vector<IconBits> icons;
+};
+
+void ApplyIcons(std::shared_ptr<IconBatch> const& batch);
+
+constexpr size_t kMaxIcons = 400;
+constexpr size_t kIconBatch = 16;
+
+// Copies a shell bitmap's pixels. False if it can't be read.
+bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
+    BITMAP info = {};
+    if (!GetObjectW(bitmap, sizeof(info), &info) || info.bmWidth <= 0 ||
+        info.bmHeight <= 0 || info.bmWidth > 512 || info.bmHeight > 512) {
+        return false;
+    }
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = info.bmWidth;
+    bmi.bmiHeader.biHeight = -info.bmHeight;  // Top-down.
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    out->width = info.bmWidth;
+    out->height = info.bmHeight;
+    out->bgra.assign((size_t)info.bmWidth * info.bmHeight * 4, 0);
+    HDC dc = GetDC(nullptr);
+    int lines = GetDIBits(dc, bitmap, 0, info.bmHeight, out->bgra.data(), &bmi,
+                          DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+    if (lines != info.bmHeight) {
+        return false;
+    }
+    // A bitmap without an alpha channel comes back with alpha 0 everywhere.
+    bool anyAlpha = false;
+    for (size_t i = 3; i < out->bgra.size(); i += 4) {
+        if (out->bgra[i]) {
+            anyAlpha = true;
+            break;
+        }
+    }
+    if (!anyAlpha) {
+        for (size_t i = 3; i < out->bgra.size(); i += 4) {
+            out->bgra[i] = 255;
+        }
+    }
+    return true;
+}
+
+// Reads icons, or thumbnails where the shell has one, for the first items of
+// a folder and sends them to the window's UI thread in small batches.
+void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
+               unsigned generation, mud::DispatcherQueue const& queue) {
+    IShellFolder* folder = nullptr;
+    HRESULT hr = ILIsEmpty(folderPidl)
+                     ? SHGetDesktopFolder(&folder)
+                     : SHBindToObject(nullptr, folderPidl, nullptr,
+                                      IID_PPV_ARGS(&folder));
+    if (FAILED(hr) || !folder) {
+        return;
+    }
+    auto batch = std::make_shared<IconBatch>();
+    batch->generation = generation;
+    auto flush = [&]() {
+        if (batch->icons.empty()) {
+            return;
+        }
+        auto sent = batch;
+        try {
+            queue.TryEnqueue([sent]() { ApplyIcons(sent); });
+        } catch (...) {
+        }
+        batch = std::make_shared<IconBatch>();
+        batch->generation = generation;
+    };
+    size_t count = std::min(children.size(), kMaxIcons);
+    for (size_t i = 0; i < count && !g_workerStop; i++) {
+        IShellItem* item = nullptr;
+        if (FAILED(SHCreateItemWithParent(nullptr, folder, children[i].get(),
+                                          IID_PPV_ARGS(&item))) ||
+            !item) {
+            continue;
+        }
+        IShellItemImageFactory* factory = nullptr;
+        if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) &&
+            factory) {
+            HBITMAP bitmap = nullptr;
+            if (SUCCEEDED(factory->GetImage(SIZE{32, 32}, SIIGBF_BIGGERSIZEOK,
+                                            &bitmap)) &&
+                bitmap) {
+                IconBits bits;
+                bits.index = i;
+                if (ReadBitmapBits(bitmap, &bits)) {
+                    batch->icons.push_back(std::move(bits));
+                }
+                DeleteObject(bitmap);
+            }
+            factory->Release();
+        }
+        item->Release();
+        if (batch->icons.size() >= kIconBatch) {
+            flush();
+        }
+    }
+    flush();
+    folder->Release();
+}
+
 DWORD WINAPI WorkerProc(LPVOID) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     while (!g_workerStop) {
@@ -1218,8 +1358,22 @@ DWORD WINAPI WorkerProc(LPVOID) {
             loaded->generation = job->generation;
             LoadFolder(job->folder.get(), job->spec, job->hidden,
                        job->maxItems, &loaded->data);
+            // The list moves to the UI thread, so keep copies of the items
+            // for the icon pass.
+            std::vector<Pidl> children;
+            for (auto& entry : loaded->data.entries) {
+                children.emplace_back(ILClone(entry.child.get()));
+                if (children.size() >= kMaxIcons) {
+                    break;
+                }
+            }
             try {
                 job->queue.TryEnqueue([loaded]() { ApplyLoaded(loaded); });
+            } catch (...) {
+            }
+            try {
+                LoadIcons(job->folder.get(), children, job->generation,
+                          job->queue);
             } catch (...) {
             }
         }
@@ -1297,6 +1451,7 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
             if (column->list) {
                 column->list.SelectionChanged(column->selectionToken);
                 column->list.DoubleTapped(column->doubleTapToken);
+                column->list.RightTapped(column->rightTapToken);
                 column->list.PreviewKeyDown(column->keyToken);
                 column->list.Loaded(column->loadedToken);
             }
@@ -1417,7 +1572,8 @@ void RefreshNames(Column* column) {
 }
 
 muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
-                           size_t capacity, muxc::TextBlock* textOut) {
+                           size_t capacity, muxc::TextBlock* textOut,
+                           muxc::Grid* iconHostOut) {
     muxc::Grid grid;
     muxc::ColumnDefinition iconColumn, nameColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
@@ -1434,8 +1590,11 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
     icon.FontSize(14);
     icon.HorizontalAlignment(mux::HorizontalAlignment::Left);
     icon.VerticalAlignment(mux::VerticalAlignment::Center);
-    muxc::Grid::SetColumn(icon, 0);
-    grid.Children().Append(icon);
+    muxc::Grid iconHost;
+    iconHost.Children().Append(icon);
+    muxc::Grid::SetColumn(iconHost, 0);
+    grid.Children().Append(iconHost);
+    *iconHostOut = iconHost;  // The worker swaps in the real icon later.
 
     muxc::TextBlock name;
     std::wstring shown = MiddleEllipsis(entry.name, capacity);
@@ -1492,6 +1651,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->rowToEntry.clear();
     column->texts.clear();
     column->texts.resize(column->entries.size(), muxc::TextBlock{nullptr});
+    column->iconHosts.clear();
+    column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
 
     FitWidth(column);
     size_t capacity = NameCapacity(column);
@@ -1518,7 +1679,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
             selectRow = (int)column->rowToEntry.size();
         }
         items.Append(MakeRow(column->entries[i], rowHeight, capacity,
-                             &column->texts[i]));
+                             &column->texts[i], &column->iconHosts[i]));
         column->rowToEntry.push_back((int)i);
     }
     if (data.truncated) {
@@ -1562,8 +1723,70 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
     // No column waits for this result any more. Drop it.
 }
 
+// The pixel buffer of a WriteableBitmap, as a byte pointer.
+struct __declspec(uuid("905a0fef-bc53-11df-8c49-001e4fc686da"))
+    IBufferByteAccessLocal : ::IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Buffer(uint8_t** value) = 0;
+};
+
+// Runs on the window's UI thread when the worker has read some icons.
+void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    for (auto& column : state->columns) {
+        if (column->generation != batch->generation) {
+            continue;
+        }
+        for (auto& icon : batch->icons) {
+            if (icon.index >= column->iconHosts.size() ||
+                !column->iconHosts[icon.index]) {
+                continue;
+            }
+            try {
+                mux::Media::Imaging::WriteableBitmap bitmap(icon.width,
+                                                            icon.height);
+                auto buffer = bitmap.PixelBuffer();
+                winrt::com_ptr<IBufferByteAccessLocal> access;
+                winrt::check_hresult(
+                    ((::IUnknown*)winrt::get_abi(buffer))
+                        ->QueryInterface(__uuidof(IBufferByteAccessLocal),
+                                         access.put_void()));
+                uint8_t* pixels = nullptr;
+                winrt::check_hresult(access->Buffer(&pixels));
+                if (!pixels || buffer.Capacity() < icon.bgra.size()) {
+                    continue;
+                }
+                memcpy(pixels, icon.bgra.data(), icon.bgra.size());
+                buffer.Length((uint32_t)icon.bgra.size());
+                bitmap.Invalidate();
+
+                muxc::Image image;
+                image.Source(bitmap);
+                image.Width(20);
+                image.Height(20);
+                image.Stretch(mux::Media::Stretch::Uniform);
+                image.HorizontalAlignment(mux::HorizontalAlignment::Left);
+                image.VerticalAlignment(mux::VerticalAlignment::Center);
+                auto host = column->iconHosts[icon.index];
+                host.Children().Clear();
+                host.Children().Append(image);
+            } catch (...) {
+                static int logged = 0;
+                if (logged++ < 3) {
+                    LogHresult(L"applying an icon");
+                }
+            }
+        }
+        return;
+    }
+}
+
 void OnRowSelected(muxc::ListView const& list);
 void OnRowDoubleTapped(muxc::ListView const& list);
+void OnRowRightTapped(muxc::ListView const& list,
+                      mux::Input::RightTappedRoutedEventArgs const& args);
 void OnColumnKey(muxc::ListView const& list,
                  mux::Input::KeyRoutedEventArgs const& args);
 
@@ -1590,6 +1813,13 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
            mux::Input::DoubleTappedRoutedEventArgs const&) {
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnRowDoubleTapped(list);
+            }
+        });
+    column->rightTapToken = list.RightTapped(
+        [](Inspectable const& sender,
+           mux::Input::RightTappedRoutedEventArgs const& args) {
+            if (auto list = sender.try_as<muxc::ListView>()) {
+                OnRowRightTapped(list, args);
             }
         });
 
@@ -1949,6 +2179,237 @@ void OnRowSelected(muxc::ListView const& list) {
     }
 }
 
+// ---- Right-click menu ----
+
+// Lets go of the shell menu and every handler on the flyout's items.
+void CloseContextMenu(WindowState* state) {
+    if (!state->context) {
+        return;
+    }
+    auto context = std::move(state->context);
+    try {
+        for (auto& hook : context->hooks) {
+            if (hook.first) {
+                hook.first.Click(hook.second);
+            }
+        }
+        if (context->flyout) {
+            context->flyout.Closed(context->closedToken);
+            context->flyout.Hide();
+        }
+    } catch (...) {
+        LogHresult(L"CloseContextMenu");
+    }
+    context->hooks.clear();
+    context->flyout = nullptr;
+    if (context->hmenu) {
+        DestroyMenu(context->hmenu);
+    }
+    if (context->menu) {
+        context->menu->Release();
+    }
+}
+
+std::wstring MenuText(HMENU menu, UINT position, MENUITEMINFOW* info) {
+    wchar_t text[256] = L"";
+    *info = {};
+    info->cbSize = sizeof(*info);
+    info->fMask = MIIM_FTYPE | MIIM_STRING | MIIM_ID | MIIM_STATE |
+                  MIIM_SUBMENU;
+    info->dwTypeData = text;
+    info->cch = ARRAYSIZE(text) - 1;
+    if (!GetMenuItemInfoW(menu, position, TRUE, info)) {
+        return L"";
+    }
+    // Without the & accelerator marks and the shortcut text after the tab.
+    std::wstring result;
+    for (const wchar_t* p = text; *p && *p != L'\t'; p++) {
+        if (*p == L'&') {
+            if (p[1] == L'&') {
+                result += L'&';
+                p++;
+            }
+            continue;
+        }
+        result += *p;
+    }
+    return result;
+}
+
+void FillFlyoutItems(WindowState* state, HMENU menu,
+                     winrt::Windows::Foundation::Collections::IVector<
+                         muxc::MenuFlyoutItemBase> const& items,
+                     int depth) {
+    int count = GetMenuItemCount(menu);
+    bool needSeparator = false;
+    for (int i = 0; i < count && i < 80; i++) {
+        MENUITEMINFOW info;
+        std::wstring text = MenuText(menu, i, &info);
+        if (info.fType & MFT_SEPARATOR) {
+            needSeparator = items.Size() > 0;
+            continue;
+        }
+        if (text.empty()) {
+            continue;
+        }
+        if (needSeparator) {
+            items.Append(muxc::MenuFlyoutSeparator());
+            needSeparator = false;
+        }
+        if (info.hSubMenu) {
+            if (depth >= 2) {
+                continue;
+            }
+            muxc::MenuFlyoutSubItem sub;
+            sub.Text(text);
+            FillFlyoutItems(state, info.hSubMenu, sub.Items(), depth + 1);
+            if (sub.Items().Size() > 0) {
+                items.Append(sub);
+            }
+            continue;
+        }
+        muxc::MenuFlyoutItem item;
+        item.Text(text);
+        item.IsEnabled(!(info.fState & (MFS_DISABLED | MFS_GRAYED)));
+        item.Tag(winrt::box_value((uint32_t)info.wID));
+        auto token = item.Click(
+            [](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                WindowState* state = StateForThisThread(false);
+                if (!state || !state->context || g_unloading) {
+                    return;
+                }
+                try {
+                    auto item = sender.try_as<muxc::MenuFlyoutItem>();
+                    if (!item) {
+                        return;
+                    }
+                    UINT id = winrt::unbox_value<uint32_t>(item.Tag());
+                    ContextMenuState* context = state->context.get();
+                    CMINVOKECOMMANDINFOEX invoke = {};
+                    invoke.cbSize = sizeof(invoke);
+                    invoke.hwnd = context->owner;
+                    invoke.lpVerb = MAKEINTRESOURCEA(id - context->idFirst);
+                    invoke.lpVerbW = MAKEINTRESOURCEW(id - context->idFirst);
+                    invoke.nShow = SW_SHOWNORMAL;
+                    invoke.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                    GetCursorPos(&invoke.ptInvoke);
+                    HRESULT hr = context->menu->InvokeCommand(
+                        (CMINVOKECOMMANDINFO*)&invoke);
+                    Out(L"context menu command %u -> hr=0x%08lX", id, hr);
+                } catch (...) {
+                    LogHresult(L"running a context menu command");
+                }
+            });
+        state->context->hooks.emplace_back(item, token);
+        items.Append(item);
+    }
+}
+
+void OnRowRightTapped(muxc::ListView const& list,
+                      mux::Input::RightTappedRoutedEventArgs const& args) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        int columnIndex = ColumnIndexOfList(state, list);
+        if (columnIndex < 0) {
+            return;
+        }
+        Column* column = state->columns[columnIndex].get();
+
+        // The row under the pointer: climb from what was hit to its item.
+        mux::DependencyObject node =
+            args.OriginalSource().try_as<mux::DependencyObject>();
+        muxc::ListViewItem row{nullptr};
+        for (int i = 0; node && i < 20; i++) {
+            if (auto found = node.try_as<muxc::ListViewItem>()) {
+                row = found;
+                break;
+            }
+            node = mux::Media::VisualTreeHelper::GetParent(node);
+        }
+        if (!row) {
+            return;  // Empty space. The quick options come in 0.3.1.
+        }
+        int rowIndex = list.IndexFromContainer(row);
+        int entryIndex = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
+                             ? column->rowToEntry[rowIndex]
+                             : -1;
+        if (entryIndex < 0) {
+            return;
+        }
+        args.Handled(true);
+        if (list.SelectedIndex() != rowIndex) {
+            list.SelectedIndex(rowIndex);
+        }
+
+        CloseContextMenu(state);
+        IShellFolder* parent = nullptr;
+        HRESULT hr = ILIsEmpty(column->folder.get())
+                         ? SHGetDesktopFolder(&parent)
+                         : SHBindToObject(nullptr, column->folder.get(),
+                                          nullptr, IID_PPV_ARGS(&parent));
+        if (FAILED(hr) || !parent) {
+            Out(L"context menu: can't bind the folder, hr=0x%08lX", hr);
+            return;
+        }
+        PCUITEMID_CHILD child = column->entries[entryIndex].child.get();
+        IContextMenu* menu = nullptr;
+        hr = parent->GetUIObjectOf(state->topLevel, 1, &child,
+                                   IID_IContextMenu, nullptr, (void**)&menu);
+        parent->Release();
+        if (FAILED(hr) || !menu) {
+            Out(L"context menu: no IContextMenu, hr=0x%08lX", hr);
+            return;
+        }
+        HMENU hmenu = CreatePopupMenu();
+        hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF,
+                                    CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME);
+        if (FAILED(hr)) {
+            DestroyMenu(hmenu);
+            menu->Release();
+            Out(L"context menu: QueryContextMenu hr=0x%08lX", hr);
+            return;
+        }
+
+        state->context = std::make_unique<ContextMenuState>();
+        state->context->menu = menu;
+        state->context->hmenu = hmenu;
+        state->context->owner = state->topLevel;
+        muxc::MenuFlyout flyout;
+        FillFlyoutItems(state, hmenu, flyout.Items(), 0);
+        state->context->flyout = flyout;
+        state->context->closedToken = flyout.Closed(
+            [](Inspectable const&, Inspectable const&) {
+                WindowState* state = StateForThisThread(false);
+                if (!state || g_unloading || !state->queue) {
+                    return;
+                }
+                // After the click has been handled.
+                try {
+                    state->queue.TryEnqueue([]() {
+                        WindowState* state = StateForThisThread(false);
+                        if (state && !g_unloading) {
+                            CloseContextMenu(state);
+                        }
+                    });
+                } catch (...) {
+                }
+            });
+        muxc::Primitives::FlyoutShowOptions options;
+        options.Position(args.GetPosition(list));
+        flyout.ShowAt(list, options);
+        Out(L"context menu shown for \"%s\", %u items",
+            column->entries[entryIndex].name.c_str(), flyout.Items().Size());
+    } catch (...) {
+        LogHresult(L"OnRowRightTapped");
+        if (state) {
+            CloseContextMenu(state);
+        }
+    }
+}
+
 void OnRowDoubleTapped(muxc::ListView const& list) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
@@ -2040,6 +2501,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    CloseContextMenu(state);
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -2095,6 +2557,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
 void AbandonWindow(WindowState* state) {
     Out(L"window closed with the panel on, letting its objects go");
     state->on = false;
+    (void)state->context.release();  // Never destroyed, like the columns.
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -2964,6 +3427,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
 using BarHandler_t = void(WINAPI*)(void* pThis, Inspectable const& sender,
                                    void* args);
 
+
 BarHandler_t PointerPressed_Original;
 void WINAPI PointerPressed_Hook(void* pThis, Inspectable const& sender,
                                 void* args) {
@@ -3143,7 +3607,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
