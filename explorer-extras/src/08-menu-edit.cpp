@@ -1569,8 +1569,8 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         muxc::StackPanel root;
         root.Orientation(muxc::Orientation::Vertical);
         root.MinWidth(300);
-        root.Margin(mux::Thickness{-10, -9, -10, -11});
-        root.Padding(mux::Thickness{2, 2, 2, 2});
+        root.Margin(mux::Thickness{-12, -11, -12, -13});
+        root.Padding(mux::Thickness{0, 0, 0, 0});
         root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
         std::set<int> used;  // Positions shown above "Show more options".
 
@@ -1668,7 +1668,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 auto button = plainButton();
                 button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
                 button.MinWidth(56);
-                button.Padding(mux::Thickness{0, 4, 0, 4});
+                button.Padding(mux::Thickness{1, 3, 1, 3});
                 muxc::StackPanel stack;
                 stack.Orientation(muxc::Orientation::Vertical);
                 stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
@@ -1716,7 +1716,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             auto button = plainButton();
             button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
             button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
-            button.Padding(mux::Thickness{8, 6, 8, 6});
+            button.Padding(mux::Thickness{5, 4, 5, 4});
             button.IsEnabled(enabled);
             muxc::Grid content;
             for (double width : {28.0, 0.0, 0.0, 18.0}) {
