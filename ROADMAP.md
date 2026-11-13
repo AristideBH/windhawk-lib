@@ -87,7 +87,7 @@ last and are not scheduled.
 | Version | Content | Effort | Risk |
 | --- | --- | --- | --- |
 | 0.6.x | Done: everyday keys, redo, live accent, multi-rename, undo of a new folder, columns of a deleted folder pruned. | | |
-| 0.7.0 | New folder with selection (flyout item and Ctrl+Alt+N, one Ctrl+Z takes it back) and open in a new tab (flyout item and middle-click). Written, not tested. | small | low. The new tab is made with Ctrl+T sent to the window, then shown its folder once the tab window exists. |
+| 0.7.0 | Done and tested: new folder with selection (flyout item and Ctrl+Alt+N, one Ctrl+Z takes it back) and open in a new tab (flyout item and middle-click). | small | low. The new tab is made with Ctrl+T sent to the window, then shown its folder once the tab window exists. |
 | 0.7.1 | Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. | medium | medium: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
 | 0.7.2 | Small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | small each | low |
 | 0.7.3 | Housekeeping: split the 8000 line source into files per area, joined by a script. Every later patch depends on it, so before 0.8. | medium | low |
@@ -167,7 +167,7 @@ Keyboard and everyday gaps:
       Ctrl+Shift+C copies the paths, Ctrl+Y redoes a delete or a rename
 - [x] The pill and the selection rectangle follow a
       change of the system accent or theme
-- [ ] Middle-click opens a folder in a new tab
+- [x] Middle-click opens a folder in a new tab (0.7.0)
 - [ ] Space for a quick preview, if Explorer's preview pane can be driven
 
 Structure and polish:
@@ -210,9 +210,8 @@ Structure and polish:
 - [ ] Option to show only real Desktop items, hiding the virtual ones (This
       PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form
       is open.
-- [ ] New folder from selection, from the right-click menu and from the
-      New button in the command bar. Scheduled in 0.6.2 for the flyout and a
-      shortcut. Design: make "New folder" like Ctrl+Shift+N, then move the
+- [x] New folder from selection, from the right-click menu (tested in 0.7.0)
+      and with a shortcut. The command bar's New button is still open. Design: make "New folder" like Ctrl+Shift+N, then move the
       selected items into it with the shell's own move, so conflicts and
       progress behave as in Explorer, then edit the name. The undo entry holds
       the moves and the folder. The command bar's New button is a later step.
