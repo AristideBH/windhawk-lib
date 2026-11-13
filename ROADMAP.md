@@ -88,7 +88,7 @@ last and are not scheduled.
 | --- | --- | --- | --- |
 | 0.6.0 | Everyday keys: F5, Escape, Backspace, Menu key and Shift+F10, Ctrl+Shift+N, Ctrl+Shift+C, redo. Live accent colour for the pill and the selection rectangle, following a change of the system accent while the panel is open. | small | low. Backspace may be taken by Explorer's accelerators, the `TranslateAcceleratorW` hook already exists for the rename box and can be reused. |
 | 0.6.1 | Multi-rename: F2 on several items asks one name and numbers the rest like Explorer. Open in new tab from the flyout and middle-click. | medium | low |
-| 0.6.2 | Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. Then the small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | medium for archives, small each for the rest | medium for archives: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
+| 0.6.2 | New folder with selection: a flyout item and a shortcut (Ctrl+Alt+N) that make a folder, move the selected items into it, and open its name for editing. One Ctrl+Z takes it all back. Open in new tab from the flyout and middle-click. Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. Then the small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | medium for archives, small each for the rest | medium for archives: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
 | 0.6.3 | Housekeeping: split the 7000 line source into files per area, joined by a script, as the roadmap planned for the second feature. | medium | low, but every later patch depends on it, so do it before 0.7 |
 | 0.7 | Columns per tab. The state is per window today. Each tab gets its own columns, the tab switch shows the right one. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high: the tab creation hook exists, closing and moving tabs between windows do not |
 | 0.8 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium: a modal menu inside a XAML handler crashed Explorer before |
@@ -210,7 +210,11 @@ Structure and polish:
       PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form
       is open.
 - [ ] New folder from selection, from the right-click menu and from the
-      New button in the command bar
+      New button in the command bar. Scheduled in 0.6.2 for the flyout and a
+      shortcut. Design: make "New folder" like Ctrl+Shift+N, then move the
+      selected items into it with the shell's own move, so conflicts and
+      progress behave as in Explorer, then edit the name. The undo entry holds
+      the moves and the folder. The command bar's New button is a later step.
 - [ ] Better archive extraction flow
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization
