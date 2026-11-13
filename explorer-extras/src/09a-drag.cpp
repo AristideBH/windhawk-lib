@@ -147,6 +147,8 @@ void CancelDrag(WindowState* state) {
     }
 }
 
+void StartOutDrag(WindowState* state);
+
 // A press on a row: a drag may start from it once the pointer moves.
 void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListViewItem const& row,
                    mux::Input::PointerRoutedEventArgs const& args) {
@@ -284,6 +286,15 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         }
     }
     d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
+    // Past the edge of the panel the drag goes on as a real one.
+    if (g_dragOut && state->rootGrid) {
+        auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
+        if (inRoot.X < 0 || inRoot.Y < 0 || inRoot.X > state->rootGrid.ActualWidth() ||
+            inRoot.Y > state->rootGrid.ActualHeight()) {
+            StartOutDrag(state);
+            return true;
+        }
+    }
     return true;
 }
 
@@ -347,6 +358,71 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     data->Release();
     drop->Release();
     ReloadAll(state);
+}
+
+// A real drag, for when the pointer leaves the panel: the shell's own drag loop
+// carries the items to whatever is under the pointer, another Explorer window,
+// the desktop or another application. Started after the event that noticed it,
+// and with the panel's own drag already ended.
+void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children) {
+    IShellFolder* source = nullptr;
+    HRESULT hr = ILIsEmpty(sourceFolder.get())
+                     ? SHGetDesktopFolder(&source)
+                     : SHBindToObject(nullptr, sourceFolder.get(), nullptr, IID_PPV_ARGS(&source));
+    IDataObject* data = nullptr;
+    if (SUCCEEDED(hr) && source) {
+        std::vector<PCUITEMID_CHILD> items;
+        for (auto& child : children) {
+            items.push_back(child.get());
+        }
+        hr = source->GetUIObjectOf(state->topLevel, (UINT)items.size(), items.data(), IID_IDataObject,
+                                   nullptr, (void**)&data);
+    }
+    if (source) {
+        source->Release();
+    }
+    if (FAILED(hr) || !data) {
+        Out(L"drag out: no data object, hr=0x%08lX", hr);
+        return;
+    }
+    DWORD effect = DROPEFFECT_NONE;
+    Out(L"drag out: %d item(s) leave the panel", (int)children.size());
+    hr = SHDoDragDrop(state->topLevel, data, nullptr,
+                      DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    Out(L"drag out ended: effect %lu, hr=0x%08lX", (unsigned long)effect, hr);
+    data->Release();
+    ReloadAll(state);
+}
+
+void StartOutDrag(WindowState* state) {
+    auto& d = state->drag;
+    if (!d.active || !d.column) {
+        return;
+    }
+    Pidl sourceFolder(ILClone(d.column->folder.get()));
+    std::vector<Pidl> children;
+    for (size_t index : d.entries) {
+        if (index < d.column->entries.size()) {
+            children.emplace_back(ILClone(d.column->entries[index].child.get()));
+        }
+    }
+    DragEnd(state);
+    if (children.empty()) {
+        return;
+    }
+    auto shared = std::make_shared<std::pair<Pidl, std::vector<Pidl>>>(std::move(sourceFolder),
+                                                                       std::move(children));
+    state->queue.TryEnqueue([shared]() {
+        WindowState* now = StateForThisThread(false);
+        if (!now || !now->on || g_unloading) {
+            return;
+        }
+        try {
+            DoOutDrag(now, std::move(shared->first), std::move(shared->second));
+        } catch (...) {
+            LogHresult(L"dragging out");
+        }
+    });
 }
 
 // The button went up. True if it ended a drag.

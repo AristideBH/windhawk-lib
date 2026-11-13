@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.12.3
+// @version         0.13.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -82,6 +82,9 @@ Not yet: drag and drop.
   - rememberLayout: true
     $name: Remember Columns per folder
     $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
+  - dragOut: true
+    $name: Drag items out of the panel
+    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. If dragging out ever causes trouble, turn this off.
   - archives: false
     $name: Browse archives in columns
     $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
@@ -192,6 +195,7 @@ std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
+std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
@@ -9617,6 +9621,8 @@ void CancelDrag(WindowState* state) {
     }
 }
 
+void StartOutDrag(WindowState* state);
+
 // A press on a row: a drag may start from it once the pointer moves.
 void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListViewItem const& row,
                    mux::Input::PointerRoutedEventArgs const& args) {
@@ -9754,6 +9760,15 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         }
     }
     d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
+    // Past the edge of the panel the drag goes on as a real one.
+    if (g_dragOut && state->rootGrid) {
+        auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
+        if (inRoot.X < 0 || inRoot.Y < 0 || inRoot.X > state->rootGrid.ActualWidth() ||
+            inRoot.Y > state->rootGrid.ActualHeight()) {
+            StartOutDrag(state);
+            return true;
+        }
+    }
     return true;
 }
 
@@ -9817,6 +9832,71 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     data->Release();
     drop->Release();
     ReloadAll(state);
+}
+
+// A real drag, for when the pointer leaves the panel: the shell's own drag loop
+// carries the items to whatever is under the pointer, another Explorer window,
+// the desktop or another application. Started after the event that noticed it,
+// and with the panel's own drag already ended.
+void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children) {
+    IShellFolder* source = nullptr;
+    HRESULT hr = ILIsEmpty(sourceFolder.get())
+                     ? SHGetDesktopFolder(&source)
+                     : SHBindToObject(nullptr, sourceFolder.get(), nullptr, IID_PPV_ARGS(&source));
+    IDataObject* data = nullptr;
+    if (SUCCEEDED(hr) && source) {
+        std::vector<PCUITEMID_CHILD> items;
+        for (auto& child : children) {
+            items.push_back(child.get());
+        }
+        hr = source->GetUIObjectOf(state->topLevel, (UINT)items.size(), items.data(), IID_IDataObject,
+                                   nullptr, (void**)&data);
+    }
+    if (source) {
+        source->Release();
+    }
+    if (FAILED(hr) || !data) {
+        Out(L"drag out: no data object, hr=0x%08lX", hr);
+        return;
+    }
+    DWORD effect = DROPEFFECT_NONE;
+    Out(L"drag out: %d item(s) leave the panel", (int)children.size());
+    hr = SHDoDragDrop(state->topLevel, data, nullptr,
+                      DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    Out(L"drag out ended: effect %lu, hr=0x%08lX", (unsigned long)effect, hr);
+    data->Release();
+    ReloadAll(state);
+}
+
+void StartOutDrag(WindowState* state) {
+    auto& d = state->drag;
+    if (!d.active || !d.column) {
+        return;
+    }
+    Pidl sourceFolder(ILClone(d.column->folder.get()));
+    std::vector<Pidl> children;
+    for (size_t index : d.entries) {
+        if (index < d.column->entries.size()) {
+            children.emplace_back(ILClone(d.column->entries[index].child.get()));
+        }
+    }
+    DragEnd(state);
+    if (children.empty()) {
+        return;
+    }
+    auto shared = std::make_shared<std::pair<Pidl, std::vector<Pidl>>>(std::move(sourceFolder),
+                                                                       std::move(children));
+    state->queue.TryEnqueue([shared]() {
+        WindowState* now = StateForThisThread(false);
+        if (!now || !now->on || g_unloading) {
+            return;
+        }
+        try {
+            DoOutDrag(now, std::move(shared->first), std::move(shared->second));
+        } catch (...) {
+            LogHresult(L"dragging out");
+        }
+    });
 }
 
 // The button went up. True if it ended a drag.
@@ -10567,6 +10647,7 @@ void LoadSettings() {
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
+    g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
     g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
     g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
     g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
@@ -10606,7 +10687,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.12.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.13.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
