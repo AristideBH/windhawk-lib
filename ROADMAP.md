@@ -175,7 +175,7 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 
 - [ ] Labels, macOS style
 - [ ] Home page overhaul
-- [ ] Item tooltip shows details (type, size, dates, dimensions, tags), not
+- [ ] (0.4.9, not tested) Item tooltip shows details (type, size, dates, dimensions, tags), not
       the full name. The full name is still reachable another way, such as a
       longer hover or the status bar.
 - [ ] Compatibility with `DarkionAvey/windhawk-gpu-accelerated-explorer-view`

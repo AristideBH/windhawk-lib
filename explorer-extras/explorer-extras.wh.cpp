@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.8
+// @version         0.4.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1347,6 +1347,7 @@ struct Column {
     winrt::event_token moveToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
     double rowHeight = 32;
     int animGroup = -1;        // A group that is opening or closing,
     bool animCollapse = false; // which way,
@@ -2340,6 +2341,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
     column->hintEntry = -1;
+    column->tipBuilt.assign(column->entries.size(), 0);
     column->animGroup = -1;
     column->animDoneAt = 0;
     column->rowGroup.clear();
@@ -4457,6 +4459,8 @@ void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
     paint(row, true);
 }
 
+muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex);
+
 void OnColumnPointerMoved(muxc::ListView const& list,
                           mux::Input::PointerRoutedEventArgs const& args) {
     WindowState* state = StateForThisThread(false);
@@ -4474,6 +4478,26 @@ void OnColumnPointerMoved(muxc::ListView const& list,
         }
         SetHeaderHover(column, list, HeaderRowAt(column, list,
                                                  args.GetCurrentPoint(list).Position()));
+
+        // The first time the pointer is on a row: its detail tooltip.
+        mux::DependencyObject node =
+            args.OriginalSource().try_as<mux::DependencyObject>();
+        for (int i = 0; node && i < 20; i++) {
+            if (auto row = node.try_as<muxc::ListViewItem>()) {
+                int rowIndex = list.IndexFromContainer(row);
+                int entry = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size()
+                                ? column->rowToEntry[rowIndex]
+                                : -1;
+                if (entry >= 0 && (size_t)entry < column->tipBuilt.size() &&
+                    !column->tipBuilt[entry]) {
+                    column->tipBuilt[entry] = 1;
+                    muxc::ToolTipService::SetToolTip(
+                        row, BuildDetailTip(column, (size_t)entry));
+                }
+                break;
+            }
+            node = mux::Media::VisualTreeHelper::GetParent(node);
+        }
     } catch (...) {
         LogHresult(L"header hover");
     }
@@ -4491,6 +4515,117 @@ void OnColumnPointerExited(muxc::ListView const& list) {
         }
     } catch (...) {
     }
+}
+
+// The detail tooltip of a row: the name, then what the shell knows about the
+// item, such as its type, size, dates, picture size or length. The labels and
+// the values are the shell's own, as the Details view shows them. Read the first
+// time the pointer is over the row, not for every row up front.
+muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
+    const Entry& entry = column->entries[entryIndex];
+    struct Line {
+        std::wstring label;
+        std::wstring value;
+    };
+    std::vector<Line> lines;
+
+    IShellFolder* folder = nullptr;
+    HRESULT hr = ILIsEmpty(column->folder.get())
+                     ? SHGetDesktopFolder(&folder)
+                     : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                      IID_PPV_ARGS(&folder));
+    IShellFolder2* folder2 = nullptr;
+    if (SUCCEEDED(hr) && folder) {
+        folder->QueryInterface(IID_PPV_ARGS(&folder2));
+    }
+    if (folder2) {
+        // One pass over the folder's columns finds the number of each property.
+        const PROPERTYKEY* wanted[] = {
+            &PKEY_ItemTypeText,    &PKEY_Size,         &PKEY_DateModified,
+            &PKEY_Image_Dimensions, &PKEY_Media_Duration, &PKEY_Title,
+            &PKEY_Author,          &PKEY_Music_Artist, &PKEY_Music_AlbumTitle,
+            &PKEY_Keywords,        &PKEY_Comment};
+        const int count = ARRAYSIZE(wanted);
+        int columnOf[ARRAYSIZE(wanted)];
+        for (int& c : columnOf) {
+            c = -1;
+        }
+        int misses = 0;
+        for (UINT i = 0; i < 600 && misses < 30; i++) {
+            SHCOLUMNID id{};
+            if (FAILED(folder2->MapColumnToSCID(i, &id))) {
+                misses++;
+                continue;
+            }
+            misses = 0;
+            for (int k = 0; k < count; k++) {
+                if (columnOf[k] < 0 && IsEqualPropertyKey(id, *wanted[k])) {
+                    columnOf[k] = (int)i;
+                }
+            }
+        }
+        PCUITEMID_CHILD child = entry.child.get();
+        for (int k = 0; k < count && lines.size() < 8; k++) {
+            if (columnOf[k] < 0) {
+                continue;
+            }
+            SHELLDETAILS head{}, value{};
+            wchar_t headText[128] = L"", valueText[512] = L"";
+            if (SUCCEEDED(folder2->GetDetailsOf(nullptr, (UINT)columnOf[k], &head)) &&
+                SUCCEEDED(StrRetToBufW(&head.str, nullptr, headText, ARRAYSIZE(headText))) &&
+                SUCCEEDED(folder2->GetDetailsOf(child, (UINT)columnOf[k], &value)) &&
+                SUCCEEDED(StrRetToBufW(&value.str, child, valueText, ARRAYSIZE(valueText))) &&
+                headText[0] && valueText[0]) {
+                lines.push_back({headText, valueText});
+            }
+        }
+        folder2->Release();
+    }
+    if (folder) {
+        folder->Release();
+    }
+
+    muxc::StackPanel panel;
+    muxc::TextBlock name;
+    name.Text(entry.name);
+    name.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    name.TextWrapping(mux::TextWrapping::Wrap);
+    name.MaxWidth(380);
+    panel.Children().Append(name);
+    if (!lines.empty()) {
+        muxc::Grid grid;
+        grid.Margin(mux::Thickness{0, 6, 0, 0});
+        muxc::ColumnDefinition labels, values;
+        labels.Width(mux::GridLength{1, mux::GridUnitType::Auto});
+        values.Width(mux::GridLength{1, mux::GridUnitType::Auto});
+        grid.ColumnDefinitions().Append(labels);
+        grid.ColumnDefinitions().Append(values);
+        for (size_t i = 0; i < lines.size(); i++) {
+            muxc::RowDefinition row;
+            row.Height(mux::GridLength{1, mux::GridUnitType::Auto});
+            grid.RowDefinitions().Append(row);
+            muxc::TextBlock label;
+            label.Text(lines[i].label);
+            label.Opacity(0.65);
+            label.FontSize(12);
+            label.Margin(mux::Thickness{0, 1, 12, 1});
+            muxc::Grid::SetRow(label, (int)i);
+            muxc::TextBlock value;
+            value.Text(lines[i].value);
+            value.FontSize(12);
+            value.Margin(mux::Thickness{0, 1, 0, 1});
+            value.TextWrapping(mux::TextWrapping::Wrap);
+            value.MaxWidth(260);
+            muxc::Grid::SetRow(value, (int)i);
+            muxc::Grid::SetColumn(value, 1);
+            grid.Children().Append(label);
+            grid.Children().Append(value);
+        }
+        panel.Children().Append(grid);
+    }
+    muxc::ToolTip tip;
+    tip.Content(panel);
+    return tip;
 }
 
 // Opens or collapses the group of a header row.
@@ -6340,7 +6475,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
