@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.8.4
+// @version         0.9.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -136,6 +136,7 @@ Not yet: drag and drop.
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1654,9 +1655,10 @@ struct ContextMenuState {
     Column* column = nullptr;  // The column and items the menu is for.
     std::vector<size_t> entries;
     bool insideArchive = false;  // The items are inside an archive that is being browsed.
-    muxc::MenuFlyout flyout{nullptr};
+    muxc::Primitives::FlyoutBase flyout{nullptr};
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
+    std::vector<std::pair<muxc::AppBarButton, winrt::event_token>> buttonHooks;
 };
 
 // What the user did in the columns that Ctrl+Z can take back. Explorer's own
@@ -5046,6 +5048,11 @@ void CloseContextMenu(WindowState* state) {
                 hook.first.Click(hook.second);
             }
         }
+        for (auto& hook : context->buttonHooks) {
+            if (hook.first) {
+                hook.first.Click(hook.second);
+            }
+        }
         if (context->flyout) {
             context->flyout.Closed(context->closedToken);
             context->flyout.Hide();
@@ -5054,6 +5061,7 @@ void CloseContextMenu(WindowState* state) {
         LogHresult(L"CloseContextMenu");
     }
     context->hooks.clear();
+    context->buttonHooks.clear();
     context->flyout = nullptr;
     if (context->hmenu) {
         DestroyMenu(context->hmenu);
@@ -5091,72 +5099,13 @@ std::wstring MenuText(HMENU menu, UINT position, MENUITEMINFOW* info) {
 
 int ArchiveParentColumn(WindowState* state, Column* column);
 
-void FillFlyoutItems(WindowState* state, HMENU menu,
-                     winrt::Windows::Foundation::Collections::IVector<
-                         muxc::MenuFlyoutItemBase> const& items,
-                     int depth) {
-    // Inside an archive only Copy is offered. Properties on such items took
-    // Explorer down in the 0.7.2 test, and Delete, Cut, Rename, Send to and
-    // the like have no meaning there.
-    bool restricted = state->context && state->context->insideArchive;
-    int count = GetMenuItemCount(menu);
-    bool needSeparator = false;
-    for (int i = 0; i < count && i < 80; i++) {
-        MENUITEMINFOW info;
-        std::wstring text = MenuText(menu, i, &info);
-        if (info.fType & MFT_SEPARATOR) {
-            needSeparator = items.Size() > 0;
-            continue;
-        }
-        if (text.empty()) {
-            continue;
-        }
-        if (needSeparator) {
-            items.Append(muxc::MenuFlyoutSeparator());
-            needSeparator = false;
-        }
-        if (restricted) {
-            if (info.hSubMenu) {
-                continue;
-            }
-            wchar_t verb[64] = L"";
-            if (state->context->menu) {
-                state->context->menu->GetCommandString(info.wID - state->context->idFirst,
-                                                       GCS_VERBW, nullptr, (char*)verb,
-                                                       ARRAYSIZE(verb));
-            }
-            if (_wcsicmp(verb, L"copy") != 0) {
-                continue;
-            }
-        }
-        if (info.hSubMenu) {
-            if (depth >= 2) {
-                continue;
-            }
-            muxc::MenuFlyoutSubItem sub;
-            sub.Text(text);
-            FillFlyoutItems(state, info.hSubMenu, sub.Items(), depth + 1);
-            if (sub.Items().Size() > 0) {
-                items.Append(sub);
-            }
-            continue;
-        }
-        muxc::MenuFlyoutItem item;
-        item.Text(text);
-        item.IsEnabled(!(info.fState & (MFS_DISABLED | MFS_GRAYED)));
-        item.Tag(winrt::box_value((uint32_t)info.wID));
-        auto token = item.Click(
-            [](Inspectable const& sender, mux::RoutedEventArgs const&) {
-                WindowState* state = StateForThisThread(false);
-                if (!state || !state->context || g_unloading) {
-                    return;
-                }
-                try {
-                    auto item = sender.try_as<muxc::MenuFlyoutItem>();
-                    if (!item) {
-                        return;
-                    }
-                    UINT id = winrt::unbox_value<uint32_t>(item.Tag());
+// Runs one command of the shell's menu for the items the menu was made for.
+void RunContextCommand(UINT id) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->context || g_unloading) {
+        return;
+    }
+    try {
                     ContextMenuState* context = state->context.get();
                     // For an undo of a delete: the paths, before they are gone.
                     std::vector<std::wstring> pathsBefore;
@@ -5214,8 +5163,73 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                         }
                     }
                     ReloadAll(state);
-                } catch (...) {
-                    LogHresult(L"running a context menu command");
+    } catch (...) {
+        LogHresult(L"running a context menu command");
+    }
+}
+
+void FillFlyoutItems(WindowState* state, HMENU menu,
+                     winrt::Windows::Foundation::Collections::IVector<
+                         muxc::MenuFlyoutItemBase> const& items,
+                     int depth, std::set<int> const* skip = nullptr) {
+    // Inside an archive only Copy is offered. Properties on such items took
+    // Explorer down in the 0.7.2 test, and Delete, Cut, Rename, Send to and
+    // the like have no meaning there.
+    bool restricted = state->context && state->context->insideArchive;
+    int count = GetMenuItemCount(menu);
+    bool needSeparator = false;
+    for (int i = 0; i < count && i < 80; i++) {
+        MENUITEMINFOW info;
+        std::wstring text = MenuText(menu, i, &info);
+        if (info.fType & MFT_SEPARATOR) {
+            needSeparator = items.Size() > 0;
+            continue;
+        }
+        if (text.empty()) {
+            continue;
+        }
+        if (skip && skip->count(i)) {
+            continue;  // Shown elsewhere in the menu.
+        }
+        if (needSeparator) {
+            items.Append(muxc::MenuFlyoutSeparator());
+            needSeparator = false;
+        }
+        if (restricted) {
+            if (info.hSubMenu) {
+                continue;
+            }
+            wchar_t verb[64] = L"";
+            if (state->context->menu) {
+                state->context->menu->GetCommandString(info.wID - state->context->idFirst,
+                                                       GCS_VERBW, nullptr, (char*)verb,
+                                                       ARRAYSIZE(verb));
+            }
+            if (_wcsicmp(verb, L"copy") != 0) {
+                continue;
+            }
+        }
+        if (info.hSubMenu) {
+            if (depth >= 2) {
+                continue;
+            }
+            muxc::MenuFlyoutSubItem sub;
+            sub.Text(text);
+            FillFlyoutItems(state, info.hSubMenu, sub.Items(), depth + 1);
+            if (sub.Items().Size() > 0) {
+                items.Append(sub);
+            }
+            continue;
+        }
+        muxc::MenuFlyoutItem item;
+        item.Text(text);
+        item.IsEnabled(!(info.fState & (MFS_DISABLED | MFS_GRAYED)));
+        item.Tag(winrt::box_value((uint32_t)info.wID));
+        auto token = item.Click(
+            [](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                auto item = sender.try_as<muxc::MenuFlyoutItem>();
+                if (item) {
+                    RunContextCommand(winrt::unbox_value<uint32_t>(item.Tag()));
                 }
             });
         state->context->hooks.emplace_back(item, token);
@@ -5663,6 +5677,59 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
 
 // The item's flyout: the shell's own commands for the picked items, at a point
 // of the list. Used by the right-click and by the Menu key.
+// One entry of the shell's menu for the picked items.
+struct MenuRow {
+    int pos = 0;
+    UINT id = 0;
+    std::wstring text;
+    std::wstring verb;
+    HMENU sub = nullptr;
+    bool enabled = true;
+};
+
+// A Fluent glyph for a shell verb, or an empty string.
+const wchar_t* GlyphForVerb(std::wstring const& verb) {
+    static const struct {
+        const wchar_t* verb;
+        const wchar_t* glyph;
+    } table[] = {
+        {L"cut", L""},        {L"copy", L""},
+        {L"rename", L""},     {L"delete", L""},
+        {L"open", L""},       {L"openas", L""},
+        {L"properties", L""}, {L"pintohome", L""},
+        {L"copyaspath", L""}, {L"edit", L""},
+        {L"print", L""},      {L"setdesktopwallpaper", L""},
+    };
+    for (auto& entry : table) {
+        if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
+            return entry.glyph;
+        }
+    }
+    if (StrStrIW(verb.c_str(), L"share")) {
+        return L"";
+    }
+    return L"";
+}
+
+// The shortcut shown at the right of a list entry.
+const wchar_t* ShortcutForVerb(std::wstring const& verb) {
+    if (_wcsicmp(verb.c_str(), L"open") == 0) {
+        return L"Enter";
+    }
+    if (_wcsicmp(verb.c_str(), L"properties") == 0) {
+        return L"Alt+Enter";
+    }
+    if (_wcsicmp(verb.c_str(), L"copyaspath") == 0) {
+        return L"Ctrl+Shift+C";
+    }
+    return L"";
+}
+
+// The shell's context menu for one item, shown the way Explorer's own is: a row
+// of quick actions with icons on top, the usual commands below, and the rest
+// of the shell's entries behind "Show more options". The shell's entries are
+// copied into XAML, since a native popup would run a modal loop inside a XAML
+// handler, which crashed Explorer before.
 void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& list,
                     std::vector<size_t> const& picked,
                     winrt::Windows::Foundation::Point position) {
@@ -5706,70 +5773,178 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         state->context->owner = state->topLevel;
         state->context->column = column;
         state->context->entries = picked;
-        muxc::MenuFlyout flyout;
-        state->context->insideArchive = ArchiveParentColumn(state, column) >= 0;
-        FillFlyoutItems(state, hmenu, flyout.Items(), 0);
-        // Two items of this mod at the top: a new folder holding the picked
-        // items, and, for one folder, a new tab.
-        {
-            wchar_t folderPath[MAX_PATH] = L"";
-            bool insideArchive = ArchiveParentColumn(state, column) >= 0;
-            bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) && folderPath[0];
-            int added = 0;
-            auto addItem = [&](const wchar_t* text, std::function<void()> action) {
-                muxc::MenuFlyoutItem item;
-                item.Text(text);
-                auto token = item.Click(
+        bool insideArchive = ArchiveParentColumn(state, column) >= 0;
+        state->context->insideArchive = insideArchive;
+
+        // The shell's entries, with the verb of each.
+        std::vector<MenuRow> rows;
+        int count = GetMenuItemCount(hmenu);
+        for (int i = 0; i < count && i < 80; i++) {
+            MENUITEMINFOW info;
+            std::wstring text = MenuText(hmenu, i, &info);
+            if ((info.fType & MFT_SEPARATOR) || text.empty()) {
+                continue;
+            }
+            MenuRow row;
+            row.pos = i;
+            row.id = info.wID;
+            row.text = text;
+            row.sub = info.hSubMenu;
+            row.enabled = !(info.fState & (MFS_DISABLED | MFS_GRAYED));
+            wchar_t verb[64] = L"";
+            menu->GetCommandString(info.wID - state->context->idFirst, GCS_VERBW, nullptr,
+                                   (char*)verb, ARRAYSIZE(verb));
+            row.verb = verb;
+            Out(L"menu entry %d: id=%u verb=\"%s\" text=\"%s\"%s", i, row.id, verb, text.c_str(),
+                row.sub ? L" (submenu)" : L"");
+            rows.push_back(std::move(row));
+        }
+
+        muxc::CommandBarFlyout flyout;
+        flyout.AlwaysExpanded(true);
+        std::set<int> used;  // Positions shown above "Show more options".
+
+        auto icon = [](const wchar_t* glyph) {
+            muxc::FontIcon icon;
+            icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            icon.Glyph(glyph);
+            return icon;
+        };
+        auto makeButton = [&](const wchar_t* label, const wchar_t* glyph, bool enabled,
+                              std::function<void()> action) {
+            muxc::AppBarButton button;
+            button.Label(label);
+            if (glyph && glyph[0]) {
+                button.Icon(icon(glyph));
+            }
+            button.IsEnabled(enabled);
+            if (action) {
+                auto token = button.Click(
                     [action](Inspectable const&, mux::RoutedEventArgs const&) {
                         try {
                             action();
                         } catch (...) {
-                            LogHresult(L"a flyout item");
+                            LogHresult(L"a flyout button");
                         }
                     });
-                state->context->hooks.emplace_back(item, token);
-                flyout.Items().InsertAt((uint32_t)added++, item);
-            };
-            if (onDisk) {
-                addItem(L"New folder with selection", [column, picked]() {
+                state->context->buttonHooks.emplace_back(button, token);
+            }
+            return button;
+        };
+        auto runRow = [](UINT id) {
+            return [id]() { RunContextCommand(id); };
+        };
+
+        // Top row: the quick actions.
+        const wchar_t* quickVerbs[] = {L"cut", L"copy", L"rename", L"share", L"delete"};
+        const wchar_t* quickLabels[] = {L"Cut", L"Copy", L"Rename", L"Share", L"Delete"};
+        for (int q = 0; q < 5; q++) {
+            if (insideArchive && q != 1) {
+                continue;
+            }
+            for (auto& row : rows) {
+                bool match = q == 3 ? (StrStrIW(row.verb.c_str(), L"share") && !row.sub)
+                                    : _wcsicmp(row.verb.c_str(), quickVerbs[q]) == 0;
+                if (!match || used.count(row.pos)) {
+                    continue;
+                }
+                used.insert(row.pos);
+                flyout.PrimaryCommands().Append(
+                    makeButton(quickLabels[q], GlyphForVerb(q == 3 ? L"share" : quickVerbs[q]),
+                               row.enabled, runRow(row.id)));
+                break;
+            }
+        }
+
+        auto secondary = flyout.SecondaryCommands();
+        int groupSize = 0;
+        auto endGroup = [&]() {
+            if (groupSize > 0) {
+                secondary.Append(muxc::AppBarSeparator());
+                groupSize = 0;
+            }
+        };
+
+        // This mod's own entries first.
+        {
+            wchar_t folderPath[MAX_PATH] = L"";
+            bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) &&
+                          folderPath[0];
+            auto addMod = [&](const wchar_t* text, const wchar_t* glyph, std::function<void()> action) {
+                secondary.Append(makeButton(text, glyph, true, [action]() {
                     WindowState* now = StateForThisThread(false);
                     if (now && !g_unloading) {
-                        NewFolderWithSelection(now, column, picked);
+                        action();
                     }
+                }));
+                groupSize++;
+            };
+            if (onDisk) {
+                addMod(L"New folder with selection", L"", [state, column, picked]() {
+                    NewFolderWithSelection(StateForThisThread(false), column, picked);
                 });
             }
             if (insideArchive) {
-                addItem(L"Extract selected here", [column, picked]() {
-                    WindowState* now = StateForThisThread(false);
-                    if (now && !g_unloading) {
-                        ExtractSelected(now, column, picked);
-                    }
+                addMod(L"Extract selected here", L"", [column, picked]() {
+                    ExtractSelected(StateForThisThread(false), column, picked);
                 });
             }
             if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
-                addItem(L"Extract here", [column, picked]() {
-                    WindowState* now = StateForThisThread(false);
-                    if (now && !g_unloading) {
-                        ExtractHere(now, column, picked[0]);
-                    }
+                addMod(L"Extract here", L"", [column, picked]() {
+                    ExtractHere(StateForThisThread(false), column, picked[0]);
                 });
             }
             if (picked.size() == 1 && column->entries[picked[0]].folder) {
-                addItem(L"Open in new tab", [column, picked]() {
-                    WindowState* now = StateForThisThread(false);
-                    if (now && !g_unloading) {
-                        auto& picked0 = column->entries[picked[0]];
-                        Pidl target(picked0.linkTarget
-                                        ? ILClone(picked0.linkTarget.get())
-                                        : ILCombine(column->folder.get(), picked0.child.get()));
-                        OpenFolderInNewTab(now, target.get());
-                    }
+                addMod(L"Open in new tab", L"", [column, picked]() {
+                    auto& picked0 = column->entries[picked[0]];
+                    Pidl target(picked0.linkTarget
+                                    ? ILClone(picked0.linkTarget.get())
+                                    : ILCombine(column->folder.get(), picked0.child.get()));
+                    OpenFolderInNewTab(StateForThisThread(false), target.get());
                 });
             }
-            if (added > 0) {
-                flyout.Items().InsertAt((uint32_t)added, muxc::MenuFlyoutSeparator());
+        }
+        endGroup();
+
+        // The usual commands, in Explorer's order. An entry with a submenu
+        // (Open with) opens it as a submenu.
+        if (!insideArchive) {
+            const wchar_t* mainVerbs[] = {L"open", L"openas", L"pintohome", L"copyaspath",
+                                          L"setdesktopwallpaper", L"edit", L"properties"};
+            for (auto verb : mainVerbs) {
+                for (auto& row : rows) {
+                    if (_wcsicmp(row.verb.c_str(), verb) != 0 || used.count(row.pos)) {
+                        continue;
+                    }
+                    used.insert(row.pos);
+                    auto button = makeButton(row.text.c_str(), GlyphForVerb(row.verb), row.enabled,
+                                             row.sub ? std::function<void()>() : runRow(row.id));
+                    if (row.sub) {
+                        muxc::MenuFlyout subMenu;
+                        FillFlyoutItems(state, row.sub, subMenu.Items(), 1, nullptr);
+                        button.Flyout(subMenu);
+                    } else if (ShortcutForVerb(row.verb)[0]) {
+                        button.KeyboardAcceleratorTextOverride(ShortcutForVerb(row.verb));
+                    }
+                    secondary.Append(button);
+                    groupSize++;
+                    break;
+                }
             }
         }
+        endGroup();
+
+        // Everything else the shell offers.
+        if (!insideArchive) {
+            muxc::MenuFlyout more;
+            FillFlyoutItems(state, hmenu, more.Items(), 0, &used);
+            if (more.Items().Size() > 0) {
+                auto button = makeButton(L"Show more options", L"", true, nullptr);
+                button.Flyout(more);
+                secondary.Append(button);
+            }
+        }
+
         state->context->flyout = flyout;
         state->context->closedToken = flyout.Closed(
             [](Inspectable const&, Inspectable const&) {
@@ -5791,9 +5966,9 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         muxc::Primitives::FlyoutShowOptions options;
         options.Position(position);
         flyout.ShowAt(list, options);
-        Out(L"context menu shown for %d item(s), first \"%s\", %u entries",
+        Out(L"context menu shown for %d item(s), first \"%s\": %u quick, %u listed",
             (int)picked.size(), column->entries[picked[0]].name.c_str(),
-            flyout.Items().Size());
+            flyout.PrimaryCommands().Size(), flyout.SecondaryCommands().Size());
     } catch (...) {
         LogHresult(L"ShowItemFlyout");
         CloseContextMenu(state);
@@ -9240,7 +9415,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.8.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.9.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
