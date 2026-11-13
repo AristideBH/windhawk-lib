@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.1
+// @version         0.5.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1364,6 +1364,7 @@ struct Column {
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
     int hintEntry = -1;  // The entry whose chevron is shown stronger.
     int hoverHeader = -1;  // The group header under the pointer.
+    int focusHeader = -1;  // The group header the keyboard is on.
     winrt::event_token moveToken{};
     winrt::event_token pressToken{};
     winrt::event_token releaseToken{};
@@ -2754,6 +2755,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
     column->hintEntry = -1;
+    column->focusHeader = -1;
     column->tipBuilt.assign(column->entries.size(), 0);
     column->animGroup = -1;
     column->animDoneAt = 0;
@@ -3006,6 +3008,7 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
 }
 
 void OnRowSelected(muxc::ListView const& list);
+void SetHeaderFocus(Column* column, muxc::ListView const& list, int row);
 void OnRowDoubleTapped(muxc::ListView const& list);
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args);
@@ -3663,6 +3666,9 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+        if (column->focusHeader >= 0) {
+            SetHeaderFocus(column, list, -1);  // A row was chosen: the keyboard leaves the header.
+        }
         column->selectionChangedAt = GetTickCount64();
         state->slowRenameAt = 0;
 
@@ -4899,7 +4905,9 @@ void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
     auto paint = [&](int r, bool on) {
         if (r >= 0 && r < (int)items.Size()) {
             if (auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
-                header.Background(on ? Brush(64, 150, 150, 150) : Brush(0, 0, 0, 0));
+                header.Background(on ? Brush(64, 150, 150, 150)
+                                  : r == column->focusHeader ? Brush(96, 150, 150, 150)
+                                                             : Brush(0, 0, 0, 0));
                 header.Opacity(on ? 1.0 : 0.92);
             }
         }
@@ -4912,6 +4920,47 @@ void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
 muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex);
 bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
                  mux::Input::PointerRoutedEventArgs const& args);
+
+// The keyboard on a group header: it is tinted, and Left and Right collapse and
+// open it. Headers cannot take real keyboard focus, so the mod keeps this
+// itself.
+void SetHeaderFocus(Column* column, muxc::ListView const& list, int row) {
+    int old = column->focusHeader;
+    column->focusHeader = row;
+    auto items = list.Items();
+    auto paint = [&](int r, bool on) {
+        if (r >= 0 && r < (int)items.Size()) {
+            if (auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+                header.Background(on ? Brush(96, 150, 150, 150)
+                                     : r == column->hoverHeader ? Brush(64, 150, 150, 150)
+                                                                : Brush(0, 0, 0, 0));
+            }
+        }
+    };
+    paint(old, false);
+    paint(row, true);
+    if (row >= 0 && row < (int)items.Size()) {
+        list.ScrollIntoView(items.GetAt((uint32_t)row));
+    }
+}
+
+// The next row in a direction that is a group header or a visible item.
+int NextHeaderOrItemRow(Column* column, muxc::ListView const& list, int from, int step) {
+    auto items = list.Items();
+    for (int r = from + step; r >= 0 && r < (int)column->rowToEntry.size() && r < (int)items.Size();
+         r += step) {
+        bool header = column->rowToEntry[r] < 0 && column->rowGroup[r] >= 0;
+        bool item = column->rowToEntry[r] >= 0;
+        if (!header && !item) {
+            continue;  // The "more items" row.
+        }
+        auto row = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
+        if (row && row.Visibility() == mux::Visibility::Visible) {
+            return r;
+        }
+    }
+    return -1;
+}
 
 void OnColumnPointerMoved(muxc::ListView const& list,
                           mux::Input::PointerRoutedEventArgs const& args) {
@@ -5700,6 +5749,66 @@ void OnColumnKey(muxc::ListView const& list,
             state->focusUntil = GetTickCount64() + 1500;
             args.Handled(true);
         };
+        // The keyboard on a group header, or on its way there.
+        {
+            int header = column->focusHeader;
+            if (header >= 0 && header < (int)column->rowGroup.size()) {
+                int group = column->rowGroup[header];
+                bool closed = group >= 0 && group < (int)column->groupTitles.size() &&
+                              std::find(column->collapsed.begin(), column->collapsed.end(),
+                                        column->groupTitles[group]) != column->collapsed.end();
+                auto goTo = [&](int target) {
+                    if (target < 0) {
+                        return;
+                    }
+                    if (column->rowToEntry[target] < 0) {
+                        SetHeaderFocus(column, list, target);
+                    } else {
+                        SetHeaderFocus(column, list, -1);
+                        list.SelectedIndex(target);
+                        list.ScrollIntoView(list.Items().GetAt((uint32_t)target));
+                    }
+                };
+                if (key == VirtualKey::Left && !closed) {
+                    ToggleGroup(state, column, header);
+                    keep();
+                    return;
+                }
+                if (key == VirtualKey::Right) {
+                    if (closed) {
+                        ToggleGroup(state, column, header);
+                    } else {
+                        goTo(NextHeaderOrItemRow(column, list, header, 1));
+                    }
+                    keep();
+                    return;
+                }
+                if (key == VirtualKey::Enter || key == VirtualKey::Space) {
+                    ToggleGroup(state, column, header);
+                    keep();
+                    return;
+                }
+                if (key == VirtualKey::Down || key == VirtualKey::Up) {
+                    goTo(NextHeaderOrItemRow(column, list, header,
+                                             key == VirtualKey::Down ? 1 : -1));
+                    keep();
+                    return;
+                }
+                // Any other key leaves the header and does its usual job.
+                SetHeaderFocus(column, list, -1);
+            } else if (key == VirtualKey::Up && !ctrl && !alt &&
+                       !(GetKeyState(VK_SHIFT) & 0x8000) && picked.size() == 1 && row > 0 &&
+                       column->rowToEntry[row - 1] < 0 && column->rowGroup[row - 1] >= 0) {
+                // Up from the first item of a group lands on its header.
+                bool wasBuilding = state->building;
+                state->building = true;
+                list.SelectedItems().Clear();
+                state->building = wasBuilding;
+                SetHeaderFocus(column, list, row - 1);
+                keep();
+                return;
+            }
+        }
         if (ctrl && !alt && (key == VirtualKey::C || key == VirtualKey::X)) {
             if (!picked.empty()) {
                 CopyOrCut(state, column, picked, key == VirtualKey::X);
@@ -7333,7 +7442,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

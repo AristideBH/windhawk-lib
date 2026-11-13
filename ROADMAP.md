@@ -80,8 +80,9 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
 
 ## Open
 
-- [ ] Keyboard collapse for group headers: Left and Right on a focused
-      header. Headers are not focusable yet.
+- [ ] (0.5.2, not tested) Keyboard collapse for group headers: Up from the
+      first item of a group goes to its header, Left and Right collapse and
+      open it, Enter toggles, Up and Down move on.
 - [ ] Rename several items at once, like Explorer's own
 - [ ] Focusing a virtual shell item, such as a link, in the Desktop folder
 - [ ] Open in Columns without the flash of Explorer's own list. Fine for now.
