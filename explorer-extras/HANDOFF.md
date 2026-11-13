@@ -23,6 +23,13 @@ For the next session, human or model. Written 2026-11-13.
   Each entry has a row shell at once and its content is built as the row comes
   near the screen. Explorer's own view stays under the panel and follows the
   active column, so the toolbar, panes and status bar act on the selection.
+- Source layout since 0.7.15: the mod is kept in parts under
+  `explorer-extras/src/` (00-header to 12-entry, joined in name order) and
+  `explorer-extras/explorer-extras.wh.cpp` is generated. Edit the parts, run
+  `python explorer-extras/build.py`, then syntax-check, copy to the editor and
+  commit both. `build.py --check` exits 1 when the generated file is out of
+  date. A patch script finds the part that holds the text it changes, and a
+  new area goes in a new numbered part.
 - Hooks: `FileExplorerExtensions.dll` command bar handlers (pointer press,
   `OnDpiChanged` for window creation, `InvokeMenuItem` for toolbar commands),
   `CreateWindowExW` for new tabs, `TranslateAcceleratorW` while the rename box

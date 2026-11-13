@@ -90,7 +90,7 @@ last and are not scheduled.
 | 0.7.0 | Done and tested: new folder with selection (flyout item and Ctrl+Alt+N, one Ctrl+Z takes it back) and open in a new tab (flyout item and middle-click). | small | low. The new tab is made with Ctrl+T sent to the window, then shown its folder once the tab window exists. |
 | 0.7.1 to 0.7.6 | Done and tested: archives in columns (setting, off by default): browsed as folders, Extract here, Extract selected here from inside an archive, the extracted items are selected and centred, a spinner while an archive is read. Inside an archive the flyout offers only Copy and no Properties, Paste or New folder (Properties on an archive item crashed Explorer, 0xC0000409). | medium | low |
 | 0.7.2 | Small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | small each | low |
-| 0.7.3 | Housekeeping: split the 8000 line source into files per area, joined by a script. Every later patch depends on it, so before 0.8. | medium | low |
+| 0.7.3 | Done in 0.7.15: the source is split into `explorer-extras/src/` parts joined by `build.py` (the generated file is byte-identical to before). | medium | low |
 | 0.8 | Columns per tab. The state is per window today. Each tab gets its own columns. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high |
 | 0.9 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium |
 | 0.10 | Drag and drop between columns and out to other windows, with the shell's drag helper. | large | medium |
@@ -232,3 +232,5 @@ Structure and polish:
 - [ ] Taskbar widget mods moved to the `Taskbar.View.dll` entry point
 - [ ] Astur workspace indicator and layout toggle
 - [ ] Desktop stacks, parked
+
+- [ ] Parked: a click should stop a long scroll that is still gliding. Tried in 0.7.12 to 0.7.15 (ChangeView to the same offset, a nudge, toggling scroll mode and inertia, scrolling the vertical wheel in the mod and dropping turns after a press). None worked with a mouse click.
