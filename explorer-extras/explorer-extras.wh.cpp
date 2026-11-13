@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.13.2
+// @version         0.13.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -9836,6 +9836,48 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     ReloadAll(state);
 }
 
+// The drag source of a real drag. It ends the drag on Escape or when the button
+// goes up, and notes what the target under the pointer last offered and which
+// window it was, for the log.
+struct OutDropSource : IDropSource {
+    LONG refs = 1;
+    DWORD lastEffect = 0;
+    HWND dropWindow = nullptr;
+    STDMETHODIMP QueryInterface(REFIID id, void** out) override {
+        if (id == IID_IUnknown || id == IID_IDropSource) {
+            *out = static_cast<IDropSource*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG now = InterlockedDecrement(&refs);
+        if (now == 0) {
+            delete this;
+        }
+        return (ULONG)now;
+    }
+    STDMETHODIMP QueryContinueDrag(BOOL escape, DWORD keys) override {
+        if (escape) {
+            return DRAGDROP_S_CANCEL;
+        }
+        if (!(keys & MK_LBUTTON)) {
+            POINT cursor;
+            GetCursorPos(&cursor);
+            dropWindow = WindowFromPoint(cursor);
+            return DRAGDROP_S_DROP;
+        }
+        return S_OK;
+    }
+    STDMETHODIMP GiveFeedback(DWORD effect) override {
+        lastEffect = effect;
+        return DRAGDROP_S_USEDEFAULTCURSORS;
+    }
+};
+
 // A real drag, for when the pointer leaves the panel: the shell's own drag loop
 // carries the items to whatever is under the pointer, another Explorer window,
 // the desktop or another application. Started after the event that noticed it,
@@ -9863,9 +9905,22 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     }
     DWORD effect = DROPEFFECT_NONE;
     Out(L"drag out: %d item(s) leave the panel, starting the shell's drag", (int)children.size());
-    hr = SHDoDragDrop(state->topLevel, data, nullptr,
+    OutDropSource* dropSource = new OutDropSource();
+    hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
-    Out(L"drag out ended: effect %lu, hr=0x%08lX", (unsigned long)effect, hr);
+    {
+        wchar_t title[80] = L"";
+        DWORD processId = 0;
+        if (dropSource->dropWindow) {
+            GetWindowTextW(dropSource->dropWindow, title, ARRAYSIZE(title));
+            GetWindowThreadProcessId(dropSource->dropWindow, &processId);
+        }
+        Out(L"drag out ended: effect %lu, hr=0x%08lX; the target last offered effect %lu; dropped over a \"%s\" window \"%s\" of process %lu",
+            (unsigned long)effect, hr, (unsigned long)dropSource->lastEffect,
+            dropSource->dropWindow ? ClassNameOf(dropSource->dropWindow).c_str() : L"?", title,
+            (unsigned long)processId);
+    }
+    dropSource->Release();
     data->Release();
     ReloadAll(state);
 }
@@ -10690,7 +10745,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.13.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.13.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
