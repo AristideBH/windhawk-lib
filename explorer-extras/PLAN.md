@@ -118,3 +118,25 @@ Desktop and Control Panel items, root of the namespace (27 items):
   files, and they should be opened with the shell rather than navigated into.
 - Recycle Bin items have the original path as their display name and a
   `$Recycle.Bin` path as parsing name.
+
+## Navigation pane clicks and the unexplained jumps, 2026-11-13 (0.3.18 to 0.3.21 trace)
+
+- `IShellBrowser::BrowseObject` is hooked through the vtable (slot 11, in
+  `explorerframe.dll`). With the debug log on, each call is logged with its
+  call stack.
+- Navigation pane clicks (OneDrive, Columns Demo, tested at 11:27 in
+  0.3.21) arrive as `flags=0x80001` (same browser, activate without focus),
+  from `SHELL32+0x329730 < SHELL32+0xB10CC < dui70 < DUser < atlthunk <
+  user32 < explorerframe`. No Windhawk mod is in the stack.
+- The unexplained jumps (to "Bureau" 150 ms after a paste, to "Columns Demo"
+  a few seconds after turning Columns on) have the same flags and the same
+  stack. So they are the navigation pane navigating, not another mod. The
+  likely trigger is the pane refreshing its tree after a file operation or a
+  navigation by this mod. Not proven.
+- Consequence for the "sidebar sets the first column" feature: a pane
+  navigation can be recognised in the BrowseObject hook by flags with
+  `SBSP_ACTIVATE_NOFOCUS`, not made by this mod, plus a recent mouse button
+  press over the pane. The pane's tree items (This PC and below) still need
+  to be told apart from the flat items. A pure-input check can't separate a
+  pane click from the jump after a paste, so the paste guard stays until the
+  cause is known.
