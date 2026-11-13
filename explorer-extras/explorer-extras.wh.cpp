@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.27
+// @version         0.4.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1164,7 +1164,7 @@ LRESULT CALLBACK NotifyProc(HWND hwnd, UINT message, WPARAM wParam,
         }
         auto* due = (ULONGLONG*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         if (due && !ownLog) {
-            *due = GetTickCount64() + 300;
+            *due = GetTickCount64() + 200;
         }
         return 0;
     }
@@ -1255,6 +1255,7 @@ struct Column {
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
     int hintEntry = -1;  // The entry whose chevron is shown stronger.
+    bool filled = false;  // Has shown a listing at least once.
     Pidl selectedChild;                 // Restored after a reload.
     unsigned generation = 0;
     bool userSized = false;
@@ -2101,6 +2102,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     if (selectRow >= 0) {
         column->list.SelectedIndex(selectRow);
     }
+    column->filled = true;
     if (state->cutFolder) {
         ApplyCutState(state);
     }
@@ -2132,6 +2134,36 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
 }
 
 // Runs on the window's UI thread when the worker has read a folder.
+// Is a freshly read folder the same as what the column shows? Then the rows
+// stay as they are: no flicker, no lost scroll position.
+bool SameListing(const FolderResult& data, const Column& column) {
+    if (!column.filled || data.entries.size() != column.entries.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < data.entries.size(); i++) {
+        if (data.entries[i].name != column.entries[i].name ||
+            data.entries[i].folder != column.entries[i].folder ||
+            !ILIsEqual(data.entries[i].child.get(), column.entries[i].child.get())) {
+            return false;
+        }
+    }
+    // Groups: the same header count and the same group of each entry.
+    size_t headers = 0;
+    for (int entry : column.rowToEntry) {
+        headers += entry < 0 ? 1 : 0;
+    }
+    size_t expected = data.groupNames.empty() ? 0 : data.groupNames.size();
+    bool more = !column.rowToEntry.empty() && column.rowToEntry.back() < 0 &&
+                data.truncated;
+    if (more) {
+        headers -= 1;
+    }
+    if (headers != expected) {
+        return false;
+    }
+    return data.truncated == more;
+}
+
 void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
@@ -2142,7 +2174,9 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
             bool wasBuilding = state->building;
             state->building = true;
             try {
-                FillColumn(state, column.get(), std::move(loaded->data));
+                if (!SameListing(loaded->data, *column)) {
+                    FillColumn(state, column.get(), std::move(loaded->data));
+                }
                 state->scroller.UpdateLayout();
                 if (state->swapOld && column->generation == state->swapGeneration) {
                     CompleteSwap(state);
@@ -2967,11 +3001,22 @@ void CommitRename(WindowState* state) {
                            newName.c_str(), SHGDN_INFOLDER, &renamed);
     Out(L"rename \"%s\" to \"%s\": hr=0x%08lX",
         column->entries[entryIndex].name.c_str(), newName.c_str(), hr);
+    parent->Release();
+    if (SUCCEEDED(hr) && renamed) {
+        // Show the new name now, then read the folder again for the order.
+        column->entries[entryIndex].name = newName;
+        column->entries[entryIndex].child.reset(renamed);
+        renamed = nullptr;
+        column->selectedChild.reset(ILClone(column->entries[entryIndex].child.get()));
+        if (entryIndex < column->texts.size() && column->texts[entryIndex]) {
+            column->texts[entryIndex].Text(
+                MiddleEllipsis(newName, NameCapacity(column)));
+        }
+        RequestLoad(state, column);
+    }
     if (renamed) {
         CoTaskMemFree(renamed);
     }
-    parent->Release();
-    // The folder's change notification reloads the column.
 }
 
 void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
@@ -3052,6 +3097,39 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
     box.SelectionStart(0);
     box.SelectionLength((uint32_t)(keepExtension ? dot : name.size()));
     Out(L"rename started for \"%s\"", name.c_str());
+}
+
+// After a delete: rows whose file is gone are hidden at once. The reload that
+// follows removes them for good, or brings them back if the delete didn't
+// happen.
+void HideDeletedRows(Column* column, std::vector<size_t> const& entries) {
+    try {
+        auto items = column->list.Items();
+        for (size_t entry : entries) {
+            if (entry >= column->entries.size()) {
+                continue;
+            }
+            Pidl absolute(ILCombine(column->folder.get(),
+                                    column->entries[entry].child.get()));
+            wchar_t path[MAX_PATH] = L"";
+            if (!absolute || !SHGetPathFromIDListW(absolute.get(), path) ||
+                !path[0] || PathFileExistsW(path)) {
+                continue;
+            }
+            for (size_t r = 0; r < column->rowToEntry.size() && r < items.Size();
+                 r++) {
+                if (column->rowToEntry[r] == (int)entry) {
+                    if (auto item = items.GetAt((uint32_t)r)
+                                        .try_as<muxc::ListViewItem>()) {
+                        item.Visibility(mux::Visibility::Collapsed);
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (...) {
+        LogHresult(L"HideDeletedRows");
+    }
 }
 
 // Cut and Copy from the shell's menu don't work without a view behind them,
@@ -3260,7 +3338,13 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                     GetCursorPos(&invoke.ptInvoke);
                     HRESULT hr = context->menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
-                    Out(L"context menu command %u -> hr=0x%08lX", id, hr);
+                    Out(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
+                    // The command may have changed the folder. Read it now
+                    // instead of waiting for the change notification.
+                    if (!_wcsicmp(verb, L"delete")) {
+                        HideDeletedRows(context->column, context->entries);
+                    }
+                    ReloadAll(state);
                 } catch (...) {
                     LogHresult(L"running a context menu command");
                 }
@@ -3734,6 +3818,7 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         hr);
     data->Release();
     drop->Release();
+    ReloadAll(state);  // The target, and the source of a move.
     return hr;
 }
 
@@ -3874,6 +3959,8 @@ void OnColumnKey(muxc::ListView const& list,
         if (key == VirtualKey::Delete && !picked.empty()) {
             HRESULT hr = InvokeVerbOnItems(state, column, picked, "delete");
             Out(L"Delete %d item(s): hr=0x%08lX", (int)picked.size(), hr);
+            HideDeletedRows(column, picked);
+            ReloadAll(state);
             keep();
             return;
         }
@@ -4242,8 +4329,15 @@ void OnTick() {
 
         // A watched folder changed on disk: read the columns again.
         // At most one reload every two seconds, however busy the folder is.
+        size_t shown = 0;
+        for (auto& c : state->columns) {
+            shown += c->entries.size();
+        }
+        // Half a second between reloads, two seconds when the columns hold a
+        // lot of rows.
+        ULONGLONG gap = shown > 3000 ? 2000 : 500;
         if (state->reloadDue && now >= state->reloadDue && !state->rename &&
-            now - state->lastReload >= 2000) {
+            now - state->lastReload >= gap) {
             state->reloadDue = 0;
             state->lastReload = now;
             Out(L"a column's folder changed, reloading");
@@ -5251,7 +5345,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.27 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

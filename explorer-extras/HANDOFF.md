@@ -12,7 +12,7 @@ For the next session, human or model. Written 2026-11-13.
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.3.27, not
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.4.0, not
   compiled yet. 0.3.5 adds icons and thumbnails (`LoadIcons`, `ApplyIcons`)
   and the right-click flyout (`OnRowRightTapped`) on top of 0.3.4, written
   without a compiler: expect compile errors, read `compiler_errors.log`.
