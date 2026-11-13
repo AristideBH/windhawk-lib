@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.9.3
+// @version         0.9.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -5725,34 +5725,80 @@ const wchar_t* ShortcutForVerb(std::wstring const& verb) {
     return L"";
 }
 
-// A two-tone icon: the glyph in the text colour, and its lower right part once
-// more in the accent colour on top.
+// The name of the icon file Windows ships for a shell verb, among the two-tone
+// SVGs of Explorer's own toolbar and menus. Empty when there is none.
+const wchar_t* OfficialIconName(std::wstring const& verb) {
+    static const struct {
+        const wchar_t* verb;
+        const wchar_t* file;
+    } table[] = {
+        {L"cut", L"windows.cut"},
+        {L"copy", L"windows.copy"},
+        {L"rename", L"windows.rename"},
+        {L"delete", L"windows.ribbondelete"},
+        {L"openas", L"windows.openwith"},
+        {L"properties", L"windows.properties"},
+        {L"pintohome", L"windows.pintohome"},
+        {L"pintohomefile", L"windows.pintohomefile"},
+        {L"copyaspath", L"windows.copyaspath"},
+        {L"setdesktopwallpaper", L"windows.setdesktopwallpaper"},
+        {L"link", L"link"},
+        {L"print", L"print"},
+    };
+    for (auto& entry : table) {
+        if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
+            return entry.file;
+        }
+    }
+    if (StrStrIW(verb.c_str(), L"share")) {
+        return L"Windows.ModernShare";
+    }
+    return L"";
+}
+
+// The icon Windows draws for that file, in the colours of the current theme. The
+// files are read straight from the File Explorer package.
+mux::UIElement OfficialIcon(const wchar_t* name, double size) {
+    if (!name || !name[0]) {
+        return nullptr;
+    }
+    try {
+        std::wstring path =
+            std::wstring(L"C:/Windows/SystemApps/MicrosoftWindows.Client.FileExp_cw5n1h2txyewy/"
+                         L"FileExplorerExtensions/Assets/images/contrast-standard/") +
+            (IsDarkMode() ? L"theme-dark/" : L"theme-light/") + name + L".svg";
+        if (!PathFileExistsW(path.c_str())) {
+            return nullptr;
+        }
+        mux::Media::Imaging::SvgImageSource source{
+            winrt::Windows::Foundation::Uri(winrt::hstring(L"file:///" + path))};
+        source.RasterizePixelWidth(size * 3);
+        source.RasterizePixelHeight(size * 3);
+        muxc::ImageIcon icon;
+        icon.Source(source);
+        icon.Width(size);
+        icon.Height(size);
+        return icon;
+    } catch (...) {
+        LogHresult(L"OfficialIcon");
+    }
+    return nullptr;
+}
+
+// A plain glyph icon. The accent part of a two-tone icon comes from the official
+// files; a glyph has no such part to colour.
 mux::UIElement MakeTwoToneIcon(WindowState* state, const wchar_t* glyph, double size, bool enabled) {
     muxc::Grid host;
     host.Width(size + 2);
     host.Height(size + 2);
-    auto make = [&](bool accent) {
-        muxc::FontIcon icon;
-        icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-        icon.Glyph(glyph);
-        icon.FontSize(size);
-        icon.HorizontalAlignment(mux::HorizontalAlignment::Center);
-        icon.VerticalAlignment(mux::VerticalAlignment::Center);
-        if (accent) {
-            winrt::Windows::UI::Color color =
-                state->colorsSet ? state->pillColor
-                                 : winrt::Windows::UI::Color{255, 0, 120, 212};
-            icon.Foreground(mux::Media::SolidColorBrush(color));
-            icon.Opacity(enabled ? 1.0 : 0.35);
-            mux::Media::RectangleGeometry clip;
-            clip.Rect(winrt::Windows::Foundation::Rect{(float)(size * 0.5), (float)(size * 0.42),
-                                                       (float)(size + 2), (float)(size + 2)});
-            icon.Clip(clip);
-        }
-        return icon;
-    };
-    host.Children().Append(make(false));
-    host.Children().Append(make(true));
+    muxc::FontIcon icon;
+    icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+    icon.Glyph(glyph);
+    icon.FontSize(size);
+    icon.Opacity(enabled ? 1.0 : 0.5);
+    icon.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    icon.VerticalAlignment(mux::VerticalAlignment::Center);
+    host.Children().Append(icon);
     return host;
 }
 
@@ -5968,6 +6014,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             const wchar_t* glyph;
             bool enabled;
             std::function<void()> action;
+            std::wstring icon;  // The official icon file, without its extension.
         };
         std::vector<Quick> quick;
         const wchar_t* quickVerbs[] = {L"cut", L"copy", L"rename", L"share", L"delete"};
@@ -5985,6 +6032,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 UINT id = row.id;
                 quick.push_back({row.text, row.text, GlyphForVerb(q == 3 ? L"share" : quickVerbs[q]),
                                  row.enabled, [id]() { RunContextCommand(id); }});
+                quick.back().icon = OfficialIconName(row.verb);
                 break;
             }
         }
@@ -5993,21 +6041,22 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                       folderPath[0];
         {
             auto addMod = [&](const wchar_t* text, const wchar_t* tip, const wchar_t* glyph,
-                              std::function<void()> action) {
+                              const wchar_t* iconFile, std::function<void()> action) {
                 quick.push_back({text, tip, glyph, true, [action]() {
                                      WindowState* now = StateForThisThread(false);
                                      if (now && !g_unloading) {
                                          action();
                                      }
                                  }});
+                quick.back().icon = iconFile;
             };
             if (onDisk) {
-                addMod(L"New folder", L"New folder with selection", L"", [column, picked]() {
+                addMod(L"New folder", L"New folder with selection", L"", L"newfolder", [column, picked]() {
                     NewFolderWithSelection(StateForThisThread(false), column, picked);
                 });
             }
             if (picked.size() == 1 && column->entries[picked[0]].folder) {
-                addMod(L"New tab", L"Open in new tab", L"", [column, picked]() {
+                addMod(L"New tab", L"Open in new tab", L"", L"windows.opennewtab", [column, picked]() {
                     auto& picked0 = column->entries[picked[0]];
                     Pidl target(picked0.linkTarget
                                     ? ILClone(picked0.linkTarget.get())
@@ -6030,7 +6079,10 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 muxc::StackPanel stack;
                 stack.Orientation(muxc::Orientation::Vertical);
                 stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
-                mux::UIElement icon = ToolbarIcon(state, quick[q].label.c_str(), 20);
+                mux::UIElement icon = OfficialIcon(quick[q].icon.c_str(), 20);
+                if (!icon) {
+                    icon = ToolbarIcon(state, quick[q].label.c_str(), 20);
+                }
                 if (!icon) {
                     icon = MakeTwoToneIcon(state, quick[q].glyph, 20, quick[q].enabled);
                 }
@@ -6059,7 +6111,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         bool separatorWanted = false;
         auto addRow = [&](const wchar_t* text, const wchar_t* glyph, const wchar_t* shortcut,
                           bool enabled, std::function<void()> action,
-                          muxc::MenuFlyout const& submenu) {
+                          muxc::MenuFlyout const& submenu, const wchar_t* iconFile) {
             if (separatorWanted && anyRows) {
                 muxc::Border line;
                 line.Height(1);
@@ -6082,7 +6134,10 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             }
             content.ColumnDefinitions().GetAt(2).Width(mux::GridLength{0, mux::GridUnitType::Auto});
             {
-                mux::UIElement icon = ToolbarIcon(state, text, 18);
+                mux::UIElement icon = OfficialIcon(iconFile, 18);
+                if (!icon) {
+                    icon = ToolbarIcon(state, text, 18);
+                }
                 if (!icon && glyph && glyph[0]) {
                     icon = MakeTwoToneIcon(state, glyph, 18, enabled);
                 }
@@ -6136,12 +6191,12 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         if (insideArchive) {
             addRow(L"Extract selected here", L"", L"", true,
                    [column, picked]() { ExtractSelected(StateForThisThread(false), column, picked); },
-                   muxc::MenuFlyout{nullptr});
+                   muxc::MenuFlyout{nullptr}, L"windows.compressedfile.extract");
         }
         if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
             addRow(L"Extract here", L"", L"", true,
                    [column, picked]() { ExtractHere(StateForThisThread(false), column, picked[0]); },
-                   muxc::MenuFlyout{nullptr});
+                   muxc::MenuFlyout{nullptr}, L"windows.compressedfile.extract");
         }
 
         // The usual commands, in Explorer's order.
@@ -6163,7 +6218,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     }
                     addRow(row.text.c_str(), GlyphForVerb(row.verb), ShortcutForVerb(row.verb),
                            row.enabled, row.sub ? std::function<void()>() : [id]() { RunContextCommand(id); },
-                           subMenu);
+                           subMenu, OfficialIconName(row.verb));
                     break;
                 }
             }
@@ -6173,7 +6228,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             FillFlyoutItems(state, hmenu, more.Items(), 0, &used);
             if (more.Items().Size() > 0) {
                 separatorWanted = anyRows;
-                addRow(L"Show more options", L"", L"", true, nullptr, more);
+                addRow(L"Show more options", L"", L"", true, nullptr, more, L"");
             }
         }
 
@@ -9648,7 +9703,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.9.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.9.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
