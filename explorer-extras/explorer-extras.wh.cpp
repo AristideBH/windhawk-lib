@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.13.4
+// @version         0.13.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -9842,6 +9842,7 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
 struct OutDropSource : IDropSource {
     LONG refs = 1;
     DWORD lastEffect = 0;
+    DWORD dropKeys = 0;
     HWND dropWindow = nullptr;
     POINT dropPoint{};
     STDMETHODIMP QueryInterface(REFIID id, void** out) override {
@@ -9869,6 +9870,7 @@ struct OutDropSource : IDropSource {
             POINT cursor;
             GetCursorPos(&cursor);
             dropPoint = cursor;
+            dropKeys = keys;
             dropWindow = WindowFromPoint(cursor);
             return DRAGDROP_S_DROP;
         }
@@ -9884,7 +9886,8 @@ struct OutDropSource : IDropSource {
 // carries the items to whatever is under the pointer, another Explorer window,
 // the desktop or another application. Started after the event that noticed it,
 // and with the panel's own drag already ended.
-void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children) {
+void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children,
+               DWORD preferred) {
     IShellFolder* source = nullptr;
     HRESULT hr = ILIsEmpty(sourceFolder.get())
                      ? SHGetDesktopFolder(&source)
@@ -9906,7 +9909,28 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         return;
     }
     DWORD effect = DROPEFFECT_NONE;
-    Out(L"drag out: %d item(s) leave the panel, starting the shell's drag", (int)children.size());
+    // The keys held as the pointer left the panel decide the default effect: a
+    // target of the shell reads it from the data when no key says otherwise. The
+    // drag loop does not see a key pressed after it has started.
+    if (preferred != DROPEFFECT_NONE) {
+        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+        if (memory) {
+            if (DWORD* value = (DWORD*)GlobalLock(memory)) {
+                *value = preferred;
+                GlobalUnlock(memory);
+            }
+            FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            STGMEDIUM medium = {};
+            medium.tymed = TYMED_HGLOBAL;
+            medium.hGlobal = memory;
+            if (FAILED(data->SetData(&wanted, &medium, TRUE))) {
+                GlobalFree(memory);
+            }
+        }
+    }
+    Out(L"drag out: %d item(s) leave the panel, starting the shell's drag, default effect %lu",
+        (int)children.size(), (unsigned long)preferred);
     OutDropSource* dropSource = new OutDropSource();
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
@@ -9917,8 +9941,9 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
             GetWindowTextW(dropSource->dropWindow, title, ARRAYSIZE(title));
             GetWindowThreadProcessId(dropSource->dropWindow, &processId);
         }
-        Out(L"drag out ended: effect %lu, hr=0x%08lX; the target last offered effect %lu; dropped over a \"%s\" window \"%s\" of process %lu",
-            (unsigned long)effect, hr, (unsigned long)dropSource->lastEffect,
+        Out(L"drag out ended: effect %lu, hr=0x%08lX; keys at the drop 0x%lX; the target last offered effect %lu; dropped over a \"%s\" window \"%s\" of process %lu",
+            (unsigned long)effect, hr, (unsigned long)dropSource->dropKeys,
+            (unsigned long)dropSource->lastEffect,
             dropSource->dropWindow ? ClassNameOf(dropSource->dropWindow).c_str() : L"?", title,
             (unsigned long)processId);
     }
@@ -9953,19 +9978,24 @@ void StartOutDrag(WindowState* state) {
         }
     }
     Out(L"drag out: the pointer left the panel, ending the panel's own drag");
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    DWORD preferred = alt ? DROPEFFECT_LINK : (ctrl && !shift) ? DROPEFFECT_COPY
+                      : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
     DragEnd(state);
     if (children.empty()) {
         return;
     }
     auto shared = std::make_shared<std::pair<Pidl, std::vector<Pidl>>>(std::move(sourceFolder),
                                                                        std::move(children));
-    state->queue.TryEnqueue([shared]() {
+    state->queue.TryEnqueue([shared, preferred]() {
         WindowState* now = StateForThisThread(false);
         if (!now || !now->on || g_unloading) {
             return;
         }
         try {
-            DoOutDrag(now, std::move(shared->first), std::move(shared->second));
+            DoOutDrag(now, std::move(shared->first), std::move(shared->second), preferred);
         } catch (...) {
             LogHresult(L"dragging out");
         }
@@ -10760,7 +10790,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.13.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.13.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
