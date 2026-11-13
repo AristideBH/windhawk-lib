@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.14
+// @version         0.5.15
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2211,6 +2211,16 @@ void UpdatePill(WindowState* state, bool animate) {
         }
         namespace anim = mux::Media::Animation;
         double from = state->pillLeft;
+        if (now < state->pillUntil) {
+            // A move is still going: the new one starts from where the pill is
+            // drawn now, not from where the old one was heading.
+            try {
+                from = state->pill.TransformToVisual(state->overlay)
+                           .TransformPoint(winrt::Windows::Foundation::Point{0, 0})
+                           .X;
+            } catch (...) {
+            }
+        }
         muxc::Canvas::SetLeft(state->pill, target);  // Where it stays.
         state->pillLeft = target;
         state->pillUntil = now + 430;
@@ -3601,7 +3611,10 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     }
     state->cursorFixUntil = GetTickCount64() + 2500;
     g_ourBrowse = true;
-    HRESULT hr = browser->BrowseObject(folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
+    // Without taking the keyboard: Explorer's view used to take it, and giving
+    // it back later flashed the selection and scrolled the strip.
+    HRESULT hr = browser->BrowseObject(
+        folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
     g_ourBrowse = false;
     if (FAILED(hr)) {
         Out(L"BrowseObject failed, hr=0x%08lX", hr);
@@ -7649,7 +7662,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
