@@ -156,7 +156,18 @@ FolderMemory GetFolderMemory(std::wstring const& path) {
     std::lock_guard<std::mutex> lock(g_memoryMutex);
     LoadFolderMemoryLocked();
     auto found = g_memory.find(MemoryKey(path));
-    return found == g_memory.end() ? FolderMemory() : found->second;
+    FolderMemory memory = found == g_memory.end() ? FolderMemory() : found->second;
+    // What the settings turn off is not given out.
+    if (!g_rememberSort) {
+        memory.hasSpec = false;
+    }
+    if (!g_rememberWidth) {
+        memory.width = 0;
+    }
+    if (!g_rememberLayout) {
+        memory.columns = -1;
+    }
+    return memory;
 }
 
 // Updates one folder's entry and writes the store when something changed.
@@ -193,6 +204,9 @@ void ChangeFolderMemory(std::wstring const& path, Change change) {
 }
 
 void RememberFolderSpec(std::wstring const& path, SortSpec const& spec) {
+    if (!g_rememberSort) {
+        return;
+    }
     ChangeFolderMemory(path, [&](FolderMemory& memory) {
         memory.hasSpec = true;
         memory.spec = spec;
@@ -200,10 +214,16 @@ void RememberFolderSpec(std::wstring const& path, SortSpec const& spec) {
 }
 
 void RememberFolderWidth(std::wstring const& path, double width) {
+    if (!g_rememberWidth) {
+        return;
+    }
     ChangeFolderMemory(path, [&](FolderMemory& memory) { memory.width = width; });
 }
 
 void RememberFolderColumns(std::wstring const& path, int columns) {
+    if (!g_rememberLayout) {
+        return;
+    }
     ChangeFolderMemory(path, [&](FolderMemory& memory) { memory.columns = columns; });
 }
 

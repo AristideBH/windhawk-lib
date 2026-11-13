@@ -141,6 +141,25 @@ struct RenameState {
 
 struct Worker;
 
+// A drag of rows from one column to a folder, followed by the mod itself.
+struct DragState {
+    bool pending = false;  // Pressed on a row, the pointer has not moved far yet.
+    bool active = false;   // Dragging.
+    Column* column = nullptr;
+    int pressedEntry = -1;
+    std::vector<size_t> entries;
+    winrt::Windows::Foundation::Point start{};  // In the source list's coordinates.
+    Column* targetColumn = nullptr;
+    int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
+    bool targetOk = false;
+    muxc::ListViewItem litRow{nullptr};
+    mux::Media::Brush litRowBrush{nullptr};
+    Column* litColumn = nullptr;
+    mux::Media::Brush litCellBrush{nullptr};
+    muxc::Border ghost{nullptr};
+    muxc::TextBlock ghostText{nullptr};
+};
+
 // The columns of a tab that is not showing, kept to put back when it is.
 struct TabColumnSnapshot {
     double scroll = 0;  // The column's vertical scroll offset.
@@ -197,6 +216,7 @@ struct WindowState {
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
     // Columns per tab: the tab that is showing, and the stacks of the others.
+    DragState drag;
     HWND currentTab = nullptr;
     ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
     std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
@@ -309,6 +329,13 @@ struct WindowState {
     double dragStartX = 0;
     double dragStartWidth = 0;
 };
+
+bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
+                 mux::Input::PointerRoutedEventArgs const& args);
+void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListViewItem const& row,
+                   mux::Input::PointerRoutedEventArgs const& args);
+bool OnDragReleased(WindowState* state);
+void CancelDrag(WindowState* state);
 
 std::mutex g_statesMutex;
 [[clang::no_destroy]] std::vector<std::unique_ptr<WindowState>> g_states;

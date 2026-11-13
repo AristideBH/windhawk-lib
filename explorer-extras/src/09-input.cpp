@@ -144,7 +144,8 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
         mux::DependencyObject node =
             args.OriginalSource().try_as<mux::DependencyObject>();
         for (int i = 0; node && i < 20; i++) {
-            if (node.try_as<muxc::ListViewItem>()) {
+            if (auto row = node.try_as<muxc::ListViewItem>()) {
+                OnDragPressed(state, list, row, args);
                 return;
             }
             node = mux::Media::VisualTreeHelper::GetParent(node);
@@ -316,11 +317,15 @@ void OnBandReleased(muxc::ListView const& list) {
         return;
     }
     try {
+        if (OnDragReleased(state)) {
+            return;
+        }
         if (state->band.pending || state->band.active) {
             EndBand(state, state->band.active);
         }
     } catch (...) {
         state->band = {};
+        state->drag = DragState();
         LogHresult(L"OnBandReleased");
     }
 }
@@ -762,6 +767,11 @@ void OnColumnKey(muxc::ListView const& list,
         }
         bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         // Everyday keys.
+        if (key == VirtualKey::Escape && state->drag.active) {
+            CancelDrag(state);
+            args.Handled(true);
+            return;
+        }
         if (key == VirtualKey::F5 && !ctrl && !alt) {
             ReloadAll(state);
             Out(L"F5: the columns are read again");
@@ -1664,7 +1674,7 @@ void OnTick() {
                 !SameSpec(after, state->specBeforeMenu) && !SameSpec(after, effective)) {
                 Out(L"sort or group changed in the Sort menu: %d sort columns, grouped=%d",
                     (int)after.columns.size(), after.grouped ? 1 : 0);
-                if (activeColumn) {
+                if (activeColumn && g_rememberSort) {
                     // Only the column the user is in changes, and it is remembered.
                     activeColumn->spec = after;
                     activeColumn->hasSpec = true;
@@ -1685,7 +1695,7 @@ void OnTick() {
                                        ? state->columns[state->active].get()
                                        : nullptr;
             IShellBrowser* browser = BrowserOf(state->topLevel);
-            if (activeColumn && browser) {
+            if (activeColumn && browser && g_rememberSort) {
                 Pidl shown = CurrentFolder(browser);
                 SortSpec read;
                 std::wstring path = PathOf(activeColumn->folder.get());
