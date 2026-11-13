@@ -90,6 +90,15 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column, until a different folder is chosen in that column or a parent.
       Keep the focused column smoothly in view, no jump.
 - [ ] Rename several items at once, like Explorer's own.
+- [ ] Selection by drawing a rectangle: click and drag from the empty space
+      of a column. Also when the column is full to the bottom, so it needs a
+      strip that is always empty, such as a gutter beside the rows or a
+      margin under the last row.
+- [ ] Remove the paste guard (0.3.13): after a paste, Explorer's jump to
+      another folder is ignored for 3 s and the view is sent back. A
+      workaround for a jump seen once, not reproduced since. Find the cause
+      or delete the guard before release; a delay and a return trip is not
+      acceptable as a final design.
 
 - [ ] Multiple selection of files and folders in a column, mirrored into
       Explorer's view. Written in 0.3.8, not tested: Ctrl and Shift select,
