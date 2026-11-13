@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.1
+// @version         0.4.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1303,6 +1303,15 @@ struct ContextMenuState {
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
 };
 
+// What the user did in the columns that Ctrl+Z can take back. Explorer's own
+// undo is out of reach from here, so deletes and renames are kept by the mod.
+struct UndoEntry {
+    bool deletion = false;
+    std::vector<std::wstring> paths;  // Deleted paths, to restore.
+    std::wstring renamedFrom;         // A rename: the old path
+    std::wstring renamedTo;           // and the new one.
+};
+
 // An item being renamed in place.
 struct RenameState {
     Column* column = nullptr;
@@ -1320,6 +1329,7 @@ struct WindowState {
     DWORD thread = 0;
     std::unique_ptr<ContextMenuState> context;
     std::unique_ptr<RenameState> rename;
+    std::vector<UndoEntry> undo;
     HWND topLevel = nullptr;
     mud::DispatcherQueue queue{nullptr};
 
@@ -2976,6 +2986,173 @@ void CancelRename(WindowState* state) {
     }
 }
 
+// ---- Undo for deletes and renames ----
+
+std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
+    Pidl absolute(ILCombine(folder, child));
+    wchar_t path[MAX_PATH] = L"";
+    if (absolute && SHGetPathFromIDListW(absolute.get(), path)) {
+        return path;
+    }
+    return L"";
+}
+
+void PushUndo(WindowState* state, UndoEntry&& entry) {
+    state->undo.push_back(std::move(entry));
+    if (state->undo.size() > 20) {
+        state->undo.erase(state->undo.begin());
+    }
+}
+
+// Remember a delete: the paths that are gone now. A delete that didn't happen
+// leaves nothing to undo.
+void RememberDeletion(WindowState* state, std::vector<std::wstring> const& paths) {
+    UndoEntry entry;
+    entry.deletion = true;
+    for (auto& path : paths) {
+        if (!path.empty() && !PathFileExistsW(path.c_str())) {
+            entry.paths.push_back(path);
+        }
+    }
+    if (!entry.paths.empty()) {
+        PushUndo(state, std::move(entry));
+    }
+}
+
+// Puts deleted files back from the Recycle Bin: the newest bin item for each
+// original path gets the bin's own "undelete" command.
+HRESULT RestoreFromRecycleBin(WindowState* state,
+                              std::vector<std::wstring> const& paths) {
+    PIDLIST_ABSOLUTE bin = nullptr;
+    HRESULT hr = SHParseDisplayName(L"shell:RecycleBinFolder", nullptr, &bin, 0,
+                                    nullptr);
+    if (FAILED(hr) || !bin) {
+        return hr;
+    }
+    IShellFolder* folder = nullptr;
+    hr = SHBindToObject(nullptr, bin, nullptr, IID_PPV_ARGS(&folder));
+    CoTaskMemFree(bin);
+    if (FAILED(hr) || !folder) {
+        return hr;
+    }
+    IShellFolder2* folder2 = nullptr;
+    folder->QueryInterface(IID_PPV_ARGS(&folder2));
+    static const PROPERTYKEY kDeletedFrom = {
+        {0x9B174B33, 0x40FF, 0x11D2, {0xA2, 0x7E, 0x00, 0xC0, 0x4F, 0xC3, 0x08, 0x71}}, 2};
+    static const PROPERTYKEY kDateDeleted = {
+        {0x9B174B33, 0x40FF, 0x11D2, {0xA2, 0x7E, 0x00, 0xC0, 0x4F, 0xC3, 0x08, 0x71}}, 3};
+
+    std::vector<Pidl> best(paths.size());
+    std::vector<double> bestDate(paths.size(), -1);
+    IEnumIDList* list = nullptr;
+    if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS |
+                                         SHCONTF_INCLUDEHIDDEN,
+                            &list) == S_OK &&
+        list) {
+        PITEMID_CHILD child = nullptr;
+        int seen = 0;
+        while (seen++ < 5000 && list->Next(1, &child, nullptr) == S_OK && child) {
+            // The bin names an item by its original path. The original folder
+            // and the plain name are the second way to say the same.
+            std::wstring normal = DisplayName(folder, child);
+            std::wstring name = [&]() {
+                STRRET text = {};
+                wchar_t buffer[MAX_PATH] = L"";
+                if (SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_INFOLDER, &text)) &&
+                    SUCCEEDED(StrRetToBufW(&text, child, buffer, MAX_PATH))) {
+                    return std::wstring(buffer);
+                }
+                return std::wstring();
+            }();
+            std::wstring from;
+            double date = 0;
+            if (folder2) {
+                VARIANT value;
+                VariantInit(&value);
+                if (SUCCEEDED(folder2->GetDetailsEx(child, &kDeletedFrom, &value)) &&
+                    value.vt == VT_BSTR && value.bstrVal) {
+                    from = value.bstrVal;
+                }
+                VariantClear(&value);
+                if (SUCCEEDED(folder2->GetDetailsEx(child, &kDateDeleted, &value)) &&
+                    value.vt == VT_DATE) {
+                    date = value.date;
+                }
+                VariantClear(&value);
+            }
+            std::wstring joined = from.empty() ? L"" : from + L"\\" + name;
+            for (size_t k = 0; k < paths.size(); k++) {
+                if ((!normal.empty() && _wcsicmp(normal.c_str(), paths[k].c_str()) == 0) ||
+                    (!joined.empty() && _wcsicmp(joined.c_str(), paths[k].c_str()) == 0)) {
+                    if (date >= bestDate[k]) {
+                        bestDate[k] = date;
+                        best[k].reset(ILClone(child));
+                    }
+                }
+            }
+            CoTaskMemFree(child);
+            child = nullptr;
+        }
+        list->Release();
+    }
+    if (folder2) {
+        folder2->Release();
+    }
+
+    std::vector<PCUITEMID_CHILD> chosen;
+    for (auto& item : best) {
+        if (item) {
+            chosen.push_back(item.get());
+        }
+    }
+    Out(L"undo delete: %d of %d item(s) found in the Recycle Bin", (int)chosen.size(),
+        (int)paths.size());
+    hr = chosen.empty() ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : S_OK;
+    if (!chosen.empty()) {
+        IContextMenu* menu = nullptr;
+        hr = folder->GetUIObjectOf(state->topLevel, (UINT)chosen.size(),
+                                   chosen.data(), IID_IContextMenu, nullptr,
+                                   (void**)&menu);
+        if (SUCCEEDED(hr) && menu) {
+            HMENU hmenu = CreatePopupMenu();
+            hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL);
+            if (SUCCEEDED(hr)) {
+                CMINVOKECOMMANDINFO invoke = {};
+                invoke.cbSize = sizeof(invoke);
+                invoke.hwnd = state->topLevel;
+                invoke.lpVerb = "undelete";
+                invoke.nShow = SW_SHOWNORMAL;
+                hr = menu->InvokeCommand(&invoke);
+            }
+            DestroyMenu(hmenu);
+            menu->Release();
+        }
+    }
+    folder->Release();
+    return hr;
+}
+
+// Takes back the last delete or rename this mod knows about. False if there
+// is none.
+bool UndoLast(WindowState* state) {
+    if (state->undo.empty()) {
+        return false;
+    }
+    UndoEntry entry = std::move(state->undo.back());
+    state->undo.pop_back();
+    HRESULT hr;
+    if (entry.deletion) {
+        hr = RestoreFromRecycleBin(state, entry.paths);
+        Out(L"Undo delete of %d item(s): hr=0x%08lX", (int)entry.paths.size(), hr);
+    } else {
+        BOOL moved = MoveFileW(entry.renamedTo.c_str(), entry.renamedFrom.c_str());
+        hr = moved ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+        Out(L"Undo rename \"%s\" back to \"%s\": hr=0x%08lX", entry.renamedTo.c_str(),
+            entry.renamedFrom.c_str(), hr);
+    }
+    return true;
+}
+
 void CommitRename(WindowState* state) {
     if (!state->rename || state->rename->done) {
         return;
@@ -2997,6 +3174,8 @@ void CommitRename(WindowState* state) {
         return;
     }
     PITEMID_CHILD renamed = nullptr;
+    std::wstring oldPath = FilePathOf(column->folder.get(),
+                                      column->entries[entryIndex].child.get());
     hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
                            newName.c_str(), SHGDN_INFOLDER, &renamed);
     Out(L"rename \"%s\" to \"%s\": hr=0x%08lX",
@@ -3004,6 +3183,13 @@ void CommitRename(WindowState* state) {
     parent->Release();
     if (SUCCEEDED(hr) && renamed) {
         // Show the new name now, then read the folder again for the order.
+        std::wstring newPath = FilePathOf(column->folder.get(), renamed);
+        if (!oldPath.empty() && !newPath.empty()) {
+            UndoEntry entry;
+            entry.renamedFrom = oldPath;
+            entry.renamedTo = newPath;
+            PushUndo(state, std::move(entry));
+        }
         column->entries[entryIndex].name = newName;
         column->entries[entryIndex].child.reset(renamed);
         renamed = nullptr;
@@ -3301,6 +3487,15 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                     }
                     UINT id = winrt::unbox_value<uint32_t>(item.Tag());
                     ContextMenuState* context = state->context.get();
+                    // For an undo of a delete: the paths, before they are gone.
+                    std::vector<std::wstring> pathsBefore;
+                    for (size_t entry : context->entries) {
+                        if (context->column && entry < context->column->entries.size()) {
+                            pathsBefore.push_back(FilePathOf(
+                                context->column->folder.get(),
+                                context->column->entries[entry].child.get()));
+                        }
+                    }
                     wchar_t verb[64] = L"";
                     context->menu->GetCommandString(
                         id - context->idFirst, GCS_VERBW, nullptr,
@@ -3343,6 +3538,9 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                     // instead of waiting for the change notification.
                     if (!_wcsicmp(verb, L"delete")) {
                         HideDeletedRows(context->column, context->entries);
+                        if (SUCCEEDED(hr) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+                            RememberDeletion(state, pathsBefore);
+                        }
                     }
                     ReloadAll(state);
                 } catch (...) {
@@ -3750,52 +3948,6 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
     return hr;
 }
 
-// Undo or redo the last file operation, through the folder's background menu,
-// which offers "Undo Delete" and the like when there is something to undo.
-// The verbs it offers are logged once, to see what this Windows names them.
-HRESULT UndoRedoInFolder(WindowState* state, PCIDLIST_ABSOLUTE folder, bool redo) {
-    IShellFolder* target = nullptr;
-    HRESULT hr = ILIsEmpty(folder)
-                     ? SHGetDesktopFolder(&target)
-                     : SHBindToObject(nullptr, folder, nullptr,
-                                      IID_PPV_ARGS(&target));
-    if (FAILED(hr) || !target) {
-        return hr;
-    }
-    IContextMenu* menu = nullptr;
-    hr = target->CreateViewObject(state->topLevel, IID_PPV_ARGS(&menu));
-    target->Release();
-    if (FAILED(hr) || !menu) {
-        return hr;
-    }
-    HMENU hmenu = CreatePopupMenu();
-    hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL);
-    if (SUCCEEDED(hr)) {
-        static bool listed = false;
-        if (!listed) {
-            listed = true;
-            for (int i = 0; i < GetMenuItemCount(hmenu); i++) {
-                UINT id = GetMenuItemID(hmenu, i);
-                wchar_t verb[64] = L"";
-                if (id >= 1 && id < 0x7FFF) {
-                    menu->GetCommandString(id - 1, GCS_VERBW, nullptr, (char*)verb,
-                                           ARRAYSIZE(verb));
-                    Out(L"background menu item %d: id=%u verb=\"%s\"", i, id, verb);
-                }
-            }
-        }
-        CMINVOKECOMMANDINFO invoke = {};
-        invoke.cbSize = sizeof(invoke);
-        invoke.hwnd = state->topLevel;
-        invoke.lpVerb = redo ? "redo" : "undo";
-        invoke.nShow = SW_SHOWNORMAL;
-        hr = menu->InvokeCommand(&invoke);
-    }
-    DestroyMenu(hmenu);
-    menu->Release();
-    return hr;
-}
-
 // Paste the clipboard into a folder the way a drop does, through the folder's
 // own drop target. The "paste" verb of the context menu made Explorer's view
 // jump to another folder afterwards.
@@ -4007,8 +4159,17 @@ void OnColumnKey(muxc::ListView const& list,
             return;
         }
         if (key == VirtualKey::Delete && !picked.empty()) {
+            std::vector<std::wstring> before;
+            for (size_t entry : picked) {
+                before.push_back(FilePathOf(column->folder.get(),
+                                            column->entries[entry].child.get()));
+            }
+            bool permanent = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             HRESULT hr = InvokeVerbOnItems(state, column, picked, "delete");
             Out(L"Delete %d item(s): hr=0x%08lX", (int)picked.size(), hr);
+            if (SUCCEEDED(hr) && !permanent) {
+                RememberDeletion(state, before);
+            }
             HideDeletedRows(column, picked);
             ReloadAll(state);
             keep();
@@ -4025,13 +4186,9 @@ void OnColumnKey(muxc::ListView const& list,
             return;
         }
         if (ctrl && !alt && (key == VirtualKey::Z || key == VirtualKey::Y)) {
-            // The folder's own menu is asked first. If it doesn't act, the key
-            // goes to Explorer's view.
-            HRESULT undone = UndoRedoInFolder(state, column->folder.get(),
-                                              key == VirtualKey::Y);
-            Out(L"%s through the folder's menu: hr=0x%08lX",
-                key == VirtualKey::Z ? L"Undo" : L"Redo", undone);
-            if (SUCCEEDED(undone)) {
+            // The mod's own undo first: deletes and renames done here. Anything
+            // else is left to Explorer's view.
+            if (key == VirtualKey::Z && UndoLast(state)) {
                 ReloadAll(state);
             } else if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
                 IShellView* view = nullptr;
@@ -5402,7 +5559,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
