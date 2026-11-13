@@ -1349,22 +1349,58 @@ mux::UIElement MakeTwoToneIcon(WindowState* state, const wchar_t* glyph, double 
     return host;
 }
 
-// The button of Explorer's toolbar with this label, searched from the chrome's root.
-muxc::AppBarButton FindToolbarButton(mux::DependencyObject const& node, const wchar_t* label,
-                                     int depth, int& visited) {
+// The icon Explorer's toolbar uses for a command with this label: on a button of
+// the bar, or on an entry of one of its menus.
+mux::Controls::IconElement FindToolbarIcon(mux::DependencyObject const& node, const wchar_t* label,
+                                           int depth, int& visited);
+
+mux::Controls::IconElement IconInMenuItems(
+    winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase> const& items,
+    const wchar_t* label, int depth) {
+    for (uint32_t i = 0; i < items.Size() && i < 60; i++) {
+        auto base = items.GetAt(i);
+        if (auto item = base.try_as<muxc::MenuFlyoutItem>()) {
+            if (item.Icon() && _wcsicmp(item.Text().c_str(), label) == 0) {
+                return item.Icon();
+            }
+        } else if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
+            if (sub.Icon() && _wcsicmp(sub.Text().c_str(), label) == 0) {
+                return sub.Icon();
+            }
+            if (depth < 2) {
+                if (auto found = IconInMenuItems(sub.Items(), label, depth + 1)) {
+                    return found;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+mux::Controls::IconElement FindToolbarIcon(mux::DependencyObject const& node, const wchar_t* label,
+                                           int depth, int& visited) {
     if (!node || depth > 40 || visited > 3000) {
         return nullptr;
     }
     visited++;
     if (auto button = node.try_as<muxc::AppBarButton>()) {
-        if (_wcsicmp(button.Label().c_str(), label) == 0 && button.Icon()) {
-            return button;
+        if (button.Icon() && _wcsicmp(button.Label().c_str(), label) == 0) {
+            return button.Icon();
+        }
+    }
+    if (auto button = node.try_as<muxc::Button>()) {
+        if (auto flyout = button.Flyout()) {
+            if (auto menu = flyout.try_as<muxc::MenuFlyout>()) {
+                if (auto found = IconInMenuItems(menu.Items(), label, 0)) {
+                    return found;
+                }
+            }
         }
     }
     int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
     for (int i = 0; i < count; i++) {
-        if (auto found = FindToolbarButton(mux::Media::VisualTreeHelper::GetChild(node, i), label,
-                                           depth + 1, visited)) {
+        if (auto found = FindToolbarIcon(mux::Media::VisualTreeHelper::GetChild(node, i), label,
+                                         depth + 1, visited)) {
             return found;
         }
     }
@@ -1372,7 +1408,7 @@ muxc::AppBarButton FindToolbarButton(mux::DependencyObject const& node, const wc
 }
 
 // A copy of the icon Explorer's toolbar uses for a command, so the menu matches
-// the toolbar. Null when the toolbar has no such button or the icon is of a kind
+// the toolbar. Null when the toolbar has no such command or the icon is of a kind
 // that is not copied.
 mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size) {
     try {
@@ -1382,11 +1418,10 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
         auto content = state->xamlRoot.Content();
         auto start = content ? content.try_as<mux::DependencyObject>() : nullptr;
         int visited = 0;
-        auto button = FindToolbarButton(start, label, 0, visited);
-        if (!button) {
+        auto icon = FindToolbarIcon(start, label, 0, visited);
+        if (!icon) {
             return nullptr;
         }
-        auto icon = button.Icon();
         if (auto image = icon.try_as<muxc::ImageIcon>()) {
             muxc::ImageIcon copy;
             copy.Source(image.Source());
@@ -1588,9 +1623,9 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 muxc::StackPanel stack;
                 stack.Orientation(muxc::Orientation::Vertical);
                 stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
-                mux::UIElement icon = ToolbarIcon(state, quick[q].label.c_str(), 18);
+                mux::UIElement icon = ToolbarIcon(state, quick[q].label.c_str(), 20);
                 if (!icon) {
-                    icon = MakeTwoToneIcon(state, quick[q].glyph, 18, quick[q].enabled);
+                    icon = MakeTwoToneIcon(state, quick[q].glyph, 20, quick[q].enabled);
                 }
                 icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
                 stack.Children().Append(icon);
@@ -1639,10 +1674,15 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 content.ColumnDefinitions().Append(definition);
             }
             content.ColumnDefinitions().GetAt(2).Width(mux::GridLength{0, mux::GridUnitType::Auto});
-            if (glyph && glyph[0]) {
-                auto icon = MakeTwoToneIcon(state, glyph, 16, enabled);
-                muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
-                content.Children().Append(icon);
+            {
+                mux::UIElement icon = ToolbarIcon(state, text, 18);
+                if (!icon && glyph && glyph[0]) {
+                    icon = MakeTwoToneIcon(state, glyph, 18, enabled);
+                }
+                if (icon) {
+                    muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
+                    content.Children().Append(icon);
+                }
             }
             muxc::TextBlock label;
             label.Text(text);
