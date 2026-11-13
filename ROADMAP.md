@@ -73,9 +73,11 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       strip.
 - [x] Flash shortened: restore waits one tick instead of three. Tested in
       0.3.1, shorter.
-- [ ] (0.3.14, not tested: Control Panel applets and the Desktop's Control
-      Panel entry are launchers, shown with a gear, not mirrored into
-      Explorer's view, opened with Enter or a double-click.)
+- [x] Control Panel in columns. Tested in 0.3.15: one Control Panel entry on
+      the Desktop, the columns browse into its categories and subfolders, and
+      Explorer's own view no longer follows into it (it swapped the window for
+      a Control Panel window). Launchers (applets) show a gear and open with
+      Enter, that part is not tested yet.
 - [ ] Focusing a Control Panel item, or another virtual shell item such as a
       link, in the Desktop folder. These aren't real folders on disk, so the
       column logic needs a way to open and focus them. Not looked at yet.
@@ -131,6 +133,10 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 ## Feature backlog, order open
 
 - [ ] Labels, macOS style
+- [ ] Home page overhaul
+- [ ] Option to show only real Desktop items, hiding the virtual ones (This
+      PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form
+      is open.
 - [ ] New folder from selection, from the right-click menu and from the
       New button in the command bar
 - [ ] Better archive extraction flow
