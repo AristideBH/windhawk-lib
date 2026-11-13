@@ -13,8 +13,11 @@ For the next session, human or model. Written 2026-11-13.
 ## State
 
 - Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.2.5.
-- Compiled and tested by Ari up to 0.2.2. Versions 0.2.3 to 0.2.5 were
-  written after that and their test results are not recorded here.
+- Compiled and tested by Ari up to 0.2.5 on 2026-11-13. Confirmed: no crash
+  when a window closes with columns on, minimum and maximum width on drag,
+  arrow keys between columns, sort inside groups.
+- Reported and not yet done: Columns is not remembered when Explorer is
+  relaunched.
 - 0.2.3: order inside groups, maximum width on drag, highlight stays on the
   current column, Left, Right and Enter move between columns.
 - 0.2.4: fix for the crash when an Explorer window closes with the panel on.

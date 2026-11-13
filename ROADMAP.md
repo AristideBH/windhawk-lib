@@ -19,48 +19,54 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 
 - [x] Rename to Explorer Extras, settings grouped under a Columns section
 - [x] Sort from the starting folder applied to every column
-- [ ] Group headers with Explorer's own names
-- [ ] Sort menu changes re-sort every column, with nothing written to folders
+- [x] Group headers, from the mod's own ranges, in English for now
+- [x] Sort menu changes re-sort every column, with nothing written to folders
 - [ ] Selection mirrored into Explorer's view: preview pane, details pane,
       status bar, command bar
 - [x] Column width fitted to the longest name, with minimum and maximum
-- [ ] Middle ellipsis on long names, full name in a tooltip
+- [x] Middle ellipsis on long names, full name in a tooltip
 - [x] Drag to resize a column, double-click to refit
 - [ ] Rows built only when visible
 - [x] Folders read on a background thread
-- [ ] Explorer's view follows with a 350 ms delay
-- [ ] Hidden files follow Explorer's setting
+- [x] Explorer's view follows with a 350 ms delay
+- [x] Hidden files follow Explorer's setting
 - [ ] Settings: enabled, minimum width, maximum width, follow active column,
       maximum items, debug log
 
 ## 0.2.1, fixes from the 0.2 test, see `explorer-extras/SPEC-0.2.1.md`
 
-- [ ] Crash with a second Explorer window found and fixed
+- [x] Crash with a second Explorer window found and fixed
 - [x] Log kept across restarts, with thread ids
-- [ ] Columns entry present after Explorer restarts
+- [x] Columns entry present after Explorer restarts
 - [x] Columns update after copy, rename, delete and Refresh
-- [ ] Back, Up and outside navigation keep the column path
-- [ ] Active column marked
-- [ ] Grouping works, and no longer moves focus to the address bar
+- [x] Back, Up and outside navigation keep the column path
+- [x] Active column marked
+- [x] Keyboard: left, right and Enter between columns
+- [x] Grouping works. The address bar focus could not be reproduced
 - [x] Resize cursor and hover handle on column separators
-- [ ] Compact view applies, hidden files and compact view update live
+- [x] Compact view applies, hidden files and compact view update live
 
 ## 0.3
 
+- [ ] Columns present when a window opens, without a click on the command bar
+- [ ] Columns remembered when Explorer or a window is reopened
 - [ ] Real file icons and thumbnails
-- [ ] Keyboard: left and right between columns, type to jump
 - [ ] Native right-click menu
-- [ ] Quick options flyout on empty space in the columns
-- [ ] Indicator on remote items: phone, network
+
+## 0.3.1
+
 - [ ] Multiple selection of files and folders in a column, mirrored into
       Explorer's view
+- [ ] Indicator on remote items: phone, network
+- [ ] Quick options flyout on empty space in the columns
+- [ ] Keyboard: type to jump to a name
+- [ ] Rows built only when visible, carried over from 0.2
 
 ## 0.4
 
 - [ ] Drag and drop between columns
 - [ ] Scroll animation to the newest column
 - [ ] Per-folder memory and a "columns everywhere" setting
-- [ ] Columns entry present when the window opens
 - [ ] Strings moved to a table for translation
 - [ ] Setting: each column keeps its own folder's sort and group
 
