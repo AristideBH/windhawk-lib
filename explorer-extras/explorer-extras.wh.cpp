@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.6.0
+// @version         0.6.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -460,8 +460,16 @@ int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
          msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
         return 0;  // Not translated: the message goes on to the focused control.
     }
-    if (g_panelWindow && msg && msg->wParam == VK_BACK &&
-        (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP)) {
+    // Keys the panel takes for itself while the keyboard is in it: Backspace,
+    // and Ctrl+Shift+N, which Explorer would use to make a folder in its own,
+    // hidden view.
+    bool panelKey = false;
+    if (g_panelWindow && msg && (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP)) {
+        panelKey = msg->wParam == VK_BACK ||
+                   (msg->wParam == 'N' && (GetKeyState(VK_CONTROL) & 0x8000) &&
+                    (GetKeyState(VK_SHIFT) & 0x8000));
+    }
+    if (panelKey) {
         HWND focus = GetFocus();
         if (focus && (focus == g_panelWindow || IsChild(g_panelWindow, focus))) {
             return 0;
@@ -6114,11 +6122,37 @@ void OnColumnKey(muxc::ListView const& list,
             return;
         }
         if (ctrl && shift && !alt && key == VirtualKey::C) {
-            CopyAsPath(state, column, picked);
+            if (picked.empty()) {
+                // Nothing selected: the column's own folder.
+                wchar_t folder[MAX_PATH] = L"";
+                if (SHGetPathFromIDListW(column->folder.get(), folder) && folder[0]) {
+                    std::wstring text = std::wstring(L"\"") + folder + L"\"";
+                    if (OpenClipboard(state->topLevel)) {
+                        EmptyClipboard();
+                        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+                        if (memory) {
+                            if (wchar_t* target = (wchar_t*)GlobalLock(memory)) {
+                                memcpy(target, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+                                GlobalUnlock(memory);
+                                if (!SetClipboardData(CF_UNICODETEXT, memory)) {
+                                    GlobalFree(memory);
+                                }
+                            } else {
+                                GlobalFree(memory);
+                            }
+                        }
+                        CloseClipboard();
+                        Out(L"copied the column's folder path as text");
+                    }
+                }
+            } else {
+                CopyAsPath(state, column, picked);
+            }
             keep();
             return;
         }
-        if (ctrl && !alt && key == VirtualKey::Y && RedoLast(state)) {
+        if (ctrl && !alt && (key == VirtualKey::Y || (shift && key == VirtualKey::Z)) &&
+            RedoLast(state)) {
             ReloadAll(state);
             keep();
             return;
@@ -6170,7 +6204,8 @@ void OnColumnKey(muxc::ListView const& list,
             args.Handled(true);
             return;
         }
-        if (ctrl && !alt && (key == VirtualKey::Z || key == VirtualKey::Y)) {
+        if (ctrl && !alt && !(shift && key == VirtualKey::Z) &&
+            (key == VirtualKey::Z || key == VirtualKey::Y)) {
             // The mod's own undo first: deletes and renames done here. Anything
             // else is left to Explorer's view.
             if (key == VirtualKey::Z && UndoLast(state)) {
@@ -7868,7 +7903,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.6.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.6.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
