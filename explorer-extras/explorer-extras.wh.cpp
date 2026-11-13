@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.9
+// @version         0.7.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1512,15 +1512,24 @@ std::wstring PathOf(PCIDLIST_ABSOLUTE pidl) {
 }
 
 void OpenItem(HWND owner, PCIDLIST_ABSOLUTE pidl) {
+    // A file on disk is opened by its path: an item of a synced folder such as
+    // OneDrive has a pidl that ShellExecute handles badly (it does nothing).
+    wchar_t path[MAX_PATH] = L"";
+    bool byPath = SHGetPathFromIDListW(pidl, path) && path[0];
     SHELLEXECUTEINFOW info = {};
     info.cbSize = sizeof(info);
-    info.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
     info.hwnd = owner;
-    info.lpIDList = (void*)pidl;
     info.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&info)) {
-        Out(L"OpenItem failed, gle=%lu", GetLastError());
+    if (byPath) {
+        info.fMask = SEE_MASK_DEFAULT;
+        info.lpFile = path;
+    } else {
+        info.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
+        info.lpIDList = (void*)pidl;
     }
+    bool ok = ShellExecuteExW(&info);
+    Out(L"OpenItem %s: %s, gle=%lu, hInstApp=%llu", byPath ? L"by path" : L"by pidl",
+        ok ? L"ok" : L"failed", ok ? 0 : GetLastError(), (unsigned long long)(ULONG_PTR)info.hInstApp);
 }
 
 #ifndef MOD_NO_WINRT
@@ -8769,7 +8778,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
