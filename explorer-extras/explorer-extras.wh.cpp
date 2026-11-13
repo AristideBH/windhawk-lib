@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.11
+// @version         0.5.12
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2947,13 +2947,18 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
             bool wasBuilding = state->building;
             state->building = true;
             try {
+                // Only a column that shows its first listing scrolls itself into
+                // view. A reload of one that is already there must not pull the
+                // strip back to the last column, which undid the centring of
+                // the column Explorer's Up had just gone to.
+                bool firstListing = !column->filled;
                 if (!SameListing(loaded->data, *column)) {
                     FillColumn(state, column.get(), std::move(loaded->data));
                 }
                 state->scroller.UpdateLayout();
                 if (state->swapOld && column->generation == state->swapGeneration) {
                     CompleteSwap(state);
-                } else if (state->columns.back().get() == column.get()) {
+                } else if (firstListing && state->columns.back().get() == column.get()) {
                     EnsureColumnVisible(state, (int)state->columns.size() - 1);
                 }
             } catch (...) {
@@ -7609,7 +7614,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
