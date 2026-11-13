@@ -5152,7 +5152,7 @@ int ArchiveParentColumn(WindowState* state, Column* column) {
             archive = part;
             break;
         }
-        size_t slash = part.rfind(L'\');
+        size_t slash = part.rfind(L'\\');
         if (slash == std::wstring::npos) {
             break;
         }
@@ -5161,7 +5161,7 @@ int ArchiveParentColumn(WindowState* state, Column* column) {
     if (archive.empty()) {
         return -1;
     }
-    std::wstring directory = archive.substr(0, archive.rfind(L'\'));
+    std::wstring directory = archive.substr(0, archive.rfind(L'\\'));
     for (int j = index - 1; j >= 0; j--) {
         std::wstring before = PathOf(state->columns[j]->folder.get());
         if (_wcsicmp(before.c_str(), directory.c_str()) == 0) {
