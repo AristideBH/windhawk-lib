@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.5
+// @version         0.5.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2278,6 +2278,30 @@ void EnsureColumnVisible(WindowState* state, int index) {
             target = 0;
         }
         if (target != offset) {
+            state->scroller.ChangeView(target, nullptr, nullptr, false);
+        }
+    } catch (...) {
+    }
+}
+
+// Scrolls the strip, smoothly, so that column `index` is in the middle of the
+// view, as far as the ends of the strip allow.
+void CenterColumn(WindowState* state, int index) {
+    if (!state->scroller || !state->strip || index < 0 ||
+        index >= (int)state->columns.size() || !state->columns[index]->cell) {
+        return;
+    }
+    try {
+        auto cell = state->columns[index]->cell;
+        double left = cell.TransformToVisual(state->strip)
+                          .TransformPoint(winrt::Windows::Foundation::Point{0, 0})
+                          .X;
+        double width = cell.ActualWidth();
+        double view = state->scroller.ViewportWidth();
+        double target = left + width / 2 - view / 2;
+        double most = state->scroller.ScrollableWidth();
+        target = std::max(0.0, std::min(target, most));
+        if (std::abs(target - state->scroller.HorizontalOffset()) > 1) {
             state->scroller.ChangeView(target, nullptr, nullptr, false);
         }
     } catch (...) {
@@ -5462,17 +5486,25 @@ void OnEmptyDoubleTapped(muxc::ListView const& list,
         if (HeaderRowAt(column, list, args.GetPosition(list)) >= 0) {
             return;
         }
-        if (index > 0) {
-            Column* previous = state->columns[index - 1].get();
-            LiftStale(state, index - 1);
-            SetActiveColumn(state, index - 1);
+        // Up from the active column, whichever column was double-clicked.
+        int from = state->active >= 0 && state->active < (int)state->columns.size()
+                       ? state->active
+                       : index;
+        if (from > 0) {
+            Column* previous = state->columns[from - 1].get();
+            LiftStale(state, from - 1);
+            SetActiveColumn(state, from - 1);
             ScheduleNavigation(state, previous->folder.get());
             state->focusColumn = previous;
             state->focusUntil = GetTickCount64() + 1500;
             previous->list.Focus(mux::FocusState::Pointer);
-            Out(L"double-click on empty space: back to column %d", index);
+            // The active column goes to the middle of the view.
+            state->scroller.UpdateLayout();
+            CenterColumn(state, from - 1);
+            Out(L"double-click on empty space: back to column %d", from);
             return;
         }
+        column = state->columns[0].get();
         if (ILIsEmpty(column->folder.get())) {
             return;  // The top of the namespace.
         }
@@ -7500,7 +7532,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
