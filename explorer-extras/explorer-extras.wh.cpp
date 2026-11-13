@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.2
+// @version         0.7.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1517,6 +1517,7 @@ struct ContextMenuState {
     HWND owner = nullptr;
     Column* column = nullptr;  // The column and items the menu is for.
     std::vector<size_t> entries;
+    bool insideArchive = false;  // The items are inside an archive that is being browsed.
     muxc::MenuFlyout flyout{nullptr};
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
@@ -4774,10 +4775,16 @@ std::wstring MenuText(HMENU menu, UINT position, MENUITEMINFOW* info) {
     return result;
 }
 
+int ArchiveParentColumn(WindowState* state, Column* column);
+
 void FillFlyoutItems(WindowState* state, HMENU menu,
                      winrt::Windows::Foundation::Collections::IVector<
                          muxc::MenuFlyoutItemBase> const& items,
                      int depth) {
+    // Inside an archive only Copy is offered. Properties on such items took
+    // Explorer down in the 0.7.2 test, and Delete, Cut, Rename, Send to and
+    // the like have no meaning there.
+    bool restricted = state->context && state->context->insideArchive;
     int count = GetMenuItemCount(menu);
     bool needSeparator = false;
     for (int i = 0; i < count && i < 80; i++) {
@@ -4793,6 +4800,20 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
         if (needSeparator) {
             items.Append(muxc::MenuFlyoutSeparator());
             needSeparator = false;
+        }
+        if (restricted) {
+            if (info.hSubMenu) {
+                continue;
+            }
+            wchar_t verb[64] = L"";
+            if (state->context->menu) {
+                state->context->menu->GetCommandString(info.wID - state->context->idFirst,
+                                                       GCS_VERBW, nullptr, (char*)verb,
+                                                       ARRAYSIZE(verb));
+            }
+            if (_wcsicmp(verb, L"copy") != 0) {
+                continue;
+            }
         }
         if (info.hSubMenu) {
             if (depth >= 2) {
@@ -5248,12 +5269,14 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
             CoTaskMemFree(known);
         }
     }
+    // Inside an archive being browsed, writing and properties make no sense.
+    bool inArchive = ArchiveParentColumn(state, column) >= 0;
     Item items[] = {
-        {L"paste", L"Paste", ClipboardHasFiles()},
-        {L"newfolder", L"New folder", true},
+        {L"paste", L"Paste", ClipboardHasFiles() && !inArchive},
+        {L"newfolder", L"New folder", !inArchive},
         {nullptr, nullptr, false},
         {L"refresh", L"Refresh", true},
-        {L"properties", desktop ? L"Personalize" : L"Folder properties", true},
+        {L"properties", desktop ? L"Personalize" : L"Folder properties", !inArchive},
     };
     for (auto& item : items) {
         if (!item.id) {
@@ -5355,6 +5378,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         state->context->column = column;
         state->context->entries = picked;
         muxc::MenuFlyout flyout;
+        state->context->insideArchive = ArchiveParentColumn(state, column) >= 0;
         FillFlyoutItems(state, hmenu, flyout.Items(), 0);
         // Two items of this mod at the top: a new folder holding the picked
         // items, and, for one folder, a new tab.
@@ -8586,7 +8610,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
