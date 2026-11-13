@@ -1333,7 +1333,7 @@ mux::UIElement MakeTwoToneIcon(WindowState* state, const wchar_t* glyph, double 
         icon.VerticalAlignment(mux::VerticalAlignment::Center);
         if (accent) {
             winrt::Windows::UI::Color color =
-                state->colorsSet ? state->accentColor
+                state->colorsSet ? state->pillColor
                                  : winrt::Windows::UI::Color{255, 0, 120, 212};
             icon.Foreground(mux::Media::SolidColorBrush(color));
             icon.Opacity(enabled ? 1.0 : 0.35);
@@ -1347,6 +1347,65 @@ mux::UIElement MakeTwoToneIcon(WindowState* state, const wchar_t* glyph, double 
     host.Children().Append(make(false));
     host.Children().Append(make(true));
     return host;
+}
+
+// The button of Explorer's toolbar with this label, searched from the chrome's root.
+muxc::AppBarButton FindToolbarButton(mux::DependencyObject const& node, const wchar_t* label,
+                                     int depth, int& visited) {
+    if (!node || depth > 40 || visited > 3000) {
+        return nullptr;
+    }
+    visited++;
+    if (auto button = node.try_as<muxc::AppBarButton>()) {
+        if (_wcsicmp(button.Label().c_str(), label) == 0 && button.Icon()) {
+            return button;
+        }
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = FindToolbarButton(mux::Media::VisualTreeHelper::GetChild(node, i), label,
+                                           depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// A copy of the icon Explorer's toolbar uses for a command, so the menu matches
+// the toolbar. Null when the toolbar has no such button or the icon is of a kind
+// that is not copied.
+mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size) {
+    try {
+        if (!state->xamlRoot) {
+            return nullptr;
+        }
+        auto content = state->xamlRoot.Content();
+        auto start = content ? content.try_as<mux::DependencyObject>() : nullptr;
+        int visited = 0;
+        auto button = FindToolbarButton(start, label, 0, visited);
+        if (!button) {
+            return nullptr;
+        }
+        auto icon = button.Icon();
+        if (auto image = icon.try_as<muxc::ImageIcon>()) {
+            muxc::ImageIcon copy;
+            copy.Source(image.Source());
+            copy.Width(size);
+            copy.Height(size);
+            return copy;
+        }
+        if (auto font = icon.try_as<muxc::FontIcon>()) {
+            muxc::FontIcon copy;
+            copy.FontFamily(font.FontFamily());
+            copy.Glyph(font.Glyph());
+            copy.FontSize(size);
+            return copy;
+        }
+        Out(L"toolbar icon of \"%s\" is a kind that is not copied", label);
+    } catch (...) {
+        LogHresult(L"ToolbarIcon");
+    }
+    return nullptr;
 }
 
 // The shell's context menu for one item, shown the way Explorer's own is: a row
@@ -1462,14 +1521,14 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
 
         // Top row: the quick actions as icons, with this mod's own after them.
         struct Quick {
-            std::wstring label;
+            std::wstring label;  // Under the icon.
+            std::wstring tip;
             const wchar_t* glyph;
             bool enabled;
             std::function<void()> action;
         };
         std::vector<Quick> quick;
         const wchar_t* quickVerbs[] = {L"cut", L"copy", L"rename", L"share", L"delete"};
-        const wchar_t* quickLabels[] = {L"Cut", L"Copy", L"Rename", L"Share", L"Delete"};
         for (int q = 0; q < 5; q++) {
             if (insideArchive && q != 1) {
                 continue;
@@ -1482,17 +1541,18 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 }
                 used.insert(row.pos);
                 UINT id = row.id;
-                quick.push_back({quickLabels[q], GlyphForVerb(q == 3 ? L"share" : quickVerbs[q]),
+                quick.push_back({row.text, row.text, GlyphForVerb(q == 3 ? L"share" : quickVerbs[q]),
                                  row.enabled, [id]() { RunContextCommand(id); }});
                 break;
             }
         }
+        wchar_t folderPath[MAX_PATH] = L"";
+        bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) &&
+                      folderPath[0];
         {
-            wchar_t folderPath[MAX_PATH] = L"";
-            bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) &&
-                          folderPath[0];
-            auto addMod = [&](const wchar_t* text, const wchar_t* glyph, std::function<void()> action) {
-                quick.push_back({text, glyph, true, [action]() {
+            auto addMod = [&](const wchar_t* text, const wchar_t* tip, const wchar_t* glyph,
+                              std::function<void()> action) {
+                quick.push_back({text, tip, glyph, true, [action]() {
                                      WindowState* now = StateForThisThread(false);
                                      if (now && !g_unloading) {
                                          action();
@@ -1500,22 +1560,12 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                                  }});
             };
             if (onDisk) {
-                addMod(L"New folder with selection", L"", [column, picked]() {
+                addMod(L"New folder", L"New folder with selection", L"", [column, picked]() {
                     NewFolderWithSelection(StateForThisThread(false), column, picked);
                 });
             }
-            if (insideArchive) {
-                addMod(L"Extract selected here", L"", [column, picked]() {
-                    ExtractSelected(StateForThisThread(false), column, picked);
-                });
-            }
-            if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
-                addMod(L"Extract here", L"", [column, picked]() {
-                    ExtractHere(StateForThisThread(false), column, picked[0]);
-                });
-            }
             if (picked.size() == 1 && column->entries[picked[0]].folder) {
-                addMod(L"Open in new tab", L"", [column, picked]() {
+                addMod(L"New tab", L"Open in new tab", L"", [column, picked]() {
                     auto& picked0 = column->entries[picked[0]];
                     Pidl target(picked0.linkTarget
                                     ? ILClone(picked0.linkTarget.get())
@@ -1533,13 +1583,28 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 header.ColumnDefinitions().Append(definition);
                 auto button = plainButton();
                 button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-                button.MinWidth(44);
-                button.Height(40);
-                button.Padding(mux::Thickness{0, 0, 0, 0});
-                button.Content(MakeTwoToneIcon(state, quick[q].glyph, 18, quick[q].enabled));
+                button.MinWidth(56);
+                button.Padding(mux::Thickness{2, 6, 2, 6});
+                muxc::StackPanel stack;
+                stack.Orientation(muxc::Orientation::Vertical);
+                stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
+                mux::UIElement icon = ToolbarIcon(state, quick[q].label.c_str(), 18);
+                if (!icon) {
+                    icon = MakeTwoToneIcon(state, quick[q].glyph, 18, quick[q].enabled);
+                }
+                icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
+                stack.Children().Append(icon);
+                muxc::TextBlock caption;
+                caption.Text(quick[q].label);
+                caption.FontSize(11);
+                caption.Margin(mux::Thickness{0, 4, 0, 0});
+                caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+                caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
+                stack.Children().Append(caption);
+                button.Content(stack);
                 button.IsEnabled(quick[q].enabled);
                 muxc::ToolTipService::SetToolTip(
-                    button, winrt::box_value(winrt::hstring{quick[q].label}));
+                    button, winrt::box_value(winrt::hstring{quick[q].tip}));
                 muxc::Grid::SetColumn(button, (int)q);
                 header.Children().Append(button);
                 clickable(button, quick[q].action, true);
@@ -1619,6 +1684,18 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             }
             anyRows = true;
         };
+
+        // Extracting from an archive.
+        if (insideArchive) {
+            addRow(L"Extract selected here", L"", L"", true,
+                   [column, picked]() { ExtractSelected(StateForThisThread(false), column, picked); },
+                   muxc::MenuFlyout{nullptr});
+        }
+        if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
+            addRow(L"Extract here", L"", L"", true,
+                   [column, picked]() { ExtractHere(StateForThisThread(false), column, picked[0]); },
+                   muxc::MenuFlyout{nullptr});
+        }
 
         // The usual commands, in Explorer's order.
         if (!insideArchive) {
