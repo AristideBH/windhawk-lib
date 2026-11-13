@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.6
+// @version         0.4.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -70,6 +70,13 @@ Not yet: drag and drop.
   - focusRect: true
     $name: Show the focus outline on the active item
     $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
+  - background: explorer
+    $name: Panel background
+    $description: Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent shows what is under the panel, for testing only, since Explorer's own list is under it.
+    $options:
+    - explorer: Explorer's file list colour
+    - theme: Theme colour
+    - transparent: Transparent (test)
   - sidebarRoot: false
     $name: Sidebar sets the first column
     $description: A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.
@@ -151,6 +158,7 @@ std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
+std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
@@ -1499,7 +1507,7 @@ struct WindowState {
     std::vector<Pidl> selectExtra;  // More items to add to that selection.
     // Cut items, dimmed until the clipboard changes.
     Pidl cutFolder;
-    std::vector<Pidl> cutChildren;
+    std::vector<std::wstring> cutPaths;
     DWORD cutSeq = 0;
     // After a paste Explorer's view may jump to another folder. For a moment
     // that is ignored and the view is sent back to this one.
@@ -1552,6 +1560,24 @@ WindowState* StateForThisThread(bool create) {
 
 mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return mux::Media::SolidColorBrush(winrt::Windows::UI::Color{a, r, g, b});
+}
+
+// The panel's background, as the setting says.
+mux::Media::SolidColorBrush PanelBackground(HWND fileList, bool dark) {
+    int mode = g_backgroundMode;
+    if (mode == 2) {
+        Out(L"panel background: transparent (test)");
+        return Brush(0, 0, 0, 0);
+    }
+    COLORREF sampled = mode == 0 ? SampleListBackground(fileList) : CLR_INVALID;
+    Out(L"panel background: %s",
+        mode == 1            ? L"the theme colour, by setting"
+        : sampled == CLR_INVALID ? L"not readable, using the theme colour"
+                                 : L"taken from Explorer's file list");
+    if (sampled != CLR_INVALID) {
+        return Brush(255, GetRValue(sampled), GetGValue(sampled), GetBValue(sampled));
+    }
+    return dark ? Brush(255, 25, 25, 25) : Brush(255, 255, 255, 255);
 }
 
 // ---- Worker thread: reads folders off the UI thread ----
@@ -2201,7 +2227,7 @@ HWND FindNativeRenameBox(HWND topLevel) {
 void ApplyCutState(WindowState* state);
 void SyncCutFromClipboard(WindowState* state) {
     state->cutFolder.reset();
-    state->cutChildren.clear();
+    state->cutPaths.clear();
     IDataObject* data = nullptr;
     if (SUCCEEDED(OleGetClipboard(&data)) && data) {
         static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
@@ -2222,25 +2248,28 @@ void SyncCutFromClipboard(WindowState* state) {
         if (move && data->GetData(&files, &medium) == S_OK) {
             HDROP drop = (HDROP)medium.hGlobal;
             UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            std::wstring parentPath;
             for (UINT i = 0; i < count && i < 500; i++) {
                 wchar_t path[MAX_PATH] = L"";
                 if (!DragQueryFileW(drop, i, path, MAX_PATH)) {
                     continue;
                 }
-                PIDLIST_ABSOLUTE absolute = ILCreateFromPathW(path);
-                if (!absolute) {
-                    continue;
+                wchar_t folder[MAX_PATH];
+                lstrcpynW(folder, path, MAX_PATH);
+                PathRemoveFileSpecW(folder);
+                if (parentPath.empty()) {
+                    parentPath = folder;
+                    PIDLIST_ABSOLUTE parentPidl = ILCreateFromPathW(folder);
+                    if (parentPidl) {
+                        state->cutFolder.reset(parentPidl);
+                    }
                 }
-                Pidl parent(ILClone(absolute));
-                ILRemoveLastID(parent.get());
-                if (!state->cutFolder) {
-                    state->cutFolder.reset(ILClone(parent.get()));
+                if (_wcsicmp(parentPath.c_str(), folder) == 0) {
+                    state->cutPaths.push_back(path);
                 }
-                if (ILIsEqual(state->cutFolder.get(), parent.get())) {
-                    state->cutChildren.emplace_back(ILClone(ILFindLastID(absolute)));
-                }
-                ILFree(absolute);
             }
+            Out(L"cut from the clipboard: %d item(s) in \"%s\"",
+                (int)state->cutPaths.size(), parentPath.c_str());
             ReleaseStgMedium(&medium);
         }
         data->Release();
@@ -2251,8 +2280,18 @@ void SyncCutFromClipboard(WindowState* state) {
 // Dims the rows that were cut, in every column that shows their folder.
 void ApplyCutState(WindowState* state) {
     for (auto& column : state->columns) {
-        bool same = state->cutFolder &&
+        bool same = state->cutFolder && !state->cutPaths.empty() &&
                     ILIsEqual(column->folder.get(), state->cutFolder.get());
+        IShellFolder* folder = nullptr;
+        if (same) {
+            HRESULT hr = ILIsEmpty(column->folder.get())
+                             ? SHGetDesktopFolder(&folder)
+                             : SHBindToObject(nullptr, column->folder.get(), nullptr,
+                                              IID_PPV_ARGS(&folder));
+            if (FAILED(hr)) {
+                folder = nullptr;
+            }
+        }
         auto items = column->list.Items();
         for (size_t r = 0; r < column->rowToEntry.size() && r < items.Size();
              r++) {
@@ -2261,9 +2300,10 @@ void ApplyCutState(WindowState* state) {
                 continue;
             }
             bool cut = false;
-            if (same) {
-                for (auto& child : state->cutChildren) {
-                    if (ILIsEqual(child.get(), column->entries[entry].child.get())) {
+            if (folder) {
+                std::wstring path = ParsingName(folder, column->entries[entry].child.get());
+                for (auto& cutPath : state->cutPaths) {
+                    if (_wcsicmp(cutPath.c_str(), path.c_str()) == 0) {
                         cut = true;
                         break;
                     }
@@ -2272,6 +2312,9 @@ void ApplyCutState(WindowState* state) {
             if (auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
                 item.Opacity(cut ? 0.45 : 1.0);
             }
+        }
+        if (folder) {
+            folder->Release();
         }
     }
 }
@@ -2547,7 +2590,22 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
         });
     column->doubleTapToken = list.DoubleTapped(
         [](Inspectable const& sender,
-           mux::Input::DoubleTappedRoutedEventArgs const&) {
+           mux::Input::DoubleTappedRoutedEventArgs const& args) {
+            // Only a double-click on a row opens it, not one on a header or
+            // on the empty space.
+            mux::DependencyObject node =
+                args.OriginalSource().try_as<mux::DependencyObject>();
+            bool onRow = false;
+            for (int i = 0; node && i < 20; i++) {
+                if (node.try_as<muxc::ListViewItem>()) {
+                    onRow = true;
+                    break;
+                }
+                node = mux::Media::VisualTreeHelper::GetParent(node);
+            }
+            if (!onRow) {
+                return;
+            }
             if (auto list = sender.try_as<muxc::ListView>()) {
                 OnRowDoubleTapped(list);
             }
@@ -3671,12 +3729,15 @@ bool CopyOrCut(WindowState* state, Column* column,
     hr = OleSetClipboard(data);
     data->Release();
     if (SUCCEEDED(hr)) {
-        state->cutChildren.clear();
+        state->cutPaths.clear();
         state->cutFolder.reset();
         if (cut) {
             state->cutFolder.reset(ILClone(column->folder.get()));
             for (PCUITEMID_CHILD child : children) {
-                state->cutChildren.emplace_back(ILClone(child));
+                std::wstring path = FilePathOf(column->folder.get(), child);
+                if (!path.empty()) {
+                    state->cutPaths.push_back(path);
+                }
             }
         }
         state->cutSeq = GetClipboardSequenceNumber();
@@ -4365,7 +4426,8 @@ void SetHeaderHover(Column* column, muxc::ListView const& list, int row) {
     auto paint = [&](int r, bool on) {
         if (r >= 0 && r < (int)items.Size()) {
             if (auto header = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
-                header.Background(on ? Brush(26, 128, 128, 128) : Brush(0, 0, 0, 0));
+                header.Background(on ? Brush(64, 150, 150, 150) : Brush(0, 0, 0, 0));
+                header.Opacity(on ? 1.0 : 0.92);
             }
         }
     };
@@ -5132,14 +5194,9 @@ void OnTick() {
             IsDarkMode() != state->shownDark) {
             bool nowDark = IsDarkMode();
             state->shownDark = nowDark;
-            COLORREF sampled = SampleListBackground(fileList);
             state->rootGrid.RequestedTheme(nowDark ? mux::ElementTheme::Dark
                                                    : mux::ElementTheme::Light);
-            state->rootGrid.Background(
-                sampled != CLR_INVALID
-                    ? Brush(255, GetRValue(sampled), GetGValue(sampled), GetBValue(sampled))
-                : nowDark ? Brush(255, 25, 25, 25)
-                          : Brush(255, 255, 255, 255));
+            state->rootGrid.Background(PanelBackground(fileList, nowDark));
             Out(L"theme changed, panel background taken again");
         }
 
@@ -5348,15 +5405,7 @@ void ShowPanel(WindowState* state) {
 
         muxc::Grid root;
         {
-            COLORREF sampled = SampleListBackground(fileList);
-            Out(L"panel background: %s", sampled == CLR_INVALID
-                                              ? L"not readable, using the theme colour"
-                                              : L"taken from Explorer's file list");
-            root.Background(
-                sampled != CLR_INVALID
-                    ? Brush(255, GetRValue(sampled), GetGValue(sampled), GetBValue(sampled))
-                : dark ? Brush(255, 25, 25, 25)
-                       : Brush(255, 255, 255, 255));
+            root.Background(PanelBackground(fileList, dark));
             state->shownDark = dark;
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
@@ -6139,6 +6188,15 @@ void LoadSettings() {
     g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
     g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
     g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
+    {
+        const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
+        g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
+                           : mode && wcscmp(mode, L"transparent") == 0 ? 2
+                                                                       : 0;
+        if (mode) {
+            Wh_FreeStringSetting(mode);
+        }
+    }
     g_styleVersion++;
     int minWidth = Wh_GetIntSetting(L"columns.minWidth");
     int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
@@ -6164,7 +6222,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
