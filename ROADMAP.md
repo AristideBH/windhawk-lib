@@ -62,6 +62,7 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Polish pass: open in Columns without the flash of Explorer's own list.
       Fine for now, per Ari.
 - [ ] A new tab opens in Columns. No creation hook for tabs is known yet.
+      Probed together with the Desktop virtual items, see below.
 - [x] Mouse horizontal scroll wheel scrolls the strip sideways across the
       columns, and does not scroll vertically inside a column. Tested in
       0.3.3: sideways glide, no vertical scroll. 0.3.2 marks the event
@@ -76,6 +77,19 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column logic needs a way to open and focus them. Not looked at yet.
 
 ## 0.4
+
+- [ ] Keyboard shortcuts in a column: Delete, Ctrl+C, Ctrl+X, Ctrl+V, F2
+      rename, Ctrl+A, Alt+Enter for properties. Copy, Cut and Rename already
+      exist from the right-click menu, Paste does not.
+- [ ] Right-click on a column's empty space: flyout with Paste and the other
+      background options (New folder, Refresh, Properties, sort and group).
+      This is the quick options flyout below. The shell's background menu
+      may return `E_NOTIMPL` for Paste, as Copy did, then paste goes through
+      the folder's drop target with the clipboard's data object.
+- [ ] Keep the columns of a folder while focus moves to a file in the same
+      column, until a different folder is chosen in that column or a parent.
+      Keep the focused column smoothly in view, no jump.
+- [ ] Rename several items at once, like Explorer's own.
 
 - [ ] Multiple selection of files and folders in a column, mirrored into
       Explorer's view. Written in 0.3.8, not tested: Ctrl and Shift select,
