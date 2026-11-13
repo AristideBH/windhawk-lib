@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.13.3
+// @version         0.13.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -9843,6 +9843,7 @@ struct OutDropSource : IDropSource {
     LONG refs = 1;
     DWORD lastEffect = 0;
     HWND dropWindow = nullptr;
+    POINT dropPoint{};
     STDMETHODIMP QueryInterface(REFIID id, void** out) override {
         if (id == IID_IUnknown || id == IID_IDropSource) {
             *out = static_cast<IDropSource*>(this);
@@ -9867,6 +9868,7 @@ struct OutDropSource : IDropSource {
         if (!(keys & MK_LBUTTON)) {
             POINT cursor;
             GetCursorPos(&cursor);
+            dropPoint = cursor;
             dropWindow = WindowFromPoint(cursor);
             return DRAGDROP_S_DROP;
         }
@@ -9919,6 +9921,19 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
             (unsigned long)effect, hr, (unsigned long)dropSource->lastEffect,
             dropSource->dropWindow ? ClassNameOf(dropSource->dropWindow).c_str() : L"?", title,
             (unsigned long)processId);
+    }
+    if (dropSource->dropWindow) {
+        HWND root = GetAncestor(dropSource->dropWindow, GA_ROOT);
+        RECT rect{};
+        wchar_t rootTitle[80] = L"";
+        if (root) {
+            GetWindowRect(root, &rect);
+            GetWindowTextW(root, rootTitle, ARRAYSIZE(rootTitle));
+        }
+        Out(L"drag out: released at %ld,%ld over top-level \"%s\" \"%s\" at %ld,%ld to %ld,%ld",
+            dropSource->dropPoint.x, dropSource->dropPoint.y,
+            root ? ClassNameOf(root).c_str() : L"?", rootTitle, rect.left, rect.top, rect.right,
+            rect.bottom);
     }
     dropSource->Release();
     data->Release();
@@ -10745,7 +10760,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.13.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.13.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
