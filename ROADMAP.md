@@ -75,16 +75,17 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       link, in the Desktop folder. These aren't real folders on disk, so the
       column logic needs a way to open and focus them. Not looked at yet.
 
-## 0.3.1
+## 0.4
 
 - [ ] Multiple selection of files and folders in a column, mirrored into
-      Explorer's view
+      Explorer's view. Written in 0.3.8, not tested: Ctrl and Shift select,
+      right-click, Copy and Cut act on all selected items.
 - [ ] Indicator on remote items: phone, network
 - [ ] Quick options flyout on empty space in the columns
-- [ ] Keyboard: type to jump to a name
+- [ ] Keyboard: type to jump to a name. Written in 0.3.8, not tested.
 - [ ] Rows built only when visible, carried over from 0.2
 
-## 0.4
+## 0.5
 
 - [ ] Drag and drop between columns
 - [ ] Scroll animation to the newest column

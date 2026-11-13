@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.7
+// @version         0.3.8
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -51,7 +51,10 @@ Also in 0.3: real file icons and thumbnails, read on a background thread (a
 glyph shows until each icon arrives), and a right-click menu that shows the
 shell's own commands for the item as a flyout.
 
-Not yet: multiple selection, drag and drop, type to jump.
+Also in 0.3: select several items with Ctrl and Shift, and type a few
+letters to jump to a name.
+
+Not yet: drag and drop.
 */
 // ==/WindhawkModReadme==
 
@@ -914,6 +917,19 @@ bool SelectInExplorer(IShellBrowser* browser, PCUITEMID_CHILD child) {
     return SUCCEEDED(hr);
 }
 
+// Adds items to the selection Explorer's own view already has.
+void AddToSelectionInExplorer(IShellBrowser* browser,
+                              std::vector<Pidl> const& children) {
+    IShellView* view = nullptr;
+    if (FAILED(browser->QueryActiveShellView(&view)) || !view) {
+        return;
+    }
+    for (auto& child : children) {
+        view->SelectItem(child.get(), SVSI_SELECT | SVSI_NOTAKEFOCUS);
+    }
+    view->Release();
+}
+
 // Cuts the middle of a name that is longer than `maxChars`, keeping its
 // start, its last characters and its extension.
 std::wstring MiddleEllipsis(const std::wstring& name, size_t maxChars) {
@@ -1090,8 +1106,8 @@ struct ContextMenuState {
     HMENU hmenu = nullptr;
     UINT idFirst = 1;
     HWND owner = nullptr;
-    Column* column = nullptr;  // The column and item the menu is for.
-    size_t entry = 0;
+    Column* column = nullptr;  // The column and items the menu is for.
+    std::vector<size_t> entries;
     muxc::MenuFlyout flyout{nullptr};
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
@@ -1163,6 +1179,9 @@ struct WindowState {
     ULONGLONG navDue = 0;
     Pidl selectFolder;  // A file to select in Explorer's view,
     Pidl selectChild;   // once it shows that folder.
+    std::vector<Pidl> selectExtra;  // More items to add to that selection.
+    std::wstring typed;     // Type to jump: what has been typed,
+    ULONGLONG typedAt = 0;  // and when the last key came.
     int selectTries = 0;
 
     // Change notifications and live settings.
@@ -1821,7 +1840,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false) {
 
     muxc::ListView list;
     list.Width(g_minWidth);
-    list.SelectionMode(muxc::ListViewSelectionMode::Single);
+    list.SelectionMode(muxc::ListViewSelectionMode::Extended);
     list.Padding(mux::Thickness{0, 4, 0, 4});
     column->selectionToken = list.SelectionChanged(
         [](Inspectable const& sender,
@@ -2151,6 +2170,26 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     state->navDue = GetTickCount64() + 350;
 }
 
+// The entries of the rows selected in a column, in row order. Group headers
+// are left out.
+std::vector<size_t> SelectedEntries(Column* column,
+                                    muxc::ListView const& list) {
+    std::vector<size_t> result;
+    auto items = list.Items();
+    uint32_t count = items.Size();
+    for (uint32_t r = 0; r < count && r < column->rowToEntry.size(); r++) {
+        int entry = column->rowToEntry[r];
+        if (entry < 0) {
+            continue;
+        }
+        auto item = items.GetAt(r).try_as<muxc::ListViewItem>();
+        if (item && item.IsSelected()) {
+            result.push_back((size_t)entry);
+        }
+    }
+    return result;
+}
+
 void OnRowSelected(muxc::ListView const& list) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || state->building || g_unloading) {
@@ -2171,6 +2210,32 @@ void OnRowSelected(muxc::ListView const& list) {
         state->building = false;
         state->selectFolder.reset();
         state->selectChild.reset();
+        state->selectExtra.clear();
+
+        // Several items selected: no column opens. Explorer's own view gets
+        // the same selection, so the preview pane, status bar and command
+        // bar act on all of them.
+        std::vector<size_t> picked = SelectedEntries(column, list);
+        if (picked.size() > 1) {
+            column->selectedChild.reset(
+                ILClone(column->entries[picked[0]].child.get()));
+            SetActiveColumn(state, columnIndex);
+            state->selectFolder.reset(ILClone(column->folder.get()));
+            state->selectChild.reset(
+                ILClone(column->entries[picked[0]].child.get()));
+            for (size_t i = 1; i < picked.size(); i++) {
+                state->selectExtra.emplace_back(
+                    ILClone(column->entries[picked[i]].child.get()));
+            }
+            state->selectTries = 0;
+            ScheduleNavigation(state, column->folder.get());
+            Out(L"%d items selected in column %d", (int)picked.size(),
+                columnIndex + 1);
+            return;
+        }
+        if (entryIndex < 0 && picked.size() == 1) {
+            entryIndex = (int)picked[0];
+        }
         if (entryIndex < 0) {
             column->selectedChild.reset();
             return;
@@ -2344,7 +2409,8 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
 
 // Cut and Copy from the shell's menu don't work without a view behind them,
 // so the item's data object goes on the clipboard here.
-bool CopyOrCut(WindowState* state, Column* column, size_t entryIndex, bool cut) {
+bool CopyOrCut(WindowState* state, Column* column,
+               std::vector<size_t> const& entries, bool cut) {
     IShellFolder* parent = nullptr;
     HRESULT hr = ILIsEmpty(column->folder.get())
                      ? SHGetDesktopFolder(&parent)
@@ -2353,10 +2419,18 @@ bool CopyOrCut(WindowState* state, Column* column, size_t entryIndex, bool cut) 
     if (FAILED(hr) || !parent) {
         return false;
     }
-    PCUITEMID_CHILD child = column->entries[entryIndex].child.get();
+    std::vector<PCUITEMID_CHILD> children;
+    for (size_t entry : entries) {
+        if (entry < column->entries.size()) {
+            children.push_back(column->entries[entry].child.get());
+        }
+    }
     IDataObject* data = nullptr;
-    hr = parent->GetUIObjectOf(state->topLevel, 1, &child, IID_IDataObject,
-                               nullptr, (void**)&data);
+    hr = children.empty()
+             ? E_INVALIDARG
+             : parent->GetUIObjectOf(state->topLevel, (UINT)children.size(),
+                                     children.data(), IID_IDataObject, nullptr,
+                                     (void**)&data);
     parent->Release();
     if (FAILED(hr) || !data) {
         return false;
@@ -2381,8 +2455,8 @@ bool CopyOrCut(WindowState* state, Column* column, size_t entryIndex, bool cut) 
     }
     hr = OleSetClipboard(data);
     data->Release();
-    Out(L"%s \"%s\": hr=0x%08lX", cut ? L"cut" : L"copy",
-        column->entries[entryIndex].name.c_str(), hr);
+    Out(L"%s %d item(s): hr=0x%08lX", cut ? L"cut" : L"copy",
+        (int)children.size(), hr);
     return SUCCEEDED(hr);
 }
 
@@ -2496,13 +2570,14 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
                         (char*)verb, ARRAYSIZE(verb));
                     Out(L"context menu verb \"%s\"", verb);
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
-                        CopyOrCut(state, context->column, context->entry,
+                        CopyOrCut(state, context->column, context->entries,
                                   !_wcsicmp(verb, L"cut"));
                         return;
                     }
-                    if (!_wcsicmp(verb, L"rename") && state->queue) {
+                    if (!_wcsicmp(verb, L"rename") && state->queue &&
+                        context->entries.size() == 1) {
                         Column* column = context->column;
-                        size_t entry = context->entry;
+                        size_t entry = context->entries[0];
                         // After the flyout has closed and given focus back.
                         state->queue.TryEnqueue([column, entry]() {
                             WindowState* state = StateForThisThread(false);
@@ -2571,8 +2646,15 @@ void OnRowRightTapped(muxc::ListView const& list,
             return;
         }
         args.Handled(true);
-        if (list.SelectedIndex() != rowIndex) {
+        // Right-click inside a selection acts on all of it. Outside, it
+        // selects the item under the pointer first.
+        std::vector<size_t> picked;
+        if (row.IsSelected()) {
+            picked = SelectedEntries(column, list);
+        }
+        if (picked.empty()) {
             list.SelectedIndex(rowIndex);
+            picked.push_back((size_t)entryIndex);
         }
 
         CloseContextMenu(state);
@@ -2585,10 +2667,14 @@ void OnRowRightTapped(muxc::ListView const& list,
             Out(L"context menu: can't bind the folder, hr=0x%08lX", hr);
             return;
         }
-        PCUITEMID_CHILD child = column->entries[entryIndex].child.get();
+        std::vector<PCUITEMID_CHILD> children;
+        for (size_t entry : picked) {
+            children.push_back(column->entries[entry].child.get());
+        }
         IContextMenu* menu = nullptr;
-        hr = parent->GetUIObjectOf(state->topLevel, 1, &child,
-                                   IID_IContextMenu, nullptr, (void**)&menu);
+        hr = parent->GetUIObjectOf(state->topLevel, (UINT)children.size(),
+                                   children.data(), IID_IContextMenu, nullptr,
+                                   (void**)&menu);
         parent->Release();
         if (FAILED(hr) || !menu) {
             Out(L"context menu: no IContextMenu, hr=0x%08lX", hr);
@@ -2609,7 +2695,7 @@ void OnRowRightTapped(muxc::ListView const& list,
         state->context->hmenu = hmenu;
         state->context->owner = state->topLevel;
         state->context->column = column;
-        state->context->entry = (size_t)entryIndex;
+        state->context->entries = picked;
         muxc::MenuFlyout flyout;
         FillFlyoutItems(state, hmenu, flyout.Items(), 0);
         state->context->flyout = flyout;
@@ -2633,8 +2719,9 @@ void OnRowRightTapped(muxc::ListView const& list,
         muxc::Primitives::FlyoutShowOptions options;
         options.Position(args.GetPosition(list));
         flyout.ShowAt(list, options);
-        Out(L"context menu shown for \"%s\", %u items",
-            column->entries[entryIndex].name.c_str(), flyout.Items().Size());
+        Out(L"context menu shown for %d item(s), first \"%s\", %u entries",
+            (int)picked.size(), column->entries[entryIndex].name.c_str(),
+            flyout.Items().Size());
     } catch (...) {
         LogHresult(L"OnRowRightTapped");
         if (state) {
@@ -2671,6 +2758,44 @@ void OnRowDoubleTapped(muxc::ListView const& list) {
     }
 }
 
+// Selects the next item whose name starts with what was just typed. Typing
+// the same letter again steps through the items with that letter.
+void TypeToJump(Column* column, muxc::ListView const& list, WindowState* state,
+                wchar_t ch) {
+    ULONGLONG now = GetTickCount64();
+    if (now - state->typedAt > 1000) {
+        state->typed.clear();
+    }
+    state->typedAt = now;
+    state->typed += ch;
+
+    std::wstring needle = state->typed;
+    bool repeated = needle.size() > 1 &&
+                    needle.find_first_not_of(needle[0]) == std::wstring::npos;
+    int current = list.SelectedIndex();
+    int start;
+    if (needle.size() == 1 || repeated) {
+        needle = needle.substr(0, 1);
+        start = current < 0 ? 0 : current + 1;
+    } else {
+        start = current < 0 ? 0 : current;
+    }
+    int rows = (int)column->rowToEntry.size();
+    for (int i = 0; i < rows; i++) {
+        int row = (start + i) % rows;
+        int entry = column->rowToEntry[row];
+        if (entry < 0) {
+            continue;
+        }
+        if (StrCmpNIW(column->entries[entry].name.c_str(), needle.c_str(),
+                      (int)needle.size()) == 0) {
+            list.SelectedIndex(row);
+            list.ScrollIntoView(list.Items().GetAt(row));
+            return;
+        }
+    }
+}
+
 // Right or Enter on a folder enters its column, Left goes back to the parent
 // column, Enter on a file opens it.
 void OnColumnKey(muxc::ListView const& list,
@@ -2695,6 +2820,22 @@ void OnColumnKey(muxc::ListView const& list,
                         ? column->rowToEntry[row]
                         : -1;
         bool onFolder = entry >= 0 && column->entries[entry].folder;
+
+        // Letters and digits jump to a name. Ctrl and Alt shortcuts are left
+        // alone.
+        int code = (int)key;
+        wchar_t typedChar = 0;
+        if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5A)) {
+            typedChar = (wchar_t)code;
+        } else if (code >= 0x60 && code <= 0x69) {
+            typedChar = (wchar_t)(L'0' + (code - 0x60));
+        }
+        if (typedChar && !(GetKeyState(VK_CONTROL) & 0x8000) &&
+            !(GetKeyState(VK_MENU) & 0x8000)) {
+            TypeToJump(column, list, state, typedChar);
+            args.Handled(true);
+            return;
+        }
 
         if (key == VirtualKey::Left) {
             if (index > 0) {
@@ -3064,12 +3205,17 @@ void OnTick() {
             !state->expected &&
             ILIsEqual(current.get(), state->selectFolder.get())) {
             if (SelectInExplorer(browser, state->selectChild.get())) {
+                if (!state->selectExtra.empty()) {
+                    AddToSelectionInExplorer(browser, state->selectExtra);
+                    state->selectExtra.clear();
+                }
                 state->selectFolder.reset();
                 state->selectChild.reset();
             } else if (++state->selectTries > 40) {
                 Out(L"selection could not be mirrored into Explorer's view");
                 state->selectFolder.reset();
                 state->selectChild.reset();
+                state->selectExtra.clear();
             }
         }
     } catch (...) {
@@ -3845,7 +3991,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.8 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
