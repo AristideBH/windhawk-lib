@@ -2279,6 +2279,9 @@ void OnColumnPointerMoved(muxc::ListView const& list,
             return;
         }
         Column* column = state->columns[index].get();
+        if (OnDragMoved(state, column, list, args)) {
+            return;  // Rows are being dragged.
+        }
         if (OnBandMoved(state, column, list, args)) {
             return;  // A rectangle is being drawn.
         }

@@ -11,6 +11,9 @@ std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
+std::atomic<bool> g_rememberSort{true};
+std::atomic<bool> g_rememberWidth{true};
+std::atomic<bool> g_rememberLayout{true};
 std::atomic<bool> g_remoteMarks{true};
 std::atomic<bool> g_desktopRealOnly{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent

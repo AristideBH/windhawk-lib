@@ -35,6 +35,9 @@ void LoadSettings() {
     g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
+    g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
+    g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
+    g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
     g_remoteMarks = Wh_GetIntSetting(L"columns.remoteMarks") != 0;
     g_desktopRealOnly = Wh_GetIntSetting(L"columns.desktopRealOnly") != 0;
     {
@@ -71,7 +74,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.11.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.12.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
