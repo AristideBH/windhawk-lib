@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.7.3
+// @version         0.7.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -5136,22 +5136,36 @@ int ArchiveParentColumn(WindowState* state, Column* column) {
             index = (int)i;
         }
     }
-    wchar_t path[MAX_PATH] = L"";
-    if (index <= 0 || SHGetPathFromIDListW(column->folder.get(), path)) {
-        return -1;  // On disk, or the first column.
+    if (index <= 0) {
+        return -1;
     }
+    // The shell gives a folder inside an archive a path too ("C:\x\a.zip\sub"),
+    // so look for a part of the path that is a file, not a folder.
+    std::wstring path = PathOf(column->folder.get());
+    if (path.size() < 3 || path[1] != L':') {
+        return -1;
+    }
+    std::wstring archive;
+    for (std::wstring part = path; part.size() > 3;) {
+        DWORD attributes = GetFileAttributesW(part.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            archive = part;
+            break;
+        }
+        size_t slash = part.rfind(L'\');
+        if (slash == std::wstring::npos) {
+            break;
+        }
+        part.resize(slash);
+    }
+    if (archive.empty()) {
+        return -1;
+    }
+    std::wstring directory = archive.substr(0, archive.rfind(L'\'));
     for (int j = index - 1; j >= 0; j--) {
-        Column* before = state->columns[j].get();
-        if (SHGetPathFromIDListW(before->folder.get(), path) && path[0]) {
-            // The column after it must have been opened from an archive row.
-            if (before->selectedChild) {
-                for (auto& entry : before->entries) {
-                    if (entry.archive && ILIsEqual(entry.child.get(), before->selectedChild.get())) {
-                        return j;
-                    }
-                }
-            }
-            return -1;
+        std::wstring before = PathOf(state->columns[j]->folder.get());
+        if (_wcsicmp(before.c_str(), directory.c_str()) == 0) {
+            return j;
         }
     }
     return -1;
@@ -5384,7 +5398,8 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         // items, and, for one folder, a new tab.
         {
             wchar_t folderPath[MAX_PATH] = L"";
-            bool onDisk = SHGetPathFromIDListW(column->folder.get(), folderPath) && folderPath[0];
+            bool insideArchive = ArchiveParentColumn(state, column) >= 0;
+            bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) && folderPath[0];
             int added = 0;
             auto addItem = [&](const wchar_t* text, std::function<void()> action) {
                 muxc::MenuFlyoutItem item;
@@ -5408,7 +5423,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     }
                 });
             }
-            if (!onDisk && ArchiveParentColumn(state, column) >= 0) {
+            if (insideArchive) {
                 addItem(L"Extract selected here", [column, picked]() {
                     WindowState* now = StateForThisThread(false);
                     if (now && !g_unloading) {
@@ -8610,7 +8625,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.7.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
