@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.18
+// @version         0.3.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -379,8 +379,11 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
                                             PCUIDLIST_RELATIVE pidl,
                                             UINT flags) {
     if (g_debugLog) {
-        std::wstring target = L"(relative or special)";
-        if ((flags & SBSP_ABSOLUTE) && pidl) {
+        // SBSP_ABSOLUTE is 0: a pidl is absolute unless one of these is set.
+        const UINT notAbsolute = SBSP_RELATIVE | SBSP_PARENT |
+                                 SBSP_NAVIGATEBACK | SBSP_NAVIGATEFORWARD;
+        std::wstring target = L"(relative, parent, back or forward)";
+        if (!(flags & notAbsolute) && pidl) {
             PWSTR name = nullptr;
             if (SUCCEEDED(SHGetNameFromIDList((PCIDLIST_ABSOLUTE)pidl,
                                               SIGDN_DESKTOPABSOLUTEPARSING,
@@ -4824,7 +4827,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.18 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.19 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

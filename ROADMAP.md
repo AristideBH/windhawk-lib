@@ -97,6 +97,17 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
       column, until a different folder is chosen in that column or a parent.
       Keep the focused column smoothly in view, no jump.
 - [ ] Rename several items at once, like Explorer's own.
+- [ ] Faster column refresh after the user's own actions (rename, new folder,
+      delete, paste, move):
+      1. reload the column right after the action, not on the folder's change
+         notification, which waits up to 2 s;
+      2. shorter debounce, about 250 ms, for the notifications that follow;
+      3. optimistic rows: a rename updates the name in place, a new folder
+         appears at once with its name box, a delete removes the rows at once
+         and the reload puts them back if the delete did not happen.
+      Changes from outside the mod keep the full reload until 0.5, where
+      item-level change events can update single rows, together with rows
+      built only when visible.
 - [ ] A click on an item of the navigation pane (Home, Gallery, pinned and
       cloud folders, not the expandable tree) makes that folder the first
       column. A setting, off by default. Needs a short recon first: how to
@@ -150,6 +161,10 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization
 - [ ] Small tweaks
+- [ ] Built-in versions of two Windhawk mods that are disabled for now:
+      double-click on empty space goes up one folder
+      (`explorer-double-click-up`), and details view columns fit their
+      content (`file-explorer-details-autofit-columns`).
 
 ## Outside this mod
 
