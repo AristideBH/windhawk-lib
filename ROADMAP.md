@@ -78,6 +78,32 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
+## Plan for the next versions, drawn up 2026-11-13
+
+Order is by value for daily use, then risk. Low priority, by Ari: Home page
+overhaul, details columns auto-fit, GPU Explorer view compatibility. They go
+last and are not scheduled.
+
+| Version | Content | Effort | Risk |
+| --- | --- | --- | --- |
+| 0.6.0 | Everyday keys: F5, Escape, Backspace, Menu key and Shift+F10, Ctrl+Shift+N, Ctrl+Shift+C, redo. Live accent colour for the pill. | small | low. Backspace may be taken by Explorer's accelerators, the `TranslateAcceleratorW` hook already exists for the rename box and can be reused. |
+| 0.6.1 | Multi-rename: F2 on several items asks one name and numbers the rest like Explorer. Open in new tab from the flyout and middle-click. | medium | low |
+| 0.6.2 | Small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | small each | low |
+| 0.6.3 | Housekeeping: split the 7000 line source into files per area, joined by a script, as the roadmap planned for the second feature. | medium | low, but every later patch depends on it, so do it before 0.7 |
+| 0.7 | Columns per tab. The state is per window today. Each tab gets its own columns, the tab switch shows the right one. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high: the tab creation hook exists, closing and moving tabs between windows do not |
+| 0.8 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium: a modal menu inside a XAML handler crashed Explorer before |
+| 0.9 | Drag and drop between columns and out to other windows, with the drag preview and count badge. | large | medium |
+| 0.10 | Per-folder memory and "columns everywhere", each column keeps its own sort and group. | medium | low |
+| 1.0 | Release: strings in a table for translation, settings cleaned of test options (the background mode), README, the pull request to windhawk-mods. | medium | low |
+| later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Labels, archive flow, toolbar customization. | | |
+
+Why this order: the keys and multi-rename are cheap and used all day. The
+source split costs a day and makes every change after it easier to review.
+Columns per tab is the biggest gap and the biggest change, so it comes after
+the split. Drag and drop and the flyout restyle are polish on a working
+whole. The three low priority items depend on things we don't control: a
+DirectUI hook, another author's mod, a design call.
+
 ## Open
 
 - [x] Keyboard on group headers (0.5.2, a setting, off by default since
