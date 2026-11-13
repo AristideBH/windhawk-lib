@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.9
+// @version         0.5.10
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -6168,6 +6168,18 @@ void AbandonWindow(WindowState* state) {
 
 // Explorer's own view moved to `current` without this mod asking. Keep the
 // columns showing the path from the first column down to that folder.
+// Explorer moved to a column's folder on its own (the toolbar's Up, Back). That
+// column's selected item is selected in Explorer's view too, so the toolbar and
+// the panes still act on what the column shows as selected.
+void MirrorColumnSelection(WindowState* state, Column* column) {
+    if (column && column->selectedChild) {
+        state->selectFolder.reset(ILClone(column->folder.get()));
+        state->selectChild.reset(ILClone(column->selectedChild.get()));
+        state->selectExtra.clear();
+        state->selectTries = 0;
+    }
+}
+
 void SyncToFolder(WindowState* state, Pidl const& current) {
     state->pendingNav.reset();
     state->selectFolder.reset();
@@ -6177,7 +6189,9 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
     for (size_t i = 0; i < state->columns.size(); i++) {
         if (ILIsEqual(current.get(), state->columns[i]->folder.get())) {
             Out(L"Explorer moved to column %d", (int)i + 1);
+            LiftStale(state, (int)i);
             SetActiveColumn(state, (int)i);
+            MirrorColumnSelection(state, state->columns[i].get());
             return;
         }
     }
@@ -6232,6 +6246,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
             state->columns[0]->selectedChild = std::move(childId);
             Out(L"Explorer moved up, parent added as first column");
             SetActiveColumn(state, 0);
+            MirrorColumnSelection(state, state->columns[0].get());
             try {
                 state->scroller.ChangeView(0.0, nullptr, nullptr);
             } catch (...) {
@@ -7590,7 +7605,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.10 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
