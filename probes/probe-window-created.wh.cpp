@@ -2,7 +2,7 @@
 // @id              probe-window-created
 // @name            Probe: File Explorer window created
 // @description     Diagnostic only. Finds the earliest hook in the command bar that runs when an Explorer window opens, and when the View flyout appears after it.
-// @version         0.5
+// @version         0.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -414,37 +414,38 @@ void Enter(int slot) {
 
 thread_local void* t_lastControl = nullptr;
 
-// Static or not, the arguments are laid out differently, so every register is
-// tried. `this` of a non-static method is skipped: treating it as an object
-// crashed version 0.2.
-void Leave(int slot, void* a0, void* a1, void* a2, void* a3, bool isStatic) {
+// Looked for BEFORE the original runs. OnDpiChanged is a coroutine that takes
+// its XamlRoot by value and moves it into its own frame, so after the call
+// the caller's slot is empty (confirmed in the 0.5 log). `this` of a
+// non-static method is skipped: treating it as an object crashed version 0.2.
+void* FindControlBefore(int slot, void* a0, void* a1, void* a2, void* a3,
+                        bool isStatic) {
     if (g_unloading || !g_slotLooks[slot]) {
-        return;
-    }
-    if (g_slotEnters[slot] > kMaxEnterLogsPerSlot) {
-        return;
+        return nullptr;
     }
     void* args[4] = {a0, a1, a2, a3};
-    void* control = nullptr;
-    int which = -1;
-    for (int i = isStatic ? 0 : 1; i < 4 && !control; i++) {
-        control = ControlFromReference(args[i]);
-        if (control) {
-            which = i;
+    for (int i = isStatic ? 0 : 1; i < 4; i++) {
+        if (void* control = ControlFromReference(args[i])) {
+            Out(L"  control found in argument %d before the call", i);
+            return control;
         }
     }
-    Out(L"LEAVE %s, args=%p %p %p %p, control %s (argument %d)",
-        g_slotNames[slot].c_str(), a0, a1, a2, a3,
-        control ? L"found" : L"not found", which);
-    if (!control && g_slotEnters[slot] <= 3) {
+    if (g_slotEnters[slot] <= 3) {
+        Out(L"  no control in the arguments before the call");
         for (int i = isStatic ? 0 : 1; i < 4; i++) {
             DescribeArgument(i, args[i]);
         }
     }
-    if (!control || g_inspect.load() < 1 || control == t_lastControl) {
+    return nullptr;
+}
+
+void LeaveWith(int slot, void* control) {
+    if (g_unloading || !control || g_inspect.load() < 1 ||
+        control == t_lastControl) {
         return;
     }
     t_lastControl = control;
+    Out(L"LEAVE %s, scheduling looks", g_slotNames[slot].c_str());
     ScheduleLooks(control);
 }
 
@@ -455,8 +456,15 @@ struct Slot {
     static inline Generic_t original = nullptr;
     static void* WINAPI Hook(void* a0, void* a1, void* a2, void* a3) {
         Enter(N);
+        void* control = FindControlBefore(N, a0, a1, a2, a3, g_slotStatic[N]);
+        // A reference held across the call, so the object can't go away
+        // under the original. Released here, while the window still exists.
+        winrt::Windows::Foundation::IInspectable hold{nullptr};
+        if (control) {
+            winrt::copy_from_abi(hold, control);
+        }
         void* result = original(a0, a1, a2, a3);
-        Leave(N, a0, a1, a2, a3, g_slotStatic[N]);
+        LeaveWith(N, control);
         return result;
     }
     static bool Install(void* address) {
@@ -677,7 +685,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 BOOL Wh_ModInit() {
     g_inspect = Wh_GetIntSetting(L"inspect");
     OutInit();
-    Out(L"PROBE START probe-window-created v0.5, inspect=%d",
+    Out(L"PROBE START probe-window-created v0.6, inspect=%d",
         g_inspect.load());
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
