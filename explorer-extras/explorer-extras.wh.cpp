@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.2.5
+// @version         0.3.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -42,8 +42,12 @@ In 0.2:
 - Folders load on a background thread.
 - Hidden files and compact view follow Explorer's own settings.
 
-Not yet: real file icons, keyboard navigation between columns, right-click
-menus, drag and drop, and memory of the choice across restarts.
+In 0.3 the Columns entry is in the View menu as soon as a window opens, with
+no click on the command bar needed. When Columns was the last layout you
+chose, new windows open in it, also after Explorer restarts. Turn this off
+with "Open new windows in Columns".
+
+Not yet: real file icons, right-click menus, and drag and drop.
 */
 // ==/WindhawkModReadme==
 
@@ -53,6 +57,9 @@ menus, drag and drop, and memory of the choice across restarts.
   - enabled: true
     $name: Enabled
     $description: Adds the Columns entry to the View menu. Off removes it.
+  - restoreOnOpen: true
+    $name: Open new windows in Columns
+    $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
   - minWidth: 160
     $name: Minimum column width
   - maxWidth: 420
@@ -123,6 +130,7 @@ std::atomic<bool> g_unloading{false};
 std::atomic<bool> g_debugLog{true};
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_enabled{true};
+std::atomic<bool> g_restore{true};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
 std::atomic<int> g_maxItems{1500};
@@ -1073,6 +1081,14 @@ struct WindowState {
     muxc::RadioMenuFlyoutItem menuItem{nullptr};
     winrt::event_token menuClickToken{};
     std::vector<SiblingHook> siblings;
+
+    // Entry at window creation, and restoring the last layout.
+    mux::XamlRoot xamlRoot{nullptr};
+    mud::DispatcherQueueTimer entryTimer{nullptr};
+    winrt::event_token entryToken{};
+    bool entryStopped = false;
+    int entryTries = 0;
+    int restoreSettle = 0;
 
     // Panel.
     bool on = false;
@@ -2034,6 +2050,18 @@ void AbandonWindow(WindowState* state) {
         (void)winrt::detach_abi(sibling.item);
     }
     state->siblings.clear();
+    try {
+        if (state->entryTimer) {
+            state->entryTimer.Stop();
+            state->entryTimer.Tick(state->entryToken);
+        }
+    } catch (...) {
+    }
+    (void)winrt::detach_abi(state->entryTimer);
+    (void)winrt::detach_abi(state->xamlRoot);
+    state->entryStopped = false;
+    state->entryTries = 0;
+    state->restoreSettle = 0;
     (void)winrt::detach_abi(state->timer);
     (void)winrt::detach_abi(state->source);
     (void)winrt::detach_abi(state->bridge);
@@ -2378,6 +2406,15 @@ void ShowPanel(WindowState* state) {
 
 // ---- View menu entry ----
 
+// The last layout the user chose, kept by Windhawk across restarts.
+bool LastLayoutWasColumns() {
+    return Wh_GetIntValue(L"lastLayoutColumns", 0) != 0;
+}
+
+void RememberColumns(bool on) {
+    Wh_SetIntValue(L"lastLayoutColumns", on ? 1 : 0);
+}
+
 void RemoveMenuEntry(WindowState* state) {
     try {
         for (auto& sibling : state->siblings) {
@@ -2435,6 +2472,9 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
                 if (state && !g_unloading) {
                     Out(L"Columns chosen in the View menu");
                     ShowPanel(state);
+                    if (state->on) {
+                        RememberColumns(true);
+                    }
                 }
             });
 
@@ -2452,6 +2492,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
                     if (state && state->on) {
                         HidePanel(state, L"another layout chosen");
                     }
+                    RememberColumns(false);
                 });
             state->siblings.push_back(std::move(hook));
         }
@@ -2560,6 +2601,227 @@ void OnCommandBarPointer(Inspectable const& sender) {
     }
 }
 
+// ---- Window creation ----
+//
+// CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
+// OnDpiChanged runs right after it, in the same call. OnDpiChanged takes the
+// window's XamlRoot by value, which gives the whole island's tree. The View
+// flyout is in that tree by the first timer tick after the call. Confirmed
+// with probes/probe-window-created.wh.cpp 0.6 on 2026-11-13, build 26100.9974.
+// OnDpiChanged is a coroutine: it moves the XamlRoot out of the caller's slot,
+// so the slot has to be read before the original runs. `this` of command bar
+// methods is never treated as a XAML object. That crashed Explorer in 0.1 and
+// 0.2 of the probe.
+
+bool ReadableMemory(const void* p, size_t size) {
+    if (!p) {
+        return false;
+    }
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery(p, &info, sizeof(info))) {
+        return false;
+    }
+    if (info.State != MEM_COMMIT ||
+        (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || info.Protect == 0) {
+        return false;
+    }
+    return (const char*)p + size <=
+           (const char*)info.BaseAddress + info.RegionSize;
+}
+
+// `arg` is the caller's temporary: a slot holding the XamlRoot pointer. The
+// object's first code address must lie in a package module.
+void* XamlRootFromArgument(void* arg) {
+    if (!ReadableMemory(arg, sizeof(void*))) {
+        return nullptr;
+    }
+    void* object = *(void**)arg;
+    if (!ReadableMemory(object, sizeof(void*))) {
+        return nullptr;
+    }
+    const void* vtable = *(const void* const*)object;
+    if (!ReadableMemory(vtable, sizeof(void*) * 3)) {
+        return nullptr;
+    }
+    const void* first = *(const void* const*)vtable;
+    HMODULE module = nullptr;
+    if (!first || !GetModuleHandleExW(
+                      GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                      (LPCWSTR)first, &module)) {
+        return nullptr;
+    }
+    wchar_t path[MAX_PATH];
+    if (!GetModuleFileNameW(module, path, ARRAYSIZE(path))) {
+        return nullptr;
+    }
+    bool ours = StrStrIW(path, L"Microsoft.UI.Xaml.dll") ||
+                StrStrIW(path, L"\\WindowsApps\\");
+    return ours ? object : nullptr;
+}
+
+BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {
+    wchar_t cls[64];
+    if (GetClassNameW(hwnd, cls, ARRAYSIZE(cls)) &&
+        wcscmp(cls, L"CabinetWClass") == 0) {
+        *(HWND*)lParam = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+HWND TopLevelOfThisThread() {
+    HWND top = nullptr;
+    EnumThreadWindows(GetCurrentThreadId(), FindCabinetOnThread, (LPARAM)&top);
+    return top;
+}
+
+// Stops the timer and revokes its handler. The timer object itself is kept
+// until the window's own cleanup, since it can't be released from inside its
+// own tick.
+void StopEntry(WindowState* state) {
+    state->entryStopped = true;
+    try {
+        if (state->entryTimer) {
+            state->entryTimer.Stop();
+            state->entryTimer.Tick(state->entryToken);
+        }
+    } catch (...) {
+        LogHresult(L"StopEntry");
+    }
+}
+
+// The window's own cleanup, on its thread, while the window still exists.
+void ReleaseEntry(WindowState* state) {
+    StopEntry(state);
+    state->entryTimer = nullptr;
+    state->xamlRoot = nullptr;
+}
+
+// Every 50 ms after the window is built: put the Columns entry into the View
+// menu, then, if Columns was the last layout chosen, turn it on once the file
+// list is visible.
+void EntryTick() {
+    if (g_unloading) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->entryTimer || state->entryStopped) {
+        return;
+    }
+    try {
+        state->entryTries++;
+        if (!state->topLevel || !IsWindow(state->topLevel)) {
+            StopEntry(state);
+            return;
+        }
+        if (!state->menuItem) {
+            int visited = 0;
+            auto content = state->xamlRoot.Content();
+            if (auto root = content.try_as<mux::DependencyObject>()) {
+                WalkForViewFlyout(state, root, 0, visited);
+            }
+            if (state->menuItem) {
+                Out(L"Columns entry added at window creation, after %d ticks",
+                    state->entryTries);
+            } else if (state->entryTries >= 40) {
+                Out(L"no View flyout found within 2 s of window creation, giving up");
+                StopEntry(state);
+            }
+            return;
+        }
+        if (!g_restore || !LastLayoutWasColumns() || state->on) {
+            StopEntry(state);
+            return;
+        }
+        HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+        RECT rect;
+        if (fileList && FileListRect(state->topLevel, fileList, &rect)) {
+            // Three ticks with a visible file list, so Explorer has had time
+            // to open the folder.
+            if (++state->restoreSettle >= 3) {
+                Out(L"restoring Columns, window=%p, tick %d", state->topLevel,
+                    state->entryTries);
+                ShowPanel(state);
+                if (state->on && state->menuItem) {
+                    state->menuItem.IsChecked(true);
+                }
+                StopEntry(state);
+            }
+        } else if (state->entryTries >= 100) {
+            Out(L"no visible file list within 5 s, not restoring Columns");
+            StopEntry(state);
+        }
+    } catch (...) {
+        LogHresult(L"EntryTick");
+        StopEntry(state);
+    }
+}
+
+void OnWindowCreated(Inspectable const& rootObject) {
+    if (g_unloading || !g_enabled) {
+        return;
+    }
+    auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
+    HWND top = TopLevelOfThisThread();
+    // At window close the same method runs again, with no tab left.
+    if (!xamlRoot || !top ||
+        !FindWindowExW(top, nullptr, L"ShellTabWindowClass", nullptr)) {
+        return;
+    }
+    WindowState* state = StateForThisThread(true);
+    if (state->topLevel && state->topLevel != top &&
+        !IsWindow(state->topLevel)) {
+        // The thread's earlier window is gone. Let its objects go.
+        AbandonWindow(state);
+    }
+    if (state->topLevel == top &&
+        (state->entryTimer || state->menuItem || state->entryStopped)) {
+        return;  // Already handled, this is a later resize or DPI change.
+    }
+    state->topLevel = top;
+    state->queue = mud::DispatcherQueue::GetForCurrentThread();
+    state->xamlRoot = xamlRoot;
+    state->entryTries = 0;
+    state->restoreSettle = 0;
+    auto timer = state->queue.CreateTimer();
+    timer.Interval(std::chrono::milliseconds(50));
+    state->entryToken = timer.Tick(
+        [](mud::DispatcherQueueTimer const&, Inspectable const&) {
+            EntryTick();
+        });
+    timer.Start();
+    state->entryTimer = timer;
+    Out(L"window created, window=%p, looking for the View flyout", top);
+}
+
+using DpiChanged_t = void*(WINAPI*)(void* pThis, void* ret, void* root,
+                                    void* args);
+DpiChanged_t DpiChanged_Original;
+void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
+    // The reference is taken before the original, which moves the XamlRoot
+    // out of the caller's slot.
+    Inspectable hold{nullptr};
+    if (!g_unloading && g_enabled) {
+        try {
+            if (void* object = XamlRootFromArgument(root)) {
+                winrt::copy_from_abi(hold, object);
+            }
+        } catch (...) {
+            LogHresult(L"OnDpiChanged, before");
+        }
+    }
+    void* result = DpiChanged_Original(pThis, ret, root, args);
+    if (hold) {
+        try {
+            OnWindowCreated(hold);
+        } catch (...) {
+            LogHresult(L"OnDpiChanged, after");
+        }
+    }
+    return result;
+}
+
 using BarHandler_t = void(WINAPI*)(void* pThis, Inspectable const& sender,
                                    void* args);
 
@@ -2612,6 +2874,10 @@ void HookExtensions(HMODULE module) {
          &PointerPressedWave1_Original,
          PointerPressedWave1_Hook,
          true},
+        {{LR"(public: struct winrt::fire_and_forget __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::OnDpiChanged(struct winrt::Microsoft::UI::Xaml::XamlRoot,struct winrt::Microsoft::UI::Xaml::XamlRootChangedEventArgs))"},
+         &DpiChanged_Original,
+         DpiChanged_Hook,
+         true},
         {{LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarManager::InvokeMenuItem(struct winrt::WindowsUdk::UI::MenuItem const &))"},
          &InvokeMenuItem_Original,
          InvokeMenuItem_Hook,
@@ -2621,7 +2887,9 @@ void HookExtensions(HMODULE module) {
     Out(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
         ok ? 1 : 0, (void*)PointerPressed_Original,
         (void*)PointerPressedWave1_Original, (void*)InvokeMenuItem_Original);
-    g_hooked = PointerPressed_Original || PointerPressedWave1_Original;
+    Out(L"OnDpiChanged=%p", (void*)DpiChanged_Original);
+    g_hooked = PointerPressed_Original || PointerPressedWave1_Original ||
+               DpiChanged_Original;
 }
 
 // Takes the panel and the menu entry out of every window, each on its own UI
@@ -2644,6 +2912,7 @@ void CloseEverything() {
                     }
                     HidePanel(state, L"mod unloading");
                     RemoveMenuEntry(state);
+                    ReleaseEntry(state);
                     state->queue = nullptr;
                     delete state;
                     if (done) {
@@ -2710,6 +2979,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 
 void LoadSettings() {
     g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
+    g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
     int minWidth = Wh_GetIntSetting(L"columns.minWidth");
     int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
     minWidth = minWidth < 80 ? 80 : (minWidth > 800 ? 800 : minWidth);
@@ -2734,7 +3004,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.2.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -191,6 +191,17 @@ Feasibility tests, with their state on 2026-11-12:
 | File labels | A mark can be drawn on one item in the DirectUI file list | Symbol hooks unavailable until Microsoft publishes symbols for the 2026-11 update, `dui70.dll` exports untested |
 | Desktop grouping | Icons can be clustered and stacked by position | Positioning proved, stacking untested |
 
+## Reaching a window as it opens, confirmed
+
+Confirmed on 2026-11-13 with `probes/probe-window-created.wh.cpp` 0.6, ARM64, build 26100.9974, French. Findings for `FileExplorerExtensions.dll`:
+
+- `CommandBarControl_Wave1::OnApplyTemplate` runs when a window is built, on the window's UI thread. `CommandBarControl_Wave1::OnDpiChanged` runs right after it, in the same call. At that moment the `CabinetWClass` window has its `ShellTabWindowClass` child and its `Microsoft.UI.Content.DesktopChildSiteBridge`. The window can still be hidden. `OnDpiChanged` runs again at window close, with no tab left, and on later resizes.
+- `OnDpiChanged` returns `winrt::fire_and_forget` and takes `XamlRoot` and `XamlRootChangedEventArgs` by value. The hook is `void* Hook(void* this, void* ret, void* root, void* args)`, and `root` points at the caller's temporary holding the `XamlRoot`. The method is a coroutine and moves the `XamlRoot` out of that slot, so read it before calling the original. After the call the slot holds 0.
+- Take a reference to the `XamlRoot` before the original and keep using it afterwards. `XamlRoot.Content()` is the island's root grid. Walking down from it finds the View flyout, 395 elements and 30 buttons, by the first `DispatcherQueueTimer` tick after the hook, about 60 ms. Inside the hook itself the tree was not checked.
+- Never treat `this` of a command bar method as a XAML object. Calling `copy_from_abi` and `try_as` on it crashed Explorer twice, once with `0xC0000409` in ucrtbase and once with `0xC0000005` in `Microsoft.UI.Xaml.dll`, and left Explorer on the legacy command bar until it restarted. Take objects only from arguments that are XAML references.
+- `OnCommandBarItemVMsChanged` is no use for this. It takes an observable map and the change arguments, and `this` is the control.
+- A generic hook that forwards four integer registers is safe for methods without floats and without by-value structs. A by-value C++/WinRT object arrives as a pointer to a temporary.
+
 ## Compatibility to check
 
 Ari runs these Explorer mods, so test with all of them enabled: Windows 11 File Explorer Styler, File Explorer WinUI-Like Content Animation and Win32 UI Modernizer. The animation mod already carries a compatibility option for Styler, which shows these mods do collide. Also test with several tabs, with a second Explorer window, with the separate-process option on, and in dark and light theme.
