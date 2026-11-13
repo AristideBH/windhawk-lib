@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.14
+// @version         0.4.15
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -2292,6 +2292,9 @@ int StyleScrollBars(mux::DependencyObject const& root, bool compact, int depth =
             if (vertical) {
                 bar.Width(7);
                 bar.HorizontalAlignment(mux::HorizontalAlignment::Right);
+                // A negative left margin takes the bar's width out of the layout,
+                // so it floats over the right edge instead of narrowing the rows.
+                bar.Margin(mux::Thickness{-7, 0, 0, 0});
             } else {
                 bar.Height(7);
                 bar.VerticalAlignment(mux::VerticalAlignment::Bottom);
@@ -2300,6 +2303,7 @@ int StyleScrollBars(mux::DependencyObject const& root, bool compact, int depth =
             bar.RenderTransform(nullptr);
             bar.ClearValue(mux::FrameworkElement::WidthProperty());
             bar.ClearValue(mux::FrameworkElement::HeightProperty());
+            bar.ClearValue(mux::FrameworkElement::MarginProperty());
             bar.HorizontalAlignment(vertical ? mux::HorizontalAlignment::Right
                                              : mux::HorizontalAlignment::Stretch);
             bar.VerticalAlignment(vertical ? mux::VerticalAlignment::Stretch
@@ -5965,6 +5969,10 @@ void OnTick() {
                     // not be built yet.
                     if (StyleScrollBars(c->list, wanted == 1) > 0) {
                         c->scrollStyle = wanted;
+                        // The bar floats over the right edge when compact, so the
+                        // strip kept free for the selection rectangle is wider
+                        // by the bar's width: 9 px stay free beside it.
+                        c->list.Padding(mux::Thickness{0, 12, wanted == 1 ? 16.0 : 10.0, 4});
                     }
                 } catch (...) {
                     LogHresult(L"scrollbar style");
@@ -5991,6 +5999,11 @@ void OnTick() {
         if (g_backgroundMode == 2) {
             if (fileList && fileList != state->clearedList) {
                 RestoreNativeList(state);
+                ClearNativeList(state, fileList);
+            } else if (fileList && state->clearedList == fileList &&
+                       !(GetWindowLongPtrW(fileList, GWL_EXSTYLE) & WS_EX_LAYERED)) {
+                // Explorer took the style off again while finishing the view.
+                state->clearedList = nullptr;
                 ClearNativeList(state, fileList);
             }
         } else if (state->clearedList) {
@@ -7061,7 +7074,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
