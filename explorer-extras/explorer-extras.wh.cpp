@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.5.13
+// @version         0.5.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1477,6 +1477,7 @@ struct WindowState {
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     int styleVersion = -1;  // The row style the rows were last given.
+    ULONGLONG scrollQuietUntil = 0;  // A scroll of the strip is under way: no refocusing meanwhile.
     ULONGLONG cursorFixUntil = 0;  // While Explorer navigates, a busy cursor over the panel is put right.
     bool shownDark = false;  // The theme the panel background was made for.
     int shownMode = 0;       // And the background mode.
@@ -2280,6 +2281,7 @@ void EnsureColumnVisible(WindowState* state, int index) {
         }
         if (target != offset) {
             state->scroller.ChangeView(target, nullptr, nullptr, false);
+            state->scrollQuietUntil = GetTickCount64() + 600;
         }
     } catch (...) {
     }
@@ -2304,6 +2306,7 @@ void CenterColumn(WindowState* state, int index) {
         target = std::max(0.0, std::min(target, most));
         if (std::abs(target - state->scroller.HorizontalOffset()) > 1) {
             state->scroller.ChangeView(target, nullptr, nullptr, false);
+            state->scrollQuietUntil = GetTickCount64() + 700;
         }
     } catch (...) {
     }
@@ -2918,8 +2921,15 @@ bool SameListing(const FolderResult& data, const Column& column) {
     }
     for (size_t i = 0; i < data.entries.size(); i++) {
         if (data.entries[i].name != column.entries[i].name ||
-            data.entries[i].folder != column.entries[i].folder ||
-            !ILIsEqual(data.entries[i].child.get(), column.entries[i].child.get())) {
+            data.entries[i].folder != column.entries[i].folder) {
+            return false;
+        }
+        // The same item read again has the same bytes. ILIsEqual asks the shell,
+        // which is slow for thousands of items on the UI thread.
+        PCUITEMID_CHILD a = data.entries[i].child.get();
+        PCUITEMID_CHILD b = column.entries[i].child.get();
+        UINT sizeA = ILGetSize(a), sizeB = ILGetSize(b);
+        if (!(sizeA == sizeB && memcmp(a, b, sizeA) == 0) && !ILIsEqual(a, b)) {
             return false;
         }
     }
@@ -2958,6 +2968,11 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 bool changed = !SameListing(loaded->data, *column);
                 if (changed) {
                     FillColumn(state, column.get(), std::move(loaded->data));
+                } else if (column->cancel) {
+                    // The rows and their icons are already there: the icon pass
+                    // that follows this load is not needed.
+                    *column->cancel = true;
+                    column->cancel = std::make_shared<std::atomic<bool>>(false);
                 }
                 // A synchronous layout pass, so only when something changed:
                 // the reloads after a toolbar command came in the middle of a
@@ -3015,6 +3030,9 @@ void ApplyIconBits(Column* column, IconBits const& icon) {
         image.HorizontalAlignment(mux::HorizontalAlignment::Left);
         image.VerticalAlignment(mux::VerticalAlignment::Center);
         auto host = column->iconHosts[icon.index];
+        if (host.Children().Size() > 0 && host.Children().GetAt(0).try_as<muxc::Image>()) {
+            return;  // Already has its icon.
+        }
         host.Children().Clear();
         host.Children().Append(image);
     } catch (...) {
@@ -6643,7 +6661,9 @@ void OnTick() {
             HWND focused = GetFocus();
             bool inside = panel && focused &&
                           (focused == panel || IsChild(panel, focused));
-            if (known && panel && !inside) {
+            // Not while the strip is scrolling: giving the list the keyboard
+            // brings it into view, which cut the centring short.
+            if (known && panel && !inside && now >= state->scrollQuietUntil) {
                 state->focusColumn->list.Focus(mux::FocusState::Programmatic);
                 Out(L"focus taken back from Explorer's view");
             }
@@ -7629,7 +7649,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.5.13 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
