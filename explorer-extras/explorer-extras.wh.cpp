@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.19
+// @version         0.5.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -91,7 +91,7 @@ Not yet: drag and drop.
   - followActiveColumn: true
     $name: Explorer follows the active column
     $description: Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.
-  - maxItems: 1500
+  - maxItems: 5000
     $name: Maximum items per column
   $name: Columns
 - debugLog: true
@@ -118,6 +118,7 @@ Not yet: drag and drop.
 #include <cwchar>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -167,7 +168,7 @@ std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
-std::atomic<int> g_maxItems{1500};
+std::atomic<int> g_maxItems{5000};
 thread_local ULONGLONG g_lastWalk = 0;
 
 // Every log line also goes to a file in the repo, so the log can be read from
@@ -1352,6 +1353,8 @@ void LogHresult(const wchar_t* where) {
     Out(L"  %s threw hr=0x%08lX", where, hr);
 }
 
+struct IconBits;
+
 struct Column {
     Pidl folder;
     std::vector<Entry> entries;
@@ -1371,6 +1374,13 @@ struct Column {
     int scrollStyle = -1;  // The scrollbar style these rows were given.
     double gutterRight = 10;  // The strip kept free on the right, in px.
     std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
+    // Rows are built when they come near the screen. Every entry has a row
+    // shell from the start; its content is made later.
+    std::vector<int> entryToRow;   // The row of each entry.
+    std::vector<char> built;       // Per entry: the row has its content.
+    std::map<size_t, std::shared_ptr<IconBits>> pendingIcons;  // Icons that came before their row.
+    muxc::ScrollViewer viewer{nullptr};  // The list's own scroller, watched for scrolling.
+    winrt::event_token viewToken{};
     double rowHeight = 32;
     int animGroup = -1;        // A group that is opening or closing,
     bool animCollapse = false; // which way,
@@ -2081,6 +2091,10 @@ void RemoveColumnsFrom(WindowState* state, size_t index) {
             if (column->cancel) {
                 *column->cancel = true;
             }
+            if (column->viewer) {
+                column->viewer.ViewChanged(column->viewToken);
+                column->viewer = nullptr;
+            }
             uint32_t count = state->strip.Children().Size();
             if (count > 0) {
                 state->strip.Children().RemoveAt(count - 1);
@@ -2387,10 +2401,24 @@ void ApplyFocusStyle(muxc::ListViewItem const& row) {
                                                       show ? 1.0 : 0.0, show ? 1.0 : 0.0});
 }
 
-muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
-                           size_t capacity, muxc::TextBlock* textOut,
-                           muxc::Grid* iconHostOut,
-                           muxc::FontIcon* chevronOut) {
+// A row without content: only the item, sized. Its content is built when the
+// row comes near the screen, so a long folder opens at once.
+muxc::ListViewItem MakeRowShell(double rowHeight) {
+    muxc::ListViewItem row;
+    row.MinHeight(rowHeight);
+    row.Height(rowHeight);
+    row.Padding(mux::Thickness{10, 0, 8, 0});
+    ApplyFocusStyle(row);
+    row.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
+    return row;
+}
+
+void ApplyIconBits(Column* column, IconBits const& icon);
+
+// Builds the content of one row.
+void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const& row) {
+    const Entry& entry = column->entries[entryIndex];
+    size_t capacity = NameCapacity(column);
     muxc::Grid grid;
     muxc::ColumnDefinition iconColumn, nameColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
@@ -2411,7 +2439,7 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
     iconHost.Children().Append(icon);
     muxc::Grid::SetColumn(iconHost, 0);
     grid.Children().Append(iconHost);
-    *iconHostOut = iconHost;  // The worker swaps in the real icon later.
+    column->iconHosts[entryIndex] = iconHost;  // The worker swaps in the real icon later.
 
     muxc::TextBlock name;
     std::wstring shown = MiddleEllipsis(entry.name, capacity);
@@ -2420,7 +2448,7 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
     name.VerticalAlignment(mux::VerticalAlignment::Center);
     muxc::Grid::SetColumn(name, 1);
     grid.Children().Append(name);
-    *textOut = name;
+    column->texts[entryIndex] = name;
 
     if (entry.folder) {
         muxc::FontIcon chevron;
@@ -2432,19 +2460,58 @@ muxc::ListViewItem MakeRow(const Entry& entry, double rowHeight,
         chevron.VerticalAlignment(mux::VerticalAlignment::Center);
         muxc::Grid::SetColumn(chevron, 2);
         grid.Children().Append(chevron);
-        *chevronOut = chevron;
+        column->chevrons[entryIndex] = chevron;
     }
 
-    muxc::ListViewItem row;
     row.Content(grid);
-    row.MinHeight(rowHeight);
-    row.Height(rowHeight);
-    row.Padding(mux::Thickness{10, 0, 8, 0});
-    ApplyFocusStyle(row);
-    row.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
-    // The full name, for names that were cut.
+    // The full name, for names that were cut. The detail tooltip replaces it
+    // the first time the pointer is on the row.
     muxc::ToolTipService::SetToolTip(row, winrt::box_value(winrt::hstring{entry.name}));
-    return row;
+    column->built[entryIndex] = 1;
+    auto pending = column->pendingIcons.find(entryIndex);
+    if (pending != column->pendingIcons.end()) {
+        ApplyIconBits(column, *pending->second);
+        column->pendingIcons.erase(pending);
+    }
+}
+
+// Builds the rows between two row numbers that don't have their content yet.
+void BuildRowRange(Column* column, int firstRow, int lastRow) {
+    auto items = column->list.Items();
+    int count = (int)std::min<size_t>(items.Size(), column->rowToEntry.size());
+    firstRow = std::max(0, firstRow);
+    lastRow = std::min(count - 1, lastRow);
+    int made = 0;
+    for (int r = firstRow; r <= lastRow && made < 200; r++) {
+        int entry = column->rowToEntry[r];
+        if (entry < 0 || (size_t)entry >= column->built.size() || column->built[entry]) {
+            continue;
+        }
+        if (auto item = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+            BuildRowContent(column, (size_t)entry, item);
+            made++;
+        }
+    }
+}
+
+// The rows on screen, and a few more each side, get their content.
+void BuildVisibleRows(Column* column) {
+    auto panel = column->list.ItemsPanelRoot().try_as<muxc::ItemsStackPanel>();
+    if (!panel) {
+        return;
+    }
+    int first = panel.FirstCacheIndex(), last = panel.LastCacheIndex();
+    if (first < 0 || last < 0) {
+        return;
+    }
+    BuildRowRange(column, first - 10, last + 10);
+}
+
+void EnsureRowBuilt(Column* column, size_t entryIndex) {
+    if (entryIndex < column->entryToRow.size() && column->entryToRow[entryIndex] >= 0) {
+        int row = column->entryToRow[entryIndex];
+        BuildRowRange(column, row, row);
+    }
 }
 
 // The chevron of a group header: down when open, right when collapsed.
@@ -2624,6 +2691,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->texts.resize(column->entries.size(), muxc::TextBlock{nullptr});
     column->iconHosts.clear();
     column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
+    column->entryToRow.assign(column->entries.size(), -1);
+    column->built.assign(column->entries.size(), 0);
+    column->pendingIcons.clear();
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
     column->hintEntry = -1;
@@ -2643,6 +2713,8 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
 
     auto items = column->list.Items();
     items.Clear();
+    std::vector<winrt::Windows::Foundation::IInspectable> made;  // Set in one go at the end.
+    made.reserve(column->entries.size() + 16);
     auto isCollapsed = [&](int group) {
         return grouped && group >= 0 && group < (int)data.groupNames.size() &&
                std::find(column->collapsed.begin(), column->collapsed.end(),
@@ -2671,7 +2743,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                     ? data.groupNames[group]
                     : L"";
             muxc::FontIcon icon{nullptr};
-            items.Append(MakeHeaderRow(title, rowHeight, isCollapsed(group), &icon));
+            made.push_back(MakeHeaderRow(title, rowHeight, isCollapsed(group), &icon));
             column->rowToEntry.push_back(-1);
             column->rowGroup.push_back(group);
             column->headerIcons.push_back(icon);
@@ -2681,13 +2753,12 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                       column->selectedChild.get())) {
             selectRow = (int)column->rowToEntry.size();
         }
-        auto row = MakeRow(column->entries[i], rowHeight, capacity,
-                           &column->texts[i], &column->iconHosts[i],
-                           &column->chevrons[i]);
+        auto row = MakeRowShell(rowHeight);
         if (isCollapsed(group)) {
             row.Visibility(mux::Visibility::Collapsed);
         }
-        items.Append(row);
+        made.push_back(row);
+        column->entryToRow[i] = (int)column->rowToEntry.size();
         column->rowToEntry.push_back((int)i);
         column->rowGroup.push_back(group);
         column->headerIcons.push_back(muxc::FontIcon{nullptr});
@@ -2703,12 +2774,17 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                                 : std::wstring(L"More items not shown");
         more.Content(winrt::box_value(winrt::hstring{text}));
         more.IsEnabled(false);
-        items.Append(more);
+        made.push_back(more);
         column->rowToEntry.push_back(-1);
         column->rowGroup.push_back(-1);
         column->headerIcons.push_back(muxc::FontIcon{nullptr});
     }
+    items.ReplaceAll(made);
+    // The first rows, and the ones around the selection, have their content
+    // now. The rest is built as the list scrolls.
+    BuildRowRange(column, 0, 60);
     if (selectRow >= 0) {
+        BuildRowRange(column, selectRow - 30, selectRow + 30);
         column->list.SelectedIndex(selectRow);
     }
     column->filled = true;
@@ -2811,6 +2887,44 @@ const GUID kIidBufferByteAccess = {
     {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
 
 // Runs on the window's UI thread when the worker has read some icons.
+// Puts an icon into its row's icon cell.
+void ApplyIconBits(Column* column, IconBits const& icon) {
+    try {
+        mux::Media::Imaging::WriteableBitmap bitmap(icon.width, icon.height);
+        auto buffer = bitmap.PixelBuffer();
+        winrt::com_ptr<IBufferByteAccessLocal> access;
+        winrt::check_hresult(
+            ((::IUnknown*)winrt::get_abi(buffer))
+                ->QueryInterface(kIidBufferByteAccess, access.put_void()));
+        uint8_t* pixels = nullptr;
+        winrt::check_hresult(access->Buffer(&pixels));
+        if (!pixels || buffer.Capacity() < icon.bgra.size()) {
+            return;
+        }
+        memcpy(pixels, icon.bgra.data(), icon.bgra.size());
+        buffer.Length((uint32_t)icon.bgra.size());
+        bitmap.Invalidate();
+
+        muxc::Image image;
+        image.Source(bitmap);
+        image.Width(20);
+        image.Height(20);
+        image.Stretch(mux::Media::Stretch::Uniform);
+        image.HorizontalAlignment(mux::HorizontalAlignment::Left);
+        image.VerticalAlignment(mux::VerticalAlignment::Center);
+        auto host = column->iconHosts[icon.index];
+        host.Children().Clear();
+        host.Children().Append(image);
+    } catch (...) {
+        static int logged = 0;
+        if (logged++ < 3) {
+            LogHresult(L"applying an icon");
+        }
+    }
+}
+
+// Runs on the window's UI thread when the worker has read some icons. An icon
+// whose row has no content yet waits for it.
 void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
@@ -2821,44 +2935,14 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
             continue;
         }
         for (auto& icon : batch->icons) {
-            if (icon.index >= column->iconHosts.size() ||
-                !column->iconHosts[icon.index]) {
+            if (icon.index >= column->iconHosts.size()) {
                 continue;
             }
-            try {
-                mux::Media::Imaging::WriteableBitmap bitmap(icon.width,
-                                                            icon.height);
-                auto buffer = bitmap.PixelBuffer();
-                winrt::com_ptr<IBufferByteAccessLocal> access;
-                winrt::check_hresult(
-                    ((::IUnknown*)winrt::get_abi(buffer))
-                        ->QueryInterface(kIidBufferByteAccess,
-                                         access.put_void()));
-                uint8_t* pixels = nullptr;
-                winrt::check_hresult(access->Buffer(&pixels));
-                if (!pixels || buffer.Capacity() < icon.bgra.size()) {
-                    continue;
-                }
-                memcpy(pixels, icon.bgra.data(), icon.bgra.size());
-                buffer.Length((uint32_t)icon.bgra.size());
-                bitmap.Invalidate();
-
-                muxc::Image image;
-                image.Source(bitmap);
-                image.Width(20);
-                image.Height(20);
-                image.Stretch(mux::Media::Stretch::Uniform);
-                image.HorizontalAlignment(mux::HorizontalAlignment::Left);
-                image.VerticalAlignment(mux::VerticalAlignment::Center);
-                auto host = column->iconHosts[icon.index];
-                host.Children().Clear();
-                host.Children().Append(image);
-            } catch (...) {
-                static int logged = 0;
-                if (logged++ < 3) {
-                    LogHresult(L"applying an icon");
-                }
+            if (!column->iconHosts[icon.index]) {
+                column->pendingIcons[icon.index] = std::make_shared<IconBits>(icon);
+                continue;
             }
+            ApplyIconBits(column.get(), icon);
         }
         return;
     }
@@ -3432,8 +3516,11 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
             return;
         }
         for (size_t i = 0; i < column->entries.size() && i < column->chevrons.size(); i++) {
-            if (column->chevrons[i] &&
-                ILIsEqual(column->entries[i].child.get(), leading.get())) {
+            if (ILIsEqual(column->entries[i].child.get(), leading.get())) {
+                EnsureRowBuilt(column, i);
+                if (!column->chevrons[i]) {
+                    break;
+                }
                 column->chevrons[i].Opacity(1.0);
                 column->chevrons[i].FontSize(13);
                 column->hintEntry = (int)i;
@@ -3902,6 +3989,9 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
     bool known = false;
     for (auto& c : state->columns) {
         known = known || c.get() == column;
+    }
+    if (known) {
+        EnsureRowBuilt(column, entryIndex);  // A row that was never near the screen.
     }
     if (!known || entryIndex >= column->texts.size() ||
         !column->texts[entryIndex]) {
@@ -4952,6 +5042,25 @@ muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth
         }
     }
     return nullptr;
+}
+
+// The list scrolled: the rows that came near the screen get their content.
+void OnListViewChanged(Inspectable const& sender) {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        auto viewer = sender.try_as<muxc::ScrollViewer>();
+        for (auto& c : state->columns) {
+            if (viewer && c->viewer && c->viewer == viewer && c->filled) {
+                BuildVisibleRows(c.get());
+                return;
+            }
+        }
+    } catch (...) {
+        LogHresult(L"OnListViewChanged");
+    }
 }
 
 // Where each row sits in the list's scrolled content. Computed from the row
@@ -6038,6 +6147,27 @@ void OnTick() {
                     LogHresult(L"scrollbar style");
                 }
             }
+        }
+
+        // Rows near the screen have their content: the scroller of each list is
+        // watched once it exists, and the rows are topped up here as well, since
+        // the list lays out a moment after it is filled.
+        for (auto& c : state->columns) {
+            if (!c->filled || !c->list) {
+                continue;
+            }
+            if (!c->viewer) {
+                auto viewer = FindListScroller(c->list);
+                if (viewer) {
+                    c->viewer = viewer;
+                    c->viewToken = viewer.ViewChanged(
+                        [](Inspectable const& sender,
+                           muxc::ScrollViewerViewChangedEventArgs const&) {
+                            OnListViewChanged(sender);
+                        });
+                }
+            }
+            BuildVisibleRows(c.get());
         }
 
         // A compact scrollbar floats over the right edge. While it shows, the
@@ -7145,7 +7275,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.19 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.5.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
