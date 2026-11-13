@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.15
+// @version         0.4.16
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -4999,6 +4999,22 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
         }
         Column* column = state->columns[index].get();
         auto scroller = FindListScroller(list);
+        {
+            // For the log: what was pressed, and where, so a strip that doesn't
+            // start a rectangle can be traced.
+            static int logged = 0;
+            if (logged++ < 30) {
+                auto at = point.Position();
+                std::wstring source = L"?";
+                try {
+                    source = winrt::get_class_name(args.OriginalSource()).c_str();
+                } catch (...) {
+                }
+                Out(L"press on empty space of column %d: x=%.0f of %.0f, y=%.0f, source=%s",
+                    index + 1, (double)at.X, list.ActualWidth(), (double)at.Y,
+                    source.c_str());
+            }
+        }
         auto& band = state->band;
         band.pending = true;
         band.active = false;
@@ -5963,6 +5979,11 @@ void OnTick() {
         // costs nothing to keep.
         for (auto& c : state->columns) {
             int wanted = g_compactScroll ? 1 : 0;
+            // A column that never had the compact style is left exactly as
+            // Explorer's template made it.
+            if (c->scrollStyle == -1 && wanted == 0) {
+                c->scrollStyle = 0;
+            }
             if (c->filled && c->scrollStyle != wanted && c->list) {
                 try {
                     // Remembered only when a bar was found: the template may
@@ -7074,7 +7095,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.16 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
