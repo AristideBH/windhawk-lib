@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.4.11
+// @version         0.4.12
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -67,6 +67,9 @@ Not yet: drag and drop.
   - restoreOnOpen: true
     $name: Open new windows in Columns
     $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+  - compactScrollbars: false
+    $name: Compact scrollbars
+    $description: Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.
   - focusRect: true
     $name: Show the focus outline on the active item
     $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
@@ -159,6 +162,7 @@ std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
+std::atomic<bool> g_compactScroll{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
@@ -1351,6 +1355,7 @@ struct Column {
     winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    int scrollStyle = -1;  // The scrollbar style these rows were given.
     std::vector<char> tipBuilt;  // Per entry: the detail tooltip exists.
     double rowHeight = 32;
     int animGroup = -1;        // A group that is opening or closing,
@@ -2108,6 +2113,35 @@ void RefreshNames(Column* column) {
                 MiddleEllipsis(column->entries[i].name, capacity));
         }
     }
+}
+
+// Compact scrollbars: every scrollbar inside `root` is drawn half as wide (or
+// as high), whatever state it is in. The transform moves the hit area with the
+// drawing, so a compact bar is still clicked and dragged where it is seen.
+int StyleScrollBars(mux::DependencyObject const& root, bool compact, int depth = 0) {
+    if (!root || depth > 10) {
+        return 0;
+    }
+    if (auto bar = root.try_as<muxc::Primitives::ScrollBar>()) {
+        bool vertical = bar.Orientation() == muxc::Orientation::Vertical;
+        if (compact) {
+            mux::Media::ScaleTransform scale;
+            scale.ScaleX(vertical ? 0.5 : 1.0);
+            scale.ScaleY(vertical ? 1.0 : 0.5);
+            bar.RenderTransformOrigin(winrt::Windows::Foundation::Point{
+                vertical ? 1.0f : 0.5f, vertical ? 0.5f : 1.0f});
+            bar.RenderTransform(scale);
+        } else {
+            bar.RenderTransform(nullptr);
+        }
+        return 1;
+    }
+    int found = 0;
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(root);
+    for (int i = 0; i < count; i++) {
+        found += StyleScrollBars(mux::Media::VisualTreeHelper::GetChild(root, i), compact, depth + 1);
+    }
+    return found;
 }
 
 // The focus outline around the item under the keyboard cursor, shown or not
@@ -5734,6 +5768,24 @@ void OnTick() {
             }
         }
 
+        // Scrollbars of the columns, once a column has its template, and again
+        // when the setting changes. The compact style is a transform, so it
+        // costs nothing to keep.
+        for (auto& c : state->columns) {
+            int wanted = g_compactScroll ? 1 : 0;
+            if (c->filled && c->scrollStyle != wanted && c->list) {
+                try {
+                    // Remembered only when a bar was found: the template may
+                    // not be built yet.
+                    if (StyleScrollBars(c->list, wanted == 1) > 0) {
+                        c->scrollStyle = wanted;
+                    }
+                } catch (...) {
+                    LogHresult(L"scrollbar style");
+                }
+            }
+        }
+
         // A changed setting that affects rows already on screen.
         if (state->styleVersion != g_styleVersion) {
             state->styleVersion = g_styleVersion;
@@ -6770,6 +6822,7 @@ void LoadSettings() {
     g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
     g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
     g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
+    g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
     {
         const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
         g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
@@ -6804,7 +6857,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.4.11 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.4.12 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
