@@ -168,6 +168,18 @@ compiled and tested. Details live in `explorer-columns/PLAN.md` and
 
 - [ ] Labels, macOS style
 - [ ] Home page overhaul
+- [ ] Item tooltip shows details (type, size, dates, dimensions, tags), not
+      the full name. The full name is still reachable another way, such as a
+      longer hover or the status bar.
+- [ ] Compatibility with `DarkionAvey/windhawk-gpu-accelerated-explorer-view`
+      (GPL-2.0, replaces the Details and Icons views with its own GPU
+      overlay). Ari tests the two together first. If they conflict: detect
+      its window property `WindhawkExplorerGpuOverlayOwnsShellView` on the
+      native view, keep our panel above its overlay, and don't depend on a
+      visible `SHELLDLL_DefView`. Never copy its code, only ideas.
+- [ ] Ideas to take from that mod: middle-click opens a folder in a new tab,
+      marquee selection, a drag preview with a count badge, a toggle back to
+      the native view with a hotkey.
 - [ ] Option to show only real Desktop items, hiding the virtual ones (This
       PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form
       is open.
