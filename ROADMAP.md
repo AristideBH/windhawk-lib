@@ -86,16 +86,17 @@ last and are not scheduled.
 
 | Version | Content | Effort | Risk |
 | --- | --- | --- | --- |
-| 0.6.0 | Everyday keys: F5, Escape, Backspace, Menu key and Shift+F10, Ctrl+Shift+N, Ctrl+Shift+C, redo. Live accent colour for the pill and the selection rectangle, following a change of the system accent while the panel is open. | small | low. Backspace may be taken by Explorer's accelerators, the `TranslateAcceleratorW` hook already exists for the rename box and can be reused. |
-| 0.6.1 | Multi-rename: F2 on several items asks one name and numbers the rest like Explorer. Open in new tab from the flyout and middle-click. | medium | low |
-| 0.6.2 | New folder with selection: a flyout item and a shortcut (Ctrl+Alt+N) that make a folder, move the selected items into it, and open its name for editing. One Ctrl+Z takes it all back. Open in new tab from the flyout and middle-click. Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. Then the small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | medium for archives, small each for the rest | medium for archives: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
-| 0.6.3 | Housekeeping: split the 7000 line source into files per area, joined by a script, as the roadmap planned for the second feature. | medium | low, but every later patch depends on it, so do it before 0.7 |
-| 0.7 | Columns per tab. The state is per window today. Each tab gets its own columns, the tab switch shows the right one. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high: the tab creation hook exists, closing and moving tabs between windows do not |
-| 0.8 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium: a modal menu inside a XAML handler crashed Explorer before |
-| 0.9 | Drag and drop between columns and out to other windows, with the drag preview and count badge. | large | medium |
-| 0.10 | Per-folder memory and "columns everywhere", each column keeps its own sort and group. | medium | low |
-| 1.0 | Release: strings in a table for translation, settings cleaned of test options (the background mode), README, the pull request to windhawk-mods. | medium | low |
-| later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Labels, archive flow, toolbar customization. | | |
+| 0.6.x | Done: everyday keys, redo, live accent, multi-rename, undo of a new folder, columns of a deleted folder pruned. | | |
+| 0.7.0 | New folder with selection (flyout item and Ctrl+Alt+N, one Ctrl+Z takes it back) and open in a new tab (flyout item and middle-click). Written, not tested. | small | low. The new tab is made with Ctrl+T sent to the window, then shown its folder once the tab window exists. |
+| 0.7.1 | Archives in columns: a zip, 7z, rar or tar is browsed as a folder in the next column (setting, off by default), with Extract here and Extract to from the flyout, using the shell's own archive folders. | medium | medium: the shell reads big archives slowly and may write temporary files, local fixed drives only. Needs a limit and a loading state. |
+| 0.7.2 | Small tweaks: icon jobs for the rows on screen first, show only real Desktop items (setting), Documents icon, focusing a virtual shell item, remote item indicator. | small each | low |
+| 0.7.3 | Housekeeping: split the 8000 line source into files per area, joined by a script. Every later patch depends on it, so before 0.8. | medium | low |
+| 0.8 | Columns per tab. The state is per window today. Each tab gets its own columns. Needs a model change, from `WindowState` to a per-tab state with the window's shared parts split out. | large | medium to high |
+| 0.9 | Flyouts restyled to match Explorer, Paste in the item menu, the native look if a probe shows a safe way. | medium | medium |
+| 0.10 | Drag and drop between columns and out to other windows, with the shell's drag helper. | large | medium |
+| 0.11 | Per-folder memory and "columns everywhere", each column keeps its own sort and group. | medium | low |
+| 1.0 | Release: strings in a table for translation, settings cleaned of test options, README, the pull request to windhawk-mods. | medium | low |
+| later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Labels, toolbar customization. | | |
 
 Why this order: the keys and multi-rename are cheap and used all day. The
 source split costs a day and makes every change after it easier to review.

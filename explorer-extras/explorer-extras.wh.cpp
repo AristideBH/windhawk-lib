@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.6.3
+// @version         0.7.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1477,6 +1477,7 @@ struct UndoEntry {
     std::wstring renamedFrom;         // A rename: the old path
     std::wstring renamedTo;           // and the new one.
     bool created = false;             // A new folder, whose path is in renamedTo.
+    std::vector<std::pair<std::wstring, std::wstring>> moves;  // Items moved into it, old and new path.
     std::vector<std::pair<std::wstring, std::wstring>> renames;  // Several renames at once, old and new.
 };
 
@@ -1503,6 +1504,11 @@ struct WindowState {
     std::unique_ptr<RenameState> rename;
     std::vector<UndoEntry> undo;
     std::vector<UndoEntry> redo;
+    // Open in a new tab: the folder to show, until when to wait, and the tab
+    // Explorer made for it.
+    Pidl openTabFolder;
+    ULONGLONG openTabUntil = 0;
+    HWND newTab = nullptr;
     int styleVersion = -1;  // The row style the rows were last given.
     winrt::Windows::UI::Color pillColor{};    // The accent shades the panel was last drawn with.
     winrt::Windows::UI::Color accentColor{};
@@ -4150,6 +4156,10 @@ bool UndoLast(WindowState* state) {
     state->undo.pop_back();
     HRESULT hr;
     if (entry.created) {
+        // The items that were moved into it go back first.
+        for (size_t i = entry.moves.size(); i-- > 0;) {
+            MoveFileW(entry.moves[i].second.c_str(), entry.moves[i].first.c_str());
+        }
         // A new folder is taken back to the Recycle Bin, with what is in it.
         std::wstring names = entry.renamedTo;
         names.push_back(L'\0');
@@ -4198,6 +4208,9 @@ bool RedoLast(WindowState* state) {
         hr = CreateDirectoryW(entry.renamedTo.c_str(), nullptr)
                  ? S_OK
                  : HRESULT_FROM_WIN32(GetLastError());
+        for (auto& pair : entry.moves) {
+            MoveFileW(pair.first.c_str(), pair.second.c_str());
+        }
         Out(L"Redo new folder \"%s\": hr=0x%08lX", entry.renamedTo.c_str(), hr);
     } else if (!entry.renames.empty()) {
         for (auto& pair : entry.renames) {
@@ -4809,6 +4822,96 @@ void CreateNewFolder(WindowState* state, Column* column) {
     }
 }
 
+// Makes a folder in the column's folder and moves the selected items into it,
+// then opens its name for editing. The move is the shell's own, so conflicts
+// and progress behave as in Explorer.
+void NewFolderWithSelection(WindowState* state, Column* column,
+                            std::vector<size_t> const& entries) {
+    wchar_t path[MAX_PATH] = L"";
+    if (entries.empty() || !SHGetPathFromIDListW(column->folder.get(), path) || !path[0]) {
+        Out(L"new folder with selection: not a folder on disk, or nothing selected");
+        return;
+    }
+    std::vector<std::wstring> from;
+    for (size_t entry : entries) {
+        if (entry < column->entries.size()) {
+            std::wstring item = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            if (!item.empty()) {
+                from.push_back(item);
+            }
+        }
+    }
+    if (from.empty()) {
+        return;
+    }
+    std::wstring name = L"New folder";
+    std::wstring candidate, full;
+    for (int i = 1; i < 100; i++) {
+        candidate = i == 1 ? name : name + L" (" + std::to_wstring(i) + L")";
+        full = std::wstring(path) + L"\\" + candidate;
+        if (!PathFileExistsW(full.c_str())) {
+            break;
+        }
+    }
+    if (!CreateDirectoryW(full.c_str(), nullptr)) {
+        Out(L"new folder with selection: CreateDirectory failed, gle=%lu", GetLastError());
+        return;
+    }
+    std::wstring names;
+    for (auto& item : from) {
+        names += item;
+        names.push_back(L'\0');
+    }
+    names.push_back(L'\0');
+    std::wstring target = full;
+    target.push_back(L'\0');
+    SHFILEOPSTRUCTW op = {};
+    op.hwnd = state->topLevel;
+    op.wFunc = FO_MOVE;
+    op.pFrom = names.c_str();
+    op.pTo = target.c_str();
+    op.fFlags = FOF_ALLOWUNDO;
+    int result = SHFileOperationW(&op);
+    Out(L"new folder \"%s\" with %d item(s): result %d", candidate.c_str(), (int)from.size(), result);
+
+    UndoEntry undo;
+    undo.created = true;
+    undo.renamedTo = full;
+    for (auto& item : from) {
+        const wchar_t* leaf = wcsrchr(item.c_str(), L'\\');
+        std::wstring moved = full + L"\\" + (leaf ? leaf + 1 : item.c_str());
+        if (PathFileExistsW(moved.c_str())) {
+            undo.moves.emplace_back(item, moved);
+        }
+    }
+    PushUndo(state, std::move(undo));
+    state->renameName = candidate;
+    state->renameColumn = column;
+    RequestLoad(state, column);
+}
+
+// Opens a folder in a new tab of this window: Ctrl+T makes the tab, and once
+// Explorer has built it, the folder is shown in it.
+void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
+    if (!folder || FolderGone(folder)) {
+        return;
+    }
+    state->openTabFolder.reset(ILClone(folder));
+    state->openTabUntil = GetTickCount64() + 4000;
+    state->newTab = nullptr;
+    INPUT keys[4] = {};
+    keys[0].type = INPUT_KEYBOARD;
+    keys[0].ki.wVk = VK_CONTROL;
+    keys[1].type = INPUT_KEYBOARD;
+    keys[1].ki.wVk = 'T';
+    keys[2] = keys[1];
+    keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    keys[3] = keys[0];
+    keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, keys, sizeof(INPUT));
+    Out(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
+}
+
 void RunBackgroundAction(WindowState* state, Column* column,
                          const std::wstring& action) {
     bool known = false;
@@ -4965,6 +5068,48 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         state->context->entries = picked;
         muxc::MenuFlyout flyout;
         FillFlyoutItems(state, hmenu, flyout.Items(), 0);
+        // Two items of this mod at the top: a new folder holding the picked
+        // items, and, for one folder, a new tab.
+        {
+            wchar_t folderPath[MAX_PATH] = L"";
+            bool onDisk = SHGetPathFromIDListW(column->folder.get(), folderPath) && folderPath[0];
+            int added = 0;
+            auto addItem = [&](const wchar_t* text, std::function<void()> action) {
+                muxc::MenuFlyoutItem item;
+                item.Text(text);
+                auto token = item.Click(
+                    [action](Inspectable const&, mux::RoutedEventArgs const&) {
+                        try {
+                            action();
+                        } catch (...) {
+                            LogHresult(L"a flyout item");
+                        }
+                    });
+                state->context->hooks.emplace_back(item, token);
+                flyout.Items().InsertAt((uint32_t)added++, item);
+            };
+            if (onDisk) {
+                addItem(L"New folder with selection", [column, picked]() {
+                    WindowState* now = StateForThisThread(false);
+                    if (now && !g_unloading) {
+                        NewFolderWithSelection(now, column, picked);
+                    }
+                });
+            }
+            if (picked.size() == 1 && column->entries[picked[0]].folder) {
+                addItem(L"Open in new tab", [column, picked]() {
+                    WindowState* now = StateForThisThread(false);
+                    if (now && !g_unloading) {
+                        Pidl target(ILCombine(column->folder.get(),
+                                              column->entries[picked[0]].child.get()));
+                        OpenFolderInNewTab(now, target.get());
+                    }
+                });
+            }
+            if (added > 0) {
+                flyout.Items().InsertAt((uint32_t)added, muxc::MenuFlyoutSeparator());
+            }
+        }
         state->context->flyout = flyout;
         state->context->closedToken = flyout.Closed(
             [](Inspectable const&, Inspectable const&) {
@@ -5612,6 +5757,32 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
     }
     try {
         auto point = args.GetCurrentPoint(list);
+        // The middle button on a folder opens it in a new tab.
+        if (point.Properties().IsMiddleButtonPressed()) {
+            mux::DependencyObject node =
+                args.OriginalSource().try_as<mux::DependencyObject>();
+            for (int i = 0; node && i < 20; i++) {
+                if (auto row = node.try_as<muxc::ListViewItem>()) {
+                    int at = ColumnIndexOfList(state, list);
+                    int rowIndex = list.IndexFromContainer(row);
+                    if (at >= 0 && rowIndex >= 0) {
+                        Column* column = state->columns[at].get();
+                        int entry = rowIndex < (int)column->rowToEntry.size()
+                                        ? column->rowToEntry[rowIndex]
+                                        : -1;
+                        if (entry >= 0 && column->entries[entry].folder) {
+                            Pidl target(ILCombine(column->folder.get(),
+                                                  column->entries[entry].child.get()));
+                            OpenFolderInNewTab(state, target.get());
+                            args.Handled(true);
+                        }
+                    }
+                    return;
+                }
+                node = mux::Media::VisualTreeHelper::GetParent(node);
+            }
+            return;
+        }
         if (!point.Properties().IsLeftButtonPressed()) {
             return;
         }
@@ -6282,6 +6453,11 @@ void OnColumnKey(muxc::ListView const& list,
         }
         if (ctrl && shift && !alt && key == VirtualKey::N) {
             CreateNewFolder(state, column);
+            keep();
+            return;
+        }
+        if (ctrl && alt && !shift && key == VirtualKey::N && !picked.empty()) {
+            NewFolderWithSelection(state, column, picked);
             keep();
             return;
         }
@@ -7006,6 +7182,32 @@ void OnTick() {
                     state->bandBox.BorderBrush(Brush(170, accent.R, accent.G, accent.B));
                 }
             } catch (...) {
+            }
+        }
+
+        // Open in a new tab: the tab is there, show the folder in it.
+        if (state->openTabFolder) {
+            if (now >= state->openTabUntil) {
+                Out(L"the new tab did not open in time");
+                state->openTabFolder.reset();
+                state->newTab = nullptr;
+            } else if (state->newTab && IsWindow(state->newTab)) {
+                DWORD_PTR result = 0;
+                if (SendMessageTimeoutW(state->newTab, WM_USER + 7, 0, 0,
+                                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, &result) &&
+                    result) {
+                    IShellBrowser* tabBrowser = (IShellBrowser*)result;
+                    g_ourBrowse = true;
+                    HRESULT hr = tabBrowser->BrowseObject(
+                        state->openTabFolder.get(),
+                        SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
+                    g_ourBrowse = false;
+                    Out(L"the new tab shows its folder: hr=0x%08lX", hr);
+                    if (SUCCEEDED(hr)) {
+                        state->openTabFolder.reset();
+                        state->newTab = nullptr;
+                    }
+                }
             }
         }
 
@@ -7735,7 +7937,19 @@ void EntryTick() {
 // last layout chosen and this window isn't showing it, turn it on for the tab
 // once the tab is visible.
 void OnTabCreated(HWND tab) {
-    if (g_unloading || !g_enabled || !g_restore) {
+    if (g_unloading || !g_enabled) {
+        return;
+    }
+    // The tab that "open in a new tab" asked for.
+    {
+        WindowState* waiting = StateForThisThread(false);
+        if (waiting && waiting->openTabFolder && !waiting->newTab &&
+            GetTickCount64() < waiting->openTabUntil && waiting->topLevel &&
+            GetAncestor(tab, GA_PARENT) == waiting->topLevel) {
+            waiting->newTab = tab;
+        }
+    }
+    if (!g_restore) {
         return;
     }
     WindowState* state = StateForThisThread(false);
@@ -8067,7 +8281,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.6.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.7.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
