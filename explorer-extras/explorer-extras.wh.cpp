@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.3.14
+// @version         0.3.15
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -398,6 +398,32 @@ bool IsFolderItem(IShellFolder* folder, PCUITEMID_CHILD child) {
     }
     // Zip files and the like report both. Treat them as files.
     return (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
+}
+
+// The parsing name of a child item, such as "::{GUID}" for a virtual folder.
+std::wstring ParsingName(IShellFolder* folder, PCUITEMID_CHILD child) {
+    STRRET text = {};
+    wchar_t buffer[MAX_PATH] = L"";
+    if (SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_FORPARSING, &text)) &&
+        SUCCEEDED(StrRetToBufW(&text, child, buffer, MAX_PATH))) {
+        return buffer;
+    }
+    return L"";
+}
+
+// Control Panel, or something inside it. Explorer's own view can't follow a
+// column into it: it closes the window and opens a Control Panel window in
+// its place (seen in the 0.3.14 test).
+bool IsInControlPanel(PCIDLIST_ABSOLUTE pidl) {
+    PWSTR name = nullptr;
+    if (FAILED(SHGetNameFromIDList(pidl, SIGDN_DESKTOPABSOLUTEPARSING, &name)) ||
+        !name) {
+        return false;
+    }
+    bool inside = StrStrIW(name, L"{26EE0668-A00A-44D7-9371-BEB064C98683}") ||
+                  StrStrIW(name, L"{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}");
+    CoTaskMemFree(name);
+    return inside;
 }
 
 bool IsLauncherItem(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -851,6 +877,15 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 result->truncated = true;
                 CoTaskMemFree(child);
                 break;
+            }
+            // The Desktop lists Control Panel twice: as a folder and as an
+            // item that only opens a window. Keep the folder.
+            if (ILIsEmpty(folderPidl) &&
+                StrStrIW(ParsingName(folder, child).c_str(),
+                         L"{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}")) {
+                CoTaskMemFree(child);
+                child = nullptr;
+                continue;
             }
             Entry entry;
             entry.name = DisplayName(folder, child);
@@ -2243,6 +2278,13 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 // one navigation.
 void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     if (!g_follow) {
+        return;
+    }
+    if (IsInControlPanel(folder)) {
+        // Explorer's view stays where it is. The columns still show it.
+        state->pendingNav.reset();
+        state->selectFolder.reset();
+        state->selectChild.reset();
         return;
     }
     state->pendingNav.reset(ILClone(folder));
@@ -4438,7 +4480,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.3.14 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.3.15 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
