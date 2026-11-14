@@ -1057,7 +1057,13 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 bool firstListing = !column->filled;
                 bool changed = !SameListing(loaded->data, *column);
                 if (changed) {
+                    ULONGLONG fillStarted = GetTickCount64();
+                    size_t fillCount = loaded->data.entries.size();
                     FillColumn(state, column.get(), std::move(loaded->data));
+                    ULONGLONG fillTook = GetTickCount64() - fillStarted;
+                    if (fillTook >= 40) {
+                        Out(L"fill: %d rows set up in %d ms on the UI thread", (int)fillCount, (int)fillTook);
+                    }
                 } else if (column->cancel) {
                     // The rows and their icons are already there: the icon pass
                     // that follows this load is not needed.

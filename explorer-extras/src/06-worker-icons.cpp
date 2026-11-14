@@ -127,29 +127,49 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         batch->generation = generation;
     };
     size_t count = std::min(std::min(children.size(), indices.size()), limit);
-    for (size_t i = 0; i < count && !stop && !(cancel && *cancel); i++) {
+    std::vector<size_t> missed;
+    // The first pass asks only for what the shell already has in its cache, which
+    // is quick, so the rows on screen fill at once. What is not cached is made in
+    // the second pass, in the same order.
+    auto readOne = [&](size_t i, bool cachedOnly) -> bool {
         IShellItem* item = nullptr;
-        if (FAILED(SHCreateItemWithParent(nullptr, folder, children[i].get(),
-                                          IID_PPV_ARGS(&item))) ||
-            !item) {
-            continue;
+        if (FAILED(SHCreateItemWithParent(nullptr, folder, children[i].get(), IID_PPV_ARGS(&item))) || !item) {
+            return true;  // Nothing more to try.
         }
+        bool done = false;
         IShellItemImageFactory* factory = nullptr;
-        if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) &&
-            factory) {
+        if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
             HBITMAP bitmap = nullptr;
-            if (SUCCEEDED(factory->GetImage(SIZE{32, 32}, 0, &bitmap)) &&
-                bitmap) {
+            HRESULT got = factory->GetImage(SIZE{32, 32}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
+            if (SUCCEEDED(got) && bitmap) {
                 IconBits bits;
                 bits.index = indices[i];
                 if (ReadBitmapBits(bitmap, &bits)) {
                     batch->icons.push_back(std::move(bits));
                 }
                 DeleteObject(bitmap);
+                done = true;
+            } else if (!cachedOnly) {
+                done = true;  // Asked in full and failed: not again.
             }
             factory->Release();
+        } else {
+            done = true;
         }
         item->Release();
+        return done;
+    };
+    for (size_t i = 0; i < count && !stop && !(cancel && *cancel); i++) {
+        if (!readOne(i, true)) {
+            missed.push_back(i);
+        }
+        if (batch->icons.size() >= kIconBatch) {
+            flush();
+        }
+    }
+    flush();
+    for (size_t k = 0; k < missed.size() && !stop && !(cancel && *cancel); k++) {
+        readOne(missed[k], false);
         if (batch->icons.size() >= kIconBatch) {
             flush();
         }
@@ -292,6 +312,23 @@ void StopWorker() {
     }
 }
 
+// Where a job goes in a worker's queue: a folder is needed to fill a column, so it
+// goes before every icon job (and after the folders asked earlier); the newest
+// icon request goes first among the icon jobs, since it is for what is on screen
+// now, and older ones are for rows that may have scrolled away.
+void QueueJob(Worker* worker, std::unique_ptr<Job> job) {
+    std::lock_guard<std::mutex> lock(worker->mutex);
+    auto at = worker->jobs.begin();
+    while (at != worker->jobs.end() && !(*at)->iconsOnly) {
+        ++at;
+    }
+    if (job->iconsOnly) {
+        worker->jobs.insert(at, std::move(job));
+    } else {
+        worker->jobs.insert(at, std::move(job));
+    }
+}
+
 void RequestLoad(WindowState* state, Column* column) {
     if (g_unloading) {
         return;
@@ -313,10 +350,7 @@ void RequestLoad(WindowState* state, Column* column) {
     job->maxItems = g_maxItems;
     job->queue = state->queue;
     job->cancel = column->cancel;
-    {
-        std::lock_guard<std::mutex> lock(state->worker->mutex);
-        state->worker->jobs.push_back(std::move(job));
-    }
+    QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }
 
@@ -332,19 +366,17 @@ void RequestIcons(WindowState* state, Column* column) {
     job->folder.reset(ILClone(column->folder.get()));
     job->queue = state->queue;
     job->cancel = column->cancel;
+    // The rows built last are the ones on screen: take those, newest first.
     size_t take = std::min<size_t>(column->iconWanted.size(), 200);
     for (size_t i = 0; i < take; i++) {
-        size_t entry = column->iconWanted[i];
+        size_t entry = column->iconWanted[column->iconWanted.size() - 1 - i];
         if (entry < column->entries.size()) {
             job->iconIndices.push_back(entry);
             job->iconChildren.emplace_back(ILClone(column->entries[entry].child.get()));
         }
     }
-    column->iconWanted.erase(column->iconWanted.begin(), column->iconWanted.begin() + take);
-    {
-        std::lock_guard<std::mutex> lock(state->worker->mutex);
-        state->worker->jobs.push_back(std::move(job));
-    }
+    column->iconWanted.erase(column->iconWanted.end() - take, column->iconWanted.end());
+    QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }
 
