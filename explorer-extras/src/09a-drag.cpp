@@ -390,6 +390,7 @@ struct OutDropSource : IDropSource {
     LONG refs = 1;
     DWORD lastEffect = 0;
     DWORD dropKeys = 0;
+    DWORD graceKeys = 0;  // The keys of a moment ago that still count at the release.
     IDataObject* data = nullptr;  // The dragged data, not owned.
     ULONGLONG ctrlAt = 0, shiftAt = 0, altAt = 0;  // When each key was last seen down.
     HWND dropWindow = nullptr;
@@ -438,6 +439,10 @@ struct OutDropSource : IDropSource {
             } else if (now - shiftAt < grace) {
                 wanted = DROPEFFECT_MOVE;
             }
+            graceKeys = wanted == DROPEFFECT_COPY   ? MK_CONTROL
+                        : wanted == DROPEFFECT_MOVE ? MK_SHIFT
+                        : wanted == DROPEFFECT_LINK ? (MK_CONTROL | MK_SHIFT)
+                                                    : 0;
             if (wanted != DROPEFFECT_NONE && data) {
                 SetPreferredEffect(data, wanted);
                 Out(L"drag out: the keys of a moment ago ask for effect %lu", (unsigned long)wanted);
@@ -451,11 +456,203 @@ struct OutDropSource : IDropSource {
         }
         return S_OK;
     }
+    HWND probeWindow = nullptr;
+    DWORD probeEffect = 0xFFFFFFFF;
+    // Probe (0.13.7): logs when the window under the pointer or the effect it
+    // offers changes, and the tree item under the pointer over a tree view.
+    int feedbackCalls = 0;
+    void Probe(DWORD effect) {
+        POINT cursor;
+        GetCursorPos(&cursor);
+        HWND under = WindowFromPoint(cursor);
+        if (under == probeWindow && effect == probeEffect) {
+            return;
+        }
+        probeWindow = under;
+        probeEffect = effect;
+        std::wstring cls = under ? ClassNameOf(under) : L"?";
+        std::wstring item;
+        if (under && cls == L"SysTreeView32") {
+            TVHITTESTINFO hit = {};
+            hit.pt = cursor;
+            ScreenToClient(under, &hit.pt);
+            HTREEITEM node = (HTREEITEM)SendMessageW(under, TVM_HITTEST, 0, (LPARAM)&hit);
+            if (node) {
+                wchar_t text[128] = L"";
+                TVITEMW info = {};
+                info.mask = TVIF_TEXT;
+                info.hItem = node;
+                info.pszText = text;
+                info.cchTextMax = ARRAYSIZE(text);
+                SendMessageW(under, TVM_GETITEMW, 0, (LPARAM)&info);
+                item = text;
+            } else {
+                item = L"(no item)";
+            }
+        }
+        Out(L"drag probe: over \"%s\" %p%s%s, effect offered %lu", cls.c_str(), under,
+            item.empty() ? L"" : L" item ", item.c_str(), (unsigned long)effect);
+    }
     STDMETHODIMP GiveFeedback(DWORD effect) override {
         lastEffect = effect;
+        feedbackCalls++;
+        Probe(effect);
         return DRAGDROP_S_USEDEFAULTCURSORS;
     }
 };
+
+// The child of a shell item whose display name is `name`, or null. The caller
+// releases it.
+IShellItem* FindChildByName(IShellItem* parent, const std::wstring& name) {
+    IEnumShellItems* items = nullptr;
+    if (FAILED(parent->BindToHandler(nullptr, BHID_EnumItems, IID_PPV_ARGS(&items))) || !items) {
+        return nullptr;
+    }
+    IShellItem* found = nullptr;
+    IShellItem* child = nullptr;
+    ULONG fetched = 0;
+    while (!found && items->Next(1, &child, &fetched) == S_OK && fetched == 1) {
+        PWSTR text = nullptr;
+        if (SUCCEEDED(child->GetDisplayName(SIGDN_NORMALDISPLAY, &text)) && text) {
+            if (_wcsicmp(text, name.c_str()) == 0) {
+                found = child;
+                found->AddRef();
+            }
+            CoTaskMemFree(text);
+        }
+        child->Release();
+        child = nullptr;
+    }
+    items->Release();
+    return found;
+}
+
+// A folder called `name` among the places a pinned folder usually comes from: the
+// known folders themselves, then what lies in the Desktop, the user's profile and
+// This PC. The caller releases it.
+IShellItem* FindInUsualPlaces(const std::wstring& name) {
+    const KNOWNFOLDERID* ids[] = {&FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures,
+                                  &FOLDERID_Music,     &FOLDERID_Videos,    &FOLDERID_Desktop,
+                                  &FOLDERID_Profile};
+    std::vector<IShellItem*> places;
+    for (const KNOWNFOLDERID* id : ids) {
+        IShellItem* place = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderItem(*id, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&place))) && place) {
+            places.push_back(place);
+        }
+    }
+    PIDLIST_ABSOLUTE computer = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &computer)) && computer) {
+        IShellItem* place = nullptr;
+        if (SUCCEEDED(SHCreateItemFromIDList(computer, IID_PPV_ARGS(&place))) && place) {
+            places.push_back(place);
+        }
+        CoTaskMemFree(computer);
+    }
+    IShellItem* found = nullptr;
+    for (IShellItem* place : places) {
+        if (found) {
+            break;
+        }
+        PWSTR text = nullptr;
+        if (SUCCEEDED(place->GetDisplayName(SIGDN_NORMALDISPLAY, &text)) && text) {
+            if (_wcsicmp(text, name.c_str()) == 0) {
+                found = place;
+                found->AddRef();
+            }
+            CoTaskMemFree(text);
+        }
+        if (!found) {
+            found = FindChildByName(place, name);
+        }
+    }
+    for (IShellItem* place : places) {
+        place->Release();
+    }
+    return found;
+}
+
+// The folder a navigation pane tree item stands for, found by walking the names
+// of the item and its parents from the root: the tree keeps no pidl we can read.
+// A root that is not under the Desktop is taken to be Home (Quick access).
+Pidl FolderOfNavItem(HWND tree, HTREEITEM node) {
+    std::vector<std::wstring> names;
+    for (HTREEITEM walk = node; walk;
+         walk = (HTREEITEM)SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT, (LPARAM)walk)) {
+        wchar_t text[256] = L"";
+        TVITEMW info = {};
+        info.mask = TVIF_TEXT;
+        info.hItem = walk;
+        info.pszText = text;
+        info.cchTextMax = ARRAYSIZE(text);
+        SendMessageW(tree, TVM_GETITEMW, 0, (LPARAM)&info);
+        names.insert(names.begin(), text);
+    }
+    if (names.empty()) {
+        return Pidl();
+    }
+    IShellItem* current = nullptr;
+    if (FAILED(SHGetKnownFolderItem(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&current))) ||
+        !current) {
+        return Pidl();
+    }
+    size_t index = 0;
+    if (IShellItem* root = FindChildByName(current, names[0])) {
+        current->Release();
+        current = root;
+        index = 1;
+    } else {
+        current->Release();
+        current = nullptr;
+        // Home: the pinned folders are roots of the tree themselves, or children of
+        // a root named Home, so look for the first name in Home, else skip it.
+        if (FAILED(SHCreateItemFromParsingName(L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}", nullptr,
+                                               IID_PPV_ARGS(&current))) ||
+            !current) {
+            Out(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
+            return Pidl();
+        }
+        if (IShellItem* pinned = FindChildByName(current, names[0])) {
+            current->Release();
+            current = pinned;
+        } else if (names.size() < 2) {
+            current->Release();
+            Out(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
+            return Pidl();
+        }
+        index = 1;
+    }
+    for (; index < names.size(); ++index) {
+        IShellItem* next = FindChildByName(current, names[index]);
+        if (!next) {
+            next = FindInUsualPlaces(names[index]);
+        }
+        current->Release();
+        current = next;
+        if (!current) {
+            Out(L"drag out: no folder found for the navigation pane item \"%s\" (stopped at \"%s\", chain of %d, first \"%s\")",
+                names.back().c_str(), names[index].c_str(), (int)names.size(), names[0].c_str());
+            return Pidl();
+        }
+    }
+    Pidl result;
+    PWSTR path = nullptr;
+    if (SUCCEEDED(current->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(path, nullptr, &pidl, 0, nullptr)) && pidl) {
+            result.reset(pidl);
+        }
+        CoTaskMemFree(path);
+    }
+    if (!result) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHGetIDListFromObject(current, &pidl)) && pidl) {
+            result.reset(pidl);
+        }
+    }
+    current->Release();
+    return result;
+}
 
 // A real drag, for when the pointer leaves the panel: the shell's own drag loop
 // carries the items to whatever is under the pointer, another Explorer window,
@@ -492,10 +689,14 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     }
     Out(L"drag out: %d item(s) leave the panel, starting the shell's drag, default effect %lu",
         (int)children.size(), (unsigned long)preferred);
+    // 0.13.9: the panel's pointer capture (XAML or Win32) may still hold the mouse,
+    // so the drag loop would see no moves until the release.
+    ReleaseCapture();
     OutDropSource* dropSource = new OutDropSource();
     dropSource->data = data;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    Out(L"drag out: the drag loop asked for feedback %d time(s)", dropSource->feedbackCalls);
     {
         wchar_t title[80] = L"";
         DWORD processId = 0;
@@ -522,8 +723,58 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
             root ? ClassNameOf(root).c_str() : L"?", rootTitle, rect.left, rect.top, rect.right,
             rect.bottom);
     }
+    // 0.14.0: the drag loop gets no pointer moves from the panel's input, so it only
+    // tells a target about the release point, and the navigation pane's tree needs a
+    // hovered item to take a drop. Dropped on that tree, the drop is done here, to
+    // the folder the item under the pointer stands for, with the folder's own drop
+    // target like a drop between columns.
+    HWND treeWindow = dropSource->dropWindow;
+    POINT treePoint = dropSource->dropPoint;
+    DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
+    treeKeys |= dropSource->graceKeys;
     dropSource->Release();
     data->Release();
+    DWORD treeProcess = 0;
+    if (treeWindow && ClassNameOf(treeWindow) == L"SysTreeView32") {
+        GetWindowThreadProcessId(treeWindow, &treeProcess);
+    }
+    if (treeProcess == GetCurrentProcessId() && !children.empty()) {
+        TVHITTESTINFO hit = {};
+        hit.pt = treePoint;
+        ScreenToClient(treeWindow, &hit.pt);
+        HTREEITEM node = (HTREEITEM)SendMessageW(treeWindow, TVM_HITTEST, 0, (LPARAM)&hit);
+        if (!node) {
+            Out(L"drag out: released on the navigation pane, but not on an item");
+        } else {
+            Pidl target = FolderOfNavItem(treeWindow, node);
+            if (target) {
+                // The shell may have done the move itself: look before doing it again.
+                IShellFolder* sourceFolderObject = nullptr;
+                HRESULT bound = ILIsEmpty(sourceFolder.get())
+                                    ? SHGetDesktopFolder(&sourceFolderObject)
+                                    : SHBindToObject(nullptr, sourceFolder.get(), nullptr,
+                                                     IID_PPV_ARGS(&sourceFolderObject));
+                bool stillThere = true;
+                if (SUCCEEDED(bound) && sourceFolderObject) {
+                    PCUITEMID_CHILD one = children[0].get();
+                    ULONG attributes = SFGAO_VALIDATE;
+                    stillThere = SUCCEEDED(sourceFolderObject->GetAttributesOf(1, &one, &attributes));
+                    sourceFolderObject->Release();
+                }
+                std::wstring targetPath = PathOf(target.get());
+                if (!stillThere) {
+                    Out(L"drag out: the items are gone from their folder, nothing left to drop on the navigation pane item");
+                } else if (_wcsicmp(targetPath.c_str(), PathOf(sourceFolder.get()).c_str()) == 0) {
+                    Out(L"drag out: the navigation pane item is the folder the items came from, nothing to do");
+                } else {
+                    Out(L"drag out: finishing the drop on the navigation pane item, folder \"%s\", keys 0x%lX",
+                        targetPath.c_str(), (unsigned long)treeKeys);
+                    DropItems(state, std::move(sourceFolder), std::move(children), std::move(target),
+                              treeKeys);
+                }
+            }
+        }
+    }
     ReloadAll(state);
 }
 
