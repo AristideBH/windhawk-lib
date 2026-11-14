@@ -33,6 +33,7 @@ void LoadSettings() {
     g_focusRect = SettingBool(L"focusRect");
     g_compactScroll = SettingBool(L"compactScrollbars");
     g_doubleClickUp = SettingBool(L"doubleClickUp");
+    g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
     g_archives = SettingBool(L"archives");
     g_dragOut = SettingBool(L"dragOut");
@@ -70,7 +71,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.28.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.32.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

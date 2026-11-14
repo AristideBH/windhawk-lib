@@ -133,6 +133,42 @@ std::wstring ClassOf(Inspectable const& obj) {
 
 // The View button has no name. Its flyout is the only one that opens with
 // eight radio items, the eight layouts. That holds in any language.
+// Whether this button is the View button, and if so, puts the entry in its menu.
+bool CheckViewButton(WindowState* state, muxc::Button const& button) {
+    auto flyout = button.Flyout();
+    if (!flyout) {
+        return false;
+    }
+    auto menu = flyout.try_as<muxc::MenuFlyout>();
+    if (!menu) {
+        return false;
+    }
+    auto items = menu.Items();
+    uint32_t radios = 0;
+    bool hasOurs = false;
+    for (uint32_t i = 0; i < items.Size() && i < 9; i++) {
+        auto radio = items.GetAt(i).try_as<muxc::RadioMenuFlyoutItem>();
+        if (!radio) {
+            break;
+        }
+        radios++;
+        if (radio.Name() == L"WindhawkColumnsItem") {
+            hasOurs = true;
+        }
+    }
+    if (items.Size() > 8 && (radios == 8 || (radios == 9 && hasOurs))) {
+        if (!hasOurs) {
+            AddMenuEntry(state, items);
+        }
+        if (state->viewButton != button) {
+            RestoreViewButtonIcon(state);
+            state->viewButton = button;
+        }
+        return true;
+    }
+    return false;
+}
+
 void WalkForViewFlyout(WindowState* state, mux::DependencyObject const& node,
                        int depth, int& visited) {
     if (!node || depth > 40 || visited > 3000) {
@@ -140,34 +176,9 @@ void WalkForViewFlyout(WindowState* state, mux::DependencyObject const& node,
     }
     visited++;
     if (auto button = node.try_as<muxc::Button>()) {
-        if (auto flyout = button.Flyout()) {
-            if (auto menu = flyout.try_as<muxc::MenuFlyout>()) {
-                auto items = menu.Items();
-                uint32_t radios = 0;
-                bool hasOurs = false;
-                for (uint32_t i = 0; i < items.Size() && i < 9; i++) {
-                    auto radio =
-                        items.GetAt(i).try_as<muxc::RadioMenuFlyoutItem>();
-                    if (!radio) {
-                        break;
-                    }
-                    radios++;
-                    if (radio.Name() == L"WindhawkColumnsItem") {
-                        hasOurs = true;
-                    }
-                }
-                if (items.Size() > 8 && (radios == 8 || (radios == 9 && hasOurs))) {
-                    if (!hasOurs) {
-                        AddMenuEntry(state, items);
-                    }
-                    if (state->viewButton != button) {
-                        RestoreViewButtonIcon(state);
-                        state->viewButton = button;
-                    }
-                    visited = 100000;  // Found. Stop the walk.
-                    return;
-                }
-            }
+        if (CheckViewButton(state, button)) {
+            visited = 100000;  // Found. Stop the walk.
+            return;
         }
     }
     int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
@@ -289,6 +300,36 @@ void OnCommandBarPointer(Inspectable const& sender) {
         if (g_enabled) {
             int visited = 0;
             WalkForViewFlyout(state, root, 0, visited);
+            if (!state->menuItem) {
+                // On a narrow window the View button sits in the "..." overflow, which is a popup
+                // outside the tree that was walked. Its button is still one of the command bar's
+                // own commands.
+                int found = 0;
+                auto bar = state->overflowBar;
+                if (!bar) {
+                    bar = FindCommandBar(root, 0, found);
+                }
+                if (bar) {
+                    for (auto const& command : bar.PrimaryCommands()) {
+                        if (auto button = command.try_as<muxc::Button>()) {
+                            if (CheckViewButton(state, button)) {
+                                Out(L"the View button was found among the command bar's commands");
+                                break;
+                            }
+                        }
+                    }
+                    if (!state->menuItem) {
+                        for (auto const& command : bar.SecondaryCommands()) {
+                            if (auto button = command.try_as<muxc::Button>()) {
+                                if (CheckViewButton(state, button)) {
+                                    Out(L"the View button was found among the secondary commands");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         AddOverflowEntry(state, root);
     } catch (...) {
@@ -542,11 +583,11 @@ void UpdateLastEdge(WindowState* state) {
             if (column->grip.Visibility() != wanted) {
                 column->grip.Visibility(wanted);
             }
-            // The last column has no separator line to its right, whatever it holds;
+            // The last column has no separator line to its right (unless the setting asks for one);
             // the handle to resize it still shows when the pointer is on the edge.
             if (auto content = column->grip.Child().try_as<muxc::Panel>()) {
                 if (content.Children().Size() > 0) {
-                    content.Children().GetAt(0).Opacity(last ? 0.0 : 1.0);
+                    content.Children().GetAt(0).Opacity(last && !g_lastEdge ? 0.0 : 1.0);
                 }
             }
         } catch (...) {

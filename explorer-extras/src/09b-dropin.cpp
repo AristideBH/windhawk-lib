@@ -225,6 +225,27 @@ struct PanelDropTarget : IDropTarget {
             data->AddRef();
         }
         WindowState* state = StateForThisThread(false);
+        if (object && !(state && state->outDragActive)) {
+            // What a drag from elsewhere carries, for the log.
+            static int formatLogs = 0;
+            if (formatLogs++ < 6) {
+                IEnumFORMATETC* formats = nullptr;
+                if (SUCCEEDED(object->EnumFormatEtc(DATADIR_GET, &formats)) && formats) {
+                    FORMATETC format;
+                    ULONG got = 0;
+                    Out(L"drop in: a drag comes in, allowed effects %lu, keys 0x%lX", (unsigned long)*effect,
+                        (unsigned long)keys);
+                    while (formats->Next(1, &format, &got) == S_OK && got == 1) {
+                        wchar_t name[80] = L"";
+                        if (format.cfFormat >= 0xC000) {
+                            GetClipboardFormatNameW(format.cfFormat, name, 80);
+                        }
+                        Out(L"drop in:   format %u %s tymed %lu", (unsigned)format.cfFormat, name, (unsigned long)format.tymed);
+                    }
+                    formats->Release();
+                }
+            }
+        }
         if (state && state->on && !state->outDragActive && object) {
             if (!helper) {
                 CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&helper));
@@ -236,6 +257,12 @@ struct PanelDropTarget : IDropTarget {
             }
         }
         Over(keys, pt, effect);
+        {
+            static int enterLogs = 0;
+            if (enterLogs++ < 12) {
+                Out(L"drop in: after the first look, effect %lu, folder target %s", (unsigned long)*effect, folder ? L"yes" : L"no");
+            }
+        }
         return S_OK;
     }
     STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* effect) override {

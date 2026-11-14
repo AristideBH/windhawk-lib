@@ -144,7 +144,7 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | 0.22 | Done and tested in 0.22.0: icon requests newest first and for the rows on screen, folders ahead of icons, a cache-only icon pass before the full one, timing lines (`fill:` from 40 ms, `load:` from 500 ms). Measured on the Huge folder (1500 files), Photos Unsorted and a phone's Camera folder (972 items): no fill or load reached the thresholds, so diffing a folder on change is not needed now. |
 | 0.23 | Menus. 0.23.0 done: one `MenuBuilder` and `MenuStyle` shared by the item and folder menus. Next: the visual pass from Ari's mockups, see `explorer-extras/MENU-MOCKUP-NOTES.md` for what to send (waiting for them). |
 | 0.24 to 0.28 | Settings shell (0.24 to 0.27 done and tested: schema, the window, live apply and Reset, the Extras entry in the toolbar's ... menu, Home actions, tip and what's new; 0.28 done: upcoming pages behind the showUpcoming flag and the window and menu strings in the table; the settings shell is complete), spec in `explorer-extras/SPEC-settings-shell.md` (draft, 2026-11-14): schema and generated Windhawk block, the window (Mica, sidebar, Home and Columns pages), live apply and reset, the "..." menu entry, status and tips, upcoming pages behind a flag. Done before touch and release prep. |
-| 0.29 | Touch and pen, required before 1.0, Ari's call 2026-11-14. Drag and drop with a finger or a pen: see "Touch plan" below (it was 0.24). |
+| 0.29 to 0.32 | Touch, done and tested in 0.32.1 (Ari's call 2026-11-14: required before 1.0). Hold and lift opens the flyout; hold then move starts the system's own drag (`StartDragAsync`, files plus a shell item list) with our label as its picture; drops inside the panel go through XAML drag events, to the desktop and other windows and onto the sidebar through the system; a finger on the empty space below a column draws a selection rectangle. Also in 0.30 to 0.32: the setting `lastEdge` (a border after the last column), the Columns entry on a narrow window (the View button in the "..." overflow), Desktop and Home as coming-soon pages, the first sidebar page renamed Explorer Extras. What the device taught is in "Touch plan" below. Left: a touch drop on a sidebar folder shows Explorer's Copy/Move popup (the key state of the system's drag has no button; not fixable from the mod). |
 | 0.9x, release candidates | Strings in a table for translation, remove the test settings (transparent and Mica background), settings review and defaults, x64 and arm64 builds, uninstall and reload safety, README with captures, the showcase video. |
 | 1.0 | The pull request to windhawk-mods, skills updated one last time. |
 | later | Labels, toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options. |
@@ -178,7 +178,19 @@ the split. Drag and drop and the flyout restyle are polish on a working
 whole. The three low priority items depend on things we don't control: a
 DirectUI hook, another author's mod, a design call.
 
-## Touch plan (0.29), drawn up 2026-11-14
+## What the touch work found, 2026-11-14 (0.28.1 to 0.32.1, on an ARM64 touch screen)
+
+Read this before the plan below, which was drawn up before any of it was known.
+
+- A finger on a row is `PointerDeviceType.Touch` with the left button flag and contact on. `Holding` Started comes ~0.5 s after the press, Completed on the lift, then `RightTapped` (the menu).
+- At the first real move after a hold the system takes the finger from the row: `PointerCaptureLost`, the pointer id changes, and no move of that contact reaches the panel again. Locking every `ScrollViewer` above the row did not stop it. So nothing built on XAML pointer events, or on a shell drag loop fed by them, can follow a finger.
+- `GetPointerInfo` fails (error 87) with XAML's pointer id. `WM_POINTER` reaches none of the 33 windows of the frame (subclassed to check). The cursor does not follow the finger during a drag. `GetAsyncKeyState(VK_LBUTTON)` stays up.
+- What works: `UIElement.StartDragAsync(pointerPoint)` called from the move event that crosses the threshold, while the row still has the finger. The files are fetched during the hold (`StorageFile.GetFileFromPathAsync`), since the call must be synchronous in the event. The data carries the storage items and a `Shell IDList Array` provider (the shell's own targets read it), and `DragUI.SetContentFromSoftwareBitmap` takes a bitmap of our label drawn off screen with `RenderTargetBitmap` during the hold. Start it on the pressed row, not the list, or the picture is the whole list.
+- The system's drag never reaches the panel's `IDropTarget`. Drops inside the panel come as XAML `DragEnter/DragOver/Drop` on the root grid (set `AllowDrop` for the length of the drag, answer `AcceptedOperation` Move, Copy with Ctrl; leave `RequestedOperation` unset or the drop never fires). The drop itself reuses the mouse drag's code.
+- Rubber band: the scrollers are locked at the press on empty space and the capture is taken back when lost (it was not needed to start the rectangle, it works from the first move).
+- The sidebar takes the drop (files on a folder, a folder between items to pin it), with Explorer's Copy/Move popup because the drop arrives with no mouse button in its key state.
+
+## Touch plan (0.29), drawn up 2026-11-14, before the above
 
 Goal: everything the mouse does for drag and drop works with a finger and a
 pen, without breaking panning, scrolling and tapping. To do on Ari's touch
@@ -361,3 +373,6 @@ Structure and polish:
 - [ ] Desktop stacks, parked
 
 - [ ] Parked: a click should stop a long scroll that is still gliding. Tried in 0.7.12 to 0.7.15 (ChangeView to the same offset, a nudge, toggling scroll mode and inertia, scrolling the vertical wheel in the mod and dropping turns after a press). None worked with a mouse click.
+
+- Settings window responsive: the sidebar collapses to icons on a narrow window (Ari, 0.29 session).
+- Touch, still open: pen (not tried), a live "Drop in ..." line on the touch drag picture, taller rows or wider grips for touch, a gesture for Harmonize widths.

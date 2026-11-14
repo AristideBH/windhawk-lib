@@ -9,6 +9,7 @@ std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_compactScroll{false};
 std::atomic<bool> g_doubleClickUp{false};
+std::atomic<bool> g_lastEdge{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
 std::atomic<bool> g_dragOut{false};

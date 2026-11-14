@@ -165,6 +165,23 @@ struct DragState {
     bool targetOk = false;
     bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
     bool fromArchive = false;  // The dragged items are inside an archive: a drop extracts them.
+    int deviceType = 2;        // Of the press: 0 touch, 1 pen, 2 mouse, 3 touchpad.
+    int movesLogged = 0;
+    // Touch: a drag starts only after a hold. The hold arms it and locks the list's scrolling,
+    // so the finger is not taken by a pan.
+    bool armed = false;
+    muxc::ListViewItem pressedRow{nullptr};  // Its snapshot is the picture of the system's drag.
+    bool platformDrag = false;  // The system's own drag took the finger (StartDragAsync).
+    std::optional<decltype(std::declval<mux::Input::PointerRoutedEventArgs>().GetCurrentPoint(std::declval<mux::UIElement>()))> touchPoint;
+    int recaptures = 0;
+    uint32_t pointerId = 0;
+    mux::Input::Pointer touchPointer{nullptr};
+    struct LockedScroller {
+        muxc::ScrollViewer viewer{nullptr};
+        muxc::ScrollMode v = muxc::ScrollMode::Auto;
+        muxc::ScrollMode h = muxc::ScrollMode::Auto;
+    };
+    std::vector<LockedScroller> locked;  // Every scroller above the row: any of them can take the finger.
     muxc::Border frame{nullptr};  // The accent frame around the row or column a drop would go to.
     mux::FrameworkElement ghost{nullptr};
     muxc::TextBlock ghostText{nullptr};
@@ -302,6 +319,9 @@ struct WindowState {
         std::vector<double> top, bottom;            // Row extents, content coordinates.
         std::vector<int> base;                      // Rows selected at the start.
         int first = -1, last = -1;                  // The rows the rectangle covers.
+        bool touch = false;                         // A finger started it, on the empty space below the rows.
+        int recaptures = 0;
+        std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};
     // The pill that marks the active column, on a layer over the strip.
@@ -375,6 +395,16 @@ struct WindowState {
 
 bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
                  mux::Input::PointerRoutedEventArgs const& args);
+void OnDragHold(WindowState* state, muxc::ListView const& list);
+void DragRefreshTarget(WindowState* state, winrt::Windows::Foundation::Point where);
+void DragClearTarget(WindowState* state);
+struct GhostSpec;
+void ShowGhost(WindowState* state, GhostSpec const& spec);
+GhostSpec SpecOf(Column* column, std::vector<size_t> const& entries);
+void DragUpdateLabel(WindowState* state);
+void RemoveGhost(WindowState* state);
+bool TouchContact(uint32_t id, POINT* where);
+void TouchTrack(WindowState* state, mux::Input::PointerRoutedEventArgs const& args, bool released);
 void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListViewItem const& row,
                    mux::Input::PointerRoutedEventArgs const& args);
 bool OnDragReleased(WindowState* state);

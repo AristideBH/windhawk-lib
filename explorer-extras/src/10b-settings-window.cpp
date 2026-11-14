@@ -582,7 +582,7 @@ void FillNav(SettingsUi* ui) {
         } else {
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-            icon.Glyph(i == 0 ? L"" : kFeatures[i - 2].glyph);
+            icon.Glyph(i == 0 ? L"" : kFeatures[i - 2].glyph);
             icon.FontSize(16);
             line.Children().Append(icon);
             name = i == 0 ? Str(L"page.home") : kFeatures[i - 2].name;

@@ -175,8 +175,18 @@ void FadeOutGhost(muxc::Canvas const& overlay, mux::FrameworkElement const& ghos
     }
 }
 
+void RemoveTouchHook();
+thread_local bool g_keepCapture = false;  // A touch drag goes on outside: its finger stays on the list.
+
 void DragEnd(WindowState* state) {
     auto& d = state->drag;
+    for (auto& lock : d.locked) {
+        try {
+            lock.viewer.VerticalScrollMode(lock.v);
+            lock.viewer.HorizontalScrollMode(lock.h);
+        } catch (...) {
+        }
+    }
     DragClearTarget(state);
     state->autoOn = false;
     try {
@@ -189,7 +199,10 @@ void DragEnd(WindowState* state) {
                 state->overlay.Children().RemoveAt(index);
             }
         }
-        if (d.active && d.column && d.column->list) {
+        if (!g_keepCapture) {
+            RemoveTouchHook();
+        }
+        if (d.active && d.column && d.column->list && !g_keepCapture) {
             d.column->list.ReleasePointerCaptures();
         }
     } catch (...) {
@@ -205,6 +218,455 @@ void CancelDrag(WindowState* state) {
 }
 
 void StartOutDrag(WindowState* state);
+
+// For the touch log (0.28.1): the kind of pointer that started the drag that left the panel.
+thread_local int g_outDevice = 2;
+thread_local int g_dropSourceLogs = 0;
+thread_local uint32_t g_outPointerId = 0;  // Of a touch drag that left the panel, else 0.
+
+// The finger of a touch drag: whether it still touches, and where, in screen pixels. The shell's
+// drag loop reads the mouse, so for touch the button and the cursor are taken from the finger.
+std::atomic<bool> g_touchDown{false};
+std::atomic<LONG> g_touchX{0};
+std::atomic<LONG> g_touchY{0};
+std::atomic<int> g_touchEvents{0};
+
+// Windows gives the finger no pointer id that GetPointerInfo knows (error 87), so XAML's own events
+// are the source: whether it touches and where, in screen pixels.
+bool TouchContact(uint32_t, POINT* where) {
+    if (!g_touchDown.load()) {
+        return false;
+    }
+    if (where) {
+        where->x = g_touchX.load();
+        where->y = g_touchY.load();
+    }
+    return true;
+}
+
+void TouchTrack(WindowState* state, mux::Input::PointerRoutedEventArgs const& args, bool released) {
+    try {
+        auto point = args.GetCurrentPoint(nullptr);
+        bool down = !released && point.IsInContact();
+        auto at = point.Position();
+        double scale = 1.0;
+        if (state->rootGrid) {
+            if (auto xamlRoot = state->rootGrid.XamlRoot()) {
+                scale = xamlRoot.RasterizationScale();
+            }
+        }
+        if (scale <= 0) {
+            scale = 1.0;
+        }
+        POINT screen = {(LONG)(at.X * scale), (LONG)(at.Y * scale)};
+        ClientToScreen((HWND)state->bridge.WindowId().Value, &screen);
+        g_touchX = screen.x;
+        g_touchY = screen.y;
+        g_touchDown = down;
+        if (g_outPointerId && g_touchEvents++ < 12) {
+            Out(L"touch: finger event during the drag out, down=%d at %ld,%ld", down ? 1 : 0, screen.x, screen.y);
+        }
+    } catch (...) {
+    }
+}
+
+// The finger as Windows itself sees it. XAML takes the finger away from a row ~40 ms into a drag
+// (a pan, the pointer is replaced), so the drag runs in the shell's loop and this follows the
+// finger in the window messages: WM_POINTER on the panel's windows, where GetPointerInfo works.
+thread_local std::vector<HWND> g_touchHooked;
+std::atomic<int> g_touchLogs{0};
+
+LRESULT CALLBACK TouchSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_POINTERUPDATE || msg == WM_POINTERDOWN || msg == WM_POINTERUP) {
+        UINT32 id = GET_POINTERID_WPARAM(wParam);
+        POINTER_INPUT_TYPE type = PT_POINTER;
+        if (GetPointerType(id, &type) && type == PT_TOUCH) {
+            POINTER_INFO info{};
+            bool ok = GetPointerInfo(id, &info) != 0;
+            if (ok) {
+                bool down = msg != WM_POINTERUP && (info.pointerFlags & POINTER_FLAG_INCONTACT);
+                g_touchX = info.ptPixelLocation.x;
+                g_touchY = info.ptPixelLocation.y;
+                g_touchDown = down;
+            } else if (msg == WM_POINTERUP) {
+                g_touchDown = false;
+            }
+            if (g_touchLogs++ < 30) {
+                wchar_t cls[64] = L"";
+                GetClassNameW(hwnd, cls, 64);
+                Out(L"touch: win32 message 0x%04X id=%u ok=%d at %ld,%ld hwnd=%p %s", msg, id, ok ? 1 : 0,
+                    ok ? info.ptPixelLocation.x : 0L, ok ? info.ptPixelLocation.y : 0L, hwnd, cls);
+            }
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+void InstallTouchHook(WindowState* state) {
+    try {
+        HWND bridge = (HWND)state->bridge.WindowId().Value;
+        // The touch may be routed to any window of the frame, not the one under the finger, so
+        // all of them listen; the log says which one hears it.
+        std::vector<HWND> all{state->topLevel, bridge};
+        EnumChildWindows(
+            state->topLevel,
+            [](HWND child, LPARAM param) -> BOOL {
+                ((std::vector<HWND>*)param)->push_back(child);
+                return TRUE;
+            },
+            (LPARAM)&all);
+        g_touchLogs = 0;
+        for (HWND hwnd : all) {
+            if (std::find(g_touchHooked.begin(), g_touchHooked.end(), hwnd) == g_touchHooked.end() &&
+                SetWindowSubclass(hwnd, TouchSubclassProc, 0x7A11, 0)) {
+                g_touchHooked.push_back(hwnd);
+            }
+        }
+        Out(L"touch: listening to the finger on %d window(s)", (int)g_touchHooked.size());
+    } catch (...) {
+        LogHresult(L"InstallTouchHook");
+    }
+}
+
+void RemoveTouchHook() {
+    for (HWND hwnd : g_touchHooked) {
+        RemoveWindowSubclass(hwnd, TouchSubclassProc, 0x7A11);
+    }
+    g_touchHooked.clear();
+}
+
+
+// The finger's drag, by the system. XAML takes the finger away from a row at its first real move
+// (the contact is replaced, no event of it reaches the panel again), so no drag of ours can follow
+// it. The system's own drag (UIElement.StartDragAsync) is started at the hold, while the row still
+// has the finger, and the platform follows it from there. It carries the items as files and
+// folders, so it works for what is on disk.
+// The data a shell target reads to take items from a drag: "Shell IDList Array", the folder's
+// pidl and then the pidls of the items. Without it the folders of the shell (the panel's own,
+// the navigation pane) refuse the files of the system's drag.
+winrt::Windows::Foundation::IInspectable StreamOfBytes(std::vector<uint8_t> const& bytes) {
+    namespace sts = winrt::Windows::Storage::Streams;
+    sts::Buffer buffer((uint32_t)bytes.size());
+    buffer.Length((uint32_t)bytes.size());
+    uint8_t* target = nullptr;
+    winrt::com_ptr<IBufferByteAccessLocal> access;
+    winrt::check_hresult(((::IUnknown*)winrt::get_abi(buffer))->QueryInterface(kIidBufferByteAccess, access.put_void()));
+    winrt::check_hresult(access->Buffer(&target));
+    memcpy(target, bytes.data(), bytes.size());
+    sts::InMemoryRandomAccessStream stream;
+    stream.WriteAsync(buffer);  // An in-memory stream takes it at once.
+    stream.Seek(0);
+    return stream;
+}
+
+// The files of a touch drag, fetched while the finger is held, since the system's drag must be
+// started in the very event of the first move, before the finger is taken from the row.
+struct TouchPrep {
+    bool ready = false;
+    std::vector<winrt::Windows::Storage::IStorageItem> items;
+    std::shared_ptr<std::vector<uint8_t>> cida;
+    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture{nullptr};  // Our label, as the picture of the drag.
+    uint64_t serial = 0;
+};
+[[clang::no_destroy]] thread_local TouchPrep g_touchPrep;
+
+winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::shared_ptr<std::vector<uint8_t>> cida) {
+    namespace st = winrt::Windows::Storage;
+    uint64_t serial = ++g_touchPrep.serial;
+    g_touchPrep.ready = false;
+    g_touchPrep.items.clear();
+    std::vector<st::IStorageItem> items;
+    try {
+        for (auto const& path : paths) {
+            DWORD attributes = GetFileAttributesW(path.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                items.push_back(co_await st::StorageFolder::GetFolderFromPathAsync(path));
+            } else {
+                items.push_back(co_await st::StorageFile::GetFileFromPathAsync(path));
+            }
+        }
+    } catch (...) {
+        items.clear();
+        Out(L"touch: the files of the drag could not be opened, only the shell items go");
+    }
+    // The label of the panel's own drag, drawn once into a bitmap: the system's drag shows that
+    // instead of a snapshot of the row. It is built off screen, then taken away.
+    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture{nullptr};
+    try {
+        WindowState* state = StateForThisThread(false);
+        if (state && state->on && !g_unloading && state->overlay && state->drag.column && !state->drag.ghost &&
+            serial == g_touchPrep.serial) {
+            ShowGhost(state, SpecOf(state->drag.column, state->drag.entries));
+            DragUpdateLabel(state);
+            auto ghost = state->drag.ghost;
+            if (ghost) {
+                muxc::Canvas::SetLeft(ghost, -4000);
+                muxc::Canvas::SetTop(ghost, 0);
+                ghost.UpdateLayout();
+                mux::Media::Imaging::RenderTargetBitmap target;
+                co_await target.RenderAsync(ghost);
+                auto pixels = co_await target.GetPixelsAsync();
+                int width = target.PixelWidth(), height = target.PixelHeight();
+                if (width > 0 && height > 0) {
+                    picture = winrt::Windows::Graphics::Imaging::SoftwareBitmap::CreateCopyFromBuffer(
+                        pixels, winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8, width, height,
+                        winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied);
+                }
+                Out(L"touch: the label was drawn for the drag, %d x %d", width, height);
+            }
+            if (WindowState* after = StateForThisThread(false)) {
+                RemoveGhost(after);
+            }
+        }
+    } catch (...) {
+        Out(L"touch: the label could not be drawn, the row's picture will do");
+        if (WindowState* after = StateForThisThread(false)) {
+            RemoveGhost(after);
+        }
+    }
+    if (serial == g_touchPrep.serial) {
+        g_touchPrep.items = std::move(items);
+        g_touchPrep.cida = cida;
+        g_touchPrep.picture = picture;
+        g_touchPrep.ready = true;
+        Out(L"touch: the drag's items are ready (%d file(s))", (int)g_touchPrep.items.size());
+    }
+}
+
+winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::touchPoint) point,
+                                    std::vector<winrt::Windows::Storage::IStorageItem> items,
+                                    std::shared_ptr<std::vector<uint8_t>> cida,
+                                    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture) {
+    namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
+    winrt::event_token token{};
+    bool hooked = false;
+    // The panel takes the system's drag as a drop target, for the folders of its own columns.
+    mux::UIElement panel{nullptr};
+    bool oldAllowDrop = false;
+    winrt::event_token tokenEnter{}, tokenOver{}, tokenLeave{}, tokenDrop{};
+    bool dropHooked = false;
+    bool dragWasOurs = false;
+    try {
+        token = list.DragStarting([items, cida, picture](mux::UIElement const&, mux::DragStartingEventArgs const& args) {
+            if (picture) {
+                try {
+                    args.DragUI().SetContentFromSoftwareBitmap(picture);
+                } catch (...) {
+                }
+            }
+            Out(L"touch: the system's drag is starting with %d file(s) and %d byte(s) of shell items", (int)items.size(),
+                cida ? (int)cida->size() : 0);
+            if (!items.empty()) {
+                args.Data().SetStorageItems(items);
+            }
+            if (cida && !cida->empty()) {
+                args.Data().SetDataProvider(L"Shell IDList Array", [cida](dt::DataProviderRequest const& request) {
+                    try {
+                        request.SetData(StreamOfBytes(*cida));
+                    } catch (...) {
+                    }
+                });
+            }
+            // What the shell's targets take as the effect when no key says otherwise: a move.
+            // (0.31.3, to see whether the Copy/Move/Cancel menu of the navigation pane goes.)
+            args.Data().SetDataProvider(L"Preferred DropEffect", [](dt::DataProviderRequest const& request) {
+                try {
+                    request.SetData(StreamOfBytes(std::vector<uint8_t>{2, 0, 0, 0}));
+                } catch (...) {
+                }
+            });
+            args.AllowedOperations(dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
+                                   dt::DataPackageOperation::Link);
+        });
+        hooked = true;
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->on || g_unloading || !state->drag.pending || !state->drag.touchPoint) {
+            list.DragStarting(token);
+            co_return;
+        }
+        state->drag.platformDrag = true;
+        state->drag.pending = false;
+        state->drag.active = true;
+        dragWasOurs = true;
+        if (state->rootGrid) {
+            panel = state->rootGrid;
+            oldAllowDrop = panel.AllowDrop();
+            panel.AllowDrop(true);
+            auto over = [](winrt::Windows::Foundation::IInspectable const&, mux::DragEventArgs const& args) {
+                WindowState* now = StateForThisThread(false);
+                if (!now || !now->on || !now->drag.platformDrag || !now->rootGrid) {
+                    return;
+                }
+                auto where = args.GetPosition(now->rootGrid);
+                now->autoPoint = where;
+                now->autoOn = true;
+                {
+                    // Does the cursor follow the finger in the system's drag? For the log.
+                    static int overLogs = 0;
+                    POINT cursor{};
+                    GetCursorPos(&cursor);
+                    if (overLogs++ < 16) {
+                        Out(L"touch: over the panel at %.0f,%.0f (host), the cursor is at %ld,%ld", where.X, where.Y,
+                            cursor.x, cursor.y);
+                    }
+                }
+                DragRefreshTarget(now, where);
+                using Mods = decltype(args.Modifiers());
+                bool copy = ((uint32_t)args.Modifiers() & (uint32_t)Mods::Control) != 0;
+                args.AcceptedOperation(!now->drag.targetOk ? dt::DataPackageOperation::None
+                                       : copy              ? dt::DataPackageOperation::Copy
+                                                           : dt::DataPackageOperation::Move);
+                args.Handled(true);
+            };
+            tokenEnter = panel.DragEnter(over);
+            tokenOver = panel.DragOver(over);
+            tokenLeave = panel.DragLeave([](winrt::Windows::Foundation::IInspectable const&, mux::DragEventArgs const&) {
+                WindowState* now = StateForThisThread(false);
+                if (now && now->drag.platformDrag) {
+                    DragClearTarget(now);
+                    now->autoOn = false;
+                }
+            });
+            tokenDrop = panel.Drop([](winrt::Windows::Foundation::IInspectable const&, mux::DragEventArgs const& args) {
+                WindowState* now = StateForThisThread(false);
+                if (!now || !now->on || !now->drag.platformDrag) {
+                    return;
+                }
+                auto where = args.GetPosition(now->rootGrid);
+                DragRefreshTarget(now, where);
+                Out(L"touch: dropped in the panel, target column %d entry %d ok=%d",
+                    now->drag.targetColumn ? ColumnIndexOfList(now, now->drag.targetColumn->list) + 1 : 0,
+                    now->drag.targetEntry, now->drag.targetOk ? 1 : 0);
+                now->drag.platformDrag = false;
+                OnDragReleased(now);  // The drop itself, as for a drag of the mouse.
+                args.AcceptedOperation(dt::DataPackageOperation::Move);
+                args.Handled(true);
+            });
+            dropHooked = true;
+        }
+        Out(L"touch: asking the system to drag %d item(s)", (int)items.size());
+        auto result = co_await list.StartDragAsync(*point);
+        Out(L"touch: the system's drag ended, operation %d", (int)result);
+    } catch (winrt::hresult_error const& error) {
+        Out(L"touch: the system's drag failed, hr=0x%08lX %s", (unsigned long)error.code().value, error.message().c_str());
+        if (WindowState* state = StateForThisThread(false)) {
+            state->drag.platformDrag = false;  // The shell's drag takes over at the first move.
+        }
+    } catch (...) {
+        Out(L"touch: the system's drag failed");
+        if (WindowState* state = StateForThisThread(false)) {
+            state->drag.platformDrag = false;
+        }
+    }
+    if (hooked) {
+        try {
+            list.DragStarting(token);
+        } catch (...) {
+        }
+    }
+    if (dropHooked) {
+        try {
+            panel.DragEnter(tokenEnter);
+            panel.DragOver(tokenOver);
+            panel.DragLeave(tokenLeave);
+            panel.Drop(tokenDrop);
+            panel.AllowDrop(oldAllowDrop);
+        } catch (...) {
+        }
+    }
+    if (WindowState* state = StateForThisThread(false)) {
+        if (dragWasOurs && (state->drag.platformDrag || state->drag.active)) {
+            state->drag.platformDrag = false;
+            DragEnd(state);
+        }
+    }
+}
+
+// A hold on a row with a finger: a drag may now start. Scrolling of the list is switched off for as
+// long as the drag may happen, and the finger is kept on the list.
+void OnDragHold(WindowState* state, muxc::ListView const& list) {
+    auto& d = state->drag;
+    if (!d.pending || d.deviceType != 0 || d.armed || d.column == nullptr) {
+        return;
+    }
+    int at = ColumnIndexOfList(state, list);
+    if (at < 0 || state->columns[at].get() != d.column) {
+        return;
+    }
+    d.armed = true;
+    InstallTouchHook(state);
+    try {
+        auto lockOne = [&d](muxc::ScrollViewer const& viewer) {
+            DragState::LockedScroller lock;
+            lock.viewer = viewer;
+            lock.v = viewer.VerticalScrollMode();
+            lock.h = viewer.HorizontalScrollMode();
+            viewer.VerticalScrollMode(muxc::ScrollMode::Disabled);
+            viewer.HorizontalScrollMode(muxc::ScrollMode::Disabled);
+            d.locked.push_back(lock);
+        };
+        if (auto inner = FindListScroller(list, 0)) {
+            lockOne(inner);
+        }
+        mux::DependencyObject up = list;
+        for (int i = 0; up && i < 40; i++) {
+            up = mux::Media::VisualTreeHelper::GetParent(up);
+            if (auto viewer = up.try_as<muxc::ScrollViewer>()) {
+                lockOne(viewer);
+            }
+        }
+        if (d.touchPointer) {
+            list.CapturePointer(d.touchPointer);
+        }
+    } catch (...) {
+        LogHresult(L"arming a touch drag");
+    }
+    Out(L"touch: held, the drag is armed, scrollers locked=%d", (int)d.locked.size());
+    // The system's drag, for what is on disk.
+    try {
+        std::vector<size_t> picked = SelectedEntries(d.column, list);
+        if (std::find(picked.begin(), picked.end(), (size_t)d.pressedEntry) == picked.end()) {
+            picked.assign(1, (size_t)d.pressedEntry);
+        }
+        d.entries = picked;
+        std::vector<std::wstring> paths;
+        std::vector<Pidl> kids;
+        for (size_t index : picked) {
+            if (index >= d.column->entries.size()) {
+                continue;
+            }
+            kids.emplace_back(ILClone(d.column->entries[index].child.get()));
+            Pidl absolute(ILCombine(d.column->folder.get(), d.column->entries[index].child.get()));
+            wchar_t path[MAX_PATH] = L"";
+            if (absolute && SHGetPathFromIDListW(absolute.get(), path) && path[0]) {
+                paths.push_back(path);
+            }
+        }
+        auto cida = std::make_shared<std::vector<uint8_t>>();
+        if (!kids.empty()) {
+            UINT count = (UINT)kids.size();
+            cida->assign(4 * (2 + count), 0);
+            memcpy(cida->data(), &count, 4);
+            auto put = [&cida](PCIDLIST_ABSOLUTE pidl, UINT slot) {
+                UINT offset = (UINT)cida->size();
+                UINT size = ILGetSize(pidl);
+                cida->insert(cida->end(), (const uint8_t*)pidl, (const uint8_t*)pidl + size);
+                memcpy(cida->data() + 4 + 4 * slot, &offset, 4);
+            };
+            put(d.column->folder.get(), 0);
+            for (UINT i = 0; i < count; i++) {
+                put(kids[i].get(), i + 1);
+            }
+        }
+        if (!kids.empty() && d.touchPoint) {
+            TouchDragPrepare(std::move(paths), cida);  // The drag itself starts at the first move.
+        } else {
+            Out(L"touch: nothing on disk to hand to the system's drag, the shell's drag will do");
+        }
+    } catch (...) {
+        LogHresult(L"starting the system's drag");
+    }
+}
 
 // A press on a row: a drag may start from it once the pointer moves.
 void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListViewItem const& row,
@@ -229,6 +691,21 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     d.fromArchive = ArchiveParentColumn(state, column) >= 0;
     d.pressedEntry = entry;
     d.start = args.GetCurrentPoint(list).Position();
+    d.deviceType = (int)args.Pointer().PointerDeviceType();
+    g_touchPrep.ready = false;
+    g_touchPrep.serial++;
+    d.pointerId = args.Pointer().PointerId();
+    d.touchPointer = d.deviceType == 0 ? args.Pointer() : nullptr;
+    if (d.deviceType == 0) {
+        d.touchPoint = args.GetCurrentPoint(row);
+        d.pressedRow = row;
+    }
+    if (d.deviceType != 2) {
+        auto point = args.GetCurrentPoint(list);
+        Out(L"touch: a press on a row, device=%d id=%u left=%d inContact=%d pressure=%.2f", d.deviceType,
+            args.Pointer().PointerId(), point.Properties().IsLeftButtonPressed() ? 1 : 0, point.IsInContact() ? 1 : 0,
+            point.Properties().Pressure());
+    }
     static int logged = 0;
     if (logged++ < 6) {
         Out(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
@@ -541,8 +1018,14 @@ void DragUpdateLabel(WindowState* state) {
 bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
                  mux::Input::PointerRoutedEventArgs const& args) {
     auto& d = state->drag;
+    if (args.Pointer().PointerDeviceType() == winrt::Microsoft::UI::Input::PointerDeviceType::Touch) {
+        TouchTrack(state, args, false);
+    }
     if (!d.pending && !d.active) {
         return false;
+    }
+    if (d.platformDrag) {
+        return true;  // The system's drag has the finger.
     }
     if (d.column != column) {
         return d.active;
@@ -553,9 +1036,28 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         return false;
     }
     auto at = point.Position();
+    if (d.deviceType != 2 && d.movesLogged < 8) {
+        d.movesLogged++;
+        Out(L"touch: move %d at %.0f,%.0f, left=%d inContact=%d, pending=%d active=%d", d.movesLogged, at.X, at.Y,
+            point.Properties().IsLeftButtonPressed() ? 1 : 0, point.IsInContact() ? 1 : 0, d.pending ? 1 : 0, d.active ? 1 : 0);
+    }
     if (d.pending) {
+        if (d.deviceType == 0 && (!d.armed || d.platformDrag)) {
+            return false;  // A finger drags only after a hold: until then it pans.
+        }
         if (std::abs(at.X - d.start.X) + std::abs(at.Y - d.start.Y) < 8) {
             return false;  // Still a click.
+        }
+        if (d.deviceType == 0) {
+            // The finger moved after a hold: the system's drag starts now, in this event, while the
+            // row still has the finger. Held and let go without moving, it is the menu instead.
+            if (!g_touchPrep.ready || !d.pressedRow) {
+                return false;
+            }
+            Out(L"touch: moved after the hold, starting the system's drag");
+            decltype(DragState::touchPoint) now = args.GetCurrentPoint(d.pressedRow);
+            TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture);
+            return true;
         }
         std::vector<size_t> picked = SelectedEntries(column, list);
         if (std::find(picked.begin(), picked.end(), (size_t)d.pressedEntry) == picked.end()) {
@@ -566,11 +1068,19 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         d.active = true;
         state->slowRenameAt = 0;
         Out(L"drag: moved far enough, taking the pointer");
-        list.CapturePointer(args.Pointer());
+        if (!d.armed) {
+            list.CapturePointer(args.Pointer());
+        }
         Out(L"drag: pointer taken, making the label");
         ShowGhost(state, SpecOf(column, d.entries));
         Out(L"drag started from column %d with %d item(s)", ColumnIndexOfList(state, list) + 1,
             (int)d.entries.size());
+        if (d.deviceType == 0) {
+            // A finger is taken from the panel's own drag at once, so the shell's drag loop
+            // carries it, wherever the finger goes (the panel takes drops like any window).
+            StartOutDrag(state);
+            return true;
+        }
     }
 
     // Where the label goes, and the target under the pointer.
@@ -709,6 +1219,22 @@ struct OutDropSource : IDropSource {
         return (ULONG)now;
     }
     STDMETHODIMP QueryContinueDrag(BOOL escape, DWORD keys) override {
+        if (g_outDevice != 2 && g_dropSourceLogs < 25) {
+            g_dropSourceLogs++;
+            POINT where;
+            GetCursorPos(&where);
+            Out(L"touch: the drag loop asks, keys=0x%lX escape=%d, cursor %ld,%ld, left button %s", (unsigned long)keys,
+                escape ? 1 : 0, where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
+        }
+        if (g_outPointerId) {
+            POINT where;
+            if (TouchContact(g_outPointerId, &where)) {
+                keys |= MK_LBUTTON;
+                SetCursorPos(where.x, where.y);
+            } else {
+                keys &= ~(DWORD)MK_LBUTTON;
+            }
+        }
         if (escape) {
             return DRAGDROP_S_CANCEL;
         }
@@ -960,15 +1486,22 @@ struct MoveNudger {
     std::atomic<bool> stop{false};
     std::atomic<int> sent{0};
     std::thread worker;
-    void Start(DWORD threadId) {
-        worker = std::thread([this, threadId]() {
+    void Start(DWORD threadId, uint32_t touchId = 0) {
+        worker = std::thread([this, threadId, touchId]() {
             POINT last = {LONG_MIN, LONG_MIN};
+            bool lastFinger = false;
             while (!stop.load()) {
                 POINT now;
-                if (GetCursorPos(&now) && (now.x != last.x || now.y != last.y)) {
+                bool finger = touchId && TouchContact(touchId, &now);
+                if (finger) {
+                    SetCursorPos(now.x, now.y);
+                }
+                bool fingerChanged = touchId && finger != lastFinger;
+                lastFinger = finger;
+                if ((finger || GetCursorPos(&now)) && (fingerChanged || now.x != last.x || now.y != last.y)) {
                     last = now;
                     WPARAM keys = 0;
-                    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) keys |= MK_LBUTTON;
+                    if (finger || (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) keys |= MK_LBUTTON;
                     if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
                     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
                     if (PostThreadMessageW(threadId, WM_MOUSEMOVE, keys,
@@ -1033,12 +1566,31 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     OutDropSource* dropSource = new OutDropSource();
     dropSource->data = data;
     MoveNudger nudger;
-    nudger.Start(GetCurrentThreadId());
+    nudger.Start(GetCurrentThreadId(), g_outPointerId);
     state->outDragActive = true;
+    ULONGLONG outStarted = GetTickCount64();
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       state->outFromArchive ? DROPEFFECT_COPY : (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK),
                       &effect);
     state->outDragActive = false;
+    if (g_outDevice != 2) {
+        Out(L"touch: the shell's drag ran for %d ms, hr=0x%08lX, effect %lu", (int)(GetTickCount64() - outStarted), hr,
+            (unsigned long)effect);
+    }
+    g_outDevice = 2;
+    if (g_outPointerId) {
+        g_touchEvents = 0;
+        try {
+            for (auto& column : state->columns) {
+                if (column && column->list) {
+                    column->list.ReleasePointerCaptures();
+                }
+            }
+        } catch (...) {
+        }
+    }
+    g_outPointerId = 0;
+    RemoveTouchHook();
     RemoveGhost(state);
     nudger.Stop();
     Out(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
@@ -1193,8 +1745,20 @@ void StartOutDrag(WindowState* state) {
                       : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
     state->outSpec = SpecOf(d.column, d.entries);
     state->outFromArchive = d.fromArchive;
+    g_outDevice = d.deviceType;
+    g_outPointerId = d.deviceType == 0 ? d.pointerId : 0;
+    g_dropSourceLogs = 0;
+    if (g_outDevice != 2) {
+        POINT where;
+        GetCursorPos(&where);
+        Out(L"touch: the drag leaves the panel, device=%d, the cursor is at %ld,%ld, the left button is %s", g_outDevice,
+            where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
+    }
+    g_keepCapture = g_outPointerId != 0;
     DragEnd(state);
+    g_keepCapture = false;
     if (children.empty()) {
+        RemoveTouchHook();
         return;
     }
     auto shared = std::make_shared<std::pair<Pidl, std::vector<Pidl>>>(std::move(sourceFolder),
@@ -1215,6 +1779,9 @@ void StartOutDrag(WindowState* state) {
 // The button went up. True if it ended a drag.
 bool OnDragReleased(WindowState* state) {
     auto& d = state->drag;
+    if (d.platformDrag) {
+        return true;  // The system's drag runs on its own; its end is seen by the code that started it.
+    }
     if (d.pending) {
         DragEnd(state);
         return false;

@@ -100,6 +100,17 @@
       "needs": "now"
     },
     {
+      "id": "lastEdge",
+      "group": "columns",
+      "type": "bool",
+      "default": false,
+      "name": "Show a border after the last column",
+      "description": "The last column has no separator line on its right, so the columns end cleanly against the window. Switch it on to draw that line too.",
+      "page": "columns",
+      "card": "layout",
+      "needs": "rebuild"
+    },
+    {
       "id": "harmonizeWidths",
       "group": "columns",
       "type": "bool",
@@ -299,6 +310,28 @@
   ],
   "features": [
     {
+      "id": "desktop",
+      "name": "Desktop",
+      "glyph": "\uE7F4",
+      "summary": "Options for the desktop and its icons.",
+      "planned": [
+        "Group icons into stacks",
+        "Keep icons where you put them, on every display",
+        "Quick actions on the desktop’s own menu"
+      ]
+    },
+    {
+      "id": "home",
+      "name": "Home",
+      "glyph": "\uE80F",
+      "summary": "File Explorer’s Home page, made your own.",
+      "planned": [
+        "Choose and order the sections of Home",
+        "Pin folders and files to Home",
+        "A quieter look for Quick access and Recent"
+      ]
+    },
+    {
       "id": "labels",
       "name": "Labels",
       "glyph": "",
@@ -347,7 +380,7 @@
     "window.title": "Explorer Extras",
     "menu.extras": "Extras",
     "menu.columns": "Columns",
-    "page.home": "Home",
+    "page.home": "Explorer Extras",
     "home.title": "Explorer Extras",
     "home.subtitle": "Optional additions to File Explorer, each one with its own page and switch.",
     "tip.title": "Tip",
@@ -375,7 +408,7 @@
     "action.reset.detail": "Every setting goes back to what Windhawk’s page for the mod says.",
     "columns.title": "Columns",
     "columns.subtitle": "A Columns layout in the View menu: Miller columns drawn with Explorer’s own controls.",
-    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk’s values.",
+    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values.",
     "soon.title": "Coming soon",
     "soon.body": "This feature is not built yet. Its switch and its settings will appear on this page when it is.",
     "soon.planned": "Planned"

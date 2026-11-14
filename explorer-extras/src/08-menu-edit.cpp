@@ -1992,6 +1992,9 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
 
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args) {
+    if (args.PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
+        Out(L"touch: a right tap, device=%d", (int)args.PointerDeviceType());
+    }
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
         return;

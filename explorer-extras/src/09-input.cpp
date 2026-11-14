@@ -82,6 +82,16 @@ void EndBand(WindowState* state, bool apply) {
     band.pending = false;
     band.active = false;
     band.column = nullptr;
+    for (auto& lock : band.locked) {
+        try {
+            lock.viewer.VerticalScrollMode(lock.v);
+            lock.viewer.HorizontalScrollMode(lock.h);
+        } catch (...) {
+        }
+    }
+    band.locked.clear();
+    band.touch = false;
+    band.recaptures = 0;
     band.top.clear();
     band.bottom.clear();
     band.base.clear();
@@ -180,6 +190,34 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
         band.start = point.Position();
         band.startOffset = scroller ? scroller.VerticalOffset() : 0;
         band.first = band.last = -1;
+        band.touch = args.Pointer().PointerDeviceType() == winrt::Microsoft::UI::Input::PointerDeviceType::Touch;
+        if (band.touch) {
+            // A finger on the empty space below the rows draws the rectangle instead of panning:
+            // the scrolling of the list and of what is above it is switched off until it ends.
+            band.recaptures = 0;
+            auto lockOne = [&band](muxc::ScrollViewer const& viewer) {
+                DragState::LockedScroller lock;
+                lock.viewer = viewer;
+                lock.v = viewer.VerticalScrollMode();
+                lock.h = viewer.HorizontalScrollMode();
+                viewer.VerticalScrollMode(muxc::ScrollMode::Disabled);
+                viewer.HorizontalScrollMode(muxc::ScrollMode::Disabled);
+                band.locked.push_back(lock);
+            };
+            if (scroller) {
+                lockOne(scroller);
+            }
+            mux::DependencyObject up = list;
+            for (int i = 0; up && i < 40; i++) {
+                up = mux::Media::VisualTreeHelper::GetParent(up);
+                if (auto viewer = up.try_as<muxc::ScrollViewer>()) {
+                    lockOne(viewer);
+                }
+            }
+            list.CapturePointer(args.Pointer());
+            Out(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
+                (int)band.locked.size());
+        }
     } catch (...) {
         LogHresult(L"OnBandPressed");
     }
@@ -210,6 +248,9 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
         // the user wants to keep.
         band.pending = false;
         band.active = true;
+        if (band.touch) {
+            Out(L"touch: the finger moved, the rectangle starts");
+        }
         list.CapturePointer(args.Pointer());
         auto scroller = FindListScroller(list);
         MeasureRows(column, list, scroller ? scroller.VerticalOffset() : 0, &band.top, &band.bottom);
