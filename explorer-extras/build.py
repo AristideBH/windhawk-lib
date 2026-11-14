@@ -106,10 +106,15 @@ def cpp_table(schema):
         default_text = cpp_string(default) if setting['type'] in ('enum', 'string') else 'L""'
         minimum = setting.get('min', 0)
         maximum = setting.get('max', 0)
-        rows.append('    {%s, %s, SettingKind::%s, %d, %s, %d, %d,\n     %s,\n     %s}' % (
+        options = '|'.join('%s=%s' % (o['value'], o['label']) for o in setting.get('options', []))
+        rows.append('    {%s, %s, SettingKind::%s, %d, %s, %d, %d,\n     %s,\n     %s,\n     %s, %s, %s, %s}' % (
             cpp_string(setting['id']), cpp_string(key), kind, default_int, default_text,
-            minimum, maximum, cpp_string(setting['name']), cpp_string(setting.get('description', ''))))
-    return 'constexpr SettingInfo kSettings[] = {\n%s,\n};\n' % ',\n'.join(rows)
+            minimum, maximum, cpp_string(setting['name']), cpp_string(setting.get('description', '')),
+            cpp_string(setting.get('page', '')), cpp_string(setting.get('card', '')),
+            'true' if setting.get('windhawkOnly') else 'false', cpp_string(options)))
+    cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema['cards'].items())
+    return ('constexpr SettingInfo kSettings[] = {\n%s,\n};\n\n'
+            'constexpr SettingCard kCards[] = {\n%s,\n};\n') % (',\n'.join(rows), cards)
 
 
 schema = load_schema()

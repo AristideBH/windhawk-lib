@@ -451,6 +451,7 @@ void CloseEverything() {
 bool g_hooked = false;
 void HookExtensions(HMODULE) {}
 void CloseEverything() {}
+void CloseSettingsWindowAtUnload() {}
 void StartWorker() {}
 void StopWorker() {}
 

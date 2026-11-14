@@ -18,10 +18,20 @@ struct SettingInfo {
     int maxValue;
     const wchar_t* name;
     const wchar_t* description;
+    const wchar_t* page;          // "home", "columns", or "" for none.
+    const wchar_t* card;          // The card of the page it sits in.
+    bool windhawkOnly;            // Not shown in the settings window.
+    const wchar_t* options;       // Enum: "value=Label|value=Label".
+};
+
+struct SettingCard {
+    const wchar_t* id;
+    const wchar_t* name;
 };
 
 @@SETTINGS_TABLE@@
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
+constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 
 const SettingInfo* FindSetting(const wchar_t* id) {
     for (size_t i = 0; i < kSettingCount; i++) {

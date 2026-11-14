@@ -9,6 +9,8 @@ muxc::IconElement MakeColumnsIcon() {
         .as<muxc::IconElement>();
 }
 
+void OpenSettingsWindow(WindowState* state);
+
 // The last layout the user chose, kept by Windhawk across restarts.
 bool LastLayoutWasColumns() {
     return Wh_GetIntValue(L"lastLayoutColumns", 0) != 0;
@@ -26,6 +28,14 @@ void RemoveMenuEntry(WindowState* state) {
             }
         }
         state->siblings.clear();
+        if (state->settingsItem) {
+            state->settingsItem.Click(state->settingsClickToken);
+            uint32_t at = 0;
+            if (state->menuItems && state->menuItems.IndexOf(state->settingsItem, at)) {
+                state->menuItems.RemoveAt(at);
+            }
+            state->settingsItem = nullptr;
+        }
         if (state->menuItem) {
             state->menuItem.Click(state->menuClickToken);
             uint32_t index = 0;
@@ -101,6 +111,33 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
         items.InsertAt(8, item);
         state->menuItem = item;
         state->menuItems = items;
+
+        // The settings window, right under Columns.
+        muxc::MenuFlyoutItem settings;
+        settings.Text(L"Extras");
+        muxc::FontIcon gear;
+        gear.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+        gear.Glyph(L"\uE713");
+        settings.Icon(gear);
+        settings.Name(L"WindhawkSettingsItem");
+        state->settingsClickToken = settings.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+            WindowState* now = StateForThisThread(false);
+            if (!now || g_unloading || !now->queue) {
+                return;
+            }
+            // After the menu has closed and the click has been handled.
+            try {
+                now->queue.TryEnqueue([]() {
+                    WindowState* later = StateForThisThread(false);
+                    if (later && !g_unloading) {
+                        OpenSettingsWindow(later);
+                    }
+                });
+            } catch (...) {
+            }
+        });
+        items.InsertAt(9, settings);
+        state->settingsItem = settings;
         Out(L"Columns entry added to the View menu, window=%p",
             state->topLevel);
     } catch (...) {
