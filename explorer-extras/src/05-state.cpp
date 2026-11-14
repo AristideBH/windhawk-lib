@@ -245,7 +245,8 @@ struct WindowState {
     // View menu entry.
     ItemsVector menuItems{nullptr};
     muxc::RadioMenuFlyoutItem menuItem{nullptr};
-    muxc::MenuFlyoutItem settingsItem{nullptr};  // "Explorer Extras settings", under Columns.
+    muxc::AppBarButton settingsItem{nullptr};  // "Extras", last in the toolbar's "..." menu.
+    muxc::CommandBar overflowBar{nullptr};     // The toolbar that holds it.
     winrt::event_token settingsClickToken{};
     // The View button of the toolbar: while Columns shows, its icon is ours.
     muxc::Button viewButton{nullptr};

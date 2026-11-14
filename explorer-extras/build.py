@@ -114,8 +114,10 @@ def cpp_table(schema):
             'true' if setting.get('windhawkOnly') else 'false', cpp_string(options),
             'true' if setting.get('needs') == 'rebuild' else 'false'))
     cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema['cards'].items())
+    news = ',\n'.join('    %s' % cpp_string(item) for item in schema.get('whatsNew', []))
     return ('constexpr SettingInfo kSettings[] = {\n%s,\n};\n\n'
-            'constexpr SettingCard kCards[] = {\n%s,\n};\n') % (',\n'.join(rows), cards)
+            'constexpr SettingCard kCards[] = {\n%s,\n};\n\n'
+            'constexpr const wchar_t* kWhatsNew[] = {\n%s,\n};\n') % (',\n'.join(rows), cards, news)
 
 
 schema = load_schema()

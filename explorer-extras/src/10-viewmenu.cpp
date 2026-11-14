@@ -31,10 +31,11 @@ void RemoveMenuEntry(WindowState* state) {
         if (state->settingsItem) {
             state->settingsItem.Click(state->settingsClickToken);
             uint32_t at = 0;
-            if (state->menuItems && state->menuItems.IndexOf(state->settingsItem, at)) {
-                state->menuItems.RemoveAt(at);
+            if (state->overflowBar && state->overflowBar.SecondaryCommands().IndexOf(state->settingsItem, at)) {
+                state->overflowBar.SecondaryCommands().RemoveAt(at);
             }
             state->settingsItem = nullptr;
+            state->overflowBar = nullptr;
         }
         if (state->menuItem) {
             state->menuItem.Click(state->menuClickToken);
@@ -53,10 +54,11 @@ void RemoveMenuEntry(WindowState* state) {
 
 void AddMenuEntry(WindowState* state, ItemsVector const& items) {
     try {
-        if (state->menuItem) {
+        bool columnsOn = g_enabled;
+        auto mine = state->menuItem;
+        if (mine) {
             uint32_t index = 0;
-            if (state->menuItems == items &&
-                items.IndexOf(state->menuItem, index)) {
+            if (state->menuItems == items && items.IndexOf(mine, index)) {
                 return;
             }
             // The menu was rebuilt. Start again on the new one.
@@ -68,78 +70,54 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
             groupName = first.GroupName();
         }
 
-        muxc::RadioMenuFlyoutItem item;
-        item.Text(L"Columns");
-        if (!groupName.empty()) {
-            item.GroupName(groupName);
-        }
-        item.Icon(MakeColumnsIcon());
-        item.Name(L"WindhawkColumnsItem");
-        item.IsChecked(state->on);
-        state->menuClickToken = item.Click(
-            [](Inspectable const&, mux::RoutedEventArgs const&) {
-                WindowState* state = StateForThisThread(false);
-                if (state && !g_unloading) {
-                    Out(L"Columns chosen in the View menu");
-                    ChooseColumns(state);
-                    if (state->on) {
-                        RememberColumns(true);
-                    }
-                }
-            });
-
-        // Choosing any of Explorer's eight layouts turns columns off.
-        for (uint32_t i = 0; i < 8 && i < items.Size(); i++) {
-            auto sibling = items.GetAt(i).try_as<muxc::MenuFlyoutItem>();
-            if (!sibling) {
-                continue;
+        if (columnsOn) {
+            muxc::RadioMenuFlyoutItem item;
+            item.Text(L"Columns");
+            if (!groupName.empty()) {
+                item.GroupName(groupName);
             }
-            SiblingHook hook;
-            hook.item = sibling;
-            hook.token = sibling.Click(
+            item.Icon(MakeColumnsIcon());
+            item.Name(L"WindhawkColumnsItem");
+            item.IsChecked(state->on);
+            state->menuClickToken = item.Click(
                 [](Inspectable const&, mux::RoutedEventArgs const&) {
                     WindowState* state = StateForThisThread(false);
-                    if (state && state->on) {
-                        LeaveColumns(state);
+                    if (state && !g_unloading) {
+                        Out(L"Columns chosen in the View menu");
+                        ChooseColumns(state);
+                        if (state->on) {
+                            RememberColumns(true);
+                        }
                     }
-                    RememberColumns(false);
                 });
-            state->siblings.push_back(std::move(hook));
+
+            // Choosing any of Explorer's eight layouts turns columns off.
+            for (uint32_t i = 0; i < 8 && i < items.Size(); i++) {
+                auto sibling = items.GetAt(i).try_as<muxc::MenuFlyoutItem>();
+                if (!sibling) {
+                    continue;
+                }
+                SiblingHook hook;
+                hook.item = sibling;
+                hook.token = sibling.Click(
+                    [](Inspectable const&, mux::RoutedEventArgs const&) {
+                        WindowState* state = StateForThisThread(false);
+                        if (state && state->on) {
+                            LeaveColumns(state);
+                        }
+                        RememberColumns(false);
+                    });
+                state->siblings.push_back(std::move(hook));
+            }
+
+            // Right after the eight layouts, before the separator.
+            items.InsertAt(8, item);
+            state->menuItem = item;
+            state->menuItems = items;
+
         }
 
-        // Right after the eight layouts, before the separator.
-        items.InsertAt(8, item);
-        state->menuItem = item;
-        state->menuItems = items;
-
-        // The settings window, right under Columns.
-        muxc::MenuFlyoutItem settings;
-        settings.Text(L"Extras");
-        muxc::FontIcon gear;
-        gear.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-        gear.Glyph(L"\uE713");
-        settings.Icon(gear);
-        settings.Name(L"WindhawkSettingsItem");
-        state->settingsClickToken = settings.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
-            WindowState* now = StateForThisThread(false);
-            if (!now || g_unloading || !now->queue) {
-                return;
-            }
-            // After the menu has closed and the click has been handled.
-            try {
-                now->queue.TryEnqueue([]() {
-                    WindowState* later = StateForThisThread(false);
-                    if (later && !g_unloading) {
-                        OpenSettingsWindow(later);
-                    }
-                });
-            } catch (...) {
-            }
-        });
-        items.InsertAt(9, settings);
-        state->settingsItem = settings;
-        Out(L"Columns entry added to the View menu, window=%p",
-            state->topLevel);
+        Out(L"Columns entry added to the View menu, window=%p", state->topLevel);
     } catch (...) {
         LogHresult(L"AddMenuEntry");
     }
@@ -199,8 +177,81 @@ void WalkForViewFlyout(WindowState* state, mux::DependencyObject const& node,
     }
 }
 
+// ---- The "..." menu ----
+//
+// The toolbar's "..." button has no flyout: it opens the command bar's overflow, the
+// secondary commands of the CommandBar named FileExplorerCommandBar (Select all, Select
+// none, Invert selection, Properties, Options). "Extras" is one more secondary command,
+// last, under Options.
+
+muxc::CommandBar FindCommandBar(mux::DependencyObject const& node, int depth, int& visited) {
+    if (!node || depth > 40 || visited > 3000) {
+        return nullptr;
+    }
+    visited++;
+    if (auto bar = node.try_as<muxc::CommandBar>()) {
+        return bar;
+    }
+    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < children; i++) {
+        if (auto found = FindCommandBar(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
+    try {
+        muxc::CommandBar bar = state->overflowBar;
+        if (!bar) {
+            int visited = 0;
+            bar = FindCommandBar(root, 0, visited);
+        }
+        if (!bar) {
+            return;
+        }
+        auto commands = bar.SecondaryCommands();
+        uint32_t at = 0;
+        if (state->settingsItem && state->overflowBar == bar && commands.IndexOf(state->settingsItem, at)) {
+            return;  // Already there.
+        }
+        if (!state->settingsItem) {
+            muxc::AppBarButton item;
+            item.Label(L"Extras");
+            muxc::FontIcon icon;
+            icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            icon.Glyph(L"");  // ExploitProtection.
+            item.Icon(icon);
+            item.Name(L"WindhawkSettingsItem");
+            state->settingsClickToken = item.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+                WindowState* now = StateForThisThread(false);
+                if (!now || g_unloading || !now->queue) {
+                    return;
+                }
+                // After the menu has closed and the click has been handled.
+                try {
+                    now->queue.TryEnqueue([]() {
+                        WindowState* later = StateForThisThread(false);
+                        if (later && !g_unloading) {
+                            OpenSettingsWindow(later);
+                        }
+                    });
+                } catch (...) {
+                }
+            });
+            state->settingsItem = item;
+        }
+        commands.Append(state->settingsItem);
+        state->overflowBar = bar;
+        Out(L"the Extras entry is in the \"...\" menu, window=%p", state->topLevel);
+    } catch (...) {
+        LogHresult(L"AddOverflowEntry");
+    }
+}
+
 void OnCommandBarPointer(Inspectable const& sender) {
-    if (g_unloading || !g_enabled) {
+    if (g_unloading) {
         return;
     }
     ULONGLONG now = GetTickCount64();
@@ -235,8 +286,11 @@ void OnCommandBarPointer(Inspectable const& sender) {
             }
             root = parent;
         }
-        int visited = 0;
-        WalkForViewFlyout(state, root, 0, visited);
+        if (g_enabled) {
+            int visited = 0;
+            WalkForViewFlyout(state, root, 0, visited);
+        }
+        AddOverflowEntry(state, root);
     } catch (...) {
         LogHresult(L"OnCommandBarPointer");
     }

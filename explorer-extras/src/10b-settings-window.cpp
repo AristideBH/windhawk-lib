@@ -292,10 +292,89 @@ std::wstring WindowsBuildText() {
     return L"Windows build " + std::to_wstring(info.dwBuildNumber);
 }
 
+// ---- Quick actions ----
+
+std::wstring DiagnosticsText() {
+    std::wstring text = L"Explorer Extras ";
+    text += WH_MOD_VERSION;
+    text += L"\r\n" + WindowsBuildText() + L"\r\n";
+    text += g_hooked ? L"Hooks: found\r\n" : L"Hooks: not found\r\n";
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        text += L"Explorer windows known: " + std::to_wstring(g_states.size()) + L"\r\n";
+    }
+    text += L"Settings (an asterisk marks one set in the settings window):\r\n";
+    for (size_t i = 0; i < kSettingCount; i++) {
+        auto const& info = kSettings[i];
+        text += L"  ";
+        text += SettingIsOverridden(&info) ? L"* " : L"  ";
+        text += info.id;
+        text += L" = " + EffectiveText(&info) + L"\r\n";
+    }
+    text += g_outPath[0] ? std::wstring(L"Log: ") + g_outPath + L"\r\n" : L"Log: none (the log folder does not exist)\r\n";
+    return text;
+}
+
+bool CopyTextToClipboard(HWND owner, std::wstring const& text) {
+    if (!OpenClipboard(owner)) {
+        return false;
+    }
+    bool done = false;
+    EmptyClipboard();
+    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+        if (void* target = GlobalLock(memory)) {
+            memcpy(target, text.c_str(), bytes);
+            GlobalUnlock(memory);
+            done = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+        }
+        if (!done) {
+            GlobalFree(memory);
+        }
+    }
+    CloseClipboard();
+    return done;
+}
+
+// What's new and the tip.
+bool TipDismissed() {
+    return Wh_GetIntValue(L"ui.tipDismissed", 0) != 0;
+}
+
 mux::UIElement BuildHomePage() {
     muxc::StackPanel page;
     page.Spacing(8);
     page.Children().Append(MakePageHeader(L"Explorer Extras", L"Optional additions to File Explorer, each one with its own page and switch."));
+
+    // A tip, until it is dismissed.
+    if (!TipDismissed()) {
+        auto card = MakeCard();
+        muxc::Grid line;
+        muxc::ColumnDefinition textColumn, buttonColumn;
+        textColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+        buttonColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+        line.ColumnDefinitions().Append(textColumn);
+        line.ColumnDefinitions().Append(buttonColumn);
+        line.ColumnSpacing(16);
+        muxc::StackPanel texts;
+        texts.Children().Append(MakeText(L"Tip", 14, true, false));
+        auto body = MakeText(L"Choose Columns in the View menu of a File Explorer window. The Extras entry just below it opens this window.", 13, false, true);
+        body.Margin(mux::Thickness{0, 2, 0, 0});
+        texts.Children().Append(body);
+        muxc::Grid::SetColumn(texts, 0);
+        line.Children().Append(texts);
+        muxc::Button gotIt;
+        gotIt.Content(winrt::box_value(L"Got it"));
+        gotIt.VerticalAlignment(mux::VerticalAlignment::Center);
+        gotIt.Click([card](Inspectable const&, mux::RoutedEventArgs const&) {
+            Wh_SetIntValue(L"ui.tipDismissed", 1);
+            card.Visibility(mux::Visibility::Collapsed);
+        });
+        muxc::Grid::SetColumn(gotIt, 1);
+        line.Children().Append(gotIt);
+        card.Child(line);
+        page.Children().Append(card);
+    }
 
     // The features.
     {
@@ -344,13 +423,45 @@ mux::UIElement BuildHomePage() {
             button.Content(winrt::box_value(label));
             button.MinWidth(180);
             bool isReset = wcsncmp(label, L"Reset", 5) == 0;
-            button.IsEnabled(isReset);
+            bool isLog = wcsncmp(label, L"Open", 4) == 0;
+            std::wstring detail = isReset ? L"Every setting goes back to what Windhawk's page for the mod says."
+                                  : isLog ? L"The file the mod writes while it works, if its folder exists."
+                                          : L"Version, settings and state, as text, to paste in a message.";
             if (isReset) {
                 button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
+            } else if (isLog) {
+                button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                    bool opened = g_outPath[0] && GetFileAttributesW(g_outPath) != INVALID_FILE_ATTRIBUTES &&
+                                  (INT_PTR)ShellExecuteW(nullptr, L"open", g_outPath, nullptr, nullptr, SW_SHOWNORMAL) > 32;
+                    if (auto clicked = sender.try_as<muxc::Button>()) {
+                        clicked.Content(winrt::box_value(opened ? L"Opened" : L"No log file"));
+                    }
+                });
+            } else {
+                button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                    bool copied = CopyTextToClipboard(g_settingsWindow, DiagnosticsText());
+                    if (auto clicked = sender.try_as<muxc::Button>()) {
+                        clicked.Content(winrt::box_value(copied ? L"Copied" : L"Could not copy"));
+                    }
+                });
             }
-            rows.Children().Append(MakeSettingRow(label, isReset ? L"Every setting goes back to what Windhawk's page for the mod says." : L"", button));
+            rows.Children().Append(MakeSettingRow(label, detail, button));
         }
         card.Child(rows);
+        page.Children().Append(card);
+    }
+    // What's new.
+    if (kWhatsNewCount) {
+        auto title = MakeText(L"What's new", 14, true, false);
+        title.Margin(mux::Thickness{0, 12, 0, 0});
+        page.Children().Append(title);
+        auto card = MakeCard();
+        muxc::StackPanel items;
+        items.Spacing(8);
+        for (size_t i = 0; i < kWhatsNewCount; i++) {
+            items.Children().Append(MakeText(kWhatsNew[i], 13, false, i > 0 ? true : false));
+        }
+        card.Child(items);
         page.Children().Append(card);
     }
     return page;
@@ -411,6 +522,88 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
     ui->content.ChangeView(nullptr, 0.0, nullptr, true);
 }
 
+// The icon of the window and the taskbar: the ExploitProtection glyph of Segoe Fluent
+// Icons, drawn into a bitmap in the colour the caption text has, with its shape as
+// the alpha. Made again when the theme changes.
+HICON g_settingsIconSmall = nullptr;
+HICON g_settingsIconBig = nullptr;
+
+HICON IconFromGlyph(wchar_t glyph, int size, COLORREF colour) {
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = size;
+    info.bmiHeader.biHeight = -size;  // Top-down.
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    HDC screen = GetDC(nullptr);
+    HDC dc = CreateCompatibleDC(screen);
+    void* pixels = nullptr;
+    HBITMAP colourBitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    HICON icon = nullptr;
+    if (dc && colourBitmap && pixels) {
+        HGDIOBJ oldBitmap = SelectObject(dc, colourBitmap);
+        memset(pixels, 0, (size_t)size * size * 4);
+        HFONT font = CreateFontW(-(size * 9 / 10), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH,
+                                 L"Segoe Fluent Icons");
+        HGDIOBJ oldFont = SelectObject(dc, font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        RECT box = {0, 0, size, size};
+        wchar_t text[2] = {glyph, 0};
+        DrawTextW(dc, text, 1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+        SelectObject(dc, oldFont);
+        DeleteObject(font);
+        // White on black: the brightness is the shape.
+        uint8_t* data = (uint8_t*)pixels;
+        for (int i = 0; i < size * size; i++) {
+            uint8_t* px = data + i * 4;
+            unsigned alpha = std::max(px[0], std::max(px[1], px[2]));
+            px[0] = (uint8_t)(GetBValue(colour) * alpha / 255);
+            px[1] = (uint8_t)(GetGValue(colour) * alpha / 255);
+            px[2] = (uint8_t)(GetRValue(colour) * alpha / 255);
+            px[3] = (uint8_t)alpha;
+        }
+        SelectObject(dc, oldBitmap);
+        HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
+        ICONINFO made = {TRUE, 0, 0, mask, colourBitmap};
+        icon = CreateIconIndirect(&made);
+        DeleteObject(mask);
+    }
+    if (colourBitmap) {
+        DeleteObject(colourBitmap);
+    }
+    if (dc) {
+        DeleteDC(dc);
+    }
+    return icon;
+}
+
+void UpdateSettingsWindowIcon(HWND window, bool dark) {
+    UINT dpi = GetDpiForWindow(window);
+    int small = GetSystemMetricsForDpi(SM_CXSMICON, dpi);
+    int big = GetSystemMetricsForDpi(SM_CXICON, dpi);
+    COLORREF colour = dark ? RGB(235, 235, 235) : RGB(32, 32, 32);
+    HICON newSmall = IconFromGlyph(L'', small, colour);
+    HICON newBig = IconFromGlyph(L'', big, colour);
+    if (newSmall) {
+        SendMessageW(window, WM_SETICON, ICON_SMALL, (LPARAM)newSmall);
+    }
+    if (newBig) {
+        SendMessageW(window, WM_SETICON, ICON_BIG, (LPARAM)newBig);
+    }
+    if (g_settingsIconSmall) {
+        DestroyIcon(g_settingsIconSmall);
+    }
+    if (g_settingsIconBig) {
+        DestroyIcon(g_settingsIconBig);
+    }
+    g_settingsIconSmall = newSmall;
+    g_settingsIconBig = newBig;
+}
+
 // The window's backdrop and caption follow the theme of its content.
 void ApplySettingsWindowTheme(HWND window, SettingsUi* ui) {
     HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
@@ -426,6 +619,7 @@ void ApplySettingsWindowTheme(HWND window, SettingsUi* ui) {
     auto extend = (Extend_t)GetProcAddress(dwm, "DwmExtendFrameIntoClientArea");
     if (set) {
         BOOL dark = ui && ui->root && ui->root.ActualTheme() == mux::ElementTheme::Dark;
+        UpdateSettingsWindowIcon(window, dark != FALSE);
         set(window, 20, &dark, sizeof(dark));          // DWMWA_USE_IMMERSIVE_DARK_MODE
         int backdrop = 2;                              // DWMSBT_MAINWINDOW: Mica
         set(window, 38, &backdrop, sizeof(backdrop));  // DWMWA_SYSTEMBACKDROP_TYPE
@@ -528,6 +722,14 @@ LRESULT CALLBACK SettingsWindowProc(HWND window, UINT message, WPARAM wparam, LP
         case WM_DESTROY:
             if (g_settingsWindow == window) {
                 g_settingsWindow = nullptr;
+            }
+            if (g_settingsIconSmall) {
+                DestroyIcon(g_settingsIconSmall);
+                g_settingsIconSmall = nullptr;
+            }
+            if (g_settingsIconBig) {
+                DestroyIcon(g_settingsIconBig);
+                g_settingsIconBig = nullptr;
             }
             DestroySettingsUi(true);  // A window destroyed another way: nothing is released.
             return 0;

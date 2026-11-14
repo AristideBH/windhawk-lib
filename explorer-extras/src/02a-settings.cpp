@@ -33,6 +33,7 @@ struct SettingCard {
 @@SETTINGS_TABLE@@
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
+constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
 
 const SettingInfo* FindSetting(const wchar_t* id) {
     for (size_t i = 0; i < kSettingCount; i++) {

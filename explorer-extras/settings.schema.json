@@ -280,5 +280,12 @@
       "description": "Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
       "windhawkOnly": true
     }
+  ],
+  "whatsNew": [
+    "Extras in the View menu opens this window. Settings apply at once, and Reset goes back to Windhawk’s values.",
+    "Hold Shift and double-click a column border to give every column the same width.",
+    "Drag rows to another window, the desktop, the navigation pane or the tab strip. Hold them on a folder to open it.",
+    "Archives can be dragged out of, and a phone’s folders and OneDrive syncing show their own marks.",
+    "The toolbar’s Select all, Invert selection and Select none reach the columns."
   ]
 }
