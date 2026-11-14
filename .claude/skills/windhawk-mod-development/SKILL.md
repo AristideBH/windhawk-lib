@@ -380,6 +380,8 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - The API headers are `windhawk_api.h` and `windhawk_utils.h` under `C:\Program Files\Windhawk\Compiler\include`. Read them before using a function this repo hasn't used.
 - Networking is limited to `Wh_GetUrlContent`, a synchronous HTTP fetch. For WebSockets use WinRT's `MessageWebSocket`.
 - WinUI headers: `winrt/Microsoft.UI.Xaml.Markup.h` for `XamlReader::Load` (a `PathIcon` from path data), `FontWeights` is in `Microsoft::UI::Text`, not `Windows::UI::Text`. A `ToolTip` control works as a free standing surface in an overlay canvas.
+- A `DispatcherQueueTimer` nobody holds is dropped before it ticks: keep it in a member (the hover delay of a submenu never fired until it was stored). A timer in a lambda that stops itself, as with the one in the hover handler, still needs a holder until the first tick.
+- A popup with light dismiss blocks the pointer for everything under it. A hover menu needs a transient one.
 - A logging build first, then the design: for touch, five builds of logs found what no reading of docs did (the finger replaced at the first move, error 87 on `GetPointerInfo`, no `WM_POINTER` on any window). When an input path is unknown, log the device type, flags, ids and positions at each hook point, ask for one short test, and read the result before choosing an approach.
 - A touch or modal path that can hang needs an Escape (the shell's drag loop cancels on it) and a guard that gives scrolling and captures back at every exit.
 - A `co_await` in a coroutine hands the UI thread back; a call that must happen inside an event (`StartDragAsync`) needs what it uses prepared before the event, not awaited in it.

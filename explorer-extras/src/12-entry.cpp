@@ -71,7 +71,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.32.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.34.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -112,6 +112,9 @@ void Wh_ModSettingsChanged() {
 
 void Wh_ModBeforeUninit() {
     g_unloading = true;
+    for (int i = 0; i < 60 && g_compressJobs > 0; i++) {
+        Sleep(50);  // An archive being made by tar.exe: its thread ends in this code.
+    }
     // The worker first, so no result is queued after the windows are cleaned.
     StopWorker();
     CloseEverything();

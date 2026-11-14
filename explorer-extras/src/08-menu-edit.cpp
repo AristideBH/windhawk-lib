@@ -638,6 +638,21 @@ void CloseContextMenu(WindowState* state) {
     }
     auto context = std::move(state->context);
     try {
+        if (context->watch) {
+            context->watch.Stop();
+            context->watch = nullptr;
+        }
+        if (context->hover) {
+            context->hover.Stop();
+            context->hover = nullptr;
+        }
+        if (context->openSub) {
+            try {
+                context->openSub.Hide();
+            } catch (...) {
+            }
+            context->openSub = nullptr;
+        }
         for (auto& hook : context->hooks) {
             if (hook.first) {
                 hook.first.Click(hook.second);
@@ -763,6 +778,19 @@ void RunContextCommand(UINT id) {
     }
 }
 
+// The shell fills some submenus (Open with, Send to, New) only when they are about to be
+// shown: a window message to the menu's handler, WM_INITMENUPOPUP, asks for it.
+void InitSubmenu(WindowState* state, HMENU submenu, int position) {
+    if (!state->context || !state->context->menu || !submenu) {
+        return;
+    }
+    IContextMenu2* menu2 = nullptr;
+    if (SUCCEEDED(state->context->menu->QueryInterface(IID_PPV_ARGS(&menu2))) && menu2) {
+        menu2->HandleMenuMsg(WM_INITMENUPOPUP, (WPARAM)submenu, MAKELPARAM(position, 0));
+        menu2->Release();
+    }
+}
+
 void FillFlyoutItems(WindowState* state, HMENU menu,
                      winrt::Windows::Foundation::Collections::IVector<
                          muxc::MenuFlyoutItemBase> const& items,
@@ -810,6 +838,7 @@ void FillFlyoutItems(WindowState* state, HMENU menu,
             }
             muxc::MenuFlyoutSubItem sub;
             sub.Text(text);
+            InitSubmenu(state, info.hSubMenu, i);
             FillFlyoutItems(state, info.hSubMenu, sub.Items(), depth + 1);
             if (sub.Items().Size() > 0) {
                 items.Append(sub);
@@ -995,7 +1024,7 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 
 // Extracts an archive into a folder next to it, named like the archive, with the
 // shell's own copy: conflicts and progress behave as in Explorer.
-void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
+void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool named = true) {
     if (entryIndex >= column->entries.size() || !column->entries[entryIndex].archive) {
         return;
     }
@@ -1005,16 +1034,23 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
         return;
     }
     std::wstring target = archivePath;
-    size_t dot = target.rfind(L'.');
-    if (dot != std::wstring::npos && dot > target.rfind(L'\\')) {
-        target.resize(dot);
-    }
-    for (int i = 2; PathFileExistsW(target.c_str()) && i < 100; i++) {
-        target = archivePath.substr(0, archivePath.rfind(L'.')) + L" (" + std::to_wstring(i) + L")";
-    }
-    if (!CreateDirectoryW(target.c_str(), nullptr)) {
-        Out(L"extract: can't make \"%s\", gle=%lu", target.c_str(), GetLastError());
-        return;
+    if (named) {
+        size_t dot = target.rfind(L'.');
+        if (dot != std::wstring::npos && dot > target.rfind(L'\\')) {
+            target.resize(dot);
+        }
+        for (int i = 2; PathFileExistsW(target.c_str()) && i < 100; i++) {
+            target = archivePath.substr(0, archivePath.rfind(L'.')) + L" (" + std::to_wstring(i) + L")";
+        }
+        if (!CreateDirectoryW(target.c_str(), nullptr)) {
+            Out(L"extract: can't make \"%s\", gle=%lu", target.c_str(), GetLastError());
+            return;
+        }
+    } else {
+        target = PathOf(column->folder.get());  // Into the folder that holds the archive.
+        if (target.empty()) {
+            return;
+        }
     }
     IShellFolder* source = nullptr;
     HRESULT hr = SHBindToObject(nullptr, archive.get(), nullptr, IID_PPV_ARGS(&source));
@@ -1051,7 +1087,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex) {
         }
     }
     Out(L"extract \"%s\": %d item(s), hr=0x%08lX", target.c_str(), copied, hr);
-    if (copied > 0) {
+    if (copied > 0 && named) {
         const wchar_t* leaf = wcsrchr(target.c_str(), L'\\');
         state->selectNames.assign(1, leaf ? leaf + 1 : target.c_str());
         state->selectNamesColumn = column;
@@ -1268,6 +1304,7 @@ const wchar_t* OfficialIconName(std::wstring const& verb) {
         {L"pintohome", L"windows.pintohome"},
         {L"pintohomefile", L"windows.pintohomefile"},
         {L"copyaspath", L"windows.copyaspath"},
+        {L"paste", L"windows.paste"},
         {L"setdesktopwallpaper", L"windows.setdesktopwallpaper"},
         {L"link", L"link"},
         {L"print", L"print"},
@@ -1423,6 +1460,197 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
     return nullptr;
 }
 
+// ---- Compress to ----
+//
+// Windows' own tar.exe (bsdtar) writes zip, 7z and tar, so the three need no code of ours
+// for the format. The archive is made next to the items, named after the item (or Archive
+// for several), on a thread of its own; when it is done the column loads again and the
+// new archive is selected.
+std::atomic<int> g_compressJobs{0};
+
+void CompressItems(WindowState* state, Column* column, std::vector<size_t> const& picked, int kind) {
+    std::wstring dir = PathOf(column->folder.get());
+    std::vector<std::wstring> names;
+    bool singleFolder = false;
+    for (size_t index : picked) {
+        if (index >= column->entries.size()) {
+            continue;
+        }
+        std::wstring path = FilePathOf(column->folder.get(), column->entries[index].child.get());
+        if (path.empty()) {
+            return;  // Not on disk.
+        }
+        const wchar_t* leaf = wcsrchr(path.c_str(), L'\\');
+        names.push_back(leaf ? leaf + 1 : path);
+        singleFolder = column->entries[index].folder;
+    }
+    if (names.empty() || dir.empty()) {
+        return;
+    }
+    const wchar_t* extension = kind == 0 ? L".zip" : kind == 1 ? L".7z" : L".tar";
+    std::wstring stem = names.size() == 1 ? names[0] : L"Archive";
+    if (names.size() == 1 && !singleFolder) {
+        size_t dot = stem.rfind(L'.');
+        if (dot != std::wstring::npos && dot > 0) {
+            stem.resize(dot);
+        }
+    }
+    std::wstring destination = dir + L"\\" + stem + extension;
+    for (int i = 2; PathFileExistsW(destination.c_str()) && i < 1000; i++) {
+        destination = dir + L"\\" + stem + L" (" + std::to_wstring(i) + L")" + extension;
+    }
+    wchar_t system[MAX_PATH] = L"";
+    GetSystemDirectoryW(system, MAX_PATH);
+    std::wstring command = L"\"" + std::wstring(system) + L"\\tar.exe\" -c ";
+    command += kind == 0 ? L"--format zip " : kind == 1 ? L"--format 7zip " : L"";
+    command += L"-f \"" + destination + L"\" -C \"" + dir + L"\"";
+    for (auto& name : names) {
+        command += L" \"" + name + L"\"";
+    }
+    auto queue = state->queue;
+    g_compressJobs++;
+    Out(L"compress: %s", command.c_str());
+    std::thread([command, destination, dir, queue]() mutable {
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process{};
+        DWORD code = 1;
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                           &startup, &process)) {
+            WaitForSingleObject(process.hProcess, 10 * 60 * 1000);
+            GetExitCodeProcess(process.hProcess, &code);
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+        Out(L"compress: \"%s\" done, exit code %lu", destination.c_str(), code);
+        try {
+            queue.TryEnqueue([destination, dir]() {
+                WindowState* now = StateForThisThread(false);
+                if (!now || !now->on || g_unloading) {
+                    return;
+                }
+                const wchar_t* leaf = wcsrchr(destination.c_str(), L'\\');
+                for (auto& column : now->columns) {
+                    if (column && _wcsicmp(PathOf(column->folder.get()).c_str(), dir.c_str()) == 0) {
+                        now->selectNames.assign(1, leaf ? leaf + 1 : destination.c_str());
+                        now->selectNamesColumn = column.get();
+                        RequestLoad(now, column.get());
+                        return;
+                    }
+                }
+            });
+        } catch (...) {
+        }
+        g_compressJobs--;
+    }).detach();
+}
+
+// The icon of the app that opens a file: the program the file type's "open" verb runs, its
+// icon read from the shell at 32 px and shown at 16. Null when there is none to show.
+mux::UIElement AppIconOf(std::wstring const& path) {
+    try {
+        const wchar_t* extension = PathFindExtensionW(path.c_str());
+        std::wstring program;
+        if (_wcsicmp(extension, L".exe") == 0 || _wcsicmp(extension, L".lnk") == 0) {
+            program = path;
+        } else if (extension[0]) {
+            wchar_t buffer[MAX_PATH * 2] = L"";
+            DWORD size = ARRAYSIZE(buffer);
+            if (FAILED(AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE, extension, L"open", buffer, &size))) {
+                return nullptr;
+            }
+            program = buffer;
+        }
+        if (program.empty() || StrStrIW(program.c_str(), L"ApplicationFrameHost")) {
+            return nullptr;
+        }
+        IShellItem* item = nullptr;
+        if (FAILED(SHCreateItemFromParsingName(program.c_str(), nullptr, IID_PPV_ARGS(&item))) || !item) {
+            return nullptr;
+        }
+        IShellItemImageFactory* factory = nullptr;
+        HBITMAP bitmap = nullptr;
+        if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
+            factory->GetImage(SIZE{32, 32}, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
+            factory->Release();
+        }
+        item->Release();
+        if (!bitmap) {
+            return nullptr;
+        }
+        IconBits bits;
+        bool ok = ReadBitmapBits(bitmap, &bits);
+        DeleteObject(bitmap);
+        if (!ok) {
+            return nullptr;
+        }
+        mux::Media::Imaging::WriteableBitmap image(bits.width, bits.height);
+        auto buffer = image.PixelBuffer();
+        winrt::com_ptr<IBufferByteAccessLocal> access;
+        winrt::check_hresult(((::IUnknown*)winrt::get_abi(buffer))->QueryInterface(kIidBufferByteAccess, access.put_void()));
+        uint8_t* pixels = nullptr;
+        winrt::check_hresult(access->Buffer(&pixels));
+        if (!pixels || buffer.Capacity() < bits.bgra.size()) {
+            return nullptr;
+        }
+        memcpy(pixels, bits.bgra.data(), bits.bgra.size());
+        buffer.Length((uint32_t)bits.bgra.size());
+        image.Invalidate();
+        muxc::Image icon;
+        icon.Source(image);
+        icon.Width(16);
+        icon.Height(16);
+        icon.Stretch(mux::Media::Stretch::Uniform);
+        return icon;
+    } catch (...) {
+        LogHresult(L"the icon of the app that opens a file");
+    }
+    return nullptr;
+}
+
+// Glyphs of the rows the mockup draws, by verb, for when no official icon file exists.
+const wchar_t* MockupGlyphForVerb(std::wstring const& verb) {
+    static const struct {
+        const wchar_t* verb;
+        const wchar_t* glyph;
+    } table[] = {
+        {L"cut", L"\uE8C6"},    {L"copy", L"\uE8C8"},       {L"paste", L"\uE77F"},
+        {L"rename", L"\uE8AC"}, {L"delete", L"\uE74D"},     {L"properties", L"\uE946"},
+        {L"open", L"\uE8E5"},   {L"openas", L"\uE7AC"},     {L"copyaspath", L"\uF89A"},
+        {L"edit", L"\uE70F"},   {L"print", L"\uE749"},      {L"play", L"\uE768"},
+    };
+    for (auto& entry : table) {
+        if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
+            return entry.glyph;
+        }
+    }
+    if (StrStrIW(verb.c_str(), L"share")) {
+        return L"\uE72D";
+    }
+    return GlyphForVerb(verb);
+}
+
+// The icon file of the main action of a file's format.
+const wchar_t* FormatActionIcon(std::wstring const& verb) {
+    static const struct {
+        const wchar_t* verb;
+        const wchar_t* file;
+    } table[] = {
+        {L"setdesktopwallpaper", L"windows.setdesktopwallpaper"},
+        {L"Windows.PowerShell.Run", L"windows.powershell.run"},
+        {L"runas", L"RunAsAdmin"},
+        {L"print", L"print"},
+        {L"mount", L"windows.mount"},
+        {L"install", L"windows.install"},
+    };
+    for (auto& entry : table) {
+        if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
+            return entry.file;
+        }
+    }
+    return L"";
+}
+
 // ---- The two flyouts, built from the same parts ----
 //
 // The item menu and the folder (background) menu are one look: a header row of
@@ -1432,30 +1660,42 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
 // colour is made in one place.
 
 struct MenuStyle {
-    double minWidth = 300;
-    mux::Thickness rootMargin{-12, -11, -12, -13};  // Takes the flyout's own padding back.
-    double rowIcon = 18;
-    mux::Thickness rowPadding{5, 4, 5, 4};
-    double iconColumn = 28;
-    double arrowColumn = 18;
-    double hintOpacity = 0.6;
-    double hintGap = 24;
-    double quickIcon = 20;
-    double quickMinWidth = 56;
-    mux::Thickness quickPadding{1, 3, 1, 3};
-    double quickCaptionSize = 11;
-    mux::Thickness separatorMargin{6, 4, 6, 4};
-    winrt::Windows::UI::Color separatorColor{50, 128, 128, 128};
+    double minWidth = 320;
+    mux::Thickness rootMargin{0, 0, 0, 0};
+    // The quick row: 40 px buttons 4 px apart, 8 px around, a 16 px icon, no label.
+    double quickButton = 40;
+    double quickGap = 4;
+    double quickPadding = 8;
+    double quickIcon = 16;
+    // The list (tightened from the mockup's 40, 16 and 8 to 35, 12 and 4: a 36 px pitch): rows 1 px apart, 4 px at the sides, the
+    // highlight inset 5 and 3 px, the icon 16 px at 16, the name at 44, the hint and the
+    // arrow ending 16 px from the right.
+    double rowHeight = 33;
+    double rowGap = 1;
+    mux::Thickness listPadding{4, 4, 4, 4};
+    double rowIcon = 16;
+    double iconLeft = 16;
+    double textLeft = 44;
+    double tailRight = 16;
+    double nameSize = 14;
+    double hintSize = 12;
+    double arrowSize = 12;
+    double hintOpacity = 0.79;
+    double separatorHeight = 10;
+    winrt::Windows::UI::Color separatorColor{21, 255, 255, 255};
     double corner = 4;
+    double presenterCorner = 7;
 };
 
 // A quick action of the header row.
 struct MenuQuick {
-    std::wstring label;  // Under the icon.
+    std::wstring label;  // The tooltip's fallback.
     std::wstring tip;
     const wchar_t* glyph = L"";
     std::wstring icon;   // The official icon file, without its extension.
     bool enabled = true;
+    bool pinned = false;  // At the right end of the row, apart from the others.
+    bool glyphOnly = false;  // Draw the glyph, whatever icon file or toolbar icon there is.
     std::function<void()> action;
 };
 
@@ -1466,24 +1706,86 @@ struct MenuRowSpec {
     std::wstring icon;
     std::wstring shortcut;
     bool enabled = true;
+    bool glyphOnly = false;
+    mux::UIElement custom{nullptr};  // An icon made by the caller (the app that opens a file).
     std::function<void()> action;
     muxc::MenuFlyout submenu{nullptr};
 };
+
+// Looks of the flyout that are the same for every menu, loaded once from XAML: the
+// template of a row (a highlight inset in it, the hover and press fills), the template
+// of a quick button, and the style of the flyout's presenter without its padding.
+[[clang::no_destroy]] thread_local muxc::ControlTemplate g_rowTemplate{nullptr};
+[[clang::no_destroy]] thread_local muxc::ControlTemplate g_quickTemplate{nullptr};
+[[clang::no_destroy]] thread_local mux::Style g_presenterStyle{nullptr};
+
+muxc::ControlTemplate LoadButtonTemplate(const wchar_t* inset) {
+    std::wstring xaml =
+        L"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+        L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>"
+        L"<Grid Background='Transparent'>"
+        L"<Border x:Name='Base' Margin='";
+    xaml += inset;
+    xaml +=
+        L"' CornerRadius='3' Background='Transparent'/>"
+        L"<ContentPresenter x:Name='Presenter' Content='{TemplateBinding Content}' "
+        L"Padding='{TemplateBinding Padding}' HorizontalContentAlignment='{TemplateBinding HorizontalContentAlignment}' "
+        L"VerticalContentAlignment='Center'/>"
+        L"<VisualStateManager.VisualStateGroups>"
+        L"<VisualStateGroup x:Name='CommonStates'>"
+        L"<VisualState x:Name='Normal'/>"
+        L"<VisualState x:Name='PointerOver'><VisualState.Setters>"
+        L"<Setter Target='Base.Background' Value='{ThemeResource SubtleFillColorSecondaryBrush}'/>"
+        L"</VisualState.Setters></VisualState>"
+        L"<VisualState x:Name='Pressed'><VisualState.Setters>"
+        L"<Setter Target='Base.Background' Value='{ThemeResource SubtleFillColorTertiaryBrush}'/>"
+        L"</VisualState.Setters></VisualState>"
+        L"<VisualState x:Name='Disabled'><VisualState.Setters>"
+        L"<Setter Target='Presenter.Opacity' Value='0.4'/>"
+        L"</VisualState.Setters></VisualState>"
+        L"</VisualStateGroup>"
+        L"<VisualStateGroup x:Name='FocusStates'>"
+        L"<VisualState x:Name='Unfocused'/>"
+        L"<VisualState x:Name='Focused'><VisualState.Setters>"
+        L"<Setter Target='Base.Background' Value='{ThemeResource SubtleFillColorSecondaryBrush}'/>"
+        L"</VisualState.Setters></VisualState>"
+        L"</VisualStateGroup>"
+        L"</VisualStateManager.VisualStateGroups>"
+        L"</Grid></ControlTemplate>";
+    return winrt::unbox_value<muxc::ControlTemplate>(mux::Markup::XamlReader::Load(xaml));
+}
 
 struct MenuBuilder {
     WindowState* state;
     MenuStyle style;
     muxc::StackPanel root;
+    muxc::StackPanel list{nullptr};  // The rows, once the first is added.
     bool anyRows = false;
     bool separatorWanted = false;
     bool toolbarIcons = true;  // Look for the toolbar's own icon of a label before drawing a glyph.
+    bool styled = false;       // The presenter has no padding of its own.
+    muxc::Grid quickHeader{nullptr};  // The quick row and the line under it, to put them under the list
+    mux::UIElement quickLine{nullptr};  // when the menu opens upwards.
 
     MenuBuilder(WindowState* owner, double minWidth, bool toolbarFallback)
         : state(owner), toolbarIcons(toolbarFallback) {
         style.minWidth = minWidth;
+        try {
+            if (!g_rowTemplate) {
+                g_rowTemplate = LoadButtonTemplate(L"5,3,5,3");
+                g_quickTemplate = LoadButtonTemplate(L"1,1,1,1");
+                g_presenterStyle = winrt::unbox_value<mux::Style>(mux::Markup::XamlReader::Load(
+                    L"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+                    L"TargetType='FlyoutPresenter'><Setter Property='Padding' Value='0'/>"
+                    L"<Setter Property='MinWidth' Value='0'/><Setter Property='CornerRadius' Value='7'/></Style>"));
+            }
+            styled = true;
+        } catch (...) {
+            LogHresult(L"the flyout's templates");
+        }
         root.Orientation(muxc::Orientation::Vertical);
         root.MinWidth(style.minWidth);
-        root.Margin(style.rootMargin);
+        root.Margin(styled ? style.rootMargin : mux::Thickness{-12, -11, -12, -13});  // The flyout's own padding, taken back.
         root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
     }
 
@@ -1525,94 +1827,150 @@ struct MenuBuilder {
         return icon;
     }
 
-    // A thin line between groups of rows. It is drawn only before a row that follows
-    // other rows.
-    void Separator() {
+    mux::UIElement Line(double height, double side) {
         muxc::Border line;
-        line.Height(1);
-        line.Margin(style.separatorMargin);
+        line.Height(height);
+        line.Margin(mux::Thickness{side, 0, side, 0});
         line.Background(mux::Media::SolidColorBrush(style.separatorColor));
-        root.Children().Append(line);
+        return line;
     }
 
-    // The header row: icons with labels, as many as there are.
+    void EnsureList() {
+        if (list) {
+            return;
+        }
+        list = muxc::StackPanel();
+        list.Orientation(muxc::Orientation::Vertical);
+        list.Spacing(style.rowGap);
+        list.Padding(styled ? style.listPadding : mux::Thickness{4, 4, 4, 4});
+        root.Children().Append(list);
+    }
+
+    // The gap between two groups of rows: 16 px with a thin line in the middle. It is drawn
+    // only before a row that follows other rows.
+    void Separator() {
+        EnsureList();
+        muxc::Grid gap;
+        gap.Height(style.separatorHeight);
+        auto line = Line(1, 0).as<mux::FrameworkElement>();
+        line.VerticalAlignment(mux::VerticalAlignment::Center);
+        gap.Children().Append(line);
+        list.Children().Append(gap);
+    }
+
+    // The header row: icons only, 40 px buttons, and the pinned ones at the right end.
     void QuickRow(std::vector<MenuQuick> const& quick) {
         if (quick.empty()) {
             return;
         }
         muxc::Grid header;
+        header.Padding(mux::Thickness{style.quickPadding, style.quickPadding, style.quickPadding, style.quickPadding});
+        muxc::ColumnDefinition leftColumn, rightColumn;
+        leftColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+        rightColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+        header.ColumnDefinitions().Append(leftColumn);
+        header.ColumnDefinitions().Append(rightColumn);
+        muxc::StackPanel left;
+        left.Orientation(muxc::Orientation::Horizontal);
+        left.Spacing(style.quickGap);
+        muxc::Grid::SetColumn(left, 0);
+        header.Children().Append(left);
         for (size_t q = 0; q < quick.size(); q++) {
-            muxc::ColumnDefinition definition;
-            definition.Width(mux::GridLength{1, mux::GridUnitType::Star});
-            header.ColumnDefinitions().Append(definition);
             auto button = PlainButton();
-            button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-            button.MinWidth(style.quickMinWidth);
-            button.Padding(style.quickPadding);
-            muxc::StackPanel stack;
-            stack.Orientation(muxc::Orientation::Vertical);
-            stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
-            mux::UIElement icon = IconFor(quick[q].icon, quick[q].label, quick[q].glyph, style.quickIcon,
-                                          quick[q].enabled, false);
-            icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
-            stack.Children().Append(icon);
-            muxc::TextBlock caption;
-            caption.Text(quick[q].label);
-            caption.FontSize(style.quickCaptionSize);
-            caption.Margin(mux::Thickness{0, 4, 0, 0});
-            caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
-            caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
-            stack.Children().Append(caption);
-            button.Content(stack);
-            button.IsEnabled(quick[q].enabled);
-            if (!quick[q].tip.empty()) {
-                muxc::ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{quick[q].tip}));
+            if (g_quickTemplate) {
+                button.Template(g_quickTemplate);
             }
-            muxc::Grid::SetColumn(button, (int)q);
-            header.Children().Append(button);
+            button.Width(style.quickButton);
+            button.Height(style.quickButton);
+            button.Padding(mux::Thickness{0, 0, 0, 0});
+            button.HorizontalContentAlignment(mux::HorizontalAlignment::Center);
+            mux::UIElement icon = quick[q].glyphOnly
+                                      ? MakeTwoToneIcon(state, quick[q].glyph, (int)style.quickIcon, quick[q].enabled)
+                                      : IconFor(quick[q].icon, quick[q].label, quick[q].glyph, style.quickIcon,
+                                                quick[q].enabled, false);
+            icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
+            icon.as<mux::FrameworkElement>().VerticalAlignment(mux::VerticalAlignment::Center);
+            button.Content(icon);
+            button.IsEnabled(quick[q].enabled);
+            std::wstring tip = quick[q].tip.empty() ? quick[q].label : quick[q].tip;
+            if (!tip.empty()) {
+                muxc::ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{tip}));
+            }
+            if (quick[q].pinned) {
+                muxc::Grid::SetColumn(button, 1);
+                header.Children().Append(button);
+            } else {
+                left.Children().Append(button);
+            }
             if (quick[q].action) {
                 Clickable(button, quick[q].action, true);
             }
         }
         root.Children().Append(header);
+        quickHeader = header;
+        quickLine = Line(1, 0);  // Across the whole menu.
+        root.Children().Append(quickLine);
         anyRows = true;
+        separatorWanted = false;
     }
 
     // A list row: icon, name, shortcut and, for a submenu, an arrow.
     void Row(MenuRowSpec const& spec) {
+        EnsureList();
         if (separatorWanted && anyRows) {
             Separator();
         }
         separatorWanted = false;
         auto button = PlainButton();
+        if (g_rowTemplate) {
+            button.Template(g_rowTemplate);
+        }
+        button.Height(style.rowHeight);
         button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
         button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
-        button.Padding(style.rowPadding);
+        button.Padding(mux::Thickness{0, 0, 0, 0});
         button.IsEnabled(spec.enabled);
         muxc::Grid content;
-        muxc::ColumnDefinition iconColumn, nameColumn, hintColumn, arrowColumn;
-        iconColumn.Width(mux::GridLength{style.iconColumn, mux::GridUnitType::Pixel});
+        muxc::ColumnDefinition iconColumn, nameColumn, tailColumn;
+        iconColumn.Width(mux::GridLength{style.textLeft, mux::GridUnitType::Pixel});
         nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
-        hintColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
-        arrowColumn.Width(mux::GridLength{style.arrowColumn, mux::GridUnitType::Pixel});
+        tailColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
         content.ColumnDefinitions().Append(iconColumn);
         content.ColumnDefinitions().Append(nameColumn);
-        content.ColumnDefinitions().Append(hintColumn);
-        content.ColumnDefinitions().Append(arrowColumn);
-        if (mux::UIElement icon = IconFor(spec.icon, spec.text, spec.glyph, style.rowIcon, spec.enabled, toolbarIcons)) {
-            muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
-            content.Children().Append(icon);
+        content.ColumnDefinitions().Append(tailColumn);
+        mux::UIElement rowIcon = spec.custom ? spec.custom
+                                 : spec.glyphOnly ? MakeTwoToneIcon(state, spec.glyph, (int)style.rowIcon, spec.enabled)
+                                                  : IconFor(spec.icon, spec.text, spec.glyph, style.rowIcon, spec.enabled,
+                                                            toolbarIcons);
+        if (mux::UIElement icon = rowIcon) {
+            muxc::Grid slot;
+            slot.Width(style.rowIcon);
+            slot.Height(style.rowIcon);
+            slot.HorizontalAlignment(mux::HorizontalAlignment::Left);
+            slot.VerticalAlignment(mux::VerticalAlignment::Center);
+            slot.Margin(mux::Thickness{style.iconLeft, 0, 0, 0});
+            auto frame = icon.as<mux::FrameworkElement>();
+            frame.HorizontalAlignment(mux::HorizontalAlignment::Center);
+            frame.VerticalAlignment(mux::VerticalAlignment::Center);
+            slot.Children().Append(icon);
+            muxc::Grid::SetColumn(slot, 0);
+            content.Children().Append(slot);
         }
+        bool tail = !spec.shortcut.empty() || spec.submenu;
         muxc::TextBlock label;
         label.Text(spec.text);
+        label.FontSize(style.nameSize);
         label.VerticalAlignment(mux::VerticalAlignment::Center);
+        label.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+        label.Margin(mux::Thickness{0, 0, tail ? 8.0 : style.tailRight, 0});
         muxc::Grid::SetColumn(label, 1);
         content.Children().Append(label);
         if (!spec.shortcut.empty()) {
             muxc::TextBlock hint;
             hint.Text(spec.shortcut);
+            hint.FontSize(style.hintSize);
             hint.Opacity(style.hintOpacity);
-            hint.Margin(mux::Thickness{style.hintGap, 0, 0, 0});
+            hint.Margin(mux::Thickness{0, 0, style.tailRight, 0});
             hint.VerticalAlignment(mux::VerticalAlignment::Center);
             muxc::Grid::SetColumn(hint, 2);
             content.Children().Append(hint);
@@ -1620,24 +1978,104 @@ struct MenuBuilder {
         if (spec.submenu) {
             muxc::FontIcon arrow;
             arrow.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-            arrow.Glyph(L"");
-            arrow.FontSize(10);
+            arrow.Glyph(L"");
+            arrow.FontSize(style.arrowSize);
             arrow.Opacity(style.hintOpacity);
+            arrow.Margin(mux::Thickness{0, 0, style.tailRight, 0});
             arrow.HorizontalAlignment(mux::HorizontalAlignment::Right);
             arrow.VerticalAlignment(mux::VerticalAlignment::Center);
-            muxc::Grid::SetColumn(arrow, 3);
+            muxc::Grid::SetColumn(arrow, 2);
             content.Children().Append(arrow);
             button.Flyout(spec.submenu);
+            // Like a cascading menu: beside the row, top aligned with it.
+            spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
+            auto sub = spec.submenu;
+            spec.submenu.Opened([sub](Inspectable const&, Inspectable const&) {
+                WindowState* open = StateForThisThread(false);
+                if (open && open->context) {
+                    open->context->openSub = sub;
+                }
+            });
             spec.submenu.Closed([](Inspectable const&, Inspectable const&) {
-                // A choice made in the submenu closes the whole menu.
+                // A choice made in the submenu closes the whole menu. A submenu replaced by
+                // another, as the pointer moves down the rows, does not.
                 WindowState* open = StateForThisThread(false);
                 if (open && open->context && open->context->flyout) {
+                    if (GetTickCount64() < open->context->switchUntil) {
+                        return;
+                    }
                     open->context->flyout.Hide();
                 }
             });
+            // Right arrow opens it from the keyboard.
+            button.KeyDown([sub, button](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
+                if (keyArgs.Key() == winrt::Windows::System::VirtualKey::Right) {
+                    try {
+                        sub.ShowAt(button);
+                    } catch (...) {
+                    }
+                    keyArgs.Handled(true);
+                }
+            });
+        }
+        // The pointer on a row: the submenu of another row goes away, and this row's own opens
+        // after a short moment if the pointer stays.
+        {
+            auto hovering = std::make_shared<bool>(false);
+            auto sub = spec.submenu;
+            button.PointerEntered([hovering, sub, button](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+                *hovering = true;
+                WindowState* st = StateForThisThread(false);
+                if (!st || !st->context || !st->queue || g_unloading) {
+                    return;
+                }
+                auto& ctx = *st->context;
+                if (ctx.openSub && (!sub || ctx.openSub != sub)) {
+                    ctx.switchUntil = GetTickCount64() + 400;
+                    try {
+                        ctx.openSub.Hide();
+                    } catch (...) {
+                    }
+                    ctx.openSub = nullptr;
+                }
+                if (sub && ctx.openSub != sub) {
+                    if (ctx.hover) {
+                        ctx.hover.Stop();
+                    }
+                    auto timer = st->queue.CreateTimer();
+                    ctx.hover = timer;
+                    timer.Interval(std::chrono::milliseconds(200));
+                    timer.IsRepeating(false);
+                    timer.Tick([hovering, sub, button](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                        sender.Stop();
+                        WindowState* now = StateForThisThread(false);
+                        if (!*hovering || !now || !now->context || g_unloading || now->context->openSub == sub) {
+                            return;
+                        }
+                        try {
+                            // Transient: a submenu that is not light dismissed, so the rows of the
+                            // menu under it still see the pointer and another submenu can replace it.
+                            muxc::Primitives::FlyoutShowOptions shown;
+                            shown.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
+                            shown.ShowMode(muxc::Primitives::FlyoutShowMode::Transient);
+                            sub.ShowAt(button, shown);
+                            static int logged = 0;
+                            if (logged++ < 3) {
+                                Out(L"menu: a submenu opened on hover");
+                            }
+                        } catch (...) {
+                            LogHresult(L"opening a submenu on hover");
+                        }
+                    });
+                    timer.Start();
+                }
+            });
+            button.PointerExited([hovering](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+                *hovering = false;
+            });
         }
         button.Content(content);
-        root.Children().Append(button);
+        list.Children().Append(button);
         if (spec.action) {
             Clickable(button, spec.action, true);
         }
@@ -1646,9 +2084,77 @@ struct MenuBuilder {
 
     // Puts the content in the flyout, hands the flyout to the state so it can be
     // closed, and shows it at `position` of `anchor`.
-    void Show(muxc::Flyout const& flyout, mux::UIElement const& anchor, winrt::Windows::Foundation::Point position) {
+    void Show(muxc::Flyout const& flyout, mux::UIElement const& anchor, winrt::Windows::Foundation::Point position,
+              std::optional<winrt::Windows::Foundation::Rect> avoid = std::nullopt) {
         flyout.Content(root);
+        if (styled && g_presenterStyle) {
+            flyout.FlyoutPresenterStyle(g_presenterStyle);
+        }
         state->context->flyout = flyout;
+        // Opened upwards, the quick row goes under the list so that it stays next to the pointer.
+        {
+            auto rootCopy = root;
+            auto header = quickHeader;
+            auto line = quickLine;
+            flyout.Opened([rootCopy, header, line, anchor, position](Inspectable const&, Inspectable const&) {
+                if (!header) {
+                    return;
+                }
+                try {
+                    auto origin = rootCopy.TransformToVisual(anchor).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+                    if (origin.Y + 8 < position.Y) {
+                        auto kids = rootCopy.Children();
+                        uint32_t at = 0;
+                        if (kids.IndexOf(header, at)) {
+                            kids.RemoveAt(at);
+                        }
+                        if (kids.IndexOf(line, at)) {
+                            kids.RemoveAt(at);
+                        }
+                        kids.Append(line);
+                        kids.Append(header);
+                    }
+                } catch (...) {
+                    LogHresult(L"placing the quick row");
+                }
+            });
+        }
+        // A click outside the menu closes it, also outside this window's panel, where the
+        // flyout's own light dismiss does not see it.
+        try {
+            auto rootCopy = root;
+            auto timer = state->queue.CreateTimer();
+            timer.Interval(std::chrono::milliseconds(40));
+            timer.Tick([rootCopy](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                WindowState* st = StateForThisThread(false);
+                if (!st || !st->context || !st->context->flyout || g_unloading) {
+                    sender.Stop();
+                    return;
+                }
+                auto& ctx = *st->context;
+                bool down = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
+                if (down && !ctx.wasDown && !ctx.openSub && st->rootGrid && st->bridge) {
+                    try {
+                        auto topLeft = rootCopy.TransformToVisual(nullptr).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+                        double scale = st->rootGrid.XamlRoot() ? st->rootGrid.XamlRoot().RasterizationScale() : 1.0;
+                        POINT corner = {(LONG)(topLeft.X * scale), (LONG)(topLeft.Y * scale)};
+                        ClientToScreen((HWND)st->bridge.WindowId().Value, &corner);
+                        RECT box = {corner.x - 3, corner.y - 3, corner.x + (LONG)(rootCopy.ActualWidth() * scale) + 3,
+                                    corner.y + (LONG)(rootCopy.ActualHeight() * scale) + 3};
+                        POINT cursor;
+                        if (GetCursorPos(&cursor) && !PtInRect(&box, cursor)) {
+                            ctx.flyout.Hide();
+                        }
+                    } catch (...) {
+                    }
+                }
+                ctx.wasDown = down;
+            });
+            state->context->watch = timer;
+            timer.Start();
+        } catch (...) {
+            LogHresult(L"watching for a click outside the menu");
+        }
         state->context->closedToken = flyout.Closed([](Inspectable const&, Inspectable const&) {
             WindowState* open = StateForThisThread(false);
             if (!open || g_unloading || !open->queue) {
@@ -1667,6 +2173,12 @@ struct MenuBuilder {
         });
         muxc::Primitives::FlyoutShowOptions options;
         options.Position(position);
+        if (avoid) {
+            // The clicked row stays uncovered: the menu goes under it, or over it when there is
+            // no room below, and the quick row ends up on the side next to it.
+            options.ExclusionRect(*avoid);
+            options.Placement(muxc::Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);
+        }
         flyout.ShowAt(anchor, options);
     }
 };
@@ -1756,76 +2268,56 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         };
         auto plainButton = [&]() { return builder.PlainButton(); };
 
-        // Top row: the quick actions as icons, with this mod's own after them.
-        struct Quick {
-            std::wstring label;  // Under the icon.
-            std::wstring tip;
-            const wchar_t* glyph;
-            bool enabled;
-            std::function<void()> action;
-            std::wstring icon;  // The official icon file, without its extension.
-        };
-        std::vector<Quick> quick;
-        const wchar_t* quickVerbs[] = {L"cut", L"copy", L"rename", L"share", L"delete"};
-        for (int q = 0; q < 5; q++) {
-            if (insideArchive && q != 1) {
-                continue;
-            }
-            for (auto& row : rows) {
-                bool match = q == 3 ? (StrStrIW(row.verb.c_str(), L"share") && !row.sub)
-                                    : _wcsicmp(row.verb.c_str(), quickVerbs[q]) == 0;
-                if (!match || used.count(row.pos)) {
-                    continue;
-                }
-                used.insert(row.pos);
-                UINT id = row.id;
-                quick.push_back({row.text, row.text, GlyphForVerb(q == 3 ? L"share" : quickVerbs[q]),
-                                 row.enabled, [id]() { RunContextCommand(id); }});
-                quick.back().icon = OfficialIconName(row.verb);
-                break;
-            }
-        }
         wchar_t folderPath[MAX_PATH] = L"";
         bool onDisk = !insideArchive && SHGetPathFromIDListW(column->folder.get(), folderPath) &&
                       folderPath[0];
-        {
-            auto addMod = [&](const wchar_t* text, const wchar_t* tip, const wchar_t* glyph,
-                              const wchar_t* iconFile, std::function<void()> action) {
-                quick.push_back({text, tip, glyph, true, [action]() {
-                                     WindowState* now = StateForThisThread(false);
-                                     if (now && !g_unloading) {
-                                         action();
-                                     }
-                                 }});
-                quick.back().icon = iconFile;
-            };
-            if (onDisk) {
-                addMod(L"New folder", L"New folder with selection", L"", L"newfolder", [column, picked]() {
-                    NewFolderWithSelection(StateForThisThread(false), column, picked);
-                });
+        bool single = picked.size() == 1;
+
+        auto findRow = [&](const wchar_t* verb) -> MenuRow* {
+            for (auto& row : rows) {
+                if (used.count(row.pos)) {
+                    continue;
+                }
+                bool match = verb ? _wcsicmp(row.verb.c_str(), verb) == 0
+                                  : (StrStrIW(row.verb.c_str(), L"share") && !row.sub);
+                if (match) {
+                    return &row;
+                }
             }
-            if (picked.size() == 1 && column->entries[picked[0]].folder) {
-                addMod(L"New tab", L"Open in new tab", L"", L"windows.opennewtab", [column, picked]() {
-                    auto& picked0 = column->entries[picked[0]];
-                    Pidl target(picked0.linkTarget
-                                    ? ILClone(picked0.linkTarget.get())
-                                    : ILCombine(column->folder.get(), picked0.child.get()));
-                    OpenFolderInNewTab(StateForThisThread(false), target.get());
-                });
-            }
-        }
-        bool& anyRows = builder.anyRows;
+            return nullptr;
+        };
+
+        // The quick row: Cut, Copy, Paste (a folder takes it), Rename, Delete, Share, and the
+        // properties pinned at the right end.
         {
             std::vector<MenuQuick> header;
-            for (auto& q : quick) {
+            auto addQuick = [&](MenuRow* row, bool pinned) {
+                used.insert(row->pos);
+                UINT id = row->id;
                 MenuQuick item;
-                item.label = q.label;
-                item.tip = q.tip;
-                item.glyph = q.glyph;
-                item.icon = q.icon;
-                item.enabled = q.enabled;
-                item.action = q.action;
+                item.label = row->text;
+                item.tip = row->text;
+                item.glyph = MockupGlyphForVerb(row->verb);
+                item.icon = OfficialIconName(row->verb);
+                item.glyphOnly = pinned;  // The properties button is the Info glyph.
+                item.enabled = row->enabled;
+                item.pinned = pinned;
+                item.action = [id]() { RunContextCommand(id); };
                 header.push_back(std::move(item));
+            };
+            const wchar_t* quickVerbs[] = {L"cut", L"copy", L"paste", L"rename", L"delete", nullptr};
+            for (auto verb : quickVerbs) {
+                if (insideArchive && !(verb && _wcsicmp(verb, L"copy") == 0)) {
+                    continue;
+                }
+                if (MenuRow* row = findRow(verb)) {
+                    addQuick(row, false);
+                }
+            }
+            if (!insideArchive) {
+                if (MenuRow* row = findRow(L"properties")) {
+                    addQuick(row, true);
+                }
             }
             builder.QuickRow(header);
         }
@@ -1844,56 +2336,169 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             spec.submenu = submenu;
             builder.Row(spec);
         };
+        auto addSubItem = [](muxc::MenuFlyout const& menu, std::wstring const& text, std::function<void()> action) {
+            muxc::MenuFlyoutItem item;
+            item.Text(text);
+            item.Click([action](Inspectable const&, mux::RoutedEventArgs const&) {
+                WindowState* now = StateForThisThread(false);
+                if (now && !g_unloading) {
+                    action();
+                }
+            });
+            menu.Items().Append(item);
+        };
+        // A row of the shell's own, by verb: its name, its icon and its shortcut.
+        auto addShellRow = [&](MenuRow* row, const wchar_t* glyphOverride, mux::UIElement custom = nullptr) {
+            used.insert(row->pos);
+            UINT id = row->id;
+            muxc::MenuFlyout subMenu{nullptr};
+            if (row->sub) {
+                subMenu = muxc::MenuFlyout();
+                InitSubmenu(state, row->sub, row->pos);
+                FillFlyoutItems(state, row->sub, subMenu.Items(), 1, nullptr);
+            }
+            const wchar_t* icon = OfficialIconName(row->verb);
+            if (!icon[0]) {
+                icon = FormatActionIcon(row->verb);
+            }
+            MenuRowSpec spec;
+            spec.text = row->text;
+            spec.glyph = glyphOverride ? glyphOverride : MockupGlyphForVerb(row->verb);
+            spec.icon = icon;
+            spec.shortcut = ShortcutForVerb(row->verb);
+            spec.enabled = row->enabled;
+            spec.custom = custom;
+            spec.action = row->sub ? std::function<void()>() : [id]() { RunContextCommand(id); };
+            spec.submenu = subMenu;
+            builder.Row(spec);
+        };
 
-        // Extracting from an archive.
         if (insideArchive) {
-            addRow(L"Extract selected here", L"", L"", true,
+            // Inside an archive: copying and extracting only.
+            addRow(L"Extract selected here", L"", L"", true,
                    [column, picked]() { ExtractSelected(StateForThisThread(false), column, picked); },
                    muxc::MenuFlyout{nullptr}, L"windows.compressedfile.extract");
-        }
-        if (onDisk && picked.size() == 1 && column->entries[picked[0]].archive) {
-            addRow(L"Extract here", L"", L"", true,
-                   [column, picked]() { ExtractHere(StateForThisThread(false), column, picked[0]); },
-                   muxc::MenuFlyout{nullptr}, L"windows.compressedfile.extract");
-        }
+        } else {
+            // First group: Open, Open in a new tab (a folder), Open with.
+            if (MenuRow* row = findRow(L"open")) {
+                mux::UIElement appIcon{nullptr};
+                if (single && !column->entries[picked[0]].folder && onDisk) {
+                    appIcon = AppIconOf(FilePathOf(column->folder.get(), column->entries[picked[0]].child.get()));
+                }
+                addShellRow(row, nullptr, appIcon);
+            }
+            if (single && column->entries[picked[0]].folder) {
+                addRow(L"Open in new tab", L"\uE8A7", L"", true, [column, picked]() {
+                    auto& picked0 = column->entries[picked[0]];
+                    Pidl target(picked0.linkTarget ? ILClone(picked0.linkTarget.get())
+                                                   : ILCombine(column->folder.get(), picked0.child.get()));
+                    OpenFolderInNewTab(StateForThisThread(false), target.get());
+                }, muxc::MenuFlyout{nullptr}, L"windows.opennewtab");
+            }
+            if (MenuRow* row = findRow(L"openas")) {
+                addShellRow(row, nullptr);
+            }
 
-        // The usual commands, in Explorer's order.
-        if (!insideArchive) {
-            const wchar_t* mainVerbs[] = {L"open", L"openas", L"pintohome", L"copyaspath",
-                                          L"setdesktopwallpaper", L"edit", L"properties"};
-            separatorWanted = anyRows;
-            for (auto verb : mainVerbs) {
-                for (auto& row : rows) {
-                    if (_wcsicmp(row.verb.c_str(), verb) != 0 || used.count(row.pos)) {
-                        continue;
+            // Second group: Extract (an archive), Compress to, New folder from selection, Copy as
+            // path, and the main action of the file's format.
+            separatorWanted = true;
+            if (onDisk && single && column->entries[picked[0]].archive) {
+                muxc::MenuFlyout extract;
+                size_t index = picked[0];
+                std::wstring stem = column->entries[index].name;
+                size_t dot = stem.rfind(L'.');
+                if (dot != std::wstring::npos && dot > 0) {
+                    stem.resize(dot);
+                }
+                addSubItem(extract, L"Extract here", [column, index]() {
+                    ExtractHere(StateForThisThread(false), column, index, false);
+                });
+                addSubItem(extract, L"Extract to \u201C" + stem + L"\\\u201D", [column, index]() {
+                    ExtractHere(StateForThisThread(false), column, index, true);
+                });
+                if (MenuRow* all = findRow(L"extract")) {
+                    used.insert(all->pos);
+                    UINT id = all->id;
+                    addSubItem(extract, L"Extract all\u2026", [id]() { RunContextCommand(id); });
+                }
+                addRow(L"Extract", L"\uF012", L"", true, nullptr, extract, L"windows.compressedfile.extract");
+            }
+            bool compressible = onDisk;
+            for (size_t index : picked) {
+                if (FilePathOf(column->folder.get(), column->entries[index].child.get()).empty()) {
+                    compressible = false;
+                }
+            }
+            if (compressible) {
+                muxc::MenuFlyout compress;
+                addSubItem(compress, L"ZIP file", [column, picked]() {
+                    CompressItems(StateForThisThread(false), column, picked, 0);
+                });
+                addSubItem(compress, L"7z file", [column, picked]() {
+                    CompressItems(StateForThisThread(false), column, picked, 1);
+                });
+                addSubItem(compress, L"TAR file", [column, picked]() {
+                    CompressItems(StateForThisThread(false), column, picked, 2);
+                });
+                addRow(L"Compress to", L"\uF012", L"", true, nullptr, compress, L"Windows.Zip.Action");
+            }
+            if (onDisk) {
+                addRow(L"New folder from selection", L"\uE8F4", L"", true, [column, picked]() {
+                    NewFolderWithSelection(StateForThisThread(false), column, picked);
+                }, muxc::MenuFlyout{nullptr}, L"newfolder");
+            }
+            if (MenuRow* row = findRow(L"copyaspath")) {
+                addShellRow(row, nullptr);
+            }
+            // The main action of the file's format: the first of these the shell offers for it.
+            const wchar_t* formatVerbs[] = {L"setdesktopwallpaper", L"Windows.PowerShell.Run", L"runas", L"edit",
+                                            L"print",               L"play",                   L"mount", L"install"};
+            for (auto verb : formatVerbs) {
+                if (MenuRow* row = findRow(verb)) {
+                    if (!row->sub) {
+                        addShellRow(row, L"\uE734");
+                        break;
                     }
-                    used.insert(row.pos);
-                    UINT id = row.id;
-                    muxc::MenuFlyout subMenu{nullptr};
-                    if (row.sub) {
-                        subMenu = muxc::MenuFlyout();
-                        FillFlyoutItems(state, row.sub, subMenu.Items(), 1, nullptr);
-                    }
-                    addRow(row.text.c_str(), GlyphForVerb(row.verb), ShortcutForVerb(row.verb),
-                           row.enabled, row.sub ? std::function<void()>() : [id]() { RunContextCommand(id); },
-                           subMenu, OfficialIconName(row.verb));
-                    break;
                 }
             }
 
-            // Everything else the shell offers.
+            // Third group: everything else the shell offers. The app extensions of the newer
+            // menu are not in the data the shell gives, so they are in here too.
             muxc::MenuFlyout more;
             FillFlyoutItems(state, hmenu, more.Items(), 0, &used);
             if (more.Items().Size() > 0) {
-                separatorWanted = anyRows;
-                addRow(L"Show more options", L"", L"", true, nullptr, more, L"");
+                separatorWanted = true;
+                addRow(L"More options", L"\uF2C7", L"", true, nullptr, more, L"");
             }
         }
 
-        builder.Show(flyout, list, position);
-        Out(L"context menu shown for %d item(s), first \"%s\": %d quick, %u rows",
-            (int)picked.size(), column->entries[picked[0]].name.c_str(), (int)quick.size(),
-            root.Children().Size());
+        // The row the menu was asked on, so that the menu does not cover it.
+        std::optional<winrt::Windows::Foundation::Rect> rowBox;
+        try {
+            double best = 1e9;
+            for (size_t entry : picked) {
+                for (size_t r = 0; r < column->rowToEntry.size(); r++) {
+                    if (column->rowToEntry[r] != (int)entry) {
+                        continue;
+                    }
+                    auto container = list.ContainerFromIndex((int)r).try_as<muxc::ListViewItem>();
+                    if (!container || container.ActualHeight() <= 0) {
+                        continue;
+                    }
+                    auto box = container.TransformToVisual(list).TransformBounds(
+                        winrt::Windows::Foundation::Rect{0, 0, (float)container.ActualWidth(), (float)container.ActualHeight()});
+                    double away = position.Y < box.Y ? box.Y - position.Y : position.Y > box.Y + box.Height ? position.Y - box.Y - box.Height : 0;
+                    if (away < best) {
+                        best = away;
+                        rowBox = box;
+                    }
+                }
+            }
+        } catch (...) {
+        }
+        builder.Show(flyout, list, position, rowBox);
+        Out(L"context menu shown for %d item(s), first \"%s\": %u parts",
+            (int)picked.size(), column->entries[picked[0]].name.c_str(), root.Children().Size());
     } catch (...) {
         LogHresult(L"ShowItemFlyout");
         CloseContextMenu(state);
@@ -1972,10 +2577,13 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
 
     // The list: the folder's properties.
     {
-        builder.separatorWanted = true;
         MenuRowSpec spec;
         spec.text = desktop ? L"Personalize" : L"Folder properties";
-        spec.icon = desktop ? L"Personalize" : L"windows.properties";
+        spec.icon = desktop ? L"Personalize" : L"";
+        if (!desktop) {
+            spec.glyph = L"\uE946";  // Info.
+            spec.glyphOnly = true;
+        }
         spec.enabled = !inArchive;
         spec.action = []() {
             WindowState* now = StateForThisThread(false);

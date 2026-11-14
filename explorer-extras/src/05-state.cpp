@@ -113,6 +113,13 @@ struct ContextMenuState {
     winrt::event_token closedToken{};
     std::vector<std::pair<muxc::MenuFlyoutItem, winrt::event_token>> hooks;
     std::vector<std::pair<muxc::Button, winrt::event_token>> buttonHooks;
+    // Behaviour of a context menu: the submenu that is open, the clock that lets a submenu
+    // be replaced by another without the whole menu closing, and a watch for a click outside.
+    muxc::MenuFlyout openSub{nullptr};
+    ULONGLONG switchUntil = 0;
+    mud::DispatcherQueueTimer watch{nullptr};
+    mud::DispatcherQueueTimer hover{nullptr};  // The delay before a submenu opens; a timer nobody holds is dropped.
+    bool wasDown = false;
 };
 
 // What the user did in the columns that Ctrl+Z can take back. Explorer's own

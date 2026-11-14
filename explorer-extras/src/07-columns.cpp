@@ -737,115 +737,9 @@ void ApplyCutState(WindowState* state) {
     }
 }
 
-void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
-    if (state->rename && state->rename->column == column) {
-        CancelRename(state);
-    }
-    column->entries = std::move(data.entries);
-    column->rowToEntry.clear();
-    column->texts.clear();
-    column->texts.resize(column->entries.size(), muxc::TextBlock{nullptr});
-    column->iconHosts.clear();
-    column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
-    column->entryToRow.assign(column->entries.size(), -1);
-    column->iconAsked.assign(column->entries.size(), 0);
-    column->iconWanted.clear();
-    column->built.assign(column->entries.size(), 0);
-    column->pendingIcons.clear();
-    column->chevrons.clear();
-    column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
-    column->hintEntry = -1;
-    column->focusHeader = -1;
-    column->tipBuilt.assign(column->entries.size(), 0);
-    column->animGroup = -1;
-    column->animDoneAt = 0;
-    column->rowGroup.clear();
-    column->headerIcons.clear();
-    column->groupTitles = data.groupNames;
-
-    FitWidth(column);
-    size_t capacity = NameCapacity(column);
-    double rowHeight = IsCompactMode() ? 24 : 32;
-    column->rowHeight = rowHeight;
-    bool grouped = data.groupOf.size() == column->entries.size() &&
-                   !data.groupNames.empty();
-
-    auto items = column->list.Items();
-    items.Clear();
-    std::vector<winrt::Windows::Foundation::IInspectable> made;  // Set in one go at the end.
-    made.reserve(column->entries.size() + 16);
-    auto isCollapsed = [&](int group) {
-        return grouped && group >= 0 && group < (int)data.groupNames.size() &&
-               std::find(column->collapsed.begin(), column->collapsed.end(),
-                         data.groupNames[group]) != column->collapsed.end();
-    };
-    // The selected item's group is opened: a selection can't be hidden.
-    if (grouped && column->selectedChild) {
-        for (size_t i = 0; i < column->entries.size(); i++) {
-            if (ILIsEqual(column->entries[i].child.get(),
-                          column->selectedChild.get()) &&
-                isCollapsed(data.groupOf[i])) {
-                auto at = std::find(column->collapsed.begin(),
-                                    column->collapsed.end(),
-                                    data.groupNames[data.groupOf[i]]);
-                column->collapsed.erase(at);
-                break;
-            }
-        }
-    }
-    int selectRow = -1;
-    for (size_t i = 0; i < column->entries.size(); i++) {
-        int group = grouped ? data.groupOf[i] : -1;
-        if (grouped && (i == 0 || data.groupOf[i] != data.groupOf[i - 1])) {
-            std::wstring title =
-                group >= 0 && group < (int)data.groupNames.size()
-                    ? data.groupNames[group]
-                    : L"";
-            muxc::FontIcon icon{nullptr};
-            made.push_back(MakeHeaderRow(title, rowHeight, isCollapsed(group), &icon));
-            column->rowToEntry.push_back(-1);
-            column->rowGroup.push_back(group);
-            column->headerIcons.push_back(icon);
-        }
-        if (column->selectedChild &&
-            ILIsEqual(column->entries[i].child.get(),
-                      column->selectedChild.get())) {
-            selectRow = (int)column->rowToEntry.size();
-        }
-        auto row = MakeRowShell(rowHeight);
-        if (isCollapsed(group)) {
-            row.Visibility(mux::Visibility::Collapsed);
-        }
-        made.push_back(row);
-        column->entryToRow[i] = (int)column->rowToEntry.size();
-        column->rowToEntry.push_back((int)i);
-        column->rowGroup.push_back(group);
-        column->headerIcons.push_back(muxc::FontIcon{nullptr});
-    }
-    if (data.truncated) {
-        muxc::ListViewItem more;
-        size_t hidden = data.total > column->entries.size()
-                            ? data.total - column->entries.size()
-                            : 0;
-        std::wstring text = hidden > 0
-                                ? std::to_wstring(hidden) + (data.total >= (size_t)kReadCap ? L"+" : L"") +
-                                      L" more items not shown"
-                                : std::wstring(L"More items not shown");
-        more.Content(winrt::box_value(winrt::hstring{text}));
-        more.IsEnabled(false);
-        made.push_back(more);
-        column->rowToEntry.push_back(-1);
-        column->rowGroup.push_back(-1);
-        column->headerIcons.push_back(muxc::FontIcon{nullptr});
-    }
-    items.ReplaceAll(made);
-    // The first rows, and the ones around the selection, have their content
-    // now. The rest is built as the list scrolls.
-    BuildRowRange(column, 0, 60);
-    if (selectRow >= 0) {
-        BuildRowRange(column, selectRow - 30, selectRow + 30);
-        column->list.SelectedIndex(selectRow);
-    }
+// What follows a fill or a patch: the cut look, a rename or a selection that was waiting for
+// the new rows, and a scroll position to put back.
+void FinishFill(WindowState* state, Column* column) {
     column->filled = true;
     column->list.IsTabStop(column->entries.empty());
     if (!state->cutPaths.empty()) {
@@ -958,6 +852,118 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
             }
         });
     }
+}
+
+void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
+    if (state->rename && state->rename->column == column) {
+        CancelRename(state);
+    }
+    column->entries = std::move(data.entries);
+    column->rowToEntry.clear();
+    column->texts.clear();
+    column->texts.resize(column->entries.size(), muxc::TextBlock{nullptr});
+    column->iconHosts.clear();
+    column->iconHosts.resize(column->entries.size(), muxc::Grid{nullptr});
+    column->entryToRow.assign(column->entries.size(), -1);
+    column->iconAsked.assign(column->entries.size(), 0);
+    column->iconWanted.clear();
+    column->built.assign(column->entries.size(), 0);
+    column->pendingIcons.clear();
+    column->chevrons.clear();
+    column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
+    column->hintEntry = -1;
+    column->focusHeader = -1;
+    column->tipBuilt.assign(column->entries.size(), 0);
+    column->animGroup = -1;
+    column->animDoneAt = 0;
+    column->rowGroup.clear();
+    column->headerIcons.clear();
+    column->groupTitles = data.groupNames;
+
+    FitWidth(column);
+    size_t capacity = NameCapacity(column);
+    double rowHeight = IsCompactMode() ? 24 : 32;
+    column->rowHeight = rowHeight;
+    bool grouped = data.groupOf.size() == column->entries.size() &&
+                   !data.groupNames.empty();
+
+    auto items = column->list.Items();
+    items.Clear();
+    std::vector<winrt::Windows::Foundation::IInspectable> made;  // Set in one go at the end.
+    made.reserve(column->entries.size() + 16);
+    auto isCollapsed = [&](int group) {
+        return grouped && group >= 0 && group < (int)data.groupNames.size() &&
+               std::find(column->collapsed.begin(), column->collapsed.end(),
+                         data.groupNames[group]) != column->collapsed.end();
+    };
+    // The selected item's group is opened: a selection can't be hidden.
+    if (grouped && column->selectedChild) {
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            if (ILIsEqual(column->entries[i].child.get(),
+                          column->selectedChild.get()) &&
+                isCollapsed(data.groupOf[i])) {
+                auto at = std::find(column->collapsed.begin(),
+                                    column->collapsed.end(),
+                                    data.groupNames[data.groupOf[i]]);
+                column->collapsed.erase(at);
+                break;
+            }
+        }
+    }
+    int selectRow = -1;
+    for (size_t i = 0; i < column->entries.size(); i++) {
+        int group = grouped ? data.groupOf[i] : -1;
+        if (grouped && (i == 0 || data.groupOf[i] != data.groupOf[i - 1])) {
+            std::wstring title =
+                group >= 0 && group < (int)data.groupNames.size()
+                    ? data.groupNames[group]
+                    : L"";
+            muxc::FontIcon icon{nullptr};
+            made.push_back(MakeHeaderRow(title, rowHeight, isCollapsed(group), &icon));
+            column->rowToEntry.push_back(-1);
+            column->rowGroup.push_back(group);
+            column->headerIcons.push_back(icon);
+        }
+        if (column->selectedChild &&
+            ILIsEqual(column->entries[i].child.get(),
+                      column->selectedChild.get())) {
+            selectRow = (int)column->rowToEntry.size();
+        }
+        auto row = MakeRowShell(rowHeight);
+        if (isCollapsed(group)) {
+            row.Visibility(mux::Visibility::Collapsed);
+        }
+        made.push_back(row);
+        column->entryToRow[i] = (int)column->rowToEntry.size();
+        column->rowToEntry.push_back((int)i);
+        column->rowGroup.push_back(group);
+        column->headerIcons.push_back(muxc::FontIcon{nullptr});
+    }
+    if (data.truncated) {
+        muxc::ListViewItem more;
+        size_t hidden = data.total > column->entries.size()
+                            ? data.total - column->entries.size()
+                            : 0;
+        std::wstring text = hidden > 0
+                                ? std::to_wstring(hidden) + (data.total >= (size_t)kReadCap ? L"+" : L"") +
+                                      L" more items not shown"
+                                : std::wstring(L"More items not shown");
+        more.Content(winrt::box_value(winrt::hstring{text}));
+        more.IsEnabled(false);
+        made.push_back(more);
+        column->rowToEntry.push_back(-1);
+        column->rowGroup.push_back(-1);
+        column->headerIcons.push_back(muxc::FontIcon{nullptr});
+    }
+    items.ReplaceAll(made);
+    // The first rows, and the ones around the selection, have their content
+    // now. The rest is built as the list scrolls.
+    BuildRowRange(column, 0, 60);
+    if (selectRow >= 0) {
+        BuildRowRange(column, selectRow - 30, selectRow + 30);
+        column->list.SelectedIndex(selectRow);
+    }
+    FinishFill(state, column);
     Out(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
         grouped ? (int)data.groupNames.size() : 0,
@@ -1000,6 +1006,166 @@ bool SameListing(const FolderResult& data, const Column& column) {
         return false;
     }
     return data.truncated == more;
+}
+
+
+void ShapeSelectionRuns(Column* column, muxc::ListView const& list);
+void UnshapeRows(Column* column);
+
+// Brings a column's rows to a freshly read listing without building them all again: the rows
+// of items that are still there stay as they are (with their icons, selection and place in the
+// scroll), the rows of items that went are removed, and rows are made only for new items. A
+// rename, a delete, a paste, a new folder or an extraction then touches a few rows. The
+// listings are in the same order, so the items that stayed form a run in both; a longest such
+// run is kept and the others (an item whose sort key changed too) go out and come back.
+// False, with nothing changed, when the column is grouped or cut short, was or becomes empty,
+// or when most of it changed: a full fill is cheaper then.
+bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
+    if (!column->filled || data.truncated || !data.groupNames.empty()) {
+        return false;
+    }
+    auto items = column->list.Items();
+    size_t oldCount = column->entries.size(), newCount = data.entries.size();
+    if (oldCount == 0 || newCount == 0 || items.Size() != oldCount || column->rowToEntry.size() != oldCount ||
+        column->built.size() != oldCount) {
+        return false;
+    }
+    for (size_t i = 0; i < oldCount; i++) {
+        if (column->rowToEntry[i] != (int)i) {
+            return false;  // Group headers or a "more items" row are in the list.
+        }
+    }
+    auto keyOf = [](Entry const& entry) {
+        return std::string((const char*)entry.child.get(), ILGetSize(entry.child.get()));
+    };
+    std::map<std::string, size_t> oldIndex;
+    for (size_t i = 0; i < oldCount; i++) {
+        oldIndex.emplace(keyOf(column->entries[i]), i);
+    }
+    std::vector<int> match(newCount, -1);  // For each new entry, the old one it is, or -1.
+    for (size_t j = 0; j < newCount; j++) {
+        auto found = oldIndex.find(keyOf(data.entries[j]));
+        if (found == oldIndex.end()) {
+            continue;
+        }
+        Entry const& before = column->entries[found->second];
+        Entry const& now = data.entries[j];
+        if (before.name == now.name && before.folder == now.folder && before.archive == now.archive &&
+            before.launcher == now.launcher && before.remote == now.remote) {
+            match[j] = (int)found->second;
+        }
+    }
+    // The longest run of items that keep their order.
+    std::vector<int> tails, previous(newCount, -1);
+    for (size_t j = 0; j < newCount; j++) {
+        if (match[j] < 0) {
+            continue;
+        }
+        size_t low = 0, high = tails.size();
+        while (low < high) {
+            size_t mid = (low + high) / 2;
+            if (match[tails[mid]] < match[j]) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        previous[j] = low > 0 ? tails[low - 1] : -1;
+        if (low == tails.size()) {
+            tails.push_back((int)j);
+        } else {
+            tails[low] = (int)j;
+        }
+    }
+    std::vector<char> keep(newCount, 0);
+    size_t kept = 0;
+    for (int j = tails.empty() ? -1 : tails.back(); j >= 0; j = previous[j]) {
+        keep[j] = 1;
+        kept++;
+    }
+    size_t removed = oldCount - kept, inserted = newCount - kept;
+    if (removed + inserted > std::max<size_t>(40, oldCount / 2)) {
+        return false;
+    }
+    if (state->rename && state->rename->column == column) {
+        CancelRename(state);
+    }
+    UnshapeRows(column);
+
+    std::vector<char> keepOld(oldCount, 0);
+    std::vector<int> newOf(oldCount, -1);
+    for (size_t j = 0; j < newCount; j++) {
+        if (keep[j]) {
+            keepOld[match[j]] = 1;
+            newOf[match[j]] = (int)j;
+        }
+    }
+    for (size_t i = oldCount; i-- > 0;) {
+        if (!keepOld[i]) {
+            items.RemoveAt((uint32_t)i);
+        }
+    }
+    for (size_t j = 0; j < newCount; j++) {
+        if (!keep[j]) {
+            items.InsertAt((uint32_t)j, MakeRowShell(column->rowHeight));
+        }
+    }
+
+    // The per-entry lists follow the new order.
+    auto follow = [&](auto& list, auto blank) {
+        std::decay_t<decltype(list)> out(newCount, blank);
+        for (size_t j = 0; j < newCount; j++) {
+            if (keep[j]) {
+                out[j] = list[match[j]];
+            }
+        }
+        list = std::move(out);
+    };
+    follow(column->texts, muxc::TextBlock{nullptr});
+    follow(column->iconHosts, muxc::Grid{nullptr});
+    follow(column->chevrons, muxc::FontIcon{nullptr});
+    follow(column->built, (char)0);
+    follow(column->iconAsked, (char)0);
+    follow(column->tipBuilt, (char)0);
+    column->entryToRow.assign(newCount, 0);
+    column->rowToEntry.assign(newCount, 0);
+    for (size_t j = 0; j < newCount; j++) {
+        column->entryToRow[j] = (int)j;
+        column->rowToEntry[j] = (int)j;
+    }
+    column->rowGroup.assign(newCount, -1);
+    column->headerIcons.assign(newCount, muxc::FontIcon{nullptr});
+    column->groupTitles.clear();
+    {
+        std::vector<size_t> wanted;
+        for (size_t old : column->iconWanted) {
+            if (old < oldCount && newOf[old] >= 0) {
+                wanted.push_back((size_t)newOf[old]);
+            }
+        }
+        column->iconWanted = std::move(wanted);
+        std::map<size_t, std::shared_ptr<IconBits>> pending;
+        for (auto& waiting : column->pendingIcons) {
+            if (waiting.first < oldCount && newOf[waiting.first] >= 0) {
+                pending.emplace((size_t)newOf[waiting.first], waiting.second);
+            }
+        }
+        column->pendingIcons = std::move(pending);
+        column->hintEntry = column->hintEntry >= 0 && (size_t)column->hintEntry < oldCount ? newOf[column->hintEntry] : -1;
+    }
+    column->entries = std::move(data.entries);
+
+    FitWidth(column);
+    for (size_t j = 0; j < newCount; j++) {
+        if (!keep[j]) {
+            BuildRowRange(column, (int)j, (int)j);  // The new rows have their content at once.
+        }
+    }
+    FinishFill(state, column);
+    ShapeSelectionRuns(column, column->list);
+    Out(L"column \"%s\": patched, %d removed, %d new, %d kept", PathOf(column->folder.get()).c_str(), (int)removed,
+        (int)inserted, (int)kept);
+    return true;
 }
 
 void LiftStale(WindowState* state, int columnIndex);
@@ -1059,9 +1225,13 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 if (changed) {
                     ULONGLONG fillStarted = GetTickCount64();
                     size_t fillCount = loaded->data.entries.size();
-                    FillColumn(state, column.get(), std::move(loaded->data));
+                    if (!firstListing && PatchColumn(state, column.get(), loaded->data)) {
+                        fillCount = 0;
+                    } else {
+                        FillColumn(state, column.get(), std::move(loaded->data));
+                    }
                     ULONGLONG fillTook = GetTickCount64() - fillStarted;
-                    if (fillTook >= 40) {
+                    if (fillTook >= 40 && fillCount > 0) {
                         Out(L"fill: %d rows set up in %d ms on the UI thread", (int)fillCount, (int)fillTook);
                     }
                 } else if (column->cancel) {
@@ -2279,6 +2449,25 @@ muxc::Border SelectionBorderOf(muxc::ListViewItem const& item) {
     } catch (...) {
     }
     return nullptr;
+}
+
+// Puts the rows that were shaped for a run of selected rows back to their own look.
+void UnshapeRows(Column* column) {
+    try {
+        auto items = column->list.Items();
+        for (uint32_t r : column->shapedRows) {
+            if (r < items.Size()) {
+                if (auto item = items.GetAt(r).try_as<muxc::ListViewItem>()) {
+                    if (auto border = SelectionBorderOf(item)) {
+                        border.Margin(mux::Thickness{4, 2.3, 4, 2.3});
+                        border.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+                    }
+                }
+            }
+        }
+        column->shapedRows.clear();
+    } catch (...) {
+    }
 }
 
 void ShapeSelectionRuns(Column* column, muxc::ListView const& list) {
