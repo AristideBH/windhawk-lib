@@ -480,7 +480,12 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         mark.Glyph(entry.remote == 1   ? L"\uE753"
                    : entry.remote == 2 ? L"\uE839"
                    : entry.remote == 3 ? L"\uE8EA"
+                   : entry.remote == 6 ? L"\uE895"
                                        : L"\uE73E");
+        if (entry.remote == 6) {  // Syncing now: the blue of OneDrive.
+            mark.Foreground(mux::Media::SolidColorBrush(
+                winrt::Windows::UI::ColorHelper::FromArgb(255, 0, 120, 212)));
+        }
         if (entry.remote == 4) {
             mark.Foreground(mux::Media::SolidColorBrush(
                 winrt::Windows::UI::ColorHelper::FromArgb(255, 16, 124, 16)));

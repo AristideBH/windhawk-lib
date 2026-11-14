@@ -288,6 +288,21 @@ bool IsInControlPanel(PCIDLIST_ABSOLUTE pidl) {
     return inside;
 }
 
+// Whether a cloud item is transferring now: the storage provider (OneDrive)
+// publishes System.StorageProviderTransferProgress while it uploads or downloads
+// and drops it when it is done.
+bool IsSyncing(IShellFolder* folder, PCUITEMID_CHILD child) {
+    IShellItem2* item = nullptr;
+    if (FAILED(SHCreateItemWithParent(nullptr, folder, child, IID_PPV_ARGS(&item))) || !item) {
+        return false;
+    }
+    static const PROPERTYKEY transfer = {{0xE77E90DF, 0x6271, 0x4F5B, {0x83, 0x4F, 0x2D, 0xD1, 0xF2, 0x45, 0xDD, 0xA4}}, 4};
+    ULONGLONG value = 0;
+    bool syncing = SUCCEEDED(item->GetUInt64(transfer, &value)) && value != 0;
+    item->Release();
+    return syncing;
+}
+
 // Whether an item is not plainly on this disk: a cloud file that is not
 // downloaded, a network location, or a phone or camera. Read on the worker thread.
 int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -296,8 +311,8 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
         return 0;
     }
     if (StrStrIW(name.c_str(), L"\\\\?\\usb#") || StrStrIW(name.c_str(), L"\\\\?\\swd#") ||
-        StrStrIW(name.c_str(), L"\\\\?\\wpdbusenum")) {
-        return 3;
+        StrStrIW(name.c_str(), L"\\\\?\\wpdbusenum") || StrStrIW(name.c_str(), L"\\CrossDevice\\")) {
+        return 3;  // A phone, by its device path or by Phone Link's folder.
     }
     if (name.size() > 2 && name[0] == L'\\' && name[1] == L'\\') {
         return 2;
@@ -325,6 +340,11 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
             DWORD attributes = found.dwFileAttributes;
             bool cloud = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
                          (found.dwReserved0 & 0xF000FFFF) == 0x9000001A;
+            bool placeholder = cloud || (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS |
+                                                       FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE));
+            if (placeholder && IsSyncing(folder, child)) {
+                return 6;
+            }
             if (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN |
                               FILE_ATTRIBUTE_OFFLINE)) {
                 return 1;
@@ -801,6 +821,7 @@ constexpr int kReadCap = 20000;  // The most items read from one folder.
 // thread, with shell objects of its own.
 void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 bool includeHidden, int maxItems, FolderResult* result) {
+    ULONGLONG loadStarted = GetTickCount64();
     IShellFolder* folder = nullptr;
     HRESULT hr;
     if (ILIsEmpty(folderPidl)) {
@@ -850,18 +871,22 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             }
             Entry entry;
             entry.name = DisplayName(folder, child);
-            entry.folder = IsFolderItem(folder, child);
+            // One call for what the row needs to know: each one is a round trip to a
+            // phone's driver, and a camera folder holds thousands of items.
+            SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM | SFGAO_LINK;
+            bool known = SUCCEEDED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&child, &attributes));
+            entry.folder = known && (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
             if (!entry.folder && IsBrowsableArchive(folder, child, entry.name)) {
                 entry.folder = true;
                 entry.archive = true;
             }
-            if (!entry.folder) {
+            if (!entry.folder && known && (attributes & SFGAO_LINK) && !(attributes & SFGAO_FOLDER)) {
                 entry.linkTarget = FolderLinkTarget(folder, child);
                 if (entry.linkTarget) {
                     entry.folder = true;
                 }
             }
-            entry.launcher = !entry.folder && IsLauncherItem(folder, child);
+            entry.launcher = !entry.folder && known && !(attributes & (SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM));
             if (g_remoteMarks) {
                 entry.remote = RemoteKind(folder, child);
             }
@@ -872,14 +897,42 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         list->Release();
     }
     result->ok = SUCCEEDED(hr);
+    {
+        // A folder that takes a while is worth a line: a phone is read item by item.
+        ULONGLONG took = GetTickCount64() - loadStarted;
+        if (took >= 500 || !result->ok) {
+            PWSTR where = nullptr;
+            std::wstring key;
+            if (SUCCEEDED(SHGetNameFromIDList(folderPidl, SIGDN_DESKTOPABSOLUTEPARSING, &where)) && where) {
+                key = where;
+                CoTaskMemFree(where);
+            }
+            Out(L"load: \"%s\" read %d items in %d ms, enumeration hr=0x%08lX", key.c_str(),
+                (int)result->entries.size(), (int)took, hr);
+        }
+    }
     if (g_remoteMarks) {
-        int marked = 0;
+        int marked = 0, syncing = 0;
         for (auto& entry : result->entries) {
             marked += entry.remote != 0;
+            syncing += entry.remote == 6;
         }
-        if (marked) {
-            Out(L"load: %d item(s) marked as cloud, network or device", marked);
+        // One line per folder, again only when the numbers change.
+        static std::mutex lock;
+        static std::map<std::wstring, int> last;
+        std::wstring key;
+        PWSTR text = nullptr;
+        if (SUCCEEDED(SHGetNameFromIDList(folderPidl, SIGDN_DESKTOPABSOLUTEPARSING, &text)) && text) {
+            key = text;
+            CoTaskMemFree(text);
         }
+        std::lock_guard<std::mutex> guard(lock);
+        int summary = marked * 10000 + syncing;
+        auto at = last.find(key);
+        if ((at == last.end() ? marked != 0 || syncing != 0 : at->second != summary)) {
+            Out(L"marks in \"%s\": %d cloud, network or device, %d syncing", key.c_str(), marked, syncing);
+        }
+        last[key] = summary;
     }
 
     // Sort with the shell's own comparison, one sort column after the other.

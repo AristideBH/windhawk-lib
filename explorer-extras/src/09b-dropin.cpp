@@ -48,6 +48,7 @@ struct PanelDropTarget : IDropTarget {
     IDropTarget* folder = nullptr;  // The folder's own target, between its DragEnter and DragLeave.
     Pidl folderPidl;
     DWORD lastKeys = 0;
+    DWORD lastButtons = 0;  // The button of the drag, as the last move saw it held.
     POINTL lastPoint{};
     DWORD lastWanted = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
 
@@ -88,6 +89,9 @@ struct PanelDropTarget : IDropTarget {
     // The pointer is at `pt` (screen). Settles the target and gives the effect.
     void Settle(DWORD keys, POINTL pt, DWORD* effect) {
         lastKeys = keys;
+        if (keys & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) {
+            lastButtons = keys & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON);
+        }
         lastPoint = pt;
         DWORD wanted = *effect;
         lastWanted = wanted;
@@ -215,6 +219,7 @@ struct PanelDropTarget : IDropTarget {
 
     STDMETHODIMP DragEnter(IDataObject* object, DWORD keys, POINTL pt, DWORD* effect) override {
         DropData();
+        lastButtons = 0;
         data = object;
         if (data) {
             data->AddRef();
@@ -264,8 +269,14 @@ struct PanelDropTarget : IDropTarget {
             RemoveGhost(state);
         }
         if (folder && *effect != DROPEFFECT_NONE) {
+            // At the drop the button is already up, and a folder's drop target takes a
+            // key state with no button for a drag of the right button: it asks
+            // "Copy here, Move here, Cancel". The button of the drag is the one the
+            // last move had; the modifiers are those of the drop.
+            DWORD buttons = lastButtons;
+            DWORD dropKeys = (keys & ~(DWORD)(MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) | (buttons ? buttons : MK_LBUTTON);
             DWORD result = wanted;
-            HRESULT hr = folder->Drop(data, keys, pt, &result);
+            HRESULT hr = folder->Drop(data, dropKeys, pt, &result);
             Out(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
                 (unsigned long)result, hr);
             *effect = result;
