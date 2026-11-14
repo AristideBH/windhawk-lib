@@ -989,6 +989,9 @@ void OnColumnKey(muxc::ListView const& list,
 
 void ChooseColumns(WindowState* state);
 void LeaveColumns(WindowState* state);
+void RegisterPanelDropTarget(WindowState* state);
+void RevokePanelDropTarget(WindowState* state);
+void DragAutoScroll(WindowState* state);
 
 void HidePanel(WindowState* state, const wchar_t* why) {
     if (!state->source) {
@@ -998,6 +1001,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     Out(L"panel off: %s", why);
     state->on = false;
     g_panelWindow = nullptr;
+    RevokePanelDropTarget(state);
     RestoreNativeList(state);
     CancelRename(state);
     CloseContextMenu(state);
@@ -1504,6 +1508,7 @@ void OnTick() {
         HidePanel(state, L"mod unloading or feature off");
         return;
     }
+    DragAutoScroll(state);
     try {
         if (!IsWindow(state->topLevel)) {
             AbandonWindow(state);
@@ -2220,6 +2225,7 @@ void ShowPanel(WindowState* state) {
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         state->lastRect = rect;
         g_panelWindow = (HWND)bridge.WindowId().Value;
+        RegisterPanelDropTarget(state);
         state->lastFileList = fileList;
         state->scroller = scroller;
         state->strip = strip;

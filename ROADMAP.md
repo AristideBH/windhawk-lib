@@ -78,7 +78,7 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
-## Where we stopped, 2026-11-14 (version 0.14.4)
+## Where we stopped, 2026-11-14 (version 0.15.0)
 
 Done and tested by Ari: everything in the plan table through 0.12.3 (columns
 per tab, menus, per-folder memory with three toggles, drag between columns,
@@ -100,12 +100,15 @@ Open, most useful first:
    was not reproduced (it came right after the mod was replaced while a window
    was in Columns). When it is switched on and works for a while, make it
    default on.
-3. Drops coming in from other windows and apps onto the panel are not
-   handled. WinUI: `AllowDrop` on the lists, `DragOver` and `Drop`, read the
-   storage items, do the move or copy with `IFileOperation` to the folder row or
-   column under the pointer.
-4. While dragging: no auto-scroll at the edges of a column or the strip;
-   dragging out of an archive column is refused.
+3. Drops coming in from other windows and apps, and edge auto-scroll: built and tested
+   in 0.15.0. The panel registers its own OLE drop target on its window and
+   hands the drop to the folder under the pointer (row or column), through that
+   folder's own drop target, so the shell does the move, copy or link. The target is
+   lit like in the drag of rows. A column scrolls near its top or bottom edge and the
+   strip near its left or right edge, for inbound drags and for the drag of rows.
+4. Still open while dragging: dragging out of an archive column is refused; the
+   dragged label of the drag of rows between columns is weak (count badge,
+   translucent), see 1b.
 5. The folder (background) menu and the item menu build their rows with
    similar code that should be shared; their visuals get a dedicated pass
    (spacing, icon sizes, the Windows icon files in

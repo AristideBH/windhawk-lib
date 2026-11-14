@@ -278,6 +278,12 @@ struct WindowState {
     muxc::Border bandBox{nullptr};
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
+    // Drops coming in from other windows and applications, and the scroll that
+    // follows a drag (inbound or of rows) near the edge of a column or the strip.
+    IDropTarget* panelDrop = nullptr;
+    HWND panelDropWindow = nullptr;
+    winrt::Windows::Foundation::Point autoPoint{};  // The pointer, host coordinates.
+    bool autoOn = false;
     muxc::Border pill{nullptr};
     double pillLeft = -1;      // Where the pill is, or is going.
     ULONGLONG pillUntil = 0;   // Until when its animation runs.

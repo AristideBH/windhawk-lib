@@ -125,6 +125,7 @@ void DragClearTarget(WindowState* state) {
 void DragEnd(WindowState* state) {
     auto& d = state->drag;
     DragClearTarget(state);
+    state->autoOn = false;
     try {
         if (d.ghost && state->overlay) {
             uint32_t index = 0;
@@ -174,6 +175,62 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     static int logged = 0;
     if (logged++ < 6) {
         Out(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
+    }
+}
+
+// Lights the folder row, or the column, a drop would go to.
+void DragLight(WindowState* state, Column* targetColumn, int targetEntry) {
+    auto& d = state->drag;
+    winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
+                                                      : winrt::Windows::UI::Color{255, 76, 194, 255};
+    try {
+        if (targetEntry >= 0) {
+            int rowIndex = targetColumn->entryToRow[targetEntry];
+            auto row = targetColumn->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
+            if (row) {
+                d.litRow = row;
+                d.litRowBrush = row.Background();
+                row.Background(Brush(80, tint.R, tint.G, tint.B));
+            }
+        } else if (targetColumn->cell) {
+            d.litColumn = targetColumn;
+            d.litCellBrush = targetColumn->cell.Background();
+            targetColumn->cell.Background(Brush(40, tint.R, tint.G, tint.B));
+        }
+    } catch (...) {
+        LogHresult(L"lighting the drop target");
+    }
+}
+
+// Finds the target under a point of the panel (host coordinates) for the drag
+// of rows, and lights it when the drop is allowed. Also run by the tick while
+// a column scrolls under a pointer that does not move.
+void DragRefreshTarget(WindowState* state, winrt::Windows::Foundation::Point where) {
+    auto& d = state->drag;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    Column* targetColumn = nullptr;
+    int targetEntry = -1;
+    bool found = false;
+    try {
+        found = DragTargetAt(state, where, &targetColumn, &targetEntry);
+    } catch (...) {
+        LogHresult(L"finding the drop target");
+    }
+    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry ||
+        ctrl != d.lastCtrl) {
+        d.lastCtrl = ctrl;
+        DragClearTarget(state);
+        if (found) {
+            d.targetColumn = targetColumn;
+            d.targetEntry = targetEntry;
+            d.targetOk = DragTargetAllowed(state, targetColumn, targetEntry);
+            if (d.targetOk) {
+                DragLight(state, targetColumn, targetEntry);
+            }
+        }
+    }
+    if (d.ghost) {
+        d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
     }
 }
 
@@ -248,46 +305,9 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     }
 
     // The target under the pointer.
-    Column* targetColumn = nullptr;
-    int targetEntry = -1;
-    bool found = false;
-    try {
-        found = DragTargetAt(state, args.GetCurrentPoint(nullptr).Position(), &targetColumn, &targetEntry);
-    } catch (...) {
-        LogHresult(L"finding the drop target");
-    }
-    if (!found || targetColumn != d.targetColumn || targetEntry != d.targetEntry ||
-        ctrl != d.lastCtrl) {
-        d.lastCtrl = ctrl;
-        DragClearTarget(state);
-        if (found) {
-            d.targetColumn = targetColumn;
-            d.targetEntry = targetEntry;
-            d.targetOk = DragTargetAllowed(state, targetColumn, targetEntry);
-            if (d.targetOk) {
-                winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
-                                                                  : winrt::Windows::UI::Color{255, 76, 194, 255};
-                try {
-                    if (targetEntry >= 0) {
-                        int rowIndex = targetColumn->entryToRow[targetEntry];
-                        auto row = targetColumn->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
-                        if (row) {
-                            d.litRow = row;
-                            d.litRowBrush = row.Background();
-                            row.Background(Brush(80, tint.R, tint.G, tint.B));
-                        }
-                    } else if (targetColumn->cell) {
-                        d.litColumn = targetColumn;
-                        d.litCellBrush = targetColumn->cell.Background();
-                        targetColumn->cell.Background(Brush(40, tint.R, tint.G, tint.B));
-                    }
-                } catch (...) {
-                    LogHresult(L"lighting the drop target");
-                }
-            }
-        }
-    }
-    d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
+    state->autoPoint = args.GetCurrentPoint(nullptr).Position();
+    state->autoOn = true;
+    DragRefreshTarget(state, state->autoPoint);
     // Past the edge of the panel the drag goes on as a real one.
     if (g_dragOut && state->rootGrid) {
         auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
