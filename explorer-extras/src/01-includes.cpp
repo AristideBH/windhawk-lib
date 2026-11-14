@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cmath>
 #include <cstdarg>
 #include <cwchar>
@@ -22,6 +23,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef MOD_NO_WINRT

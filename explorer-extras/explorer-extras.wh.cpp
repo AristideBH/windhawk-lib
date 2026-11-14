@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.14.3
+// @version         0.14.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -141,6 +141,7 @@ Not yet: drag and drop.
 
 #include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cmath>
 #include <cstdarg>
 #include <cwchar>
@@ -151,6 +152,7 @@ Not yet: drag and drop.
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef MOD_NO_WINRT
@@ -10129,6 +10131,45 @@ Pidl FolderOfNavItem(HWND tree, HTREEITEM node) {
     return result;
 }
 
+// The shell's drag loop is driven by mouse move messages, and the panel's input
+// (a XAML island) takes them as pointer messages, so the loop never sees the
+// pointer move: a target hears of the release point only, and the navigation
+// pane, the views of other windows and other applications show no hover and
+// answer nothing until then. This thread posts the missing moves to the drag
+// loop's thread while the drag runs, with the position and the keys as they are.
+struct MoveNudger {
+    std::atomic<bool> stop{false};
+    std::atomic<int> sent{0};
+    std::thread worker;
+    void Start(DWORD threadId) {
+        worker = std::thread([this, threadId]() {
+            POINT last = {LONG_MIN, LONG_MIN};
+            while (!stop.load()) {
+                POINT now;
+                if (GetCursorPos(&now) && (now.x != last.x || now.y != last.y)) {
+                    last = now;
+                    WPARAM keys = 0;
+                    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) keys |= MK_LBUTTON;
+                    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
+                    if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
+                    if (PostThreadMessageW(threadId, WM_MOUSEMOVE, keys,
+                                           MAKELPARAM((WORD)now.x, (WORD)now.y))) {
+                        sent++;
+                    }
+                }
+                Sleep(15);
+            }
+        });
+    }
+    void Stop() {
+        stop = true;
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+    ~MoveNudger() { Stop(); }
+};
+
 // A real drag, for when the pointer leaves the panel: the shell's own drag loop
 // carries the items to whatever is under the pointer, another Explorer window,
 // the desktop or another application. Started after the event that noticed it,
@@ -10169,9 +10210,13 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     ReleaseCapture();
     OutDropSource* dropSource = new OutDropSource();
     dropSource->data = data;
+    MoveNudger nudger;
+    nudger.Start(GetCurrentThreadId());
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
-    Out(L"drag out: the drag loop asked for feedback %d time(s)", dropSource->feedbackCalls);
+    nudger.Stop();
+    Out(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
+        dropSource->feedbackCalls, nudger.sent.load());
     {
         wchar_t title[80] = L"";
         DWORD processId = 0;
@@ -10207,13 +10252,19 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     POINT treePoint = dropSource->dropPoint;
     DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
     treeKeys |= dropSource->graceKeys;
+    // A target that answered the drag with one effect has taken the drop itself;
+    // only one that kept the whole offer (all three effects) has heard nothing.
+    bool unanswered = (dropSource->lastEffect & (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK)) ==
+                      (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK);
     dropSource->Release();
     data->Release();
     DWORD treeProcess = 0;
     if (treeWindow && ClassNameOf(treeWindow) == L"SysTreeView32") {
         GetWindowThreadProcessId(treeWindow, &treeProcess);
     }
-    if (treeProcess == GetCurrentProcessId() && !children.empty()) {
+    if (treeProcess == GetCurrentProcessId() && !children.empty() && !unanswered) {
+        Out(L"drag out: the navigation pane answered the drag itself, nothing to finish");
+    } else if (treeProcess == GetCurrentProcessId() && !children.empty()) {
         TVHITTESTINFO hit = {};
         hit.pt = treePoint;
         ScreenToClient(treeWindow, &hit.pt);
@@ -11078,7 +11129,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.14.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.14.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

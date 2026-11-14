@@ -78,7 +78,7 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
-## Where we stopped, 2026-11-14 (version 0.14.3)
+## Where we stopped, 2026-11-14 (version 0.14.4)
 
 Done and tested by Ari: everything in the plan table through 0.12.3 (columns
 per tab, menus, per-folder memory with three toggles, drag between columns,
@@ -88,22 +88,14 @@ before the button). Everything below is open.
 
 Open, most useful first:
 
-1. Drag out onto Explorer's navigation pane: done in 0.14.0 to 0.14.3, tested
-   (move works, Ctrl copy not yet confirmed). Cause: the shell's drag loop gets no
-   pointer moves from the panel's input, so a target only hears about the release
-   point; the nav tree needs a hovered item. Fix: a release over the tree is
-   finished by the mod, which walks the item's name chain to a folder (Home, then
-   known folders, Desktop, profile, This PC) and runs the folder's own drop. Debt:
-   the name walk can pick the wrong folder when two share a name, and a drop onto a
-   folder in a second Explorer window works through the shell as before. The
-   0.13.8 probe that called a target's `DragEnter`/`DragLeave` directly crashed
-   Explorer twice (explorerframe.dll): never do that.
-1b. Visuals while dragging, to improve (Ari, 2026-11-14): no hover feedback on the
-   target (the shell loop sees no moves, so the nav pane and other windows show
-   nothing), and the dragged overlay is weak. Needs our own pointer tracking
-   (the panel still gets moves) to light the target and draw a better overlay with
-   a count badge; the translucent overlay idea from DragDropNormalizer is in the
-   ideas section.
+1. Drag out: done and tested in 0.14.4. Cause of everything that failed before: the
+   shell's drag loop gets no pointer moves from the panel's input (a XAML island),
+   so a target only heard of the release point. A helper thread now posts the
+   moves to the loop (`MoveNudger`), and the navigation pane, other windows (any
+   view), the desktop and other apps hover and answer natively. The mod's own
+   finishing of a drop on the nav pane (a name walk to a folder) stays as a
+   fallback for a tree that gives no answer. Never call a drop target's
+   `DragEnter`/`DragLeave` by hand: it crashed Explorer twice (explorerframe.dll).
 2. `dragOut` is off by default after the first test hung Explorer. The hang
    was not reproduced (it came right after the mod was replaced while a window
    was in Columns). When it is switched on and works for a while, make it
