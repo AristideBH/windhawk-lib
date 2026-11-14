@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.20.0
+// @version         0.20.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -5123,6 +5123,8 @@ void OnRowSelected(muxc::ListView const& list) {
     }
 }
 
+bool TryShowNewTab(WindowState* state);
+void OnTick();
 // ---- Right-click menu ----
 
 // ---- Rename in place and clipboard, which the shell menu can't do here ----
@@ -6096,6 +6098,24 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, keys, sizeof(INPUT));
     Out(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
+    // Watched every 10 ms, not at the tick's pace: the folder is shown in the tab
+    // and the columns follow the moment it exists.
+    try {
+        auto timer = state->queue.CreateTimer();
+        timer.Interval(std::chrono::milliseconds(10));
+        timer.Tick([](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            WindowState* now = StateForThisThread(false);
+            if (!now || g_unloading || TryShowNewTab(now)) {
+                sender.Stop();
+                if (now && !g_unloading) {
+                    OnTick();  // Notices the new folder at once.
+                }
+            }
+        });
+        timer.Start();
+    } catch (...) {
+        LogHresult(L"watching for the new tab");
+    }
 }
 
 // Extracts an archive into a folder next to it, named like the archive, with the
@@ -7522,12 +7542,20 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
         folder->Release();
     }
 
+    // The tooltip is never wider than the column of the row it describes.
+    double columnWidth = column->list ? column->list.ActualWidth() : 0;
+    if (columnWidth < 160) {
+        columnWidth = 160;
+    }
+    const double padding = 24;  // The tooltip's own padding and border.
+    double room = columnWidth - padding;
     muxc::StackPanel panel;
+    panel.MaxWidth(room);
     muxc::TextBlock name;
     name.Text(entry.name);
     name.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     name.TextWrapping(mux::TextWrapping::Wrap);
-    name.MaxWidth(323);
+    name.MaxWidth(std::min(323.0, room));
     panel.Children().Append(name);
     if (!lines.empty()) {
         muxc::Grid grid;
@@ -7552,7 +7580,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
             value.FontSize(12);
             value.Margin(mux::Thickness{0, 1, 0, 1});
             value.TextWrapping(mux::TextWrapping::Wrap);
-            value.MaxWidth(221);
+            value.MaxWidth(std::max(60.0, std::min(221.0, room - 96)));
             muxc::Grid::SetRow(value, (int)i);
             muxc::Grid::SetColumn(value, 1);
             grid.Children().Append(label);
@@ -7561,6 +7589,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
         panel.Children().Append(grid);
     }
     muxc::ToolTip tip;
+    tip.MaxWidth(columnWidth);
     tip.Content(panel);
     return tip;
 }
@@ -9143,6 +9172,39 @@ void SyncSelectionFromExplorer(WindowState* state) {
     }
 }
 
+// "Open in a new tab": once the new tab exists, shows the folder in it. True
+// when there is nothing left to wait for.
+bool TryShowNewTab(WindowState* state) {
+    if (!state->openTabFolder) {
+        return true;
+    }
+    if (GetTickCount64() >= state->openTabUntil) {
+        Out(L"the new tab did not open in time");
+        state->openTabFolder.reset();
+        state->newTab = nullptr;
+        return true;
+    }
+    if (state->newTab && IsWindow(state->newTab)) {
+        DWORD_PTR result = 0;
+        if (SendMessageTimeoutW(state->newTab, WM_USER + 7, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 500,
+                                &result) &&
+            result) {
+            IShellBrowser* tabBrowser = (IShellBrowser*)result;
+            g_ourBrowse = true;
+            HRESULT hr = tabBrowser->BrowseObject(state->openTabFolder.get(),
+                                                  SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
+            g_ourBrowse = false;
+            Out(L"the new tab shows its folder: hr=0x%08lX", hr);
+            if (SUCCEEDED(hr)) {
+                state->openTabFolder.reset();
+                state->newTab = nullptr;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
@@ -9517,30 +9579,7 @@ void OnTick() {
         }
 
         // Open in a new tab: the tab is there, show the folder in it.
-        if (state->openTabFolder) {
-            if (now >= state->openTabUntil) {
-                Out(L"the new tab did not open in time");
-                state->openTabFolder.reset();
-                state->newTab = nullptr;
-            } else if (state->newTab && IsWindow(state->newTab)) {
-                DWORD_PTR result = 0;
-                if (SendMessageTimeoutW(state->newTab, WM_USER + 7, 0, 0,
-                                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, &result) &&
-                    result) {
-                    IShellBrowser* tabBrowser = (IShellBrowser*)result;
-                    g_ourBrowse = true;
-                    HRESULT hr = tabBrowser->BrowseObject(
-                        state->openTabFolder.get(),
-                        SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
-                    g_ourBrowse = false;
-                    Out(L"the new tab shows its folder: hr=0x%08lX", hr);
-                    if (SUCCEEDED(hr)) {
-                        state->openTabFolder.reset();
-                        state->newTab = nullptr;
-                    }
-                }
-            }
-        }
+        TryShowNewTab(state);
 
         // A column resized or moved: the pill follows, without animation.
         UpdatePill(state, false);
@@ -11053,6 +11092,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     POINT treePoint = dropSource->dropPoint;
     DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
     treeKeys |= dropSource->graceKeys;
+    DWORD lastOffered = dropSource->lastEffect;
     if (state->outFromArchive) {
         treeKeys = MK_CONTROL;
     }
@@ -11065,6 +11105,45 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     DWORD treeProcess = 0;
     if (treeWindow && ClassNameOf(treeWindow) == L"SysTreeView32") {
         GetWindowThreadProcessId(treeWindow, &treeProcess);
+    }
+    // A folder dropped on the tab strip opens in a new tab. The strip is Explorer's
+    // own XAML and took no drop from this drag, so the mod does it: the release is
+    // in the top band of the window, left of the caption buttons, and nothing
+    // answered the drag.
+    if (!children.empty() && lastOffered == 0 && treeWindow && !state->outFromArchive) {
+        HWND top = GetAncestor(treeWindow, GA_ROOT);
+        DWORD topProcess = 0;
+        if (top) {
+            GetWindowThreadProcessId(top, &topProcess);
+        }
+        RECT box{};
+        if (top && topProcess == GetCurrentProcessId() && ClassNameOf(top) == L"CabinetWClass" &&
+            GetWindowRect(top, &box)) {
+            double scale = GetDpiForWindow(top) / 96.0;
+            bool inStrip = treePoint.y >= box.top && treePoint.y <= box.top + (LONG)(46 * scale) &&
+                           treePoint.x >= box.left && treePoint.x <= box.right - (LONG)(140 * scale);
+            if (inStrip) {
+                IShellFolder* sourceFolderObject = nullptr;
+                HRESULT bound = ILIsEmpty(sourceFolder.get())
+                                    ? SHGetDesktopFolder(&sourceFolderObject)
+                                    : SHBindToObject(nullptr, sourceFolder.get(), nullptr,
+                                                     IID_PPV_ARGS(&sourceFolderObject));
+                if (SUCCEEDED(bound) && sourceFolderObject) {
+                    for (auto& child : children) {
+                        PCUITEMID_CHILD one = child.get();
+                        ULONG attributes = SFGAO_FOLDER | SFGAO_STREAM;
+                        if (SUCCEEDED(sourceFolderObject->GetAttributesOf(1, &one, &attributes)) &&
+                            (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM)) {
+                            Pidl folder(ILCombine(sourceFolder.get(), child.get()));
+                            Out(L"drag out: a folder dropped on the tab strip opens in a new tab");
+                            OpenFolderInNewTab(state, folder.get());
+                            break;  // One tab per drop.
+                        }
+                    }
+                    sourceFolderObject->Release();
+                }
+            }
+        }
     }
     if (treeProcess == GetCurrentProcessId() && !children.empty() && !unanswered) {
         Out(L"drag out: the navigation pane answered the drag itself, nothing to finish");
@@ -12674,7 +12753,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.20.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.20.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

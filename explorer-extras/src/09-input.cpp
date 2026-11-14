@@ -1576,6 +1576,39 @@ void SyncSelectionFromExplorer(WindowState* state) {
     }
 }
 
+// "Open in a new tab": once the new tab exists, shows the folder in it. True
+// when there is nothing left to wait for.
+bool TryShowNewTab(WindowState* state) {
+    if (!state->openTabFolder) {
+        return true;
+    }
+    if (GetTickCount64() >= state->openTabUntil) {
+        Out(L"the new tab did not open in time");
+        state->openTabFolder.reset();
+        state->newTab = nullptr;
+        return true;
+    }
+    if (state->newTab && IsWindow(state->newTab)) {
+        DWORD_PTR result = 0;
+        if (SendMessageTimeoutW(state->newTab, WM_USER + 7, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 500,
+                                &result) &&
+            result) {
+            IShellBrowser* tabBrowser = (IShellBrowser*)result;
+            g_ourBrowse = true;
+            HRESULT hr = tabBrowser->BrowseObject(state->openTabFolder.get(),
+                                                  SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
+            g_ourBrowse = false;
+            Out(L"the new tab shows its folder: hr=0x%08lX", hr);
+            if (SUCCEEDED(hr)) {
+                state->openTabFolder.reset();
+                state->newTab = nullptr;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
@@ -1950,30 +1983,7 @@ void OnTick() {
         }
 
         // Open in a new tab: the tab is there, show the folder in it.
-        if (state->openTabFolder) {
-            if (now >= state->openTabUntil) {
-                Out(L"the new tab did not open in time");
-                state->openTabFolder.reset();
-                state->newTab = nullptr;
-            } else if (state->newTab && IsWindow(state->newTab)) {
-                DWORD_PTR result = 0;
-                if (SendMessageTimeoutW(state->newTab, WM_USER + 7, 0, 0,
-                                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, &result) &&
-                    result) {
-                    IShellBrowser* tabBrowser = (IShellBrowser*)result;
-                    g_ourBrowse = true;
-                    HRESULT hr = tabBrowser->BrowseObject(
-                        state->openTabFolder.get(),
-                        SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
-                    g_ourBrowse = false;
-                    Out(L"the new tab shows its folder: hr=0x%08lX", hr);
-                    if (SUCCEEDED(hr)) {
-                        state->openTabFolder.reset();
-                        state->newTab = nullptr;
-                    }
-                }
-            }
-        }
+        TryShowNewTab(state);
 
         // A column resized or moved: the pill follows, without animation.
         UpdatePill(state, false);

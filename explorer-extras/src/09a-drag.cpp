@@ -1078,6 +1078,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     POINT treePoint = dropSource->dropPoint;
     DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
     treeKeys |= dropSource->graceKeys;
+    DWORD lastOffered = dropSource->lastEffect;
     if (state->outFromArchive) {
         treeKeys = MK_CONTROL;
     }
@@ -1090,6 +1091,45 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     DWORD treeProcess = 0;
     if (treeWindow && ClassNameOf(treeWindow) == L"SysTreeView32") {
         GetWindowThreadProcessId(treeWindow, &treeProcess);
+    }
+    // A folder dropped on the tab strip opens in a new tab. The strip is Explorer's
+    // own XAML and took no drop from this drag, so the mod does it: the release is
+    // in the top band of the window, left of the caption buttons, and nothing
+    // answered the drag.
+    if (!children.empty() && lastOffered == 0 && treeWindow && !state->outFromArchive) {
+        HWND top = GetAncestor(treeWindow, GA_ROOT);
+        DWORD topProcess = 0;
+        if (top) {
+            GetWindowThreadProcessId(top, &topProcess);
+        }
+        RECT box{};
+        if (top && topProcess == GetCurrentProcessId() && ClassNameOf(top) == L"CabinetWClass" &&
+            GetWindowRect(top, &box)) {
+            double scale = GetDpiForWindow(top) / 96.0;
+            bool inStrip = treePoint.y >= box.top && treePoint.y <= box.top + (LONG)(46 * scale) &&
+                           treePoint.x >= box.left && treePoint.x <= box.right - (LONG)(140 * scale);
+            if (inStrip) {
+                IShellFolder* sourceFolderObject = nullptr;
+                HRESULT bound = ILIsEmpty(sourceFolder.get())
+                                    ? SHGetDesktopFolder(&sourceFolderObject)
+                                    : SHBindToObject(nullptr, sourceFolder.get(), nullptr,
+                                                     IID_PPV_ARGS(&sourceFolderObject));
+                if (SUCCEEDED(bound) && sourceFolderObject) {
+                    for (auto& child : children) {
+                        PCUITEMID_CHILD one = child.get();
+                        ULONG attributes = SFGAO_FOLDER | SFGAO_STREAM;
+                        if (SUCCEEDED(sourceFolderObject->GetAttributesOf(1, &one, &attributes)) &&
+                            (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM)) {
+                            Pidl folder(ILCombine(sourceFolder.get(), child.get()));
+                            Out(L"drag out: a folder dropped on the tab strip opens in a new tab");
+                            OpenFolderInNewTab(state, folder.get());
+                            break;  // One tab per drop.
+                        }
+                    }
+                    sourceFolderObject->Release();
+                }
+            }
+        }
     }
     if (treeProcess == GetCurrentProcessId() && !children.empty() && !unanswered) {
         Out(L"drag out: the navigation pane answered the drag itself, nothing to finish");

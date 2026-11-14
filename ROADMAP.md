@@ -143,6 +143,7 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | 0.21 | Everyday gaps: focusing virtual Desktop items, OneDrive syncing state, MTP and phone detection, Documents icon, remote marks log lines. |
 | 0.22 | Speed: icon jobs for the rows on screen first, item-level change events (diff a folder instead of replacing it), measure the 5 000 row limit and the Huge folder case. |
 | 0.23 | Menus: share the row building of the item and folder menus, visual pass (spacing, icon sizes, Windows icon files). |
+| 0.24 | Touch and pen, required before 1.0, Ari's call 2026-11-14. Drag and drop with a finger or a pen: see "Touch plan" below. |
 | 0.9x, release candidates | Strings in a table for translation, remove the test settings (transparent and Mica background), settings review and defaults, x64 and arm64 builds, uninstall and reload safety, README with captures, the showcase video. |
 | 1.0 | The pull request to windhawk-mods, skills updated one last time. |
 | later | Labels, toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options. |
@@ -175,6 +176,53 @@ Columns per tab is the biggest gap and the biggest change, so it comes after
 the split. Drag and drop and the flyout restyle are polish on a working
 whole. The three low priority items depend on things we don't control: a
 DirectUI hook, another author's mod, a design call.
+
+## Touch plan (0.24), drawn up 2026-11-14
+
+Goal: everything the mouse does for drag and drop works with a finger and a
+pen, without breaking panning, scrolling and tapping. To do on Ari's touch
+screen, with logs, since none of it can be judged from code.
+
+1. Telling the pointers apart. `PointerRoutedEventArgs` gives `PointerDeviceType`
+   (Mouse, Touch, Pen). A touch press must not start a drag by moving: that is a
+   pan of the column. A drag starts after a press and hold (about 400 ms, no
+   move beyond 8 px), with a small haptic-style cue (the row lifts: scale, shadow
+   or accent frame), and only then does moving drag. A pen drags like a mouse
+   with its barrel or tip contact and no hold; to check.
+2. Panning and the hold. The column's scroll viewer pans by touch. While the
+   hold timer runs a move cancels it and the pan proceeds; after the lift the
+   scroll viewer must stop panning (capture the pointer, `CancelDirectManipulations`).
+3. The context menu. A hold and release on a row opens the item menu today
+   (right-tap). The lift must come first and the menu only when the finger is
+   released without moving. Same for an empty space and the folder menu.
+4. The drag out of the panel with the shell's loop. `SHDoDragDrop` ends when the
+   mouse button is not down: for touch the button is never down, so
+   `QueryContinueDrag` would end the drag at once. It has to read the contact
+   state from the XAML pointer (a flag set by `PointerReleased` and
+   `PointerCanceled`) and the `MoveNudger` has to post the finger's position,
+   since the system cursor does not follow a finger (`GetCursorPos` may be stale).
+   To verify on the device: what `WindowFromPoint` and `GetCursorPos` give during
+   a touch drag.
+5. The label and frame. The label goes above the finger, not below and right,
+   since the hand hides it. The drop frame and the spring-loaded folder work
+   the same (pointer position, dwell), with a longer dwell for a finger (1 s).
+   Edge scroll zones wider for touch (72 px).
+6. Drops coming in. Touch drags from other windows and apps arrive through the
+   panel's `IDropTarget` like a mouse drag; check the hover and the helper image.
+7. Targets. Rows are 32 px: Explorer's touch mode uses taller rows. Option to
+   follow the "touch keyboard and touch mode" spacing of Explorer, or a setting
+   for taller rows. Chevron and border grips need a wider touch target (the
+   border grip is 9 px).
+8. Also by touch: tap to select, double tap to open, tap on the empty strip
+   to pick the column, Shift and Ctrl selection by the selection mode of the
+   list (touch has no modifier keys: a check-box mode or a press and hold to
+   enter multi-select), rename (slow second tap) must not fire while panning,
+   Harmonize widths needs a gesture (two-finger tap on a border?).
+
+Order: 1 to 3 (hold, pan, menu), then 4 and 5 (drag out and label) on the
+device, then 6 to 8. Log the pointer type in the existing drag lines so the
+first test says what the platform does.
+
 
 ## Ideas taken from three other mods, 2026-11-13, ideas only
 

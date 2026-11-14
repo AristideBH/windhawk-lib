@@ -1,3 +1,5 @@
+bool TryShowNewTab(WindowState* state);
+void OnTick();
 // ---- Right-click menu ----
 
 // ---- Rename in place and clipboard, which the shell menu can't do here ----
@@ -971,6 +973,24 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, keys, sizeof(INPUT));
     Out(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
+    // Watched every 10 ms, not at the tick's pace: the folder is shown in the tab
+    // and the columns follow the moment it exists.
+    try {
+        auto timer = state->queue.CreateTimer();
+        timer.Interval(std::chrono::milliseconds(10));
+        timer.Tick([](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            WindowState* now = StateForThisThread(false);
+            if (!now || g_unloading || TryShowNewTab(now)) {
+                sender.Stop();
+                if (now && !g_unloading) {
+                    OnTick();  // Notices the new folder at once.
+                }
+            }
+        });
+        timer.Start();
+    } catch (...) {
+        LogHresult(L"watching for the new tab");
+    }
 }
 
 // Extracts an archive into a folder next to it, named like the archive, with the
@@ -2397,12 +2417,20 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
         folder->Release();
     }
 
+    // The tooltip is never wider than the column of the row it describes.
+    double columnWidth = column->list ? column->list.ActualWidth() : 0;
+    if (columnWidth < 160) {
+        columnWidth = 160;
+    }
+    const double padding = 24;  // The tooltip's own padding and border.
+    double room = columnWidth - padding;
     muxc::StackPanel panel;
+    panel.MaxWidth(room);
     muxc::TextBlock name;
     name.Text(entry.name);
     name.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     name.TextWrapping(mux::TextWrapping::Wrap);
-    name.MaxWidth(323);
+    name.MaxWidth(std::min(323.0, room));
     panel.Children().Append(name);
     if (!lines.empty()) {
         muxc::Grid grid;
@@ -2427,7 +2455,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
             value.FontSize(12);
             value.Margin(mux::Thickness{0, 1, 0, 1});
             value.TextWrapping(mux::TextWrapping::Wrap);
-            value.MaxWidth(221);
+            value.MaxWidth(std::max(60.0, std::min(221.0, room - 96)));
             muxc::Grid::SetRow(value, (int)i);
             muxc::Grid::SetColumn(value, 1);
             grid.Children().Append(label);
@@ -2436,6 +2464,7 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
         panel.Children().Append(grid);
     }
     muxc::ToolTip tip;
+    tip.MaxWidth(columnWidth);
     tip.Content(panel);
     return tip;
 }
