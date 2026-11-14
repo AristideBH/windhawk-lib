@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.18.6
+// @version         0.19.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1439,6 +1439,34 @@ bool SelectInExplorer(IShellBrowser* browser, PCUITEMID_CHILD child) {
     return SUCCEEDED(hr);
 }
 
+// The items selected in Explorer's own view, as child ids.
+std::vector<Pidl> ExplorerSelection(IShellBrowser* browser) {
+    std::vector<Pidl> result;
+    IFolderView* folderView = FolderViewOf(browser);
+    if (!folderView) {
+        return result;
+    }
+    IShellItemArray* array = nullptr;
+    if (SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARGS(&array))) && array) {
+        DWORD count = 0;
+        array->GetCount(&count);
+        for (DWORD i = 0; i < count; i++) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(array->GetItemAt(i, &item)) && item) {
+                PIDLIST_ABSOLUTE absolute = nullptr;
+                if (SUCCEEDED(SHGetIDListFromObject(item, &absolute)) && absolute) {
+                    result.emplace_back(ILClone(ILFindLastID(absolute)));
+                    CoTaskMemFree(absolute);
+                }
+                item->Release();
+            }
+        }
+        array->Release();
+    }
+    folderView->Release();
+    return result;
+}
+
 // Adds items to the selection Explorer's own view already has.
 void AddToSelectionInExplorer(IShellBrowser* browser,
                               std::vector<Pidl> const& children) {
@@ -2029,6 +2057,7 @@ struct WindowState {
     // After a command of Explorer's own toolbar: read the columns again, and
     // watch for Explorer opening its own rename box, which the panel hides.
     ULONGLONG postActionAt = 0;
+    ULONGLONG syncSelAt = 0;  // When to take Explorer's selection after a toolbar command.
     ULONGLONG postActionAt2 = 0;
     ULONGLONG watchEditUntil = 0;
     DWORD clipSeen = 0;
@@ -9034,6 +9063,74 @@ bool HandleTabSwitch(WindowState* state, HWND tab, HWND fileList) {
     return true;
 }
 
+// A toolbar command that changes the selection of Explorer's own view, Select
+// all, Select none, Invert selection or a Paste that selects what it made, acts
+// on the view under the panel. Some time after a command, the active column
+// takes that selection when Explorer shows the column's folder and nothing else
+// is changing the selection.
+void SyncSelectionFromExplorer(WindowState* state) {
+    if (!state->on || state->active < 0 || state->active >= (int)state->columns.size()) {
+        return;
+    }
+    Column* column = state->columns[state->active].get();
+    if (!column->list || !column->filled || state->selectChild || state->pendingNav || state->rename ||
+        state->expected || GetTickCount64() - column->selectionChangedAt < 1000) {
+        return;
+    }
+    IShellBrowser* browser = BrowserOf(state->topLevel);
+    if (!browser) {
+        return;
+    }
+    Pidl current = CurrentFolder(browser);
+    if (!current || !ILIsEqual(current.get(), column->folder.get())) {
+        return;
+    }
+    auto selection = ExplorerSelection(browser);
+    std::vector<size_t> wanted;
+    if (!column->entries.empty() && selection.size() == column->entries.size()) {
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            wanted.push_back(i);
+        }
+    } else if (!selection.empty()) {
+        if (selection.size() * column->entries.size() > 4000000) {
+            return;  // Too much to match here.
+        }
+        for (auto& child : selection) {
+            for (size_t i = 0; i < column->entries.size(); i++) {
+                if (ILIsEqual(column->entries[i].child.get(), child.get())) {
+                    wanted.push_back(i);
+                    break;
+                }
+            }
+        }
+        std::sort(wanted.begin(), wanted.end());
+    }
+    auto shown = SelectedEntries(column, column->list);
+    std::sort(shown.begin(), shown.end());
+    if (shown == wanted) {
+        return;
+    }
+    try {
+        auto selected = column->list.SelectedItems();
+        auto items = column->list.Items();
+        state->building = true;
+        selected.Clear();
+        for (size_t index : wanted) {
+            int row = column->entryToRow[index];
+            if (row >= 0 && (uint32_t)row < items.Size()) {
+                selected.Append(items.GetAt((uint32_t)row));
+            }
+        }
+        state->building = false;
+        Out(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
+            state->active + 1);
+        OnRowSelected(column->list);
+    } catch (...) {
+        state->building = false;
+        LogHresult(L"taking Explorer's selection after a toolbar command");
+    }
+}
+
 void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
@@ -9455,12 +9552,17 @@ void OnTick() {
         }
 
         // After a toolbar command: read again, once soon and once later.
+        if (state->syncSelAt && now >= state->syncSelAt) {
+            state->syncSelAt = 0;
+            SyncSelectionFromExplorer(state);
+        }
         if (state->postActionAt && now >= state->postActionAt) {
             state->postActionAt = 0;
             ReloadAll(state);
         }
         if (state->postActionAt2 && now >= state->postActionAt2) {
             state->postActionAt2 = 0;
+            SyncSelectionFromExplorer(state);
             ReloadAll(state);
         }
 
@@ -12305,6 +12407,7 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
         ULONGLONG now = GetTickCount64();
         state->specCheckAt = now + 300;
         state->postActionAt = now + 150;
+        state->syncSelAt = now + 70;
         state->postActionAt2 = now + 800;
         state->watchEditUntil = now + 1500;
         Out(L"toolbar command invoked");
@@ -12486,7 +12589,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.18.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.19.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

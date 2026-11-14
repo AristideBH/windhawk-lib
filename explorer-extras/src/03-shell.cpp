@@ -953,6 +953,34 @@ bool SelectInExplorer(IShellBrowser* browser, PCUITEMID_CHILD child) {
     return SUCCEEDED(hr);
 }
 
+// The items selected in Explorer's own view, as child ids.
+std::vector<Pidl> ExplorerSelection(IShellBrowser* browser) {
+    std::vector<Pidl> result;
+    IFolderView* folderView = FolderViewOf(browser);
+    if (!folderView) {
+        return result;
+    }
+    IShellItemArray* array = nullptr;
+    if (SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARGS(&array))) && array) {
+        DWORD count = 0;
+        array->GetCount(&count);
+        for (DWORD i = 0; i < count; i++) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(array->GetItemAt(i, &item)) && item) {
+                PIDLIST_ABSOLUTE absolute = nullptr;
+                if (SUCCEEDED(SHGetIDListFromObject(item, &absolute)) && absolute) {
+                    result.emplace_back(ILClone(ILFindLastID(absolute)));
+                    CoTaskMemFree(absolute);
+                }
+                item->Release();
+            }
+        }
+        array->Release();
+    }
+    folderView->Release();
+    return result;
+}
+
 // Adds items to the selection Explorer's own view already has.
 void AddToSelectionInExplorer(IShellBrowser* browser,
                               std::vector<Pidl> const& children) {

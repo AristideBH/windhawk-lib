@@ -351,6 +351,7 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
         ULONGLONG now = GetTickCount64();
         state->specCheckAt = now + 300;
         state->postActionAt = now + 150;
+        state->syncSelAt = now + 70;
         state->postActionAt2 = now + 800;
         state->watchEditUntil = now + 1500;
         Out(L"toolbar command invoked");

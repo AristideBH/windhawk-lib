@@ -219,6 +219,7 @@ struct WindowState {
     // After a command of Explorer's own toolbar: read the columns again, and
     // watch for Explorer opening its own rename box, which the panel hides.
     ULONGLONG postActionAt = 0;
+    ULONGLONG syncSelAt = 0;  // When to take Explorer's selection after a toolbar command.
     ULONGLONG postActionAt2 = 0;
     ULONGLONG watchEditUntil = 0;
     DWORD clipSeen = 0;
