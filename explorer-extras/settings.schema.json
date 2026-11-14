@@ -279,6 +279,15 @@
       "name": "Write a debug log",
       "description": "Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
       "windhawkOnly": true
+    },
+    {
+      "id": "showUpcoming",
+      "group": null,
+      "type": "bool",
+      "default": false,
+      "name": "Show upcoming features in the settings window",
+      "description": "Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.",
+      "windhawkOnly": true
     }
   ],
   "whatsNew": [
@@ -287,5 +296,88 @@
     "Drag rows to another window, the desktop, the navigation pane or the tab strip. Hold them on a folder to open it.",
     "Archives can be dragged out of, and a phone’s folders and OneDrive syncing show their own marks.",
     "The toolbar’s Select all, Invert selection and Select none reach the columns."
-  ]
+  ],
+  "features": [
+    {
+      "id": "labels",
+      "name": "Labels",
+      "glyph": "",
+      "summary": "Colour labels and tags on files and folders, as on macOS.",
+      "planned": [
+        "Colour labels shown on rows and in the details",
+        "Set from the right-click menu and the keyboard",
+        "Filter and group by label"
+      ]
+    },
+    {
+      "id": "sidebar",
+      "name": "Sidebar",
+      "glyph": "",
+      "summary": "A rebuilt navigation pane.",
+      "planned": [
+        "Pinned and recent folders in one place",
+        "Sections of your own",
+        "Drag a folder to pin it"
+      ]
+    },
+    {
+      "id": "preview",
+      "name": "Preview panel",
+      "glyph": "",
+      "summary": "The preview and details panes, redone.",
+      "planned": [
+        "Preview and details together in one pane",
+        "Quicker switching between items",
+        "More properties, chosen by you"
+      ]
+    },
+    {
+      "id": "statusbar",
+      "name": "Status bar",
+      "glyph": "",
+      "summary": "Options for the status bar and the info bar.",
+      "planned": [
+        "Choose what the status bar shows",
+        "Selection size and count at a glance",
+        "A quieter look"
+      ]
+    }
+  ],
+  "strings": {
+    "window.title": "Explorer Extras",
+    "menu.extras": "Extras",
+    "menu.columns": "Columns",
+    "page.home": "Home",
+    "home.title": "Explorer Extras",
+    "home.subtitle": "Optional additions to File Explorer, each one with its own page and switch.",
+    "tip.title": "Tip",
+    "tip.body": "Choose Columns in the View menu of a File Explorer window. The Extras entry at the bottom of the ... menu on the toolbar opens this window.",
+    "tip.gotit": "Got it",
+    "card.features": "Features",
+    "card.status": "Status",
+    "card.actions": "Quick actions",
+    "card.whatsnew": "What’s new",
+    "status.version": "Version",
+    "status.windows": "Windows",
+    "status.hooks": "Hooks",
+    "status.hooks.detail": "The Explorer extension the mod hooks into.",
+    "status.found": "Found",
+    "status.notfound": "Not found",
+    "action.log": "Open the log",
+    "action.log.detail": "The file the mod writes while it works, if its folder exists.",
+    "action.log.done": "Opened",
+    "action.log.none": "No log file",
+    "action.copy": "Copy diagnostics",
+    "action.copy.detail": "Version, settings and state, as text, to paste in a message.",
+    "action.copy.done": "Copied",
+    "action.copy.fail": "Could not copy",
+    "action.reset": "Reset to Windhawk’s settings",
+    "action.reset.detail": "Every setting goes back to what Windhawk’s page for the mod says.",
+    "columns.title": "Columns",
+    "columns.subtitle": "A Columns layout in the View menu: Miller columns drawn with Explorer’s own controls.",
+    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk’s values.",
+    "soon.title": "Coming soon",
+    "soon.body": "This feature is not built yet. Its switch and its settings will appear on this page when it is.",
+    "soon.planned": "Planned"
+  }
 }

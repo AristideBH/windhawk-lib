@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.27.5
+// @version         0.28.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -133,6 +133,9 @@ Not yet: drag and drop.
 - debugLog: true
   $name: Write a debug log
   $description: Writes to Code\windhawk-lib\probes\logs\explorer-extras.log in your user folder, if that folder exists.
+- showUpcoming: false
+  $name: Show upcoming features in the settings window
+  $description: Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.
 */
 // ==/WindhawkModSettings==
 
@@ -520,6 +523,22 @@ struct SettingCard {
     const wchar_t* name;
 };
 
+// A feature that is planned and not built: a placeholder page in the settings window.
+struct FeatureInfo {
+    const wchar_t* id;
+    const wchar_t* name;
+    const wchar_t* glyph;     // Segoe Fluent Icons.
+    const wchar_t* summary;
+    const wchar_t* planned;   // Lines joined by '|'.
+};
+
+// A text of the mod's own windows and menus, by id. English now; the table is where
+// translations will come in.
+struct StringInfo {
+    const wchar_t* id;
+    const wchar_t* text;
+};
+
 constexpr SettingInfo kSettings[] = {
     {L"enabled", L"columns.enabled", SettingKind::Bool, 1, L"", 0, 0,
      L"Enabled",
@@ -613,6 +632,10 @@ constexpr SettingInfo kSettings[] = {
      L"Write a debug log",
      L"Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
      L"", L"", true, L"", false},
+    {L"showUpcoming", L"showUpcoming", SettingKind::Bool, 0, L"", 0, 0,
+     L"Show upcoming features in the settings window",
+     L"Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.",
+     L"", L"", true, L"", false},
 };
 
 constexpr SettingCard kCards[] = {
@@ -629,9 +652,66 @@ constexpr const wchar_t* kWhatsNew[] = {
     L"Archives can be dragged out of, and a phone\u2019s folders and OneDrive syncing show their own marks.",
     L"The toolbar\u2019s Select all, Invert selection and Select none reach the columns.",
 };
+
+constexpr FeatureInfo kFeatures[] = {
+    {L"labels", L"Labels", L"\uE8EC", L"Colour labels and tags on files and folders, as on macOS.", L"Colour labels shown on rows and in the details|Set from the right-click menu and the keyboard|Filter and group by label"},
+    {L"sidebar", L"Sidebar", L"\uE700", L"A rebuilt navigation pane.", L"Pinned and recent folders in one place|Sections of your own|Drag a folder to pin it"},
+    {L"preview", L"Preview panel", L"\uE7B3", L"The preview and details panes, redone.", L"Preview and details together in one pane|Quicker switching between items|More properties, chosen by you"},
+    {L"statusbar", L"Status bar", L"\uE946", L"Options for the status bar and the info bar.", L"Choose what the status bar shows|Selection size and count at a glance|A quieter look"},
+};
+
+constexpr StringInfo kStrings[] = {
+    {L"window.title", L"Explorer Extras"},
+    {L"menu.extras", L"Extras"},
+    {L"menu.columns", L"Columns"},
+    {L"page.home", L"Home"},
+    {L"home.title", L"Explorer Extras"},
+    {L"home.subtitle", L"Optional additions to File Explorer, each one with its own page and switch."},
+    {L"tip.title", L"Tip"},
+    {L"tip.body", L"Choose Columns in the View menu of a File Explorer window. The Extras entry at the bottom of the ... menu on the toolbar opens this window."},
+    {L"tip.gotit", L"Got it"},
+    {L"card.features", L"Features"},
+    {L"card.status", L"Status"},
+    {L"card.actions", L"Quick actions"},
+    {L"card.whatsnew", L"What\u2019s new"},
+    {L"status.version", L"Version"},
+    {L"status.windows", L"Windows"},
+    {L"status.hooks", L"Hooks"},
+    {L"status.hooks.detail", L"The Explorer extension the mod hooks into."},
+    {L"status.found", L"Found"},
+    {L"status.notfound", L"Not found"},
+    {L"action.log", L"Open the log"},
+    {L"action.log.detail", L"The file the mod writes while it works, if its folder exists."},
+    {L"action.log.done", L"Opened"},
+    {L"action.log.none", L"No log file"},
+    {L"action.copy", L"Copy diagnostics"},
+    {L"action.copy.detail", L"Version, settings and state, as text, to paste in a message."},
+    {L"action.copy.done", L"Copied"},
+    {L"action.copy.fail", L"Could not copy"},
+    {L"action.reset", L"Reset to Windhawk\u2019s settings"},
+    {L"action.reset.detail", L"Every setting goes back to what Windhawk\u2019s page for the mod says."},
+    {L"columns.title", L"Columns"},
+    {L"columns.subtitle", L"A Columns layout in the View menu: Miller columns drawn with Explorer\u2019s own controls."},
+    {L"columns.note", L"Changes apply at once. The mod keeps them in front of Windhawk\u2019s page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk\u2019s values."},
+    {L"soon.title", L"Coming soon"},
+    {L"soon.body", L"This feature is not built yet. Its switch and its settings will appear on this page when it is."},
+    {L"soon.planned", L"Planned"},
+};
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
+constexpr size_t kFeatureCount = sizeof(kFeatures) / sizeof(kFeatures[0]);
+constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
+
+// The text for an id. A missing id shows as itself, so a gap is seen at once.
+const wchar_t* Str(const wchar_t* id) {
+    for (size_t i = 0; i < kStringCount; i++) {
+        if (wcscmp(kStrings[i].id, id) == 0) {
+            return kStrings[i].text;
+        }
+    }
+    return id;
+}
 
 const SettingInfo* FindSetting(const wchar_t* id) {
     for (size_t i = 0; i < kSettingCount; i++) {
@@ -12208,7 +12288,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
 
         if (columnsOn) {
             muxc::RadioMenuFlyoutItem item;
-            item.Text(L"Columns");
+            item.Text(Str(L"menu.columns"));
             if (!groupName.empty()) {
                 item.GroupName(groupName);
             }
@@ -12354,7 +12434,7 @@ void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
         }
         if (!state->settingsItem) {
             muxc::AppBarButton item;
-            item.Label(L"Extras");
+            item.Label(Str(L"menu.extras"));
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
             icon.Glyph(L"");  // ExploitProtection.
@@ -12731,6 +12811,7 @@ struct SettingsUi {
     muxc::ListView nav{nullptr};
     muxc::ScrollViewer content{nullptr};
     int page = 0;
+    int navCount = 0;  // The pages in the sidebar.
     bool abandon = false;  // Let the XAML objects go without releasing them.
 };
 
@@ -13050,10 +13131,12 @@ bool TipDismissed() {
     return Wh_GetIntValue(L"ui.tipDismissed", 0) != 0;
 }
 
+enum class QuickAction { Log, Copy, Reset };
+
 mux::UIElement BuildHomePage() {
     muxc::StackPanel page;
     page.Spacing(8);
-    page.Children().Append(MakePageHeader(L"Explorer Extras", L"Optional additions to File Explorer, each one with its own page and switch."));
+    page.Children().Append(MakePageHeader(Str(L"home.title"), Str(L"home.subtitle")));
 
     // A tip, until it is dismissed.
     if (!TipDismissed()) {
@@ -13066,14 +13149,14 @@ mux::UIElement BuildHomePage() {
         line.ColumnDefinitions().Append(buttonColumn);
         line.ColumnSpacing(16);
         muxc::StackPanel texts;
-        texts.Children().Append(MakeText(L"Tip", 14, true, false));
-        auto body = MakeText(L"Choose Columns in the View menu of a File Explorer window. The Extras entry just below it opens this window.", 13, false, true);
+        texts.Children().Append(MakeText(Str(L"tip.title"), 14, true, false));
+        auto body = MakeText(Str(L"tip.body"), 13, false, true);
         body.Margin(mux::Thickness{0, 2, 0, 0});
         texts.Children().Append(body);
         muxc::Grid::SetColumn(texts, 0);
         line.Children().Append(texts);
         muxc::Button gotIt;
-        gotIt.Content(winrt::box_value(L"Got it"));
+        gotIt.Content(winrt::box_value(winrt::hstring{Str(L"tip.gotit")}));
         gotIt.VerticalAlignment(mux::VerticalAlignment::Center);
         gotIt.Click([card](Inspectable const&, mux::RoutedEventArgs const&) {
             Wh_SetIntValue(L"ui.tipDismissed", 1);
@@ -13087,7 +13170,7 @@ mux::UIElement BuildHomePage() {
 
     // The features.
     {
-        auto title = MakeText(L"Features", 14, true, false);
+        auto title = MakeText(Str(L"card.features"), 14, true, false);
         title.Margin(mux::Thickness{0, 8, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
@@ -13102,55 +13185,54 @@ mux::UIElement BuildHomePage() {
                 CommitSetting(L"enabled", changed.IsOn() ? L"1" : L"0");
             }
         });
-        card.Child(MakeSettingRow(L"Columns", enabled ? enabled->description : L"", toggle));
+        card.Child(MakeSettingRow(Str(L"columns.title"), enabled ? enabled->description : L"", toggle));
         page.Children().Append(card);
     }
     // Status and version.
     {
-        auto title = MakeText(L"Status", 14, true, false);
+        auto title = MakeText(Str(L"card.status"), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
         muxc::StackPanel rows;
         rows.Spacing(2);
-        rows.Children().Append(MakeSettingRow(L"Version", L"", MakeText(WH_MOD_VERSION, 14, false, true)));
-        rows.Children().Append(MakeSettingRow(L"Windows", L"", MakeText(WindowsBuildText(), 14, false, true)));
-        rows.Children().Append(MakeSettingRow(L"Hooks", L"The Explorer extension the mod hooks into.",
-                                              MakeText(g_hooked ? L"Found" : L"Not found", 14, false, true)));
+        rows.Children().Append(MakeSettingRow(Str(L"status.version"), L"", MakeText(WH_MOD_VERSION, 14, false, true)));
+        rows.Children().Append(MakeSettingRow(Str(L"status.windows"), L"", MakeText(WindowsBuildText(), 14, false, true)));
+        rows.Children().Append(MakeSettingRow(Str(L"status.hooks"), Str(L"status.hooks.detail"),
+                                              MakeText(g_hooked ? Str(L"status.found") : Str(L"status.notfound"), 14, false, true)));
         card.Child(rows);
         page.Children().Append(card);
     }
-    // Quick actions, to come.
+    // Quick actions.
     {
-        auto title = MakeText(L"Quick actions", 14, true, false);
+        auto title = MakeText(Str(L"card.actions"), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
         muxc::StackPanel rows;
-        for (auto const& label : {L"Open the log", L"Copy diagnostics", L"Reset to Windhawk's settings"}) {
+        for (QuickAction action : {QuickAction::Log, QuickAction::Copy, QuickAction::Reset}) {
             muxc::Button button;
-            button.Content(winrt::box_value(label));
+            const wchar_t* label = action == QuickAction::Log ? Str(L"action.log")
+                                   : action == QuickAction::Copy ? Str(L"action.copy") : Str(L"action.reset");
+            const wchar_t* detail = action == QuickAction::Log ? Str(L"action.log.detail")
+                                    : action == QuickAction::Copy ? Str(L"action.copy.detail") : Str(L"action.reset.detail");
+            button.Content(winrt::box_value(winrt::hstring{label}));
             button.MinWidth(180);
-            bool isReset = wcsncmp(label, L"Reset", 5) == 0;
-            bool isLog = wcsncmp(label, L"Open", 4) == 0;
-            std::wstring detail = isReset ? L"Every setting goes back to what Windhawk's page for the mod says."
-                                  : isLog ? L"The file the mod writes while it works, if its folder exists."
-                                          : L"Version, settings and state, as text, to paste in a message.";
-            if (isReset) {
+            if (action == QuickAction::Reset) {
                 button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
-            } else if (isLog) {
+            } else if (action == QuickAction::Log) {
                 button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
                     bool opened = g_outPath[0] && GetFileAttributesW(g_outPath) != INVALID_FILE_ATTRIBUTES &&
                                   (INT_PTR)ShellExecuteW(nullptr, L"open", g_outPath, nullptr, nullptr, SW_SHOWNORMAL) > 32;
                     if (auto clicked = sender.try_as<muxc::Button>()) {
-                        clicked.Content(winrt::box_value(opened ? L"Opened" : L"No log file"));
+                        clicked.Content(winrt::box_value(winrt::hstring{opened ? Str(L"action.log.done") : Str(L"action.log.none")}));
                     }
                 });
             } else {
                 button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
                     bool copied = CopyTextToClipboard(g_settingsWindow, DiagnosticsText());
                     if (auto clicked = sender.try_as<muxc::Button>()) {
-                        clicked.Content(winrt::box_value(copied ? L"Copied" : L"Could not copy"));
+                        clicked.Content(winrt::box_value(winrt::hstring{copied ? Str(L"action.copy.done") : Str(L"action.copy.fail")}));
                     }
                 });
             }
@@ -13161,7 +13243,7 @@ mux::UIElement BuildHomePage() {
     }
     // What's new.
     if (kWhatsNewCount) {
-        auto title = MakeText(L"What's new", 14, true, false);
+        auto title = MakeText(Str(L"card.whatsnew"), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
@@ -13179,13 +13261,10 @@ mux::UIElement BuildHomePage() {
 mux::UIElement BuildColumnsPage() {
     muxc::StackPanel page;
     page.Spacing(8);
-    page.Children().Append(MakePageHeader(
-        L"Columns", L"A Columns layout in the View menu: Miller columns drawn with Explorer's own controls."));
+    page.Children().Append(MakePageHeader(Str(L"columns.title"), Str(L"columns.subtitle")));
     {
         auto note = MakeCard();
-        note.Child(MakeText(
-            L"Changes apply at once. The mod keeps them in front of Windhawk's page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk's values.",
-            12, false, true));
+        note.Child(MakeText(Str(L"columns.note"), 12, false, true));
         page.Children().Append(note);
     }
     for (size_t c = 0; c < kCardCount; c++) {
@@ -13216,12 +13295,54 @@ mux::UIElement BuildColumnsPage() {
     return page;
 }
 
+// A feature that is planned: what it is for, and a note that it is not built.
+mux::UIElement BuildComingSoonPage(const FeatureInfo& feature) {
+    muxc::StackPanel page;
+    page.Spacing(8);
+    page.Children().Append(MakePageHeader(feature.name, feature.summary));
+    {
+        auto card = MakeCard();
+        muxc::StackPanel lines;
+        lines.Spacing(2);
+        lines.Children().Append(MakeText(Str(L"soon.title"), 14, true, false));
+        lines.Children().Append(MakeText(Str(L"soon.body"), 13, false, true));
+        card.Child(lines);
+        page.Children().Append(card);
+    }
+    auto title = MakeText(Str(L"soon.planned"), 14, true, false);
+    title.Margin(mux::Thickness{0, 12, 0, 0});
+    page.Children().Append(title);
+    auto card = MakeCard();
+    muxc::StackPanel items;
+    items.Spacing(8);
+    std::wstring planned = feature.planned;
+    size_t at = 0;
+    while (at <= planned.size() && !planned.empty()) {
+        size_t end = planned.find(L'|', at);
+        items.Children().Append(MakeText(planned.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at), 13, false, false));
+        if (end == std::wstring::npos) {
+            break;
+        }
+        at = end + 1;
+    }
+    card.Child(items);
+    page.Children().Append(card);
+    return page;
+}
+
+// Home and Columns, then the planned features when the flag asks for them.
+int SettingsPageCount() {
+    return 2 + (SettingBool(L"showUpcoming") ? (int)kFeatureCount : 0);
+}
+
 void ShowSettingsPage(SettingsUi* ui, int page) {
     ui->page = page;
     g_settingsBuilding = true;
     mux::UIElement content{nullptr};
     try {
-        content = page == 0 ? BuildHomePage() : BuildColumnsPage();
+        content = page == 0 ? BuildHomePage()
+                  : page == 1 ? BuildColumnsPage()
+                  : page - 2 < (int)kFeatureCount ? BuildComingSoonPage(kFeatures[page - 2]) : BuildHomePage();
     } catch (...) {
         g_settingsBuilding = false;
         throw;
@@ -13230,6 +13351,45 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
     g_settingsBuilding = false;
     ui->content.ChangeView(nullptr, 0.0, nullptr, true);
 }
+
+// The sidebar: its pages, as the flag has them.
+void FillNav(SettingsUi* ui) {
+    auto items = ui->nav.Items();
+    items.Clear();
+    int count = SettingsPageCount();
+    for (int i = 0; i < count; i++) {
+        muxc::ListViewItem item;
+        muxc::StackPanel line;
+        line.Orientation(muxc::Orientation::Horizontal);
+        line.Spacing(12);
+        const wchar_t* name = nullptr;
+        if (i == 1) {
+            auto icon = MakeColumnsIcon();
+            icon.as<mux::FrameworkElement>().VerticalAlignment(mux::VerticalAlignment::Center);
+            line.Children().Append(icon);
+            name = Str(L"columns.title");
+        } else {
+            muxc::FontIcon icon;
+            icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            icon.Glyph(i == 0 ? L"" : kFeatures[i - 2].glyph);
+            icon.FontSize(16);
+            line.Children().Append(icon);
+            name = i == 0 ? Str(L"page.home") : kFeatures[i - 2].name;
+        }
+        auto label = MakeText(name, 14, false, false);
+        label.VerticalAlignment(mux::VerticalAlignment::Center);
+        line.Children().Append(label);
+        item.Content(line);
+        item.Height(40);
+        items.Append(item);
+    }
+    ui->navCount = count;
+    if (ui->page >= count) {
+        ui->page = 0;
+    }
+    ui->nav.SelectedIndex(ui->page);
+}
+
 
 // The icon of the window and the taskbar: the ExploitProtection glyph of Segoe Fluent
 // Icons, drawn into a bitmap in the colour the caption text has, with its shape as
@@ -13458,6 +13618,9 @@ void OpenSettingsWindow(WindowState* state) {
         // reads the settings into the page again.
         if (g_settingsThread == GetCurrentThreadId() && g_settingsUi) {
             try {
+                if (g_settingsUi->navCount != SettingsPageCount()) {
+                    FillNav(g_settingsUi);
+                }
                 ShowSettingsPage(g_settingsUi, g_settingsUi->page);
             } catch (...) {
                 LogHresult(L"refreshing the settings window");
@@ -13500,10 +13663,10 @@ void OpenSettingsWindow(WindowState* state) {
                     width = sw;
                     height = sh;
                 }
-                page = sp == 1 ? 1 : 0;
+                page = sp >= 0 && sp < SettingsPageCount() ? sp : 0;
             }
         }
-        HWND window = CreateWindowExW(0, kSettingsClass, L"Explorer Extras", WS_OVERLAPPEDWINDOW, x, y, width, height,
+        HWND window = CreateWindowExW(0, kSettingsClass, Str(L"window.title"), WS_OVERLAPPEDWINDOW, x, y, width, height,
                                       nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         if (!window) {
             Out(L"settings window: could not be created, gle=%lu", GetLastError());
@@ -13534,29 +13697,6 @@ void OpenSettingsWindow(WindowState* state) {
         muxc::ListView nav;
         nav.Margin(mux::Thickness{8, 16, 8, 8});
         nav.SelectionMode(muxc::ListViewSelectionMode::Single);
-        for (int i = 0; i < 2; i++) {
-            muxc::ListViewItem item;
-            muxc::StackPanel line;
-            line.Orientation(muxc::Orientation::Horizontal);
-            line.Spacing(12);
-            if (i == 0) {
-                muxc::FontIcon icon;
-                icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-                icon.Glyph(L"");
-                icon.FontSize(16);
-                line.Children().Append(icon);
-            } else {
-                auto icon = MakeColumnsIcon();
-                icon.as<mux::FrameworkElement>().VerticalAlignment(mux::VerticalAlignment::Center);
-                line.Children().Append(icon);
-            }
-            auto label = MakeText(i == 0 ? L"Home" : L"Columns", 14, false, false);
-            label.VerticalAlignment(mux::VerticalAlignment::Center);
-            line.Children().Append(label);
-            item.Content(line);
-            item.Height(40);
-            nav.Items().Append(item);
-        }
         muxc::Grid::SetColumn(nav, 0);
         root.Children().Append(nav);
         ui->nav = nav;
@@ -13583,8 +13723,9 @@ void OpenSettingsWindow(WindowState* state) {
         });
         ui->source.Content(root);
 
-        nav.SelectedIndex(page);
-        ShowSettingsPage(ui, page);
+        ui->page = page;
+        FillNav(ui);
+        ShowSettingsPage(ui, ui->page);
         ApplySettingsWindowTheme(window, ui);
         RECT client;
         GetClientRect(window, &client);
@@ -14155,7 +14296,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.27.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.28.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

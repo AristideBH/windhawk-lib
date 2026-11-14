@@ -72,7 +72,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
 
         if (columnsOn) {
             muxc::RadioMenuFlyoutItem item;
-            item.Text(L"Columns");
+            item.Text(Str(L"menu.columns"));
             if (!groupName.empty()) {
                 item.GroupName(groupName);
             }
@@ -218,7 +218,7 @@ void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
         }
         if (!state->settingsItem) {
             muxc::AppBarButton item;
-            item.Label(L"Extras");
+            item.Label(Str(L"menu.extras"));
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
             icon.Glyph(L"");  // ExploitProtection.

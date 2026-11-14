@@ -67,6 +67,10 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   `@@SETTINGS_BLOCK@@` in `00-header.cpp`) and the C++ table (`@@SETTINGS_TABLE@@`
   in `02a-settings.cpp`) from it: never edit the block in the header by hand, and
   read a setting with `SettingBool`, `SettingInt` or `SettingText` by its id.
+  The schema also holds `features` (planned features shown as placeholder pages when
+  the hidden `showUpcoming` setting is on), `whatsNew` (the Home card) and `strings`
+  (every text of the window and the menus by id; use `Str(L"id")`, never a literal,
+  so translations can come in).
   The build refuses a `$name` or `$description` with a colon followed by a space,
   which breaks the whole block (happened twice).
 - Test folders: `make-columns-demo.ps1` (small) and `make-columns-showcase.ps1`
