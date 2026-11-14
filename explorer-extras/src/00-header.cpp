@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.19.1
+// @version         0.20.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -82,6 +82,9 @@ Not yet: drag and drop.
   - rememberLayout: true
     $name: Remember Columns per folder
     $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
+  - springLoad: true
+    $name: Open a folder you hover on while dragging
+    $description: Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.
   - harmonizeWidths: true
     $name: Shift and double-click a border to even the widths
     $description: Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.

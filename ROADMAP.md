@@ -139,7 +139,7 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | --- | --- |
 | 0.18.7 | Done: 0.16 to 0.18 committed, README, HANDOFF, PLAN and the skills updated (drag loop findings, MoveNudger, bridge drop target, ToolTip surface, AppBarButton icon, presenter border). |
 | 0.19 | Selection polish: one accent bar per run of selected rows, toolbar Select all, Invert selection and Select none, Space preview left to QuickLook. |
-| 0.20 | Drag polish: drag out of an archive column, a drop onto a tab or a breadcrumb, drag image outside the panel, autoscroll tuning, dragged label for a folder row dropped on a column header. |
+| 0.20 | Done and tested: drag out of an archive column (always a copy, the label says Extract to), spring-loaded folders (hold dragged items on a folder row for 0.7 s, setting `springLoad`). Not built: drops onto a tab or a breadcrumb (to be tried with the native targets first), drag image outside the panel, autoscroll tuning. |
 | 0.21 | Everyday gaps: focusing virtual Desktop items, OneDrive syncing state, MTP and phone detection, Documents icon, remote marks log lines. |
 | 0.22 | Speed: icon jobs for the rows on screen first, item-level change events (diff a folder instead of replacing it), measure the 5 000 row limit and the Huge folder case. |
 | 0.23 | Menus: share the row building of the item and folder menus, visual pass (spacing, icon sizes, Windows icon files). |

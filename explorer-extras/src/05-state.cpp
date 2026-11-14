@@ -164,6 +164,7 @@ struct DragState {
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
     bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
+    bool fromArchive = false;  // The dragged items are inside an archive: a drop extracts them.
     muxc::Border frame{nullptr};  // The accent frame around the row or column a drop would go to.
     mux::FrameworkElement ghost{nullptr};
     muxc::TextBlock ghostText{nullptr};
@@ -307,6 +308,12 @@ struct WindowState {
     IDropTarget* panelDrop = nullptr;
     GhostSpec outSpec;               // The label of a drag that left the panel,
     bool outDragActive = false;      // shown again when it comes back to it.
+    bool outFromArchive = false;     // The drag that left the panel carries items of an archive.
+    // A folder row held under dragged items opens after a pause.
+    Column* springColumn = nullptr;
+    int springEntry = -1;
+    ULONGLONG springSince = 0;
+    bool springDone = false;
     HWND panelDropWindow = nullptr;
     winrt::Windows::Foundation::Point autoPoint{};  // The pointer, host coordinates.
     bool autoOn = false;

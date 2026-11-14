@@ -391,3 +391,56 @@ void DragAutoScroll(WindowState* state) {
         }
     }
 }
+
+// A folder row held under dragged items, rows of the panel or files from
+// elsewhere, opens in the next column after a pause, so a drop can go deeper
+// without letting go. One opening per hover.
+void SpringLoadTick(WindowState* state) {
+    auto& d = state->drag;
+    bool dragging = state->autoOn && g_springLoad;
+    if (!dragging || !d.targetOk || !d.targetColumn || d.targetEntry < 0) {
+        state->springColumn = nullptr;
+        state->springEntry = -1;
+        state->springDone = false;
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    if (state->springColumn != d.targetColumn || state->springEntry != d.targetEntry) {
+        state->springColumn = d.targetColumn;
+        state->springEntry = d.targetEntry;
+        state->springSince = now;
+        state->springDone = false;
+        return;
+    }
+    if (state->springDone || now - state->springSince < 700) {
+        return;
+    }
+    state->springDone = true;
+    Column* column = d.targetColumn;
+    int entry = d.targetEntry;
+    try {
+        if ((size_t)entry >= column->entries.size() || !column->entries[entry].folder ||
+            column->entries[entry].archive || column->entries[entry].launcher) {
+            return;
+        }
+        int index = -1;
+        for (size_t i = 0; i < state->columns.size(); i++) {
+            if (state->columns[i].get() == column) {
+                index = (int)i;
+            }
+        }
+        if (index < 0) {
+            return;
+        }
+        Pidl folder = DragTargetFolder(column, entry);
+        if (index + 1 < (int)state->columns.size() && folder &&
+            ILIsEqual(state->columns[index + 1]->folder.get(), folder.get())) {
+            return;  // Already open there.
+        }
+        Out(L"a folder held under a drag opens: \"%s\"", column->entries[entry].name.c_str());
+        SelectChildInColumn(state, column, column->entries[entry].child.get());
+        OnRowSelected(column->list);
+    } catch (...) {
+        LogHresult(L"opening a folder held under a drag");
+    }
+}

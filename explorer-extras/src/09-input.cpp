@@ -999,6 +999,7 @@ void RegisterPanelDropTarget(WindowState* state);
 void RevokePanelDropTarget(WindowState* state);
 void DragAutoScroll(WindowState* state);
 void HoverTick(WindowState* state);
+void SpringLoadTick(WindowState* state);
 void PillHide(Column* column);
 void UpdateLastEdge(WindowState* state);
 void SyncViewButtonIcon(WindowState* state);
@@ -1597,6 +1598,7 @@ void OnTick() {
         state->ticks++;
         ULONGLONG now = GetTickCount64();
         HoverTick(state);
+        SpringLoadTick(state);
         SyncViewButtonIcon(state);
         UpdateLastEdge(state);
 

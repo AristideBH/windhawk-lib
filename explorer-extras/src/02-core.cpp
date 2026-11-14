@@ -14,6 +14,7 @@ std::atomic<bool> g_archives{false};
 std::atomic<bool> g_dragOut{false};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_harmonize{true};
+std::atomic<bool> g_springLoad{true};
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};

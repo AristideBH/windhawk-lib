@@ -213,7 +213,7 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
         return;
     }
     int at = ColumnIndexOfList(state, list);
-    if (at < 0 || ArchiveParentColumn(state, state->columns[at].get()) >= 0) {
+    if (at < 0) {
         return;
     }
     Column* column = state->columns[at].get();
@@ -226,6 +226,7 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     auto& d = state->drag;
     d.pending = true;
     d.column = column;
+    d.fromArchive = ArchiveParentColumn(state, column) >= 0;
     d.pressedEntry = entry;
     d.start = args.GetCurrentPoint(list).Position();
     static int logged = 0;
@@ -508,6 +509,7 @@ void DragUpdateLabel(WindowState* state) {
                     ? d.targetColumn->entries[d.targetEntry].name
                     : FolderDisplayName(d.targetColumn->folder.get());
             const wchar_t* verb = L"Drop in ";
+            bool extract = d.fromArchive || state->outFromArchive;
             glyph = L"";  // Move to a folder.
             if (ctrl && !shift) {
                 verb = L"Copy to ";
@@ -517,6 +519,10 @@ void DragUpdateLabel(WindowState* state) {
                 glyph = L"";
             } else if (shift) {
                 verb = L"Move to ";
+            }
+            if (extract) {
+                verb = L"Extract to ";
+                glyph = L"\uE8C8";
             }
             line = std::wstring(verb) + Shortened(target, 28);
         }
@@ -1013,6 +1019,9 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     // The keys held as the pointer left the panel decide the default effect: a
     // target of the shell reads it from the data when no key says otherwise. The
     // drag loop does not see a key pressed after it has started.
+    if (state->outFromArchive) {
+        preferred = DROPEFFECT_COPY;
+    }
     if (preferred != DROPEFFECT_NONE) {
         SetPreferredEffect(data, preferred);
     }
@@ -1027,7 +1036,8 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     nudger.Start(GetCurrentThreadId());
     state->outDragActive = true;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
-                      DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+                      state->outFromArchive ? DROPEFFECT_COPY : (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK),
+                      &effect);
     state->outDragActive = false;
     RemoveGhost(state);
     nudger.Stop();
@@ -1068,6 +1078,9 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     POINT treePoint = dropSource->dropPoint;
     DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
     treeKeys |= dropSource->graceKeys;
+    if (state->outFromArchive) {
+        treeKeys = MK_CONTROL;
+    }
     // A target that answered the drag with one effect has taken the drop itself;
     // only one that kept the whole offer (all three effects) has heard nothing.
     bool unanswered = (dropSource->lastEffect & (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK)) ==
@@ -1139,6 +1152,7 @@ void StartOutDrag(WindowState* state) {
     DWORD preferred = alt ? DROPEFFECT_LINK : (ctrl && !shift) ? DROPEFFECT_COPY
                       : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
     state->outSpec = SpecOf(d.column, d.entries);
+    state->outFromArchive = d.fromArchive;
     DragEnd(state);
     if (children.empty()) {
         return;
@@ -1174,6 +1188,7 @@ bool OnDragReleased(WindowState* state) {
     // Judged again with the keys as they are at the release.
     bool ok = d.targetColumn && DragTargetAllowed(state, d.targetColumn, d.targetEntry);
     std::vector<size_t> entries = d.entries;
+    bool fromArchive = d.fromArchive;
     DragEnd(state);
     if (!ok || !targetColumn || !sourceColumn) {
         Out(L"drag ended outside a folder that takes it");
@@ -1199,6 +1214,9 @@ bool OnDragReleased(WindowState* state) {
     }
     if (GetKeyState(VK_MENU) & 0x8000) {
         keyState |= MK_ALT;
+    }
+    if (fromArchive) {
+        keyState = MK_LBUTTON | MK_CONTROL;  // Taken out of an archive: always a copy.
     }
     // After the event has finished, since the shell may show a dialog.
     auto shared = std::make_shared<std::tuple<Pidl, std::vector<Pidl>, Pidl>>(

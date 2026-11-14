@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.19.1
+// @version         0.20.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -82,6 +82,9 @@ Not yet: drag and drop.
   - rememberLayout: true
     $name: Remember Columns per folder
     $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
+  - springLoad: true
+    $name: Open a folder you hover on while dragging
+    $description: Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.
   - harmonizeWidths: true
     $name: Shift and double-click a border to even the widths
     $description: Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.
@@ -208,6 +211,7 @@ std::atomic<bool> g_archives{false};
 std::atomic<bool> g_dragOut{false};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_harmonize{true};
+std::atomic<bool> g_springLoad{true};
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
@@ -2002,6 +2006,7 @@ struct DragState {
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
     bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
+    bool fromArchive = false;  // The dragged items are inside an archive: a drop extracts them.
     muxc::Border frame{nullptr};  // The accent frame around the row or column a drop would go to.
     mux::FrameworkElement ghost{nullptr};
     muxc::TextBlock ghostText{nullptr};
@@ -2145,6 +2150,12 @@ struct WindowState {
     IDropTarget* panelDrop = nullptr;
     GhostSpec outSpec;               // The label of a drag that left the panel,
     bool outDragActive = false;      // shown again when it comes back to it.
+    bool outFromArchive = false;     // The drag that left the panel carries items of an archive.
+    // A folder row held under dragged items opens after a pause.
+    Column* springColumn = nullptr;
+    int springEntry = -1;
+    ULONGLONG springSince = 0;
+    bool springDone = false;
     HWND panelDropWindow = nullptr;
     winrt::Windows::Foundation::Point autoPoint{};  // The pointer, host coordinates.
     bool autoOn = false;
@@ -8555,6 +8566,7 @@ void RegisterPanelDropTarget(WindowState* state);
 void RevokePanelDropTarget(WindowState* state);
 void DragAutoScroll(WindowState* state);
 void HoverTick(WindowState* state);
+void SpringLoadTick(WindowState* state);
 void PillHide(Column* column);
 void UpdateLastEdge(WindowState* state);
 void SyncViewButtonIcon(WindowState* state);
@@ -9153,6 +9165,7 @@ void OnTick() {
         state->ticks++;
         ULONGLONG now = GetTickCount64();
         HoverTick(state);
+        SpringLoadTick(state);
         SyncViewButtonIcon(state);
         UpdateLastEdge(state);
 
@@ -10175,7 +10188,7 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
         return;
     }
     int at = ColumnIndexOfList(state, list);
-    if (at < 0 || ArchiveParentColumn(state, state->columns[at].get()) >= 0) {
+    if (at < 0) {
         return;
     }
     Column* column = state->columns[at].get();
@@ -10188,6 +10201,7 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     auto& d = state->drag;
     d.pending = true;
     d.column = column;
+    d.fromArchive = ArchiveParentColumn(state, column) >= 0;
     d.pressedEntry = entry;
     d.start = args.GetCurrentPoint(list).Position();
     static int logged = 0;
@@ -10470,6 +10484,7 @@ void DragUpdateLabel(WindowState* state) {
                     ? d.targetColumn->entries[d.targetEntry].name
                     : FolderDisplayName(d.targetColumn->folder.get());
             const wchar_t* verb = L"Drop in ";
+            bool extract = d.fromArchive || state->outFromArchive;
             glyph = L"";  // Move to a folder.
             if (ctrl && !shift) {
                 verb = L"Copy to ";
@@ -10479,6 +10494,10 @@ void DragUpdateLabel(WindowState* state) {
                 glyph = L"";
             } else if (shift) {
                 verb = L"Move to ";
+            }
+            if (extract) {
+                verb = L"Extract to ";
+                glyph = L"\uE8C8";
             }
             line = std::wstring(verb) + Shortened(target, 28);
         }
@@ -10975,6 +10994,9 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     // The keys held as the pointer left the panel decide the default effect: a
     // target of the shell reads it from the data when no key says otherwise. The
     // drag loop does not see a key pressed after it has started.
+    if (state->outFromArchive) {
+        preferred = DROPEFFECT_COPY;
+    }
     if (preferred != DROPEFFECT_NONE) {
         SetPreferredEffect(data, preferred);
     }
@@ -10989,7 +11011,8 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     nudger.Start(GetCurrentThreadId());
     state->outDragActive = true;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
-                      DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+                      state->outFromArchive ? DROPEFFECT_COPY : (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK),
+                      &effect);
     state->outDragActive = false;
     RemoveGhost(state);
     nudger.Stop();
@@ -11030,6 +11053,9 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     POINT treePoint = dropSource->dropPoint;
     DWORD treeKeys = dropSource->dropKeys & (MK_CONTROL | MK_SHIFT | MK_ALT);
     treeKeys |= dropSource->graceKeys;
+    if (state->outFromArchive) {
+        treeKeys = MK_CONTROL;
+    }
     // A target that answered the drag with one effect has taken the drop itself;
     // only one that kept the whole offer (all three effects) has heard nothing.
     bool unanswered = (dropSource->lastEffect & (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK)) ==
@@ -11101,6 +11127,7 @@ void StartOutDrag(WindowState* state) {
     DWORD preferred = alt ? DROPEFFECT_LINK : (ctrl && !shift) ? DROPEFFECT_COPY
                       : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
     state->outSpec = SpecOf(d.column, d.entries);
+    state->outFromArchive = d.fromArchive;
     DragEnd(state);
     if (children.empty()) {
         return;
@@ -11136,6 +11163,7 @@ bool OnDragReleased(WindowState* state) {
     // Judged again with the keys as they are at the release.
     bool ok = d.targetColumn && DragTargetAllowed(state, d.targetColumn, d.targetEntry);
     std::vector<size_t> entries = d.entries;
+    bool fromArchive = d.fromArchive;
     DragEnd(state);
     if (!ok || !targetColumn || !sourceColumn) {
         Out(L"drag ended outside a folder that takes it");
@@ -11161,6 +11189,9 @@ bool OnDragReleased(WindowState* state) {
     }
     if (GetKeyState(VK_MENU) & 0x8000) {
         keyState |= MK_ALT;
+    }
+    if (fromArchive) {
+        keyState = MK_LBUTTON | MK_CONTROL;  // Taken out of an archive: always a copy.
     }
     // After the event has finished, since the shell may show a dialog.
     auto shared = std::make_shared<std::tuple<Pidl, std::vector<Pidl>, Pidl>>(
@@ -11570,6 +11601,59 @@ void DragAutoScroll(WindowState* state) {
         } else if (state->panelDrop) {
             static_cast<PanelDropTarget*>(state->panelDrop)->Refresh();
         }
+    }
+}
+
+// A folder row held under dragged items, rows of the panel or files from
+// elsewhere, opens in the next column after a pause, so a drop can go deeper
+// without letting go. One opening per hover.
+void SpringLoadTick(WindowState* state) {
+    auto& d = state->drag;
+    bool dragging = state->autoOn && g_springLoad;
+    if (!dragging || !d.targetOk || !d.targetColumn || d.targetEntry < 0) {
+        state->springColumn = nullptr;
+        state->springEntry = -1;
+        state->springDone = false;
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    if (state->springColumn != d.targetColumn || state->springEntry != d.targetEntry) {
+        state->springColumn = d.targetColumn;
+        state->springEntry = d.targetEntry;
+        state->springSince = now;
+        state->springDone = false;
+        return;
+    }
+    if (state->springDone || now - state->springSince < 700) {
+        return;
+    }
+    state->springDone = true;
+    Column* column = d.targetColumn;
+    int entry = d.targetEntry;
+    try {
+        if ((size_t)entry >= column->entries.size() || !column->entries[entry].folder ||
+            column->entries[entry].archive || column->entries[entry].launcher) {
+            return;
+        }
+        int index = -1;
+        for (size_t i = 0; i < state->columns.size(); i++) {
+            if (state->columns[i].get() == column) {
+                index = (int)i;
+            }
+        }
+        if (index < 0) {
+            return;
+        }
+        Pidl folder = DragTargetFolder(column, entry);
+        if (index + 1 < (int)state->columns.size() && folder &&
+            ILIsEqual(state->columns[index + 1]->folder.get(), folder.get())) {
+            return;  // Already open there.
+        }
+        Out(L"a folder held under a drag opens: \"%s\"", column->entries[entry].name.c_str());
+        SelectChildInColumn(state, column, column->entries[entry].child.get());
+        OnRowSelected(column->list);
+    } catch (...) {
+        LogHresult(L"opening a folder held under a drag");
     }
 }
 // ---- View menu entry ----
@@ -12550,6 +12634,7 @@ void LoadSettings() {
     g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
     g_keepStale = Wh_GetIntSetting(L"columns.keepStale") != 0;
     g_harmonize = Wh_GetIntSetting(L"columns.harmonizeWidths") != 0;
+    g_springLoad = Wh_GetIntSetting(L"columns.springLoad") != 0;
     g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
     g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
     g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
@@ -12589,7 +12674,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.19.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.20.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
