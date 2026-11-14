@@ -918,8 +918,8 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             syncing += entry.remote == 6;
         }
         // One line per folder, again only when the numbers change.
-        static std::mutex lock;
-        static std::map<std::wstring, int> last;
+        [[clang::no_destroy]] static std::mutex lock;
+        [[clang::no_destroy]] static std::map<std::wstring, int> last;
         std::wstring key;
         PWSTR text = nullptr;
         if (SUCCEEDED(SHGetNameFromIDList(folderPidl, SIGDN_DESKTOPABSOLUTEPARSING, &text)) && text) {

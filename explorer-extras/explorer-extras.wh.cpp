@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.22.0
+// @version         0.23.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -1408,8 +1408,8 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             syncing += entry.remote == 6;
         }
         // One line per folder, again only when the numbers change.
-        static std::mutex lock;
-        static std::map<std::wstring, int> last;
+        [[clang::no_destroy]] static std::mutex lock;
+        [[clang::no_destroy]] static std::map<std::wstring, int> last;
         std::wstring key;
         PWSTR text = nullptr;
         if (SUCCEEDED(SHGetNameFromIDList(folderPidl, SIGDN_DESKTOPABSOLUTEPARSING, &text)) && text) {
@@ -6644,6 +6644,254 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
     return nullptr;
 }
 
+// ---- The two flyouts, built from the same parts ----
+//
+// The item menu and the folder (background) menu are one look: a header row of
+// quick actions with labels, then separated groups of rows with an icon, a name,
+// a right-aligned shortcut hint and, for a submenu, an arrow. Everything that
+// decides how it looks is in `MenuStyle`, so a change of spacing, icon size or
+// colour is made in one place.
+
+struct MenuStyle {
+    double minWidth = 300;
+    mux::Thickness rootMargin{-12, -11, -12, -13};  // Takes the flyout's own padding back.
+    double rowIcon = 18;
+    mux::Thickness rowPadding{5, 4, 5, 4};
+    double iconColumn = 28;
+    double arrowColumn = 18;
+    double hintOpacity = 0.6;
+    double hintGap = 24;
+    double quickIcon = 20;
+    double quickMinWidth = 56;
+    mux::Thickness quickPadding{1, 3, 1, 3};
+    double quickCaptionSize = 11;
+    mux::Thickness separatorMargin{6, 4, 6, 4};
+    winrt::Windows::UI::Color separatorColor{50, 128, 128, 128};
+    double corner = 4;
+};
+
+// A quick action of the header row.
+struct MenuQuick {
+    std::wstring label;  // Under the icon.
+    std::wstring tip;
+    const wchar_t* glyph = L"";
+    std::wstring icon;   // The official icon file, without its extension.
+    bool enabled = true;
+    std::function<void()> action;
+};
+
+// A row of the list.
+struct MenuRowSpec {
+    std::wstring text;
+    const wchar_t* glyph = L"";
+    std::wstring icon;
+    std::wstring shortcut;
+    bool enabled = true;
+    std::function<void()> action;
+    muxc::MenuFlyout submenu{nullptr};
+};
+
+struct MenuBuilder {
+    WindowState* state;
+    MenuStyle style;
+    muxc::StackPanel root;
+    bool anyRows = false;
+    bool separatorWanted = false;
+    bool toolbarIcons = true;  // Look for the toolbar's own icon of a label before drawing a glyph.
+
+    MenuBuilder(WindowState* owner, double minWidth, bool toolbarFallback)
+        : state(owner), toolbarIcons(toolbarFallback) {
+        style.minWidth = minWidth;
+        root.Orientation(muxc::Orientation::Vertical);
+        root.MinWidth(style.minWidth);
+        root.Margin(style.rootMargin);
+        root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
+    }
+
+    muxc::Button PlainButton() {
+        muxc::Button button;
+        button.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+        button.BorderThickness(mux::Thickness{0, 0, 0, 0});
+        button.CornerRadius(mux::CornerRadius{style.corner, style.corner, style.corner, style.corner});
+        return button;
+    }
+
+    // Runs `action` when the button is clicked, then closes the menu.
+    void Clickable(muxc::Button const& button, std::function<void()> action, bool closeAfter) {
+        auto token = button.Click([action, closeAfter](Inspectable const&, mux::RoutedEventArgs const&) {
+            try {
+                action();
+                if (closeAfter) {
+                    WindowState* open = StateForThisThread(false);
+                    if (open && open->context && open->context->flyout) {
+                        open->context->flyout.Hide();
+                    }
+                }
+            } catch (...) {
+                LogHresult(L"a flyout button");
+            }
+        });
+        state->context->buttonHooks.emplace_back(button, token);
+    }
+
+    mux::UIElement IconFor(const std::wstring& file, const std::wstring& label, const wchar_t* glyph, double size,
+                           bool enabled, bool glyphOnlyIfGiven) {
+        mux::UIElement icon = OfficialIcon(file.c_str(), (int)size);
+        if (!icon && toolbarIcons) {
+            icon = ToolbarIcon(state, label.c_str(), (int)size);
+        }
+        if (!icon && (!glyphOnlyIfGiven || (glyph && glyph[0]))) {
+            icon = MakeTwoToneIcon(state, glyph, (int)size, enabled);
+        }
+        return icon;
+    }
+
+    // A thin line between groups of rows. It is drawn only before a row that follows
+    // other rows.
+    void Separator() {
+        muxc::Border line;
+        line.Height(1);
+        line.Margin(style.separatorMargin);
+        line.Background(mux::Media::SolidColorBrush(style.separatorColor));
+        root.Children().Append(line);
+    }
+
+    // The header row: icons with labels, as many as there are.
+    void QuickRow(std::vector<MenuQuick> const& quick) {
+        if (quick.empty()) {
+            return;
+        }
+        muxc::Grid header;
+        for (size_t q = 0; q < quick.size(); q++) {
+            muxc::ColumnDefinition definition;
+            definition.Width(mux::GridLength{1, mux::GridUnitType::Star});
+            header.ColumnDefinitions().Append(definition);
+            auto button = PlainButton();
+            button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
+            button.MinWidth(style.quickMinWidth);
+            button.Padding(style.quickPadding);
+            muxc::StackPanel stack;
+            stack.Orientation(muxc::Orientation::Vertical);
+            stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
+            mux::UIElement icon = IconFor(quick[q].icon, quick[q].label, quick[q].glyph, style.quickIcon,
+                                          quick[q].enabled, false);
+            icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
+            stack.Children().Append(icon);
+            muxc::TextBlock caption;
+            caption.Text(quick[q].label);
+            caption.FontSize(style.quickCaptionSize);
+            caption.Margin(mux::Thickness{0, 4, 0, 0});
+            caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+            caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
+            stack.Children().Append(caption);
+            button.Content(stack);
+            button.IsEnabled(quick[q].enabled);
+            if (!quick[q].tip.empty()) {
+                muxc::ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{quick[q].tip}));
+            }
+            muxc::Grid::SetColumn(button, (int)q);
+            header.Children().Append(button);
+            if (quick[q].action) {
+                Clickable(button, quick[q].action, true);
+            }
+        }
+        root.Children().Append(header);
+        anyRows = true;
+    }
+
+    // A list row: icon, name, shortcut and, for a submenu, an arrow.
+    void Row(MenuRowSpec const& spec) {
+        if (separatorWanted && anyRows) {
+            Separator();
+        }
+        separatorWanted = false;
+        auto button = PlainButton();
+        button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
+        button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
+        button.Padding(style.rowPadding);
+        button.IsEnabled(spec.enabled);
+        muxc::Grid content;
+        muxc::ColumnDefinition iconColumn, nameColumn, hintColumn, arrowColumn;
+        iconColumn.Width(mux::GridLength{style.iconColumn, mux::GridUnitType::Pixel});
+        nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+        hintColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+        arrowColumn.Width(mux::GridLength{style.arrowColumn, mux::GridUnitType::Pixel});
+        content.ColumnDefinitions().Append(iconColumn);
+        content.ColumnDefinitions().Append(nameColumn);
+        content.ColumnDefinitions().Append(hintColumn);
+        content.ColumnDefinitions().Append(arrowColumn);
+        if (mux::UIElement icon = IconFor(spec.icon, spec.text, spec.glyph, style.rowIcon, spec.enabled, toolbarIcons)) {
+            muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
+            content.Children().Append(icon);
+        }
+        muxc::TextBlock label;
+        label.Text(spec.text);
+        label.VerticalAlignment(mux::VerticalAlignment::Center);
+        muxc::Grid::SetColumn(label, 1);
+        content.Children().Append(label);
+        if (!spec.shortcut.empty()) {
+            muxc::TextBlock hint;
+            hint.Text(spec.shortcut);
+            hint.Opacity(style.hintOpacity);
+            hint.Margin(mux::Thickness{style.hintGap, 0, 0, 0});
+            hint.VerticalAlignment(mux::VerticalAlignment::Center);
+            muxc::Grid::SetColumn(hint, 2);
+            content.Children().Append(hint);
+        }
+        if (spec.submenu) {
+            muxc::FontIcon arrow;
+            arrow.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            arrow.Glyph(L"");
+            arrow.FontSize(10);
+            arrow.Opacity(style.hintOpacity);
+            arrow.HorizontalAlignment(mux::HorizontalAlignment::Right);
+            arrow.VerticalAlignment(mux::VerticalAlignment::Center);
+            muxc::Grid::SetColumn(arrow, 3);
+            content.Children().Append(arrow);
+            button.Flyout(spec.submenu);
+            spec.submenu.Closed([](Inspectable const&, Inspectable const&) {
+                // A choice made in the submenu closes the whole menu.
+                WindowState* open = StateForThisThread(false);
+                if (open && open->context && open->context->flyout) {
+                    open->context->flyout.Hide();
+                }
+            });
+        }
+        button.Content(content);
+        root.Children().Append(button);
+        if (spec.action) {
+            Clickable(button, spec.action, true);
+        }
+        anyRows = true;
+    }
+
+    // Puts the content in the flyout, hands the flyout to the state so it can be
+    // closed, and shows it at `position` of `anchor`.
+    void Show(muxc::Flyout const& flyout, mux::UIElement const& anchor, winrt::Windows::Foundation::Point position) {
+        flyout.Content(root);
+        state->context->flyout = flyout;
+        state->context->closedToken = flyout.Closed([](Inspectable const&, Inspectable const&) {
+            WindowState* open = StateForThisThread(false);
+            if (!open || g_unloading || !open->queue) {
+                return;
+            }
+            // After the click has been handled.
+            try {
+                open->queue.TryEnqueue([]() {
+                    WindowState* now = StateForThisThread(false);
+                    if (now && !g_unloading) {
+                        CloseContextMenu(now);
+                    }
+                });
+            } catch (...) {
+            }
+        });
+        muxc::Primitives::FlyoutShowOptions options;
+        options.Position(position);
+        flyout.ShowAt(anchor, options);
+    }
+};
+
 // The shell's context menu for one item, shown the way Explorer's own is: a row
 // of quick actions with icons on top, the usual commands below, and the rest
 // of the shell's entries behind "Show more options". The shell's entries are
@@ -6720,40 +6968,14 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         }
 
         muxc::Flyout flyout;
-        // The flyout's own padding is taken back, so the rows reach the edges.
-        muxc::StackPanel root;
-        root.Orientation(muxc::Orientation::Vertical);
-        root.MinWidth(300);
-        root.Margin(mux::Thickness{-12, -11, -12, -13});
-        root.Padding(mux::Thickness{0, 0, 0, 0});
-        root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
+        MenuBuilder builder(state, 300, true);
+        auto& root = builder.root;
         std::set<int> used;  // Positions shown above "Show more options".
 
-        auto clickable = [&](muxc::Button const& button, std::function<void()> action,
-                             bool closeAfter) {
-            auto token = button.Click(
-                [action, closeAfter](Inspectable const&, mux::RoutedEventArgs const&) {
-                    try {
-                        action();
-                        if (closeAfter) {
-                            WindowState* open = StateForThisThread(false);
-                            if (open && open->context && open->context->flyout) {
-                                open->context->flyout.Hide();
-                            }
-                        }
-                    } catch (...) {
-                        LogHresult(L"a flyout button");
-                    }
-                });
-            state->context->buttonHooks.emplace_back(button, token);
+        auto clickable = [&](muxc::Button const& button, std::function<void()> action, bool closeAfter) {
+            builder.Clickable(button, action, closeAfter);
         };
-        auto plainButton = [&]() {
-            muxc::Button button;
-            button.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
-            button.BorderThickness(mux::Thickness{0, 0, 0, 0});
-            button.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
-            return button;
-        };
+        auto plainButton = [&]() { return builder.PlainButton(); };
 
         // Top row: the quick actions as icons, with this mod's own after them.
         struct Quick {
@@ -6813,126 +7035,35 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 });
             }
         }
-        bool anyRows = false;
-        if (!quick.empty()) {
-            muxc::Grid header;
-            for (size_t q = 0; q < quick.size(); q++) {
-                muxc::ColumnDefinition definition;
-                definition.Width(mux::GridLength{1, mux::GridUnitType::Star});
-                header.ColumnDefinitions().Append(definition);
-                auto button = plainButton();
-                button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-                button.MinWidth(56);
-                button.Padding(mux::Thickness{1, 3, 1, 3});
-                muxc::StackPanel stack;
-                stack.Orientation(muxc::Orientation::Vertical);
-                stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
-                mux::UIElement icon = OfficialIcon(quick[q].icon.c_str(), 20);
-                if (!icon) {
-                    icon = ToolbarIcon(state, quick[q].label.c_str(), 20);
-                }
-                if (!icon) {
-                    icon = MakeTwoToneIcon(state, quick[q].glyph, 20, quick[q].enabled);
-                }
-                icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
-                stack.Children().Append(icon);
-                muxc::TextBlock caption;
-                caption.Text(quick[q].label);
-                caption.FontSize(11);
-                caption.Margin(mux::Thickness{0, 4, 0, 0});
-                caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
-                caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
-                stack.Children().Append(caption);
-                button.Content(stack);
-                button.IsEnabled(quick[q].enabled);
-                muxc::ToolTipService::SetToolTip(
-                    button, winrt::box_value(winrt::hstring{quick[q].tip}));
-                muxc::Grid::SetColumn(button, (int)q);
-                header.Children().Append(button);
-                clickable(button, quick[q].action, true);
+        bool& anyRows = builder.anyRows;
+        {
+            std::vector<MenuQuick> header;
+            for (auto& q : quick) {
+                MenuQuick item;
+                item.label = q.label;
+                item.tip = q.tip;
+                item.glyph = q.glyph;
+                item.icon = q.icon;
+                item.enabled = q.enabled;
+                item.action = q.action;
+                header.push_back(std::move(item));
             }
-            root.Children().Append(header);
-            anyRows = true;
+            builder.QuickRow(header);
         }
 
-        // A list row: icon, name, shortcut and, for a submenu, an arrow.
-        bool separatorWanted = false;
+        bool& separatorWanted = builder.separatorWanted;
         auto addRow = [&](const wchar_t* text, const wchar_t* glyph, const wchar_t* shortcut,
                           bool enabled, std::function<void()> action,
                           muxc::MenuFlyout const& submenu, const wchar_t* iconFile) {
-            if (separatorWanted && anyRows) {
-                muxc::Border line;
-                line.Height(1);
-                line.Margin(mux::Thickness{6, 4, 6, 4});
-                line.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{50, 128, 128, 128}));
-                root.Children().Append(line);
-            }
-            separatorWanted = false;
-            auto button = plainButton();
-            button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-            button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
-            button.Padding(mux::Thickness{5, 4, 5, 4});
-            button.IsEnabled(enabled);
-            muxc::Grid content;
-            for (double width : {28.0, 0.0, 0.0, 18.0}) {
-                muxc::ColumnDefinition definition;
-                definition.Width(width == 0.0 ? mux::GridLength{1, mux::GridUnitType::Star}
-                                              : mux::GridLength{width, mux::GridUnitType::Pixel});
-                content.ColumnDefinitions().Append(definition);
-            }
-            content.ColumnDefinitions().GetAt(2).Width(mux::GridLength{0, mux::GridUnitType::Auto});
-            {
-                mux::UIElement icon = OfficialIcon(iconFile, 18);
-                if (!icon) {
-                    icon = ToolbarIcon(state, text, 18);
-                }
-                if (!icon && glyph && glyph[0]) {
-                    icon = MakeTwoToneIcon(state, glyph, 18, enabled);
-                }
-                if (icon) {
-                    muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
-                    content.Children().Append(icon);
-                }
-            }
-            muxc::TextBlock label;
-            label.Text(text);
-            label.VerticalAlignment(mux::VerticalAlignment::Center);
-            muxc::Grid::SetColumn(label, 1);
-            content.Children().Append(label);
-            if (shortcut && shortcut[0]) {
-                muxc::TextBlock hint;
-                hint.Text(shortcut);
-                hint.Opacity(0.6);
-                hint.Margin(mux::Thickness{24, 0, 0, 0});
-                hint.VerticalAlignment(mux::VerticalAlignment::Center);
-                muxc::Grid::SetColumn(hint, 2);
-                content.Children().Append(hint);
-            }
-            if (submenu) {
-                muxc::FontIcon arrow;
-                arrow.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-                arrow.Glyph(L"");
-                arrow.FontSize(10);
-                arrow.Opacity(0.6);
-                arrow.HorizontalAlignment(mux::HorizontalAlignment::Right);
-                arrow.VerticalAlignment(mux::VerticalAlignment::Center);
-                muxc::Grid::SetColumn(arrow, 3);
-                content.Children().Append(arrow);
-                button.Flyout(submenu);
-                submenu.Closed([](Inspectable const&, Inspectable const&) {
-                    // A choice made in the submenu closes the whole menu.
-                    WindowState* open = StateForThisThread(false);
-                    if (open && open->context && open->context->flyout) {
-                        open->context->flyout.Hide();
-                    }
-                });
-            }
-            button.Content(content);
-            root.Children().Append(button);
-            if (action) {
-                clickable(button, action, true);
-            }
-            anyRows = true;
+            MenuRowSpec spec;
+            spec.text = text;
+            spec.glyph = glyph ? glyph : L"";
+            spec.icon = iconFile ? iconFile : L"";
+            spec.shortcut = shortcut ? shortcut : L"";
+            spec.enabled = enabled;
+            spec.action = std::move(action);
+            spec.submenu = submenu;
+            builder.Row(spec);
         };
 
         // Extracting from an archive.
@@ -6980,28 +7111,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             }
         }
 
-        flyout.Content(root);
-        state->context->flyout = flyout;
-        state->context->closedToken = flyout.Closed(
-            [](Inspectable const&, Inspectable const&) {
-                WindowState* state = StateForThisThread(false);
-                if (!state || g_unloading || !state->queue) {
-                    return;
-                }
-                // After the click has been handled.
-                try {
-                    state->queue.TryEnqueue([]() {
-                        WindowState* state = StateForThisThread(false);
-                        if (state && !g_unloading) {
-                            CloseContextMenu(state);
-                        }
-                    });
-                } catch (...) {
-                }
-            });
-        muxc::Primitives::FlyoutShowOptions options;
-        options.Position(position);
-        flyout.ShowAt(list, options);
+        builder.Show(flyout, list, position);
         Out(L"context menu shown for %d item(s), first \"%s\": %d quick, %u rows",
             (int)picked.size(), column->entries[picked[0]].name.c_str(), (int)quick.size(),
             root.Children().Size());
@@ -7034,36 +7144,18 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
     bool inArchive = ArchiveParentColumn(state, column) >= 0;
 
     muxc::Flyout flyout;
-    muxc::StackPanel root;
-    root.Orientation(muxc::Orientation::Vertical);
-    root.MinWidth(260);
-    root.Margin(mux::Thickness{-12, -11, -12, -13});
-    root.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);
+    MenuBuilder builder(state, 260, false);
+    auto& root = builder.root;
 
-    auto plainButton = []() {
-        muxc::Button button;
-        button.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
-        button.BorderThickness(mux::Thickness{0, 0, 0, 0});
-        button.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
-        return button;
-    };
+    auto plainButton = [&]() { return builder.PlainButton(); };
     auto onClick = [&](muxc::Button const& button, std::wstring action) {
-        auto token = button.Click(
-            [action](Inspectable const&, mux::RoutedEventArgs const&) {
-                try {
-                    WindowState* now = StateForThisThread(false);
-                    if (!now || !now->context || g_unloading) {
-                        return;
-                    }
-                    RunBackgroundAction(now, now->context->column, action);
-                    if (now->context && now->context->flyout) {
-                        now->context->flyout.Hide();
-                    }
-                } catch (...) {
-                    LogHresult(L"background menu");
-                }
-            });
-        state->context->buttonHooks.emplace_back(button, token);
+        builder.Clickable(button, [action]() {
+            WindowState* now = StateForThisThread(false);
+            if (!now || !now->context || g_unloading) {
+                return;
+            }
+            RunBackgroundAction(now, now->context->column, action);
+        }, true);
     };
 
     // The quick actions.
@@ -7079,95 +7171,43 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
         {L"newfolder", L"New folder", L"", L"newfolder", !inArchive},
         {L"refresh", L"Refresh", L"", L"windows.refresh", true},
     };
-    muxc::Grid header;
-    int index = 0;
-    for (auto& q : quick) {
-        muxc::ColumnDefinition definition;
-        definition.Width(mux::GridLength{1, mux::GridUnitType::Star});
-        header.ColumnDefinitions().Append(definition);
-        auto button = plainButton();
-        button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-        button.MinWidth(56);
-        button.Padding(mux::Thickness{1, 3, 1, 3});
-        muxc::StackPanel stack;
-        stack.Orientation(muxc::Orientation::Vertical);
-        stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
-        mux::UIElement icon = OfficialIcon(q.icon, 20);
-        if (!icon) {
-            icon = MakeTwoToneIcon(state, q.glyph, 20, q.enabled);
+    {
+        std::vector<MenuQuick> header;
+        for (auto& q : quick) {
+            MenuQuick item;
+            item.label = q.label;
+            item.glyph = q.glyph;
+            item.icon = q.icon;
+            item.enabled = q.enabled;
+            std::wstring action = q.action;
+            item.action = [action]() {
+                WindowState* now = StateForThisThread(false);
+                if (now && now->context && !g_unloading) {
+                    RunBackgroundAction(now, now->context->column, action);
+                }
+            };
+            header.push_back(std::move(item));
         }
-        icon.as<mux::FrameworkElement>().HorizontalAlignment(mux::HorizontalAlignment::Center);
-        stack.Children().Append(icon);
-        muxc::TextBlock caption;
-        caption.Text(q.label);
-        caption.FontSize(11);
-        caption.Margin(mux::Thickness{0, 4, 0, 0});
-        caption.TextTrimming(mux::TextTrimming::CharacterEllipsis);
-        caption.HorizontalAlignment(mux::HorizontalAlignment::Center);
-        stack.Children().Append(caption);
-        button.Content(stack);
-        button.IsEnabled(q.enabled);
-        muxc::Grid::SetColumn(button, index++);
-        header.Children().Append(button);
-        onClick(button, q.action);
+        builder.QuickRow(header);
     }
-    root.Children().Append(header);
 
     // The list: the folder's properties.
     {
-        muxc::Border line;
-        line.Height(1);
-        line.Margin(mux::Thickness{6, 4, 6, 4});
-        line.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{50, 128, 128, 128}));
-        root.Children().Append(line);
-        auto button = plainButton();
-        button.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
-        button.HorizontalContentAlignment(mux::HorizontalAlignment::Stretch);
-        button.Padding(mux::Thickness{5, 4, 5, 4});
-        button.IsEnabled(!inArchive);
-        muxc::Grid content;
-        muxc::ColumnDefinition iconColumn, textColumn;
-        iconColumn.Width(mux::GridLength{28, mux::GridUnitType::Pixel});
-        textColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
-        content.ColumnDefinitions().Append(iconColumn);
-        content.ColumnDefinitions().Append(textColumn);
-        mux::UIElement icon = OfficialIcon(desktop ? L"Personalize" : L"windows.properties", 18);
-        if (!icon) {
-            icon = MakeTwoToneIcon(state, L"", 18, !inArchive);
-        }
-        muxc::Grid::SetColumn(icon.as<mux::FrameworkElement>(), 0);
-        content.Children().Append(icon);
-        muxc::TextBlock label;
-        label.Text(desktop ? L"Personalize" : L"Folder properties");
-        label.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(label, 1);
-        content.Children().Append(label);
-        button.Content(content);
-        root.Children().Append(button);
-        onClick(button, L"properties");
+        builder.separatorWanted = true;
+        MenuRowSpec spec;
+        spec.text = desktop ? L"Personalize" : L"Folder properties";
+        spec.icon = desktop ? L"Personalize" : L"windows.properties";
+        spec.enabled = !inArchive;
+        spec.action = []() {
+            WindowState* now = StateForThisThread(false);
+            if (now && now->context && !g_unloading) {
+                RunBackgroundAction(now, now->context->column, L"properties");
+            }
+        };
+        builder.Row(spec);
     }
 
-    flyout.Content(root);
-    state->context->flyout = flyout;
-    state->context->closedToken = flyout.Closed(
-        [](Inspectable const&, Inspectable const&) {
-            WindowState* state = StateForThisThread(false);
-            if (!state || g_unloading || !state->queue) {
-                return;
-            }
-            try {
-                state->queue.TryEnqueue([]() {
-                    WindowState* state = StateForThisThread(false);
-                    if (state && !g_unloading) {
-                        CloseContextMenu(state);
-                    }
-                });
-            } catch (...) {
-            }
-        });
-    muxc::Primitives::FlyoutShowOptions options;
-    options.Position(args.GetPosition(list));
-    flyout.ShowAt(list, options);
+    builder.Show(flyout, list, args.GetPosition(list));
     Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
 }
 
@@ -12860,7 +12900,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.22.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.23.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
