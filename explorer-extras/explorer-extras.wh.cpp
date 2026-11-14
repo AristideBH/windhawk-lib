@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.15.0
+// @version         0.18.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -82,9 +82,15 @@ Not yet: drag and drop.
   - rememberLayout: true
     $name: Remember Columns per folder
     $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
-  - dragOut: false
+  - harmonizeWidths: true
+    $name: Shift and double-click a border to even the widths
+    $description: Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.
+  - keepStale: true
+    $name: Keep the columns after a file is chosen
+    $description: When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.
+  - dragOut: true
     $name: Drag items out of the panel
-    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. This is experimental. It ran a modal drag loop inside the panel and hung Explorer in the first test, so it is off by default.
+    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.
   - archives: false
     $name: Browse archives in columns
     $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
@@ -169,6 +175,7 @@ Not yet: drag and drop.
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.h>
@@ -199,6 +206,8 @@ std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{false};
 std::atomic<bool> g_dragOut{false};
+std::atomic<bool> g_keepStale{true};
+std::atomic<bool> g_harmonize{true};
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
@@ -1824,7 +1833,9 @@ struct Column {
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
-    int hintEntry = -1;  // The entry whose chevron is shown stronger.
+    int hintEntry = -1;  // The entry whose chevron wears the badge.
+    muxc::Border hintBadge{nullptr};  // The small rounded background behind that chevron.
+    std::vector<uint32_t> shapedRows;  // Rows whose corners and gaps were changed for a run of selected rows.
     int hoverHeader = -1;  // The group header under the pointer.
     int focusHeader = -1;  // The group header the keyboard is on.
     winrt::event_token moveToken{};
@@ -1943,6 +1954,15 @@ struct RenameState {
 struct Worker;
 
 // A drag of rows from one column to a folder, followed by the mod itself.
+// What the drag label shows: the name or the count, and the icons of the first
+// items. Kept apart from the columns, so the label can be shown again, when a
+// drag that left the panel comes back to it.
+struct GhostSpec {
+    std::wstring name;
+    size_t count = 0;
+    std::vector<mux::Media::ImageSource> icons;  // Up to three, a null one when not loaded.
+};
+
 struct DragState {
     bool pending = false;  // Pressed on a row, the pointer has not moved far yet.
     bool active = false;   // Dragging.
@@ -1954,12 +1974,13 @@ struct DragState {
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
     bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
-    muxc::ListViewItem litRow{nullptr};
-    mux::Media::Brush litRowBrush{nullptr};
-    Column* litColumn = nullptr;
-    mux::Media::Brush litCellBrush{nullptr};
-    muxc::Border ghost{nullptr};
+    muxc::Border frame{nullptr};  // The accent frame around the row or column a drop would go to.
+    mux::FrameworkElement ghost{nullptr};
     muxc::TextBlock ghostText{nullptr};
+    muxc::TextBlock ghostAction{nullptr};  // What a drop would do, under the name.
+    muxc::FontIcon ghostIcon{nullptr};     // The pictogram before it.
+    muxc::StackPanel ghostRow{nullptr};    // The pictogram and the line.
+    std::wstring labelName;                // The first line of the label.
 };
 
 // The columns of a tab that is not showing, kept to put back when it is.
@@ -2032,6 +2053,17 @@ struct WindowState {
     // View menu entry.
     ItemsVector menuItems{nullptr};
     muxc::RadioMenuFlyoutItem menuItem{nullptr};
+    // The View button of the toolbar: while Columns shows, its icon is ours.
+    muxc::Button viewButton{nullptr};
+    mux::UIElement viewIconOriginal{nullptr};
+    mux::UIElement viewIconOurs{nullptr};
+    int viewIconWhere = 0;  // 1: the button's content, 2: a child of a panel, 3: the child of a border.
+    bool viewIconShown = false;
+    bool viewIconLogged = false;
+    // While the keyboard is in use, rows do not show the hover of a pointer that
+    // has not moved.
+    bool kbHoverOff = false;
+    POINT kbCursor{};
     winrt::event_token menuClickToken{};
     std::vector<SiblingHook> siblings;
 
@@ -2082,6 +2114,8 @@ struct WindowState {
     // Drops coming in from other windows and applications, and the scroll that
     // follows a drag (inbound or of rows) near the edge of a column or the strip.
     IDropTarget* panelDrop = nullptr;
+    GhostSpec outSpec;               // The label of a drag that left the panel,
+    bool outDragActive = false;      // shown again when it comes back to it.
     HWND panelDropWindow = nullptr;
     winrt::Windows::Foundation::Point autoPoint{};  // The pointer, host coordinates.
     bool autoOn = false;
@@ -2629,6 +2663,10 @@ void RequestIcons(WindowState* state, Column* column) {
     SetEvent(state->worker->event);
 }
 
+void LogRowTree(mux::DependencyObject const& node, int depth);
+void RestoreViewButtonIcon(WindowState* state);
+void HoverOn(WindowState* state);
+void HoverOff(WindowState* state);
 // ---- Columns ----
 
 int ColumnIndexOfList(WindowState* state, muxc::ListView const& list) {
@@ -2898,11 +2936,8 @@ double MeasureText(const std::wstring& text) {
 // own margins.
 const double kRowChrome = 24 + 16 + 18 + 22 + 10;  // The last 10 is the gutter.
 
-// Sets the column's width from its longest names, unless the user sized it.
-void FitWidth(Column* column) {
-    if (column->userSized) {
-        return;
-    }
+// The width a column's longest names ask for, inside the limits.
+double FittedWidth(Column* column) {
     // Measure only the longest names, by character count.
     std::vector<const std::wstring*> names;
     for (auto& entry : column->entries) {
@@ -2934,7 +2969,15 @@ void FitWidth(Column* column) {
     if (width > maxWidth) {
         width = maxWidth;
     }
-    column->list.Width(width);
+    return width;
+}
+
+// Sets the column's width from its longest names, unless the user sized it.
+void FitWidth(Column* column) {
+    if (column->userSized) {
+        return;
+    }
+    column->list.Width(FittedWidth(column));
 }
 
 size_t NameCapacity(Column* column) {
@@ -3620,7 +3663,7 @@ bool SameListing(const FolderResult& data, const Column& column) {
 }
 
 void LiftStale(WindowState* state, int columnIndex);
-void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder);
+void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay = 350);
 void SetActiveColumn(WindowState* state, int index, bool ensureVisible);
 
 // A folder on disk that is no longer there: deleted, renamed or moved.
@@ -3794,6 +3837,167 @@ void OnColumnKey(muxc::ListView const& list,
 
 // Adds an empty column for `folder` at the right end and asks the worker to
 // read it. Takes ownership of `folder`.
+// ---- The handle on a column's border: it grows where the pointer is, follows it
+// up and down the border, and shrinks away when the pointer leaves.
+
+void PillGoTo(muxc::Border const& pill, double scaleTo, double offsetTo, int milliseconds, bool hideAtEnd) {
+    try {
+        auto motion = pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+        if (!motion) {
+            return;
+        }
+        namespace anim = mux::Media::Animation;
+        anim::CubicEase ease;
+        ease.EasingMode(anim::EasingMode::EaseOut);
+        auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(milliseconds));
+        anim::Storyboard board;
+        auto add = [&](const wchar_t* property, double from, double to) {
+            anim::DoubleAnimation step;
+            step.From(from);
+            step.To(to);
+            step.Duration(length);
+            step.EasingFunction(ease);
+            step.EnableDependentAnimation(true);
+            step.FillBehavior(anim::FillBehavior::HoldEnd);
+            anim::Storyboard::SetTarget(step, pill);
+            anim::Storyboard::SetTargetProperty(step, property);
+            board.Children().Append(step);
+        };
+        add(L"(UIElement.RenderTransform).(CompositeTransform.ScaleY)", motion.ScaleY(), scaleTo);
+        add(L"(UIElement.RenderTransform).(CompositeTransform.TranslateY)", motion.TranslateY(), offsetTo);
+        if (hideAtEnd) {
+            board.Completed([pill](Inspectable const&, Inspectable const&) {
+                if (!winrt::unbox_value_or<bool>(pill.Tag(), false)) {
+                    pill.Opacity(0);
+                }
+            });
+        }
+        board.Begin();
+    } catch (...) {
+        LogHresult(L"animating the border handle");
+    }
+}
+
+// Where the handle sits for a pointer at `y` in the grip: its middle follows
+// the pointer, kept inside the grip.
+double PillOffset(Column* column, double y) {
+    double height = column->grip.ActualHeight();
+    double half = column->pill.Height() / 2;
+    double centre = y < half ? half : (y > height - half ? height - half : y);
+    return centre - height / 2;
+}
+
+void PillShow(Column* column, double y) {
+    if (!column->pill || !column->grip) {
+        return;
+    }
+    try {
+        auto motion = column->pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+        if (!motion) {
+            return;
+        }
+        bool wasShown = winrt::unbox_value_or<bool>(column->pill.Tag(), false) && column->pill.Opacity() > 0;
+        double offset = PillOffset(column, y);
+        column->pill.Tag(winrt::box_value(true));
+        column->pill.Opacity(1);
+        if (!wasShown) {
+            motion.TranslateY(offset);  // It appears at the pointer, then grows.
+        }
+        PillGoTo(column->pill, 1.0, offset, wasShown ? 80 : 150, false);
+    } catch (...) {
+        LogHresult(L"showing the border handle");
+    }
+}
+
+void PillFollow(Column* column, double y) {
+    if (!column->pill || !column->grip || !winrt::unbox_value_or<bool>(column->pill.Tag(), false)) {
+        return;
+    }
+    PillGoTo(column->pill, 1.0, PillOffset(column, y), 35, false);
+}
+
+void PillHide(Column* column) {
+    if (!column->pill || !winrt::unbox_value_or<bool>(column->pill.Tag(), false)) {
+        return;
+    }
+    column->pill.Tag(winrt::box_value(false));
+    auto motion = column->pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+    PillGoTo(column->pill, 0.0, motion ? motion.TranslateY() : 0.0, 110, true);
+}
+
+// Shift and double-click on a border: every column takes the average of the
+// widths their names would fit, gliding there, and keeps it like a width
+// dragged by hand.
+void HarmonizeWidths(WindowState* state) {
+    double total = 0;
+    int counted = 0;
+    for (auto& column : state->columns) {
+        if (column->list && column->filled && !column->entries.empty()) {
+            total += FittedWidth(column.get());
+            counted++;
+        }
+    }
+    if (counted == 0) {
+        return;
+    }
+    double target = std::round(total / counted);
+    target = std::clamp(target, (double)g_minWidth, (double)g_maxWidth);
+    namespace anim = mux::Media::Animation;
+    anim::CubicEase ease;
+    ease.EasingMode(anim::EasingMode::EaseInOut);
+    auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(260));
+    anim::Storyboard board;
+    for (auto& column : state->columns) {
+        if (!column->list) {
+            continue;
+        }
+        double from = column->list.ActualWidth();
+        column->userSized = true;
+        column->list.Width(target);
+        if (std::abs(from - target) < 1) {
+            continue;
+        }
+        anim::DoubleAnimation glide;
+        glide.From(from);
+        glide.To(target);
+        glide.Duration(length);
+        glide.EasingFunction(ease);
+        glide.EnableDependentAnimation(true);
+        glide.FillBehavior(anim::FillBehavior::Stop);
+        anim::Storyboard::SetTarget(glide, column->list);
+        anim::Storyboard::SetTargetProperty(glide, L"Width");
+        board.Children().Append(glide);
+    }
+    board.Begin();
+    // The active marker follows the widths while they change; the names are cut
+    // again for the new width at the end.
+    auto timer = state->queue.CreateTimer();
+    timer.Interval(std::chrono::milliseconds(16));
+    auto frames = std::make_shared<int>(0);
+    timer.Tick([frames](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->on) {
+            sender.Stop();
+            return;
+        }
+        UpdatePill(state, false);
+        if (++*frames >= 20) {
+            sender.Stop();
+            for (auto& column : state->columns) {
+                if (column->list) {
+                    RefreshNames(column.get());
+                    if (column->folder) {
+                        RememberFolderWidth(PathOf(column->folder.get()), column->list.Width());
+                    }
+                }
+            }
+            UpdatePill(state, false);
+        }
+    });
+    timer.Start();
+    Out(L"widths harmonized to %d across %d columns", (int)target, (int)state->columns.size());
+}
+
 void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archive = false) {
     auto column = std::make_unique<Column>();
     column->folder = std::move(folder);
@@ -3835,7 +4039,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     list.FocusVisualPrimaryThickness(mux::Thickness{0, 0, 0, 0});
     list.FocusVisualSecondaryThickness(mux::Thickness{0, 0, 0, 0});
     list.SelectionMode(muxc::ListViewSelectionMode::Extended);
-    list.Padding(mux::Thickness{0, 12, 10, 4});
+    list.Padding(mux::Thickness{5, 12, 10, 4});
     column->selectionToken = list.SelectionChanged(
         [](Inspectable const& sender,
            muxc::SelectionChangedEventArgs const&) {
@@ -4077,6 +4281,13 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     pill.HorizontalAlignment(mux::HorizontalAlignment::Center);
     pill.VerticalAlignment(mux::VerticalAlignment::Center);
     pill.Opacity(0);
+    {
+        mux::Media::CompositeTransform motion;
+        motion.ScaleY(0);
+        pill.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+        pill.RenderTransform(motion);
+        pill.Tag(winrt::box_value(false));
+    }
     muxc::Grid gripContent;
     gripContent.Children().Append(line);
     gripContent.Children().Append(pill);
@@ -4097,11 +4308,15 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     }
     column->gripEnteredToken = grip.PointerEntered(
         [](Inspectable const& sender,
-           mux::Input::PointerRoutedEventArgs const&) {
+           mux::Input::PointerRoutedEventArgs const& args) {
             WindowState* state = StateForThisThread(false);
             int index = state ? ColumnIndexOfGrip(state, sender) : -1;
             if (index >= 0) {
-                state->columns[index]->hoverSince = GetTickCount64();
+                Column* column = state->columns[index].get();
+                column->hoverSince = GetTickCount64();
+                if (state->dragColumn < 0) {
+                    PillShow(column, args.GetCurrentPoint(column->grip).Position().Y);
+                }
             }
         });
     column->gripExitedToken = grip.PointerExited(
@@ -4112,7 +4327,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             if (index >= 0) {
                 state->columns[index]->hoverSince = 0;
                 if (state->columns[index]->pill && state->dragColumn != index) {
-                    state->columns[index]->pill.Opacity(0);
+                    PillHide(state->columns[index].get());
                 }
             }
         });
@@ -4143,12 +4358,16 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         [](Inspectable const& sender,
            mux::Input::PointerRoutedEventArgs const& args) {
             WindowState* state = StateForThisThread(false);
-            if (!state || !state->on || state->dragColumn < 0) {
+            if (!state || !state->on) {
                 return;
             }
             try {
                 int index = ColumnIndexOfGrip(state, sender);
-                if (index != state->dragColumn) {
+                if (index >= 0) {
+                    Column* column = state->columns[index].get();
+                    PillFollow(column, args.GetCurrentPoint(column->grip).Position().Y);
+                }
+                if (state->dragColumn < 0 || index != state->dragColumn) {
                     return;
                 }
                 double x = args.GetCurrentPoint(state->strip).Position().X;
@@ -4181,7 +4400,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             }
             if (index < (int)state->columns.size()) {
                 if (state->columns[index]->pill) {
-                    state->columns[index]->pill.Opacity(0);
+                    PillHide(state->columns[index].get());
                 }
                 RefreshNames(state->columns[index].get());
                 RememberFolderWidth(PathOf(state->columns[index]->folder.get()),
@@ -4205,6 +4424,10 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             try {
                 int index = ColumnIndexOfGrip(state, sender);
                 if (index < 0) {
+                    return;
+                }
+                if (g_harmonize && (GetKeyState(VK_SHIFT) & 0x8000)) {
+                    HarmonizeWidths(state);
                     return;
                 }
                 Column* column = state->columns[index].get();
@@ -4454,8 +4677,10 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 }
 
 // Explorer follows after a short pause, so a run of quick selections costs
-// one navigation.
-void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
+// one navigation. A selection in the folder Explorer already shows needs no
+// navigation: it is mirrored at once, so a previewer that asks Explorer for the
+// selected item (QuickLook on Space) finds it there.
+void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay) {
     if (!g_follow) {
         return;
     }
@@ -4466,23 +4691,48 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         state->selectChild.reset();
         return;
     }
+    if (state->lastSeen && !state->expected && ILIsEqual(state->lastSeen.get(), folder)) {
+        state->pendingNav.reset();
+        if (state->selectChild && state->selectFolder && ILIsEqual(state->selectFolder.get(), folder)) {
+            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+                if (SelectInExplorer(browser, state->selectChild.get())) {
+                    if (!state->selectExtra.empty()) {
+                        AddToSelectionInExplorer(browser, state->selectExtra);
+                        state->selectExtra.clear();
+                    }
+                    state->selectFolder.reset();
+                    state->selectChild.reset();
+                }
+            }
+        }
+        return;
+    }
     state->pendingNav.reset(ILClone(folder));
-    state->navDue = GetTickCount64() + 350;
+    state->navDue = GetTickCount64() + delay;
 }
 
 // While the columns to the right of `columnIndex` are stale, the chevron of the
-// folder that leads to them is drawn stronger, a quiet thread of the hierarchy.
+// folder that leads to them sits on a small rounded badge, a quiet thread of the
+// hierarchy.
 void SetStaleHint(WindowState* state, int columnIndex, bool on) {
     if (columnIndex < 0 || columnIndex >= (int)state->columns.size()) {
         return;
     }
     Column* column = state->columns[columnIndex].get();
     try {
+        if (column->hintBadge) {
+            if (auto parent = mux::Media::VisualTreeHelper::GetParent(column->hintBadge).try_as<muxc::Panel>()) {
+                uint32_t index = 0;
+                if (parent.Children().IndexOf(column->hintBadge, index)) {
+                    parent.Children().RemoveAt(index);
+                }
+            }
+            column->hintBadge = nullptr;
+        }
         if (column->hintEntry >= 0 &&
             column->hintEntry < (int)column->chevrons.size() &&
             column->chevrons[column->hintEntry]) {
             column->chevrons[column->hintEntry].Opacity(0.6);
-            column->chevrons[column->hintEntry].FontSize(10);
         }
         column->hintEntry = -1;
         if (!on || columnIndex + 1 >= (int)state->columns.size()) {
@@ -4495,11 +4745,31 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
         for (size_t i = 0; i < column->entries.size() && i < column->chevrons.size(); i++) {
             if (ILIsEqual(column->entries[i].child.get(), leading.get())) {
                 EnsureRowBuilt(column, i);
-                if (!column->chevrons[i]) {
+                auto chevron = column->chevrons[i];
+                if (!chevron) {
                     break;
                 }
-                column->chevrons[i].Opacity(1.0);
-                column->chevrons[i].FontSize(13);
+                if (auto grid = mux::Media::VisualTreeHelper::GetParent(chevron).try_as<muxc::Panel>()) {
+                    uint32_t at = 0;
+                    if (grid.Children().IndexOf(chevron, at)) {
+                        bool dark = chevron.ActualTheme() == mux::ElementTheme::Dark;
+                        muxc::Border badge;
+                        // A circle whose middle is the chevron's middle.
+                        double glyph = chevron.ActualWidth() > 1 ? chevron.ActualWidth() : 10;
+                        badge.Width(15);
+                        badge.Height(15);
+                        badge.CornerRadius(mux::CornerRadius{7.5, 7.5, 7.5, 7.5});
+                        badge.Margin(mux::Thickness{0, 0, glyph / 2 - 7.5, 0});
+                        badge.Background(dark ? Brush(13, 255, 255, 255) : Brush(10, 0, 0, 0));
+                        badge.HorizontalAlignment(mux::HorizontalAlignment::Right);
+                        badge.VerticalAlignment(mux::VerticalAlignment::Center);
+                        badge.IsHitTestVisible(false);
+                        muxc::Grid::SetColumn(badge, 3);
+                        grid.Children().InsertAt(at, badge);  // Under the chevron.
+                        column->hintBadge = badge;
+                    }
+                }
+                chevron.Opacity(0.9);
                 column->hintEntry = (int)i;
                 break;
             }
@@ -4572,6 +4842,87 @@ std::vector<size_t> SelectedEntries(Column* column,
     return result;
 }
 
+// The background of a selected row is a border inside its presenter, inset by
+// 4 px at the sides and 2.3 px above and below. Rows that are selected next to
+// each other share one background, as in Finder: the border loses the inset
+// where it meets the next one, and its corners there are square. Only the rows
+// touched by the last pass are put back, so a long column costs nothing when
+// the selection does not change.
+muxc::Border SelectionBorderOf(muxc::ListViewItem const& item) {
+    try {
+        if (mux::Media::VisualTreeHelper::GetChildrenCount(item) > 0) {
+            auto presenter = mux::Media::VisualTreeHelper::GetChild(item, 0);
+            if (presenter && mux::Media::VisualTreeHelper::GetChildrenCount(presenter) > 0) {
+                return mux::Media::VisualTreeHelper::GetChild(presenter, 0).try_as<muxc::Border>();
+            }
+        }
+    } catch (...) {
+    }
+    return nullptr;
+}
+
+void ShapeSelectionRuns(Column* column, muxc::ListView const& list) {
+    static bool known = false;
+    static mux::Thickness defaultMargin{4, 2.3, 4, 2.3};
+    static mux::CornerRadius defaultCorner{4, 4, 4, 4};
+    try {
+        auto items = list.Items();
+        uint32_t count = items.Size();
+        auto rowAt = [&](uint32_t r) -> muxc::ListViewItem {
+            return r < count ? items.GetAt(r).try_as<muxc::ListViewItem>() : muxc::ListViewItem{nullptr};
+        };
+        auto selectedAt = [&](uint32_t r) {
+            if (r >= count || r >= column->rowToEntry.size() || column->rowToEntry[r] < 0) {
+                return false;
+            }
+            auto item = rowAt(r);
+            return item && item.IsSelected() && item.Visibility() == mux::Visibility::Visible;
+        };
+        for (uint32_t r : column->shapedRows) {
+            if (auto item = rowAt(r)) {
+                if (auto border = SelectionBorderOf(item)) {
+                    border.Margin(defaultMargin);
+                    border.CornerRadius(defaultCorner);
+                }
+            }
+        }
+        column->shapedRows.clear();
+        auto selected = list.SelectedItems();
+        for (uint32_t i = 0; i < selected.Size(); i++) {
+            auto item = selected.GetAt(i).try_as<muxc::ListViewItem>();
+            if (!item) {
+                continue;
+            }
+            int index = list.IndexFromContainer(item);
+            if (index < 0) {
+                continue;
+            }
+            auto border = SelectionBorderOf(item);
+            if (!border) {
+                continue;
+            }
+            if (!known) {
+                known = true;
+                defaultMargin = border.Margin();
+                defaultCorner = border.CornerRadius();
+            }
+            uint32_t r = (uint32_t)index;
+            bool up = r > 0 && selectedAt(r - 1);
+            bool down = selectedAt(r + 1);
+            if (!up && !down) {
+                continue;
+            }
+            border.Margin(mux::Thickness{defaultMargin.Left, up ? 0.0 : defaultMargin.Top, defaultMargin.Right,
+                                         down ? 0.0 : defaultMargin.Bottom});
+            double top = up ? 0 : defaultCorner.TopLeft, bottom = down ? 0 : defaultCorner.BottomLeft;
+            border.CornerRadius(mux::CornerRadius{top, top, bottom, bottom});
+            column->shapedRows.push_back(r);
+        }
+    } catch (...) {
+        LogHresult(L"shaping runs of selected rows");
+    }
+}
+
 void OnRowSelected(muxc::ListView const& list) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || state->building || g_unloading) {
@@ -4583,6 +4934,7 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+        ShapeSelectionRuns(column, list);
         if (column->focusHeader >= 0) {
             SetHeaderFocus(column, list, -1);  // A row was chosen: the keyboard leaves the header.
         }
@@ -4627,6 +4979,14 @@ void OnRowSelected(muxc::ListView const& list) {
         // The columns to the right stay while the selection is a file, several
         // items or nothing, dimmed, until another folder is chosen here.
         auto dimAfter = [&](bool dim) {
+            if (dim && !g_keepStale) {
+                // The setting asks for them to go instead of waiting, dimmed.
+                state->building = true;
+                RemoveColumnsFrom(state, columnIndex + 1);
+                state->building = false;
+                SetStaleHint(state, columnIndex, false);
+                return;
+            }
             for (size_t j = columnIndex + 1; j < state->columns.size(); j++) {
                 if (state->columns[j]->cell) {
                     state->columns[j]->cell.Opacity(dim ? 0.5 : 1.0);
@@ -4651,7 +5011,7 @@ void OnRowSelected(muxc::ListView const& list) {
                     ILClone(column->entries[picked[i]].child.get()));
             }
             state->selectTries = 0;
-            ScheduleNavigation(state, column->folder.get());
+            ScheduleNavigation(state, column->folder.get(), 120);
             dimAfter(true);
             Out(L"%d items selected in column %d", (int)picked.size(),
                 columnIndex + 1);
@@ -4715,7 +5075,7 @@ void OnRowSelected(muxc::ListView const& list) {
             state->selectFolder.reset(ILClone(column->folder.get()));
             state->selectChild.reset(ILClone(entry.child.get()));
             state->selectTries = 0;
-            ScheduleNavigation(state, column->folder.get());
+            ScheduleNavigation(state, column->folder.get(), 120);
         }
     } catch (...) {
         state->building = false;
@@ -7852,6 +8212,12 @@ void OnColumnKey(muxc::ListView const& list,
         }
         auto key = args.Key();
         using winrt::Windows::System::VirtualKey;
+        if (key != VirtualKey::Control && key != VirtualKey::Shift && key != VirtualKey::Menu &&
+            key != VirtualKey::LeftControl && key != VirtualKey::RightControl &&
+            key != VirtualKey::LeftShift && key != VirtualKey::RightShift &&
+            key != VirtualKey::LeftMenu && key != VirtualKey::RightMenu) {
+            HoverOff(state);
+        }
         Column* column = state->columns[index].get();
         int row = list.SelectedIndex();
         int entry = row >= 0 && row < (int)column->rowToEntry.size()
@@ -8159,6 +8525,10 @@ void LeaveColumns(WindowState* state);
 void RegisterPanelDropTarget(WindowState* state);
 void RevokePanelDropTarget(WindowState* state);
 void DragAutoScroll(WindowState* state);
+void HoverTick(WindowState* state);
+void PillHide(Column* column);
+void UpdateLastEdge(WindowState* state);
+void SyncViewButtonIcon(WindowState* state);
 
 void HidePanel(WindowState* state, const wchar_t* why) {
     if (!state->source) {
@@ -8167,6 +8537,8 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    RestoreViewButtonIcon(state);
+    HoverOn(state);
     g_panelWindow = nullptr;
     RevokePanelDropTarget(state);
     RestoreNativeList(state);
@@ -8683,6 +9055,9 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
+        HoverTick(state);
+        SyncViewButtonIcon(state);
+        UpdateLastEdge(state);
 
         HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
 
@@ -8811,12 +9186,7 @@ void OnTick() {
                     }
                 }
                 if (!over) {
-                    column->pill.Opacity(0);
-                    column->hoverSince = 0;
-                    continue;
-                }
-                if (column->hoverSince && now - column->hoverSince >= 350) {
-                    column->pill.Opacity(1);
+                    PillHide(column.get());  // The pointer left without the event.
                     column->hoverSince = 0;
                 }
             }
@@ -8923,7 +9293,7 @@ void OnTick() {
                     // not be built yet.
                     if (StyleScrollBars(c->list, wanted == 1) > 0) {
                         c->scrollStyle = wanted;
-                        c->list.Padding(mux::Thickness{0, 12, 10.0, 4});
+                        c->list.Padding(mux::Thickness{5, 12, 10.0, 4});
                         c->gutterRight = 10;
                     }
                 } catch (...) {
@@ -8968,7 +9338,7 @@ void OnTick() {
                 double wanted = barShown ? 23.0 : 10.0;  // 7 for the bar, 16 free beside it
                 if (c->gutterRight != wanted) {
                     c->gutterRight = wanted;
-                    c->list.Padding(mux::Thickness{0, 12, wanted, 4});
+                    c->list.Padding(mux::Thickness{5, 12, wanted, 4});
                 }
             }
         }
@@ -9317,6 +9687,7 @@ void ShowPanel(WindowState* state) {
                     if (!state || !state->scroller) {
                         return;
                     }
+                    HoverOn(state);
                     auto props =
                         args.GetCurrentPoint(state->scroller).Properties();
                     if (!props.IsHorizontalMouseWheel()) {
@@ -9589,26 +9960,79 @@ bool DragTargetAllowed(WindowState* state, Column* column, int entry) {
 void DragClearTarget(WindowState* state) {
     auto& d = state->drag;
     try {
-        if (d.litRow) {
-            if (d.litRowBrush) {
-                d.litRow.Background(d.litRowBrush);
-            } else {
-                d.litRow.ClearValue(muxc::Control::BackgroundProperty());
-            }
-        }
-        if (d.litColumn && d.litColumn->cell) {
-            d.litColumn->cell.Background(d.litCellBrush);
+        if (d.frame) {
+            d.frame.Visibility(mux::Visibility::Collapsed);
         }
     } catch (...) {
         LogHresult(L"clearing the drop target");
     }
-    d.litRow = nullptr;
-    d.litRowBrush = nullptr;
-    d.litColumn = nullptr;
-    d.litCellBrush = nullptr;
     d.targetColumn = nullptr;
     d.targetEntry = -1;
     d.targetOk = false;
+}
+
+// The label comes in and goes out the way a flyout does: a short fade with a
+// slight scale from the middle. On the way out it is removed when it has faded.
+void AnimateGhost(mux::FrameworkElement const& ghost, bool entering) {
+    try {
+        namespace anim = mux::Media::Animation;
+        mux::Media::ScaleTransform scale;
+        ghost.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+        ghost.RenderTransform(scale);
+        anim::CubicEase ease;
+        ease.EasingMode(entering ? anim::EasingMode::EaseOut : anim::EasingMode::EaseIn);
+        auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(entering ? 150 : 100));
+        anim::Storyboard board;
+        auto add = [&](const wchar_t* property, double from, double to) {
+            anim::DoubleAnimation step;
+            step.From(from);
+            step.To(to);
+            step.Duration(length);
+            step.EasingFunction(ease);
+            step.EnableDependentAnimation(true);
+            step.FillBehavior(entering ? anim::FillBehavior::Stop : anim::FillBehavior::HoldEnd);
+            anim::Storyboard::SetTarget(step, ghost);
+            anim::Storyboard::SetTargetProperty(step, property);
+            board.Children().Append(step);
+        };
+        add(L"Opacity", entering ? 0.0 : 1.0, entering ? 1.0 : 0.0);
+        add(L"(UIElement.RenderTransform).(ScaleTransform.ScaleX)", entering ? 0.92 : 1.0,
+            entering ? 1.0 : 0.96);
+        add(L"(UIElement.RenderTransform).(ScaleTransform.ScaleY)", entering ? 0.92 : 1.0,
+            entering ? 1.0 : 0.96);
+        board.Begin();
+    } catch (...) {
+        LogHresult(L"animating the drag label");
+    }
+}
+
+void FadeOutGhost(muxc::Canvas const& overlay, mux::FrameworkElement const& ghost) {
+    auto remove = [overlay, ghost]() {
+        try {
+            uint32_t index = 0;
+            if (overlay.Children().IndexOf(ghost, index)) {
+                overlay.Children().RemoveAt(index);
+            }
+        } catch (...) {
+        }
+    };
+    if (g_unloading) {
+        remove();
+        return;
+    }
+    try {
+        AnimateGhost(ghost, false);
+        auto timer = overlay.DispatcherQueue().CreateTimer();
+        timer.Interval(std::chrono::milliseconds(130));
+        timer.IsRepeating(false);
+        timer.Tick([remove](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            sender.Stop();
+            remove();
+        });
+        timer.Start();
+    } catch (...) {
+        remove();
+    }
 }
 
 void DragEnd(WindowState* state) {
@@ -9617,8 +10041,11 @@ void DragEnd(WindowState* state) {
     state->autoOn = false;
     try {
         if (d.ghost && state->overlay) {
+            FadeOutGhost(state->overlay, d.ghost);
+        }
+        if (d.frame && state->overlay) {
             uint32_t index = 0;
-            if (state->overlay.Children().IndexOf(d.ghost, index)) {
+            if (state->overlay.Children().IndexOf(d.frame, index)) {
                 state->overlay.Children().RemoveAt(index);
             }
         }
@@ -9667,28 +10094,78 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     }
 }
 
-// Lights the folder row, or the column, a drop would go to.
-void DragLight(WindowState* state, Column* targetColumn, int targetEntry) {
+// Puts the accent frame around the folder row, or the column, a drop would go
+// to. Run again whenever the pointer moves or the columns scroll, since the row
+// moves under a frame that stays still.
+void DragPlaceFrame(WindowState* state) {
     auto& d = state->drag;
-    winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
-                                                      : winrt::Windows::UI::Color{255, 76, 194, 255};
-    try {
-        if (targetEntry >= 0) {
-            int rowIndex = targetColumn->entryToRow[targetEntry];
-            auto row = targetColumn->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
-            if (row) {
-                d.litRow = row;
-                d.litRowBrush = row.Background();
-                row.Background(Brush(80, tint.R, tint.G, tint.B));
-            }
-        } else if (targetColumn->cell) {
-            d.litColumn = targetColumn;
-            d.litCellBrush = targetColumn->cell.Background();
-            targetColumn->cell.Background(Brush(40, tint.R, tint.G, tint.B));
+    if (!d.targetOk || !d.targetColumn || !state->overlay) {
+        if (d.frame) {
+            d.frame.Visibility(mux::Visibility::Collapsed);
         }
-    } catch (...) {
-        LogHresult(L"lighting the drop target");
+        return;
     }
+    try {
+        Column* column = d.targetColumn;
+        mux::FrameworkElement target{nullptr};
+        if (d.targetEntry >= 0) {
+            int rowIndex = column->entryToRow[d.targetEntry];
+            target = column->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
+        } else {
+            target = column->cell;
+        }
+        if (!target) {
+            if (d.frame) {
+                d.frame.Visibility(mux::Visibility::Collapsed);
+            }
+            return;
+        }
+        auto at = target.TransformToVisual(state->overlay).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+        double left = at.X, top = at.Y, width = target.ActualWidth(), height = target.ActualHeight();
+        if (d.targetEntry >= 0) {
+            // A row that is half scrolled out of its column is framed only where it shows.
+            auto listAt = column->list.TransformToVisual(state->overlay)
+                              .TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+            double listTop = listAt.Y, listBottom = listAt.Y + column->list.ActualHeight();
+            if (top < listTop) {
+                height -= listTop - top;
+                top = listTop;
+            }
+            if (top + height > listBottom) {
+                height = listBottom - top;
+            }
+        }
+        if (width < 4 || height < 4) {
+            if (d.frame) {
+                d.frame.Visibility(mux::Visibility::Collapsed);
+            }
+            return;
+        }
+        if (!d.frame) {
+            winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
+                                                              : winrt::Windows::UI::Color{255, 76, 194, 255};
+            muxc::Border frame;
+            frame.BorderBrush(Brush(255, tint.R, tint.G, tint.B));
+            frame.BorderThickness(mux::Thickness{1.5, 1.5, 1.5, 1.5});
+            frame.Background(Brush(12, tint.R, tint.G, tint.B));
+            frame.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+            frame.IsHitTestVisible(false);
+            state->overlay.Children().InsertAt(0, frame);  // Under the label.
+            d.frame = frame;
+        }
+        muxc::Canvas::SetLeft(d.frame, left);
+        muxc::Canvas::SetTop(d.frame, top);
+        d.frame.Width(width);
+        d.frame.Height(height);
+        d.frame.Visibility(mux::Visibility::Visible);
+    } catch (...) {
+        LogHresult(L"framing the drop target");
+    }
+}
+
+// Lights the folder row, or the column, a drop would go to.
+void DragLight(WindowState* state, Column*, int) {
+    DragPlaceFrame(state);
 }
 
 // Finds the target under a point of the panel (host coordinates) for the drag
@@ -9718,8 +10195,198 @@ void DragRefreshTarget(WindowState* state, winrt::Windows::Foundation::Point whe
             }
         }
     }
+    if (d.targetOk) {
+        DragPlaceFrame(state);
+    }
     if (d.ghost) {
-        d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
+        d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.8);
+    }
+}
+
+// The label's content, as it is now.
+GhostSpec SpecOf(Column* column, std::vector<size_t> const& entries) {
+    GhostSpec spec;
+    spec.count = entries.size();
+    spec.name = entries.size() == 1 && entries[0] < column->entries.size()
+                    ? column->entries[entries[0]].name
+                    : std::to_wstring(entries.size()) + L" items";
+    for (size_t at = 0; at < std::min<size_t>(3, entries.size()); ++at) {
+        mux::Media::ImageSource source{nullptr};
+        size_t entry = entries[at];
+        try {
+            if (entry < column->iconHosts.size() && column->iconHosts[entry] &&
+                column->iconHosts[entry].Children().Size() > 0) {
+                if (auto image = column->iconHosts[entry].Children().GetAt(0).try_as<muxc::Image>()) {
+                    source = image.Source();
+                }
+            }
+        } catch (...) {
+        }
+        spec.icons.push_back(source);
+    }
+    return spec;
+}
+
+// Builds the label that follows the pointer, on the surface of a WinUI tooltip
+// (no stroke of its own): up to three icons of what is dragged, stacked, the
+// name or the count, and a line saying what a drop would do there. It goes into
+// the drag state and the overlay; the caller keeps the rest.
+void ShowGhost(WindowState* state, GhostSpec const& spec) {
+    auto& d = state->drag;
+    muxc::ToolTip ghost;
+    ghost.BorderThickness(mux::Thickness{0, 0, 0, 0});
+    ghost.Padding(mux::Thickness{10, 8, 14, 8});
+    ghost.IsHitTestVisible(false);
+    muxc::StackPanel content;
+    content.Orientation(muxc::Orientation::Horizontal);
+    content.Spacing(10);
+    size_t shown = std::max<size_t>(1, std::min<size_t>(3, spec.count));
+    const double iconSize = 32;  // As big as the icon of Explorer's own drag image.
+    muxc::Grid stack;
+    stack.Width(iconSize + 6.0 * (shown - 1));
+    stack.Height(iconSize + 4.0 * (shown - 1));
+    stack.VerticalAlignment(mux::VerticalAlignment::Center);
+    for (size_t at = shown; at-- > 0;) {  // Back to front.
+        mux::UIElement piece{nullptr};
+        if (at < spec.icons.size() && spec.icons[at]) {
+            muxc::Image image;
+            image.Source(spec.icons[at]);
+            image.Width(iconSize);
+            image.Height(iconSize);
+            image.Stretch(mux::Media::Stretch::Uniform);
+            piece = image;
+        } else {
+            muxc::FontIcon glyph;
+            glyph.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            glyph.Glyph(L"");
+            glyph.FontSize(26);
+            glyph.Width(iconSize);
+            glyph.Height(iconSize);
+            piece = glyph;
+        }
+        auto frame = piece.as<mux::FrameworkElement>();
+        if (shown == 1) {
+            frame.HorizontalAlignment(mux::HorizontalAlignment::Center);
+            frame.VerticalAlignment(mux::VerticalAlignment::Center);
+        } else {
+            frame.HorizontalAlignment(mux::HorizontalAlignment::Left);
+            frame.VerticalAlignment(mux::VerticalAlignment::Bottom);
+            frame.Margin(mux::Thickness{6.0 * at, 0, 0, 4.0 * at});
+            piece.Opacity(at == 0 ? 1.0 : 0.85);
+        }
+        stack.Children().Append(piece);
+    }
+    content.Children().Append(stack);
+    muxc::StackPanel texts;
+    texts.VerticalAlignment(mux::VerticalAlignment::Center);
+    muxc::TextBlock text;
+    text.FontSize(12);
+    text.MaxWidth(240);
+    text.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    texts.Children().Append(text);
+    muxc::StackPanel row;
+    row.Orientation(muxc::Orientation::Horizontal);
+    row.Spacing(5);
+    row.Opacity(0.7);
+    row.Visibility(mux::Visibility::Collapsed);
+    muxc::FontIcon icon;
+    icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+    icon.FontSize(11);
+    icon.VerticalAlignment(mux::VerticalAlignment::Center);
+    row.Children().Append(icon);
+    muxc::TextBlock action;
+    action.FontSize(11);
+    action.MaxWidth(220);
+    action.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    row.Children().Append(action);
+    texts.Children().Append(row);
+    content.Children().Append(texts);
+    ghost.Content(content);
+    d.ghost = ghost;
+    d.ghostText = text;
+    d.ghostAction = action;
+    d.ghostIcon = icon;
+    d.ghostRow = row;
+    d.labelName = spec.name;
+    state->overlay.Children().Append(ghost);
+    AnimateGhost(ghost, true);
+}
+
+// The label goes out, with its animation, and the drag state forgets it.
+void RemoveGhost(WindowState* state) {
+    auto& d = state->drag;
+    if (d.ghost && state->overlay) {
+        FadeOutGhost(state->overlay, d.ghost);
+    }
+    d.ghost = nullptr;
+    d.ghostText = nullptr;
+    d.ghostAction = nullptr;
+    d.ghostIcon = nullptr;
+    d.ghostRow = nullptr;
+}
+
+// The name of a folder, as the shell shows it.
+std::wstring FolderDisplayName(PCIDLIST_ABSOLUTE pidl) {
+    std::wstring result;
+    PWSTR text = nullptr;
+    if (pidl && SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &text)) && text) {
+        result = text;
+        CoTaskMemFree(text);
+    }
+    return result;
+}
+
+std::wstring Shortened(std::wstring text, size_t most) {
+    if (text.size() > most) {
+        text = text.substr(0, most - 1) + L"…";
+    }
+    return text;
+}
+
+// The two lines of the label: what is dragged, and what a drop would do.
+void DragUpdateLabel(WindowState* state) {
+    auto& d = state->drag;
+    if (!d.ghostText) {
+        return;
+    }
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    d.ghostText.Text(Shortened(d.labelName, 40).c_str());
+    if (!d.ghostAction) {
+        return;
+    }
+    std::wstring line;
+    const wchar_t* glyph = L"";
+    if (d.targetColumn) {
+        if (!d.targetOk) {
+            line = L"Can’t drop here";
+            glyph = L"";  // Forbidden.
+        } else {
+            std::wstring target =
+                d.targetEntry >= 0 && (size_t)d.targetEntry < d.targetColumn->entries.size()
+                    ? d.targetColumn->entries[d.targetEntry].name
+                    : FolderDisplayName(d.targetColumn->folder.get());
+            const wchar_t* verb = L"Drop in ";
+            glyph = L"";  // Move to a folder.
+            if (ctrl && !shift) {
+                verb = L"Copy to ";
+                glyph = L"";
+            } else if (alt) {
+                verb = L"Link in ";
+                glyph = L"";
+            } else if (shift) {
+                verb = L"Move to ";
+            }
+            line = std::wstring(verb) + Shortened(target, 28);
+        }
+    }
+    if (line.empty()) {
+        d.ghostRow.Visibility(mux::Visibility::Collapsed);
+    } else {
+        d.ghostIcon.Glyph(glyph);
+        d.ghostAction.Text(line.c_str());
+        d.ghostRow.Visibility(mux::Visibility::Visible);
     }
 }
 
@@ -9755,48 +10422,22 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         Out(L"drag: moved far enough, taking the pointer");
         list.CapturePointer(args.Pointer());
         Out(L"drag: pointer taken, making the label");
-        // The label that follows the pointer.
-        muxc::Border ghost;
-        ghost.Background(Brush(235, 40, 40, 40));
-        ghost.BorderBrush(Brush(120, 128, 128, 128));
-        ghost.BorderThickness(mux::Thickness{1, 1, 1, 1});
-        ghost.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
-        ghost.Padding(mux::Thickness{8, 3, 8, 3});
-        ghost.IsHitTestVisible(false);
-        muxc::TextBlock text;
-        text.FontSize(12);
-        text.Foreground(Brush(255, 255, 255, 255));
-        ghost.Child(text);
-        d.ghost = ghost;
-        d.ghostText = text;
-        state->overlay.Children().Append(ghost);
+        ShowGhost(state, SpecOf(column, d.entries));
         Out(L"drag started from column %d with %d item(s)", ColumnIndexOfList(state, list) + 1,
             (int)d.entries.size());
     }
 
-    // The label: what is dragged and what the keys ask for.
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
-    std::wstring name = d.entries.size() == 1 && d.entries[0] < column->entries.size()
-                            ? column->entries[d.entries[0]].name
-                            : std::to_wstring(d.entries.size()) + L" items";
-    if (name.size() > 28) {
-        name = name.substr(0, 27) + L"…";
-    }
-    const wchar_t* action = ctrl && !shift ? L"Copy" : alt ? L"Link" : shift ? L"Move" : L"";
-    d.ghostText.Text(action[0] ? (name + L"  ·  " + action).c_str() : name.c_str());
+    // Where the label goes, and the target under the pointer.
     try {
         auto overlayAt = args.GetCurrentPoint(state->overlay).Position();
-        muxc::Canvas::SetLeft(d.ghost, overlayAt.X + 14);
-        muxc::Canvas::SetTop(d.ghost, overlayAt.Y + 14);
+        muxc::Canvas::SetLeft(d.ghost, overlayAt.X + 16);
+        muxc::Canvas::SetTop(d.ghost, overlayAt.Y + 16);
     } catch (...) {
     }
-
-    // The target under the pointer.
     state->autoPoint = args.GetCurrentPoint(nullptr).Position();
     state->autoOn = true;
     DragRefreshTarget(state, state->autoPoint);
+    DragUpdateLabel(state);
     // Past the edge of the panel the drag goes on as a real one.
     if (g_dragOut && state->rootGrid) {
         auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
@@ -10244,8 +10885,11 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     dropSource->data = data;
     MoveNudger nudger;
     nudger.Start(GetCurrentThreadId());
+    state->outDragActive = true;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    state->outDragActive = false;
+    RemoveGhost(state);
     nudger.Stop();
     Out(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
         dropSource->feedbackCalls, nudger.sent.load());
@@ -10354,6 +10998,7 @@ void StartOutDrag(WindowState* state) {
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     DWORD preferred = alt ? DROPEFFECT_LINK : (ctrl && !shift) ? DROPEFFECT_COPY
                       : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    state->outSpec = SpecOf(d.column, d.entries);
     DragEnd(state);
     if (children.empty()) {
         return;
@@ -10461,6 +11106,21 @@ bool InboundTargetAllowed(WindowState* state, Column* column, int entry, const P
     return target && SHGetPathFromIDListW(target.get(), path) && path[0];  // A folder on disk.
 }
 
+// A point of the screen in the panel's host coordinates.
+winrt::Windows::Foundation::Point HostPointOf(WindowState* state, POINTL pt) {
+    HWND bridgeWindow = (HWND)state->bridge.WindowId().Value;
+    POINT client = {pt.x, pt.y};
+    ScreenToClient(bridgeWindow, &client);
+    double scale = 1.0;
+    if (auto xamlRoot = state->rootGrid.XamlRoot()) {
+        scale = xamlRoot.RasterizationScale();
+    }
+    if (scale <= 0) {
+        scale = 1.0;
+    }
+    return winrt::Windows::Foundation::Point{(float)(client.x / scale), (float)(client.y / scale)};
+}
+
 struct PanelDropTarget : IDropTarget {
     LONG refs = 1;
     IDataObject* data = nullptr;
@@ -10505,7 +11165,7 @@ struct PanelDropTarget : IDropTarget {
     }
 
     // The pointer is at `pt` (screen). Settles the target and gives the effect.
-    void Over(DWORD keys, POINTL pt, DWORD* effect) {
+    void Settle(DWORD keys, POINTL pt, DWORD* effect) {
         lastKeys = keys;
         lastPoint = pt;
         DWORD wanted = *effect;
@@ -10520,17 +11180,7 @@ struct PanelDropTarget : IDropTarget {
         int entry = -1;
         bool found = false;
         try {
-            HWND bridgeWindow = (HWND)state->bridge.WindowId().Value;
-            POINT client = {pt.x, pt.y};
-            ScreenToClient(bridgeWindow, &client);
-            double scale = 1.0;
-            if (auto xamlRoot = state->rootGrid.XamlRoot()) {
-                scale = xamlRoot.RasterizationScale();
-            }
-            if (scale <= 0) {
-                scale = 1.0;
-            }
-            winrt::Windows::Foundation::Point where{(float)(client.x / scale), (float)(client.y / scale)};
+            winrt::Windows::Foundation::Point where = HostPointOf(state, pt);
             state->autoPoint = where;
             state->autoOn = true;
             found = DragTargetAt(state, where, &column, &entry);
@@ -10587,6 +11237,49 @@ struct PanelDropTarget : IDropTarget {
             if (ok) {
                 DragLight(state, column, entry);
             }
+        } else if (ok) {
+            DragPlaceFrame(state);
+        }
+    }
+
+    IDropTargetHelper* helper = nullptr;  // Draws the image of a drag that comes from elsewhere.
+    bool helperActive = false;
+
+    // The label: our own drag coming back gets the label it had in the panel, a
+    // drag from elsewhere gets the shell's image, by its helper.
+    void Over(DWORD keys, POINTL pt, DWORD* effect) {
+        Settle(keys, pt, effect);
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->on || !state->bridge || !state->rootGrid) {
+            return;
+        }
+        try {
+            if (state->outDragActive) {
+                if (!state->drag.ghost) {
+                    ShowGhost(state, state->outSpec);
+                }
+                auto where = HostPointOf(state, pt);
+                muxc::Canvas::SetLeft(state->drag.ghost, where.X + 16);
+                muxc::Canvas::SetTop(state->drag.ghost, where.Y + 16);
+                DragUpdateLabel(state);
+                state->drag.ghost.Opacity(state->drag.targetOk || !state->drag.targetColumn ? 1.0 : 0.8);
+            } else if (helperActive && helper) {
+                POINT p = {pt.x, pt.y};
+                helper->DragOver(&p, *effect);
+            }
+        } catch (...) {
+            LogHresult(L"the label of a drag coming in");
+        }
+    }
+    void HideLabel() {
+        if (helper && helperActive) {
+            helper->DragLeave();
+        }
+        helperActive = false;
+        if (WindowState* state = StateForThisThread(false)) {
+            if (state->drag.ghost) {
+                RemoveGhost(state);
+            }
         }
     }
 
@@ -10605,6 +11298,17 @@ struct PanelDropTarget : IDropTarget {
         if (data) {
             data->AddRef();
         }
+        WindowState* state = StateForThisThread(false);
+        if (state && state->on && !state->outDragActive && object) {
+            if (!helper) {
+                CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&helper));
+            }
+            if (helper && state->bridge) {
+                POINT p = {pt.x, pt.y};
+                helperActive = SUCCEEDED(helper->DragEnter((HWND)state->bridge.WindowId().Value, object, &p,
+                                                           *effect));
+            }
+        }
         Over(keys, pt, effect);
         return S_OK;
     }
@@ -10613,6 +11317,7 @@ struct PanelDropTarget : IDropTarget {
         return S_OK;
     }
     STDMETHODIMP DragLeave() override {
+        HideLabel();
         LeaveFolder();
         DropData();
         if (WindowState* state = StateForThisThread(false)) {
@@ -10629,6 +11334,14 @@ struct PanelDropTarget : IDropTarget {
         DWORD wanted = *effect;
         Over(keys, pt, effect);
         WindowState* state = StateForThisThread(false);
+        if (helper && helperActive) {
+            POINT p = {pt.x, pt.y};
+            helper->Drop(data, &p, *effect);
+            helperActive = false;
+        }
+        if (state && state->drag.ghost) {
+            RemoveGhost(state);
+        }
         if (folder && *effect != DROPEFFECT_NONE) {
             DWORD result = wanted;
             HRESULT hr = folder->Drop(data, keys, pt, &result);
@@ -10683,8 +11396,13 @@ void RevokePanelDropTarget(WindowState* state) {
         RevokeDragDrop(state->panelDropWindow);
     }
     state->panelDropWindow = nullptr;
+    target->HideLabel();
     target->LeaveFolder();
     target->DropData();
+    if (target->helper) {
+        target->helper->Release();
+        target->helper = nullptr;
+    }
     target->Release();
 }
 
@@ -10754,6 +11472,15 @@ void DragAutoScroll(WindowState* state) {
 }
 // ---- View menu entry ----
 
+// The icon of Columns, drawn from assets/columns.svg (16 x 12, one filled
+// shape), as a path icon that takes the colour of the toolbar's text.
+muxc::IconElement MakeColumnsIcon() {
+    return winrt::Microsoft::UI::Xaml::Markup::XamlReader::Load(
+               L"<PathIcon xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+               L"HorizontalAlignment='Center' VerticalAlignment='Center' Foreground='{ThemeResource TextFillColorSecondaryBrush}' Data='F1 M13.0625 0C13.4531 0 13.8255 0.0807292 14.1797 0.242188C14.5391 0.398438 14.8516 0.611979 15.1172 0.882812C15.388 1.14844 15.6016 1.46094 15.7578 1.82031C15.9193 2.17448 16 2.54688 16 2.9375V9.0625C16 9.45312 15.9193 9.82812 15.7578 10.1875C15.6016 10.5417 15.388 10.8542 15.1172 11.125C14.8516 11.3906 14.5391 11.6042 14.1797 11.7656C13.8255 11.9219 13.4531 12 13.0625 12H2.9375C2.54688 12 2.17188 11.9219 1.8125 11.7656C1.45833 11.6042 1.14583 11.3906 0.875 11.125C0.609375 10.8542 0.395833 10.5417 0.234375 10.1875C0.078125 9.82812 0 9.45312 0 9.0625V2.9375C0 2.54688 0.078125 2.17448 0.234375 1.82031C0.395833 1.46094 0.609375 1.14844 0.875 0.882812C1.14583 0.611979 1.45833 0.398438 1.8125 0.242188C2.17188 0.0807292 2.54688 0 2.9375 0H13.0625ZM11 11H13.0391C13.2995 11 13.5469 10.9479 13.7812 10.8438C14.0208 10.7344 14.2292 10.5911 14.4062 10.4141C14.5885 10.2318 14.7318 10.0234 14.8359 9.78906C14.9453 9.54948 15 9.29948 15 9.03906V2.96094C15 2.70052 14.9453 2.45312 14.8359 2.21875C14.7318 1.97917 14.5885 1.77083 14.4062 1.59375C14.2292 1.41146 14.0208 1.26823 13.7812 1.16406C13.5469 1.05469 13.2995 1 13.0391 1H11V11ZM6 11H10V1H6V11ZM2.96094 1C2.70052 1 2.45052 1.05469 2.21094 1.16406C1.97656 1.26823 1.76823 1.41146 1.58594 1.59375C1.40885 1.77083 1.26562 1.97917 1.15625 2.21875C1.05208 2.45312 1 2.70052 1 2.96094V9.03906C1 9.29948 1.05208 9.54948 1.15625 9.78906C1.26562 10.0234 1.40885 10.2318 1.58594 10.4141C1.76823 10.5911 1.97656 10.7344 2.21094 10.8438C2.45052 10.9479 2.70052 11 2.96094 11H5V1H2.96094Z' />")
+        .as<muxc::IconElement>();
+}
+
 // The last layout the user chose, kept by Windhawk across restarts.
 bool LastLayoutWasColumns() {
     return Wh_GetIntValue(L"lastLayoutColumns", 0) != 0;
@@ -10808,10 +11535,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
         if (!groupName.empty()) {
             item.GroupName(groupName);
         }
-        muxc::FontIcon icon;
-        icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-        icon.Glyph(L"");
-        item.Icon(icon);
+        item.Icon(MakeColumnsIcon());
         item.Name(L"WindhawkColumnsItem");
         item.IsChecked(state->on);
         state->menuClickToken = item.Click(
@@ -10893,6 +11617,10 @@ void WalkForViewFlyout(WindowState* state, mux::DependencyObject const& node,
                     if (!hasOurs) {
                         AddMenuEntry(state, items);
                     }
+                    if (state->viewButton != button) {
+                        RestoreViewButtonIcon(state);
+                        state->viewButton = button;
+                    }
                     visited = 100000;  // Found. Stop the walk.
                     return;
                 }
@@ -10949,6 +11677,281 @@ void OnCommandBarPointer(Inspectable const& sender) {
     }
 }
 
+
+// ---- The icon of the View button ----
+
+// The icon the button shows now: the first icon element in its content.
+mux::UIElement FindIconElement(mux::DependencyObject const& node, int depth, int& visited) {
+    if (!node || depth > 12 || visited > 400) {
+        return nullptr;
+    }
+    visited++;
+    std::wstring name = ClassOf(node);
+    if (name.find(L"FontIcon") != std::wstring::npos || name.find(L"PathIcon") != std::wstring::npos ||
+        name.find(L"ImageIcon") != std::wstring::npos || name.find(L"BitmapIcon") != std::wstring::npos) {
+        return node.try_as<mux::UIElement>();
+    }
+    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < children; i++) {
+        if (auto found = FindIconElement(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+void LogTree(mux::DependencyObject const& node, int depth) {
+    if (!node || depth > 8) {
+        return;
+    }
+    Out(L"view button tree: %*s%s", depth * 2, L"", ClassOf(node).c_str());
+    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < children; i++) {
+        LogTree(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1);
+    }
+}
+
+// Puts the original icon back.
+void RestoreViewButtonIcon(WindowState* state) {
+    if (!state->viewIconShown) {
+        return;
+    }
+    state->viewIconShown = false;
+    try {
+        auto original = state->viewIconOriginal;
+        auto ours = state->viewIconOurs;
+        if (original && ours) {
+            if (state->viewIconWhere == 4) {
+                if (auto bar = state->viewButton.try_as<muxc::AppBarButton>()) {
+                    bar.Icon(original.as<muxc::IconElement>());
+                }
+            } else if (state->viewIconWhere == 1 && state->viewButton) {
+                state->viewButton.Content(original);
+            } else if (auto parent = mux::Media::VisualTreeHelper::GetParent(ours)) {
+                if (auto panel = parent.try_as<muxc::Panel>()) {
+                    uint32_t index = 0;
+                    if (panel.Children().IndexOf(ours, index)) {
+                        panel.Children().SetAt(index, original);
+                    }
+                } else if (auto border = parent.try_as<muxc::Border>()) {
+                    border.Child(original);
+                }
+            }
+        }
+    } catch (...) {
+        LogHresult(L"restoring the View button icon");
+    }
+    state->viewIconOriginal = nullptr;
+    state->viewIconOurs = nullptr;
+}
+
+// While Columns shows, the View button wears the Columns icon: Explorer does not
+// know the layout and keeps the icon of the last one it set.
+void SyncViewButtonIcon(WindowState* state) {
+    bool want = state->on && !state->softHidden && state->viewButton;
+    if (state->viewIconShown) {
+        // The button may have been rebuilt, taking our icon with it.
+        bool gone = true;
+        try {
+            gone = !state->viewIconOurs ||
+                   (state->viewIconWhere != 1 && state->viewIconWhere != 4 &&
+                    !mux::Media::VisualTreeHelper::GetParent(state->viewIconOurs));
+            if (state->viewIconWhere == 1 && state->viewButton) {
+                gone = state->viewButton.Content() != state->viewIconOurs;
+            } else if (state->viewIconWhere == 4) {
+                auto bar = state->viewButton.try_as<muxc::AppBarButton>();
+                gone = !bar || !(bar.Icon() == state->viewIconOurs.try_as<muxc::IconElement>());
+            }
+        } catch (...) {
+        }
+        if (gone) {
+            state->viewIconShown = false;
+            state->viewIconOriginal = nullptr;
+            state->viewIconOurs = nullptr;
+        }
+    }
+    if (!want) {
+        RestoreViewButtonIcon(state);
+        return;
+    }
+    if (state->viewIconShown) {
+        return;
+    }
+    try {
+        auto button = state->viewButton;
+        mux::UIElement original{nullptr};
+        int where = 0;
+        auto content = button.Content();
+        if (auto bar = button.try_as<muxc::AppBarButton>(); bar && bar.Icon()) {
+            // The toolbar's button: its Icon property is what shows.
+            original = bar.Icon();
+            where = 4;
+        } else if (content && ClassOf(content).find(L"Icon") != std::wstring::npos) {
+            original = content.try_as<mux::UIElement>();
+            where = 1;
+        } else {
+            int visited = 0;
+            original = FindIconElement(button, 0, visited);
+            if (original) {
+                auto parent = mux::Media::VisualTreeHelper::GetParent(original);
+                where = parent.try_as<muxc::Panel>() ? 2 : parent.try_as<muxc::Border>() ? 3 : 0;
+            }
+        }
+        if (!original || !where) {
+            if (!state->viewIconLogged) {
+                state->viewIconLogged = true;
+                Out(L"the View button has no icon this mod can replace, its tree:");
+                LogTree(button, 0);
+            }
+            return;
+        }
+        auto ours = MakeColumnsIcon();
+        auto frame = ours.as<mux::FrameworkElement>();
+        if (auto source = original.try_as<mux::FrameworkElement>()) {
+            frame.Margin(source.Margin());
+            frame.HorizontalAlignment(source.HorizontalAlignment());
+            frame.VerticalAlignment(source.VerticalAlignment());
+        }
+        if (where == 4) {
+            // As wide as the icon it replaces, and as high as its shape asks.
+            double width = 16;
+            if (auto source = original.try_as<mux::FrameworkElement>()) {
+                if (source.ActualWidth() > 1) {
+                    width = source.ActualWidth();
+                }
+                Out(L"the View button's icon is %.1f x %.1f", source.ActualWidth(), source.ActualHeight());
+            }
+            // The toolbar scales the icon to fill its box, so the box must be the
+            // one the original has (square); the drawing is then made smaller inside
+            // it, to the width of the glyphs around it.
+            frame.Width(width);
+            frame.Height(width);
+            // The drawing is 16 x 12 in a square box and sits at the top of it:
+            // moved down by half the difference, so it is centred like the others.
+            mux::Media::CompositeTransform inside;
+            inside.ScaleX(0.86);
+            inside.ScaleY(0.86);
+            inside.TranslateY(2.5);
+            frame.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+            frame.RenderTransform(inside);
+            button.as<muxc::AppBarButton>().Icon(ours);
+        } else if (where == 1) {
+            button.Content(ours);
+        } else {
+            auto parent = mux::Media::VisualTreeHelper::GetParent(original);
+            if (where == 2) {
+                auto panel = parent.as<muxc::Panel>();
+                uint32_t index = 0;
+                if (!panel.Children().IndexOf(original, index)) {
+                    return;
+                }
+                panel.Children().SetAt(index, ours);
+            } else {
+                parent.as<muxc::Border>().Child(ours);
+            }
+        }
+        state->viewIconOriginal = original;
+        state->viewIconOurs = ours;
+        state->viewIconWhere = where;
+        state->viewIconShown = true;
+        Out(L"the View button shows the Columns icon (replaced a %s)", ClassOf(original).c_str());
+    } catch (...) {
+        LogHresult(L"showing the Columns icon on the View button");
+    }
+}
+
+// ---- Hover while the keyboard is in use ----
+
+// The rows ignore the pointer, so none keeps a hover look because the pointer
+// rests where it was. The tick gives them back when the pointer moves.
+void SetRowsHitTest(WindowState* state, bool on) {
+    for (auto& column : state->columns) {
+        if (!column->list) {
+            continue;
+        }
+        try {
+            auto items = column->list.Items();
+            for (uint32_t i = 0; i < items.Size(); i++) {
+                if (auto row = items.GetAt(i).try_as<muxc::ListViewItem>()) {
+                    row.IsHitTestVisible(on);
+                }
+            }
+        } catch (...) {
+        }
+    }
+}
+
+void HoverOff(WindowState* state) {
+    if (state->kbHoverOff) {
+        return;
+    }
+    state->kbHoverOff = true;
+    GetCursorPos(&state->kbCursor);
+    SetRowsHitTest(state, false);
+}
+
+void HoverOn(WindowState* state) {
+    if (!state->kbHoverOff) {
+        return;
+    }
+    state->kbHoverOff = false;
+    SetRowsHitTest(state, true);
+}
+
+void HoverTick(WindowState* state) {
+    if (!state->kbHoverOff) {
+        return;
+    }
+    POINT now;
+    if (GetCursorPos(&now) && (std::abs(now.x - state->kbCursor.x) > 2 || std::abs(now.y - state->kbCursor.y) > 2)) {
+        HoverOn(state);
+    }
+}
+
+// The last column, when it is empty, has no right edge and no handle to drag:
+// there is nothing beside it to resize against.
+void UpdateLastEdge(WindowState* state) {
+    for (size_t i = 0; i < state->columns.size(); i++) {
+        auto& column = state->columns[i];
+        if (!column->grip) {
+            continue;
+        }
+        bool last = i + 1 == state->columns.size();
+        bool hide = last && column->filled && column->entries.empty();
+        auto wanted = hide ? mux::Visibility::Collapsed : mux::Visibility::Visible;
+        try {
+            if (column->grip.Visibility() != wanted) {
+                column->grip.Visibility(wanted);
+            }
+            // The last column has no separator line to its right, whatever it holds;
+            // the handle to resize it still shows when the pointer is on the edge.
+            if (auto content = column->grip.Child().try_as<muxc::Panel>()) {
+                if (content.Children().Size() > 0) {
+                    content.Children().GetAt(0).Opacity(last ? 0.0 : 1.0);
+                }
+            }
+        } catch (...) {
+        }
+    }
+}
+
+void LogRowTree(mux::DependencyObject const& node, int depth) {
+    if (!node || depth > 6) {
+        return;
+    }
+    std::wstring extra;
+    if (auto element = node.try_as<mux::FrameworkElement>()) {
+        wchar_t text[96];
+        swprintf(text, 96, L" %.0fx%.0f margin %.1f,%.1f,%.1f,%.1f", element.ActualWidth(), element.ActualHeight(),
+                 element.Margin().Left, element.Margin().Top, element.Margin().Right, element.Margin().Bottom);
+        extra = text;
+    }
+    Out(L"row tree: %*s%s%s", depth * 2, L"", ClassOf(node).c_str(), extra.c_str());
+    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < children; i++) {
+        LogRowTree(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1);
+    }
+}
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -11442,6 +12445,8 @@ void LoadSettings() {
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
     g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
+    g_keepStale = Wh_GetIntSetting(L"columns.keepStale") != 0;
+    g_harmonize = Wh_GetIntSetting(L"columns.harmonizeWidths") != 0;
     g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
     g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
     g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
@@ -11481,7 +12486,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.15.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.18.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

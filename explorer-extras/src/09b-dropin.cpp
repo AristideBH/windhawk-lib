@@ -27,6 +27,21 @@ bool InboundTargetAllowed(WindowState* state, Column* column, int entry, const P
     return target && SHGetPathFromIDListW(target.get(), path) && path[0];  // A folder on disk.
 }
 
+// A point of the screen in the panel's host coordinates.
+winrt::Windows::Foundation::Point HostPointOf(WindowState* state, POINTL pt) {
+    HWND bridgeWindow = (HWND)state->bridge.WindowId().Value;
+    POINT client = {pt.x, pt.y};
+    ScreenToClient(bridgeWindow, &client);
+    double scale = 1.0;
+    if (auto xamlRoot = state->rootGrid.XamlRoot()) {
+        scale = xamlRoot.RasterizationScale();
+    }
+    if (scale <= 0) {
+        scale = 1.0;
+    }
+    return winrt::Windows::Foundation::Point{(float)(client.x / scale), (float)(client.y / scale)};
+}
+
 struct PanelDropTarget : IDropTarget {
     LONG refs = 1;
     IDataObject* data = nullptr;
@@ -71,7 +86,7 @@ struct PanelDropTarget : IDropTarget {
     }
 
     // The pointer is at `pt` (screen). Settles the target and gives the effect.
-    void Over(DWORD keys, POINTL pt, DWORD* effect) {
+    void Settle(DWORD keys, POINTL pt, DWORD* effect) {
         lastKeys = keys;
         lastPoint = pt;
         DWORD wanted = *effect;
@@ -86,17 +101,7 @@ struct PanelDropTarget : IDropTarget {
         int entry = -1;
         bool found = false;
         try {
-            HWND bridgeWindow = (HWND)state->bridge.WindowId().Value;
-            POINT client = {pt.x, pt.y};
-            ScreenToClient(bridgeWindow, &client);
-            double scale = 1.0;
-            if (auto xamlRoot = state->rootGrid.XamlRoot()) {
-                scale = xamlRoot.RasterizationScale();
-            }
-            if (scale <= 0) {
-                scale = 1.0;
-            }
-            winrt::Windows::Foundation::Point where{(float)(client.x / scale), (float)(client.y / scale)};
+            winrt::Windows::Foundation::Point where = HostPointOf(state, pt);
             state->autoPoint = where;
             state->autoOn = true;
             found = DragTargetAt(state, where, &column, &entry);
@@ -153,6 +158,49 @@ struct PanelDropTarget : IDropTarget {
             if (ok) {
                 DragLight(state, column, entry);
             }
+        } else if (ok) {
+            DragPlaceFrame(state);
+        }
+    }
+
+    IDropTargetHelper* helper = nullptr;  // Draws the image of a drag that comes from elsewhere.
+    bool helperActive = false;
+
+    // The label: our own drag coming back gets the label it had in the panel, a
+    // drag from elsewhere gets the shell's image, by its helper.
+    void Over(DWORD keys, POINTL pt, DWORD* effect) {
+        Settle(keys, pt, effect);
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->on || !state->bridge || !state->rootGrid) {
+            return;
+        }
+        try {
+            if (state->outDragActive) {
+                if (!state->drag.ghost) {
+                    ShowGhost(state, state->outSpec);
+                }
+                auto where = HostPointOf(state, pt);
+                muxc::Canvas::SetLeft(state->drag.ghost, where.X + 16);
+                muxc::Canvas::SetTop(state->drag.ghost, where.Y + 16);
+                DragUpdateLabel(state);
+                state->drag.ghost.Opacity(state->drag.targetOk || !state->drag.targetColumn ? 1.0 : 0.8);
+            } else if (helperActive && helper) {
+                POINT p = {pt.x, pt.y};
+                helper->DragOver(&p, *effect);
+            }
+        } catch (...) {
+            LogHresult(L"the label of a drag coming in");
+        }
+    }
+    void HideLabel() {
+        if (helper && helperActive) {
+            helper->DragLeave();
+        }
+        helperActive = false;
+        if (WindowState* state = StateForThisThread(false)) {
+            if (state->drag.ghost) {
+                RemoveGhost(state);
+            }
         }
     }
 
@@ -171,6 +219,17 @@ struct PanelDropTarget : IDropTarget {
         if (data) {
             data->AddRef();
         }
+        WindowState* state = StateForThisThread(false);
+        if (state && state->on && !state->outDragActive && object) {
+            if (!helper) {
+                CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&helper));
+            }
+            if (helper && state->bridge) {
+                POINT p = {pt.x, pt.y};
+                helperActive = SUCCEEDED(helper->DragEnter((HWND)state->bridge.WindowId().Value, object, &p,
+                                                           *effect));
+            }
+        }
         Over(keys, pt, effect);
         return S_OK;
     }
@@ -179,6 +238,7 @@ struct PanelDropTarget : IDropTarget {
         return S_OK;
     }
     STDMETHODIMP DragLeave() override {
+        HideLabel();
         LeaveFolder();
         DropData();
         if (WindowState* state = StateForThisThread(false)) {
@@ -195,6 +255,14 @@ struct PanelDropTarget : IDropTarget {
         DWORD wanted = *effect;
         Over(keys, pt, effect);
         WindowState* state = StateForThisThread(false);
+        if (helper && helperActive) {
+            POINT p = {pt.x, pt.y};
+            helper->Drop(data, &p, *effect);
+            helperActive = false;
+        }
+        if (state && state->drag.ghost) {
+            RemoveGhost(state);
+        }
         if (folder && *effect != DROPEFFECT_NONE) {
             DWORD result = wanted;
             HRESULT hr = folder->Drop(data, keys, pt, &result);
@@ -249,8 +317,13 @@ void RevokePanelDropTarget(WindowState* state) {
         RevokeDragDrop(state->panelDropWindow);
     }
     state->panelDropWindow = nullptr;
+    target->HideLabel();
     target->LeaveFolder();
     target->DropData();
+    if (target->helper) {
+        target->helper->Release();
+        target->helper = nullptr;
+    }
     target->Release();
 }
 

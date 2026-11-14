@@ -100,26 +100,79 @@ bool DragTargetAllowed(WindowState* state, Column* column, int entry) {
 void DragClearTarget(WindowState* state) {
     auto& d = state->drag;
     try {
-        if (d.litRow) {
-            if (d.litRowBrush) {
-                d.litRow.Background(d.litRowBrush);
-            } else {
-                d.litRow.ClearValue(muxc::Control::BackgroundProperty());
-            }
-        }
-        if (d.litColumn && d.litColumn->cell) {
-            d.litColumn->cell.Background(d.litCellBrush);
+        if (d.frame) {
+            d.frame.Visibility(mux::Visibility::Collapsed);
         }
     } catch (...) {
         LogHresult(L"clearing the drop target");
     }
-    d.litRow = nullptr;
-    d.litRowBrush = nullptr;
-    d.litColumn = nullptr;
-    d.litCellBrush = nullptr;
     d.targetColumn = nullptr;
     d.targetEntry = -1;
     d.targetOk = false;
+}
+
+// The label comes in and goes out the way a flyout does: a short fade with a
+// slight scale from the middle. On the way out it is removed when it has faded.
+void AnimateGhost(mux::FrameworkElement const& ghost, bool entering) {
+    try {
+        namespace anim = mux::Media::Animation;
+        mux::Media::ScaleTransform scale;
+        ghost.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+        ghost.RenderTransform(scale);
+        anim::CubicEase ease;
+        ease.EasingMode(entering ? anim::EasingMode::EaseOut : anim::EasingMode::EaseIn);
+        auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(entering ? 150 : 100));
+        anim::Storyboard board;
+        auto add = [&](const wchar_t* property, double from, double to) {
+            anim::DoubleAnimation step;
+            step.From(from);
+            step.To(to);
+            step.Duration(length);
+            step.EasingFunction(ease);
+            step.EnableDependentAnimation(true);
+            step.FillBehavior(entering ? anim::FillBehavior::Stop : anim::FillBehavior::HoldEnd);
+            anim::Storyboard::SetTarget(step, ghost);
+            anim::Storyboard::SetTargetProperty(step, property);
+            board.Children().Append(step);
+        };
+        add(L"Opacity", entering ? 0.0 : 1.0, entering ? 1.0 : 0.0);
+        add(L"(UIElement.RenderTransform).(ScaleTransform.ScaleX)", entering ? 0.92 : 1.0,
+            entering ? 1.0 : 0.96);
+        add(L"(UIElement.RenderTransform).(ScaleTransform.ScaleY)", entering ? 0.92 : 1.0,
+            entering ? 1.0 : 0.96);
+        board.Begin();
+    } catch (...) {
+        LogHresult(L"animating the drag label");
+    }
+}
+
+void FadeOutGhost(muxc::Canvas const& overlay, mux::FrameworkElement const& ghost) {
+    auto remove = [overlay, ghost]() {
+        try {
+            uint32_t index = 0;
+            if (overlay.Children().IndexOf(ghost, index)) {
+                overlay.Children().RemoveAt(index);
+            }
+        } catch (...) {
+        }
+    };
+    if (g_unloading) {
+        remove();
+        return;
+    }
+    try {
+        AnimateGhost(ghost, false);
+        auto timer = overlay.DispatcherQueue().CreateTimer();
+        timer.Interval(std::chrono::milliseconds(130));
+        timer.IsRepeating(false);
+        timer.Tick([remove](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            sender.Stop();
+            remove();
+        });
+        timer.Start();
+    } catch (...) {
+        remove();
+    }
 }
 
 void DragEnd(WindowState* state) {
@@ -128,8 +181,11 @@ void DragEnd(WindowState* state) {
     state->autoOn = false;
     try {
         if (d.ghost && state->overlay) {
+            FadeOutGhost(state->overlay, d.ghost);
+        }
+        if (d.frame && state->overlay) {
             uint32_t index = 0;
-            if (state->overlay.Children().IndexOf(d.ghost, index)) {
+            if (state->overlay.Children().IndexOf(d.frame, index)) {
                 state->overlay.Children().RemoveAt(index);
             }
         }
@@ -178,28 +234,78 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     }
 }
 
-// Lights the folder row, or the column, a drop would go to.
-void DragLight(WindowState* state, Column* targetColumn, int targetEntry) {
+// Puts the accent frame around the folder row, or the column, a drop would go
+// to. Run again whenever the pointer moves or the columns scroll, since the row
+// moves under a frame that stays still.
+void DragPlaceFrame(WindowState* state) {
     auto& d = state->drag;
-    winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
-                                                      : winrt::Windows::UI::Color{255, 76, 194, 255};
-    try {
-        if (targetEntry >= 0) {
-            int rowIndex = targetColumn->entryToRow[targetEntry];
-            auto row = targetColumn->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
-            if (row) {
-                d.litRow = row;
-                d.litRowBrush = row.Background();
-                row.Background(Brush(80, tint.R, tint.G, tint.B));
-            }
-        } else if (targetColumn->cell) {
-            d.litColumn = targetColumn;
-            d.litCellBrush = targetColumn->cell.Background();
-            targetColumn->cell.Background(Brush(40, tint.R, tint.G, tint.B));
+    if (!d.targetOk || !d.targetColumn || !state->overlay) {
+        if (d.frame) {
+            d.frame.Visibility(mux::Visibility::Collapsed);
         }
-    } catch (...) {
-        LogHresult(L"lighting the drop target");
+        return;
     }
+    try {
+        Column* column = d.targetColumn;
+        mux::FrameworkElement target{nullptr};
+        if (d.targetEntry >= 0) {
+            int rowIndex = column->entryToRow[d.targetEntry];
+            target = column->list.Items().GetAt((uint32_t)rowIndex).try_as<muxc::ListViewItem>();
+        } else {
+            target = column->cell;
+        }
+        if (!target) {
+            if (d.frame) {
+                d.frame.Visibility(mux::Visibility::Collapsed);
+            }
+            return;
+        }
+        auto at = target.TransformToVisual(state->overlay).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+        double left = at.X, top = at.Y, width = target.ActualWidth(), height = target.ActualHeight();
+        if (d.targetEntry >= 0) {
+            // A row that is half scrolled out of its column is framed only where it shows.
+            auto listAt = column->list.TransformToVisual(state->overlay)
+                              .TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+            double listTop = listAt.Y, listBottom = listAt.Y + column->list.ActualHeight();
+            if (top < listTop) {
+                height -= listTop - top;
+                top = listTop;
+            }
+            if (top + height > listBottom) {
+                height = listBottom - top;
+            }
+        }
+        if (width < 4 || height < 4) {
+            if (d.frame) {
+                d.frame.Visibility(mux::Visibility::Collapsed);
+            }
+            return;
+        }
+        if (!d.frame) {
+            winrt::Windows::UI::Color tint = state->colorsSet ? state->pillColor
+                                                              : winrt::Windows::UI::Color{255, 76, 194, 255};
+            muxc::Border frame;
+            frame.BorderBrush(Brush(255, tint.R, tint.G, tint.B));
+            frame.BorderThickness(mux::Thickness{1.5, 1.5, 1.5, 1.5});
+            frame.Background(Brush(12, tint.R, tint.G, tint.B));
+            frame.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+            frame.IsHitTestVisible(false);
+            state->overlay.Children().InsertAt(0, frame);  // Under the label.
+            d.frame = frame;
+        }
+        muxc::Canvas::SetLeft(d.frame, left);
+        muxc::Canvas::SetTop(d.frame, top);
+        d.frame.Width(width);
+        d.frame.Height(height);
+        d.frame.Visibility(mux::Visibility::Visible);
+    } catch (...) {
+        LogHresult(L"framing the drop target");
+    }
+}
+
+// Lights the folder row, or the column, a drop would go to.
+void DragLight(WindowState* state, Column*, int) {
+    DragPlaceFrame(state);
 }
 
 // Finds the target under a point of the panel (host coordinates) for the drag
@@ -229,8 +335,198 @@ void DragRefreshTarget(WindowState* state, winrt::Windows::Foundation::Point whe
             }
         }
     }
+    if (d.targetOk) {
+        DragPlaceFrame(state);
+    }
     if (d.ghost) {
-        d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.55);
+        d.ghost.Opacity(d.targetOk || !found ? 1.0 : 0.8);
+    }
+}
+
+// The label's content, as it is now.
+GhostSpec SpecOf(Column* column, std::vector<size_t> const& entries) {
+    GhostSpec spec;
+    spec.count = entries.size();
+    spec.name = entries.size() == 1 && entries[0] < column->entries.size()
+                    ? column->entries[entries[0]].name
+                    : std::to_wstring(entries.size()) + L" items";
+    for (size_t at = 0; at < std::min<size_t>(3, entries.size()); ++at) {
+        mux::Media::ImageSource source{nullptr};
+        size_t entry = entries[at];
+        try {
+            if (entry < column->iconHosts.size() && column->iconHosts[entry] &&
+                column->iconHosts[entry].Children().Size() > 0) {
+                if (auto image = column->iconHosts[entry].Children().GetAt(0).try_as<muxc::Image>()) {
+                    source = image.Source();
+                }
+            }
+        } catch (...) {
+        }
+        spec.icons.push_back(source);
+    }
+    return spec;
+}
+
+// Builds the label that follows the pointer, on the surface of a WinUI tooltip
+// (no stroke of its own): up to three icons of what is dragged, stacked, the
+// name or the count, and a line saying what a drop would do there. It goes into
+// the drag state and the overlay; the caller keeps the rest.
+void ShowGhost(WindowState* state, GhostSpec const& spec) {
+    auto& d = state->drag;
+    muxc::ToolTip ghost;
+    ghost.BorderThickness(mux::Thickness{0, 0, 0, 0});
+    ghost.Padding(mux::Thickness{10, 8, 14, 8});
+    ghost.IsHitTestVisible(false);
+    muxc::StackPanel content;
+    content.Orientation(muxc::Orientation::Horizontal);
+    content.Spacing(10);
+    size_t shown = std::max<size_t>(1, std::min<size_t>(3, spec.count));
+    const double iconSize = 32;  // As big as the icon of Explorer's own drag image.
+    muxc::Grid stack;
+    stack.Width(iconSize + 6.0 * (shown - 1));
+    stack.Height(iconSize + 4.0 * (shown - 1));
+    stack.VerticalAlignment(mux::VerticalAlignment::Center);
+    for (size_t at = shown; at-- > 0;) {  // Back to front.
+        mux::UIElement piece{nullptr};
+        if (at < spec.icons.size() && spec.icons[at]) {
+            muxc::Image image;
+            image.Source(spec.icons[at]);
+            image.Width(iconSize);
+            image.Height(iconSize);
+            image.Stretch(mux::Media::Stretch::Uniform);
+            piece = image;
+        } else {
+            muxc::FontIcon glyph;
+            glyph.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            glyph.Glyph(L"");
+            glyph.FontSize(26);
+            glyph.Width(iconSize);
+            glyph.Height(iconSize);
+            piece = glyph;
+        }
+        auto frame = piece.as<mux::FrameworkElement>();
+        if (shown == 1) {
+            frame.HorizontalAlignment(mux::HorizontalAlignment::Center);
+            frame.VerticalAlignment(mux::VerticalAlignment::Center);
+        } else {
+            frame.HorizontalAlignment(mux::HorizontalAlignment::Left);
+            frame.VerticalAlignment(mux::VerticalAlignment::Bottom);
+            frame.Margin(mux::Thickness{6.0 * at, 0, 0, 4.0 * at});
+            piece.Opacity(at == 0 ? 1.0 : 0.85);
+        }
+        stack.Children().Append(piece);
+    }
+    content.Children().Append(stack);
+    muxc::StackPanel texts;
+    texts.VerticalAlignment(mux::VerticalAlignment::Center);
+    muxc::TextBlock text;
+    text.FontSize(12);
+    text.MaxWidth(240);
+    text.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    texts.Children().Append(text);
+    muxc::StackPanel row;
+    row.Orientation(muxc::Orientation::Horizontal);
+    row.Spacing(5);
+    row.Opacity(0.7);
+    row.Visibility(mux::Visibility::Collapsed);
+    muxc::FontIcon icon;
+    icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+    icon.FontSize(11);
+    icon.VerticalAlignment(mux::VerticalAlignment::Center);
+    row.Children().Append(icon);
+    muxc::TextBlock action;
+    action.FontSize(11);
+    action.MaxWidth(220);
+    action.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    row.Children().Append(action);
+    texts.Children().Append(row);
+    content.Children().Append(texts);
+    ghost.Content(content);
+    d.ghost = ghost;
+    d.ghostText = text;
+    d.ghostAction = action;
+    d.ghostIcon = icon;
+    d.ghostRow = row;
+    d.labelName = spec.name;
+    state->overlay.Children().Append(ghost);
+    AnimateGhost(ghost, true);
+}
+
+// The label goes out, with its animation, and the drag state forgets it.
+void RemoveGhost(WindowState* state) {
+    auto& d = state->drag;
+    if (d.ghost && state->overlay) {
+        FadeOutGhost(state->overlay, d.ghost);
+    }
+    d.ghost = nullptr;
+    d.ghostText = nullptr;
+    d.ghostAction = nullptr;
+    d.ghostIcon = nullptr;
+    d.ghostRow = nullptr;
+}
+
+// The name of a folder, as the shell shows it.
+std::wstring FolderDisplayName(PCIDLIST_ABSOLUTE pidl) {
+    std::wstring result;
+    PWSTR text = nullptr;
+    if (pidl && SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &text)) && text) {
+        result = text;
+        CoTaskMemFree(text);
+    }
+    return result;
+}
+
+std::wstring Shortened(std::wstring text, size_t most) {
+    if (text.size() > most) {
+        text = text.substr(0, most - 1) + L"…";
+    }
+    return text;
+}
+
+// The two lines of the label: what is dragged, and what a drop would do.
+void DragUpdateLabel(WindowState* state) {
+    auto& d = state->drag;
+    if (!d.ghostText) {
+        return;
+    }
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    d.ghostText.Text(Shortened(d.labelName, 40).c_str());
+    if (!d.ghostAction) {
+        return;
+    }
+    std::wstring line;
+    const wchar_t* glyph = L"";
+    if (d.targetColumn) {
+        if (!d.targetOk) {
+            line = L"Can’t drop here";
+            glyph = L"";  // Forbidden.
+        } else {
+            std::wstring target =
+                d.targetEntry >= 0 && (size_t)d.targetEntry < d.targetColumn->entries.size()
+                    ? d.targetColumn->entries[d.targetEntry].name
+                    : FolderDisplayName(d.targetColumn->folder.get());
+            const wchar_t* verb = L"Drop in ";
+            glyph = L"";  // Move to a folder.
+            if (ctrl && !shift) {
+                verb = L"Copy to ";
+                glyph = L"";
+            } else if (alt) {
+                verb = L"Link in ";
+                glyph = L"";
+            } else if (shift) {
+                verb = L"Move to ";
+            }
+            line = std::wstring(verb) + Shortened(target, 28);
+        }
+    }
+    if (line.empty()) {
+        d.ghostRow.Visibility(mux::Visibility::Collapsed);
+    } else {
+        d.ghostIcon.Glyph(glyph);
+        d.ghostAction.Text(line.c_str());
+        d.ghostRow.Visibility(mux::Visibility::Visible);
     }
 }
 
@@ -266,48 +562,22 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         Out(L"drag: moved far enough, taking the pointer");
         list.CapturePointer(args.Pointer());
         Out(L"drag: pointer taken, making the label");
-        // The label that follows the pointer.
-        muxc::Border ghost;
-        ghost.Background(Brush(235, 40, 40, 40));
-        ghost.BorderBrush(Brush(120, 128, 128, 128));
-        ghost.BorderThickness(mux::Thickness{1, 1, 1, 1});
-        ghost.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
-        ghost.Padding(mux::Thickness{8, 3, 8, 3});
-        ghost.IsHitTestVisible(false);
-        muxc::TextBlock text;
-        text.FontSize(12);
-        text.Foreground(Brush(255, 255, 255, 255));
-        ghost.Child(text);
-        d.ghost = ghost;
-        d.ghostText = text;
-        state->overlay.Children().Append(ghost);
+        ShowGhost(state, SpecOf(column, d.entries));
         Out(L"drag started from column %d with %d item(s)", ColumnIndexOfList(state, list) + 1,
             (int)d.entries.size());
     }
 
-    // The label: what is dragged and what the keys ask for.
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
-    std::wstring name = d.entries.size() == 1 && d.entries[0] < column->entries.size()
-                            ? column->entries[d.entries[0]].name
-                            : std::to_wstring(d.entries.size()) + L" items";
-    if (name.size() > 28) {
-        name = name.substr(0, 27) + L"…";
-    }
-    const wchar_t* action = ctrl && !shift ? L"Copy" : alt ? L"Link" : shift ? L"Move" : L"";
-    d.ghostText.Text(action[0] ? (name + L"  ·  " + action).c_str() : name.c_str());
+    // Where the label goes, and the target under the pointer.
     try {
         auto overlayAt = args.GetCurrentPoint(state->overlay).Position();
-        muxc::Canvas::SetLeft(d.ghost, overlayAt.X + 14);
-        muxc::Canvas::SetTop(d.ghost, overlayAt.Y + 14);
+        muxc::Canvas::SetLeft(d.ghost, overlayAt.X + 16);
+        muxc::Canvas::SetTop(d.ghost, overlayAt.Y + 16);
     } catch (...) {
     }
-
-    // The target under the pointer.
     state->autoPoint = args.GetCurrentPoint(nullptr).Position();
     state->autoOn = true;
     DragRefreshTarget(state, state->autoPoint);
+    DragUpdateLabel(state);
     // Past the edge of the panel the drag goes on as a real one.
     if (g_dragOut && state->rootGrid) {
         auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
@@ -755,8 +1025,11 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     dropSource->data = data;
     MoveNudger nudger;
     nudger.Start(GetCurrentThreadId());
+    state->outDragActive = true;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    state->outDragActive = false;
+    RemoveGhost(state);
     nudger.Stop();
     Out(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
         dropSource->feedbackCalls, nudger.sent.load());
@@ -865,6 +1138,7 @@ void StartOutDrag(WindowState* state) {
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     DWORD preferred = alt ? DROPEFFECT_LINK : (ctrl && !shift) ? DROPEFFECT_COPY
                       : shift ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    state->outSpec = SpecOf(d.column, d.entries);
     DragEnd(state);
     if (children.empty()) {
         return;

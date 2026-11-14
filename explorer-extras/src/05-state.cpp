@@ -23,7 +23,9 @@ struct Column {
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
-    int hintEntry = -1;  // The entry whose chevron is shown stronger.
+    int hintEntry = -1;  // The entry whose chevron wears the badge.
+    muxc::Border hintBadge{nullptr};  // The small rounded background behind that chevron.
+    std::vector<uint32_t> shapedRows;  // Rows whose corners and gaps were changed for a run of selected rows.
     int hoverHeader = -1;  // The group header under the pointer.
     int focusHeader = -1;  // The group header the keyboard is on.
     winrt::event_token moveToken{};
@@ -142,6 +144,15 @@ struct RenameState {
 struct Worker;
 
 // A drag of rows from one column to a folder, followed by the mod itself.
+// What the drag label shows: the name or the count, and the icons of the first
+// items. Kept apart from the columns, so the label can be shown again, when a
+// drag that left the panel comes back to it.
+struct GhostSpec {
+    std::wstring name;
+    size_t count = 0;
+    std::vector<mux::Media::ImageSource> icons;  // Up to three, a null one when not loaded.
+};
+
 struct DragState {
     bool pending = false;  // Pressed on a row, the pointer has not moved far yet.
     bool active = false;   // Dragging.
@@ -153,12 +164,13 @@ struct DragState {
     int targetEntry = -1;  // The folder row under the pointer, or -1 for a column.
     bool targetOk = false;
     bool lastCtrl = false;  // Ctrl as it was when the target was last judged.
-    muxc::ListViewItem litRow{nullptr};
-    mux::Media::Brush litRowBrush{nullptr};
-    Column* litColumn = nullptr;
-    mux::Media::Brush litCellBrush{nullptr};
-    muxc::Border ghost{nullptr};
+    muxc::Border frame{nullptr};  // The accent frame around the row or column a drop would go to.
+    mux::FrameworkElement ghost{nullptr};
     muxc::TextBlock ghostText{nullptr};
+    muxc::TextBlock ghostAction{nullptr};  // What a drop would do, under the name.
+    muxc::FontIcon ghostIcon{nullptr};     // The pictogram before it.
+    muxc::StackPanel ghostRow{nullptr};    // The pictogram and the line.
+    std::wstring labelName;                // The first line of the label.
 };
 
 // The columns of a tab that is not showing, kept to put back when it is.
@@ -231,6 +243,17 @@ struct WindowState {
     // View menu entry.
     ItemsVector menuItems{nullptr};
     muxc::RadioMenuFlyoutItem menuItem{nullptr};
+    // The View button of the toolbar: while Columns shows, its icon is ours.
+    muxc::Button viewButton{nullptr};
+    mux::UIElement viewIconOriginal{nullptr};
+    mux::UIElement viewIconOurs{nullptr};
+    int viewIconWhere = 0;  // 1: the button's content, 2: a child of a panel, 3: the child of a border.
+    bool viewIconShown = false;
+    bool viewIconLogged = false;
+    // While the keyboard is in use, rows do not show the hover of a pointer that
+    // has not moved.
+    bool kbHoverOff = false;
+    POINT kbCursor{};
     winrt::event_token menuClickToken{};
     std::vector<SiblingHook> siblings;
 
@@ -281,6 +304,8 @@ struct WindowState {
     // Drops coming in from other windows and applications, and the scroll that
     // follows a drag (inbound or of rows) near the edge of a column or the strip.
     IDropTarget* panelDrop = nullptr;
+    GhostSpec outSpec;               // The label of a drag that left the panel,
+    bool outDragActive = false;      // shown again when it comes back to it.
     HWND panelDropWindow = nullptr;
     winrt::Windows::Foundation::Point autoPoint{};  // The pointer, host coordinates.
     bool autoOn = false;

@@ -57,7 +57,7 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   restoreOnOpen, maxItems (5000), sidebarRoot, focusRect, compactScrollbars,
   doubleClickUp (off), headerKeyboard (off), archives (off), desktopRealOnly
   (off), remoteMarks (on), rememberSort, rememberWidth, rememberLayout (all on),
-  dragOut (off, experimental), background (a test setting), debugLog.
+  dragOut (on), background (a test setting), debugLog.
   Settings YAML rule: a `$name` or `$description` must not contain a colon
   followed by a space, it breaks the whole block (happened twice).
 - Things that cost time and are worth knowing:

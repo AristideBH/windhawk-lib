@@ -36,6 +36,8 @@ void LoadSettings() {
     g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
     g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
     g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
+    g_keepStale = Wh_GetIntSetting(L"columns.keepStale") != 0;
+    g_harmonize = Wh_GetIntSetting(L"columns.harmonizeWidths") != 0;
     g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
     g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
     g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
@@ -75,7 +77,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.15.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.18.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

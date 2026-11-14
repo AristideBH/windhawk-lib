@@ -685,6 +685,12 @@ void OnColumnKey(muxc::ListView const& list,
         }
         auto key = args.Key();
         using winrt::Windows::System::VirtualKey;
+        if (key != VirtualKey::Control && key != VirtualKey::Shift && key != VirtualKey::Menu &&
+            key != VirtualKey::LeftControl && key != VirtualKey::RightControl &&
+            key != VirtualKey::LeftShift && key != VirtualKey::RightShift &&
+            key != VirtualKey::LeftMenu && key != VirtualKey::RightMenu) {
+            HoverOff(state);
+        }
         Column* column = state->columns[index].get();
         int row = list.SelectedIndex();
         int entry = row >= 0 && row < (int)column->rowToEntry.size()
@@ -992,6 +998,10 @@ void LeaveColumns(WindowState* state);
 void RegisterPanelDropTarget(WindowState* state);
 void RevokePanelDropTarget(WindowState* state);
 void DragAutoScroll(WindowState* state);
+void HoverTick(WindowState* state);
+void PillHide(Column* column);
+void UpdateLastEdge(WindowState* state);
+void SyncViewButtonIcon(WindowState* state);
 
 void HidePanel(WindowState* state, const wchar_t* why) {
     if (!state->source) {
@@ -1000,6 +1010,8 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     }
     Out(L"panel off: %s", why);
     state->on = false;
+    RestoreViewButtonIcon(state);
+    HoverOn(state);
     g_panelWindow = nullptr;
     RevokePanelDropTarget(state);
     RestoreNativeList(state);
@@ -1516,6 +1528,9 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
+        HoverTick(state);
+        SyncViewButtonIcon(state);
+        UpdateLastEdge(state);
 
         HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
 
@@ -1644,12 +1659,7 @@ void OnTick() {
                     }
                 }
                 if (!over) {
-                    column->pill.Opacity(0);
-                    column->hoverSince = 0;
-                    continue;
-                }
-                if (column->hoverSince && now - column->hoverSince >= 350) {
-                    column->pill.Opacity(1);
+                    PillHide(column.get());  // The pointer left without the event.
                     column->hoverSince = 0;
                 }
             }
@@ -1756,7 +1766,7 @@ void OnTick() {
                     // not be built yet.
                     if (StyleScrollBars(c->list, wanted == 1) > 0) {
                         c->scrollStyle = wanted;
-                        c->list.Padding(mux::Thickness{0, 12, 10.0, 4});
+                        c->list.Padding(mux::Thickness{5, 12, 10.0, 4});
                         c->gutterRight = 10;
                     }
                 } catch (...) {
@@ -1801,7 +1811,7 @@ void OnTick() {
                 double wanted = barShown ? 23.0 : 10.0;  // 7 for the bar, 16 free beside it
                 if (c->gutterRight != wanted) {
                     c->gutterRight = wanted;
-                    c->list.Padding(mux::Thickness{0, 12, wanted, 4});
+                    c->list.Padding(mux::Thickness{5, 12, wanted, 4});
                 }
             }
         }
@@ -2150,6 +2160,7 @@ void ShowPanel(WindowState* state) {
                     if (!state || !state->scroller) {
                         return;
                     }
+                    HoverOn(state);
                     auto props =
                         args.GetCurrentPoint(state->scroller).Properties();
                     if (!props.IsHorizontalMouseWheel()) {

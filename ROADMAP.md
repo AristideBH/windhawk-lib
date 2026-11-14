@@ -129,6 +129,25 @@ Open, most useful first:
 Branches: work happens on `claude/version-0-3-continuation-1f97fb`;
 `wip/drag-0.12` is an old side branch already merged and can be deleted.
 
+## Plan from 0.18.5, drawn up 2026-11-14
+
+State: 0.15.0 is the last commit. 0.16.0 to 0.18.5 are built and tested by Ari
+but not committed: the drag label, drop frame, keepStale, view button icon,
+stale badge, QuickLook speed, harmonize widths, border handle, connected
+selection.
+
+| Version | Content |
+| --- | --- |
+| 0.18.6 | Housekeeping: commit 0.16 to 0.18, update README, HANDOFF, PLAN and the skills (drag loop findings, MoveNudger, bridge drop target, ToolTip surface, AppBarButton icon, presenter border). |
+| 0.19 | Selection polish: one accent bar per run of selected rows, toolbar Select all, Invert selection and Select none, Space preview left to QuickLook. |
+| 0.20 | Drag polish: drag out of an archive column, a drop onto a tab or a breadcrumb, drag image outside the panel, autoscroll tuning, dragged label for a folder row dropped on a column header. |
+| 0.21 | Everyday gaps: focusing virtual Desktop items, OneDrive syncing state, MTP and phone detection, Documents icon, remote marks log lines. |
+| 0.22 | Speed: icon jobs for the rows on screen first, item-level change events (diff a folder instead of replacing it), measure the 5 000 row limit and the Huge folder case. |
+| 0.23 | Menus: share the row building of the item and folder menus, visual pass (spacing, icon sizes, Windows icon files). |
+| 0.9x, release candidates | Strings in a table for translation, remove the test settings (transparent and Mica background), settings review and defaults, x64 and arm64 builds, uninstall and reload safety, README with captures, the showcase video. |
+| 1.0 | The pull request to windhawk-mods, skills updated one last time. |
+| later | Labels, toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options. |
+
 ## Plan for the next versions, drawn up 2026-11-13
 
 Order is by value for daily use, then risk. Low priority, by Ari: Home page
@@ -268,6 +287,13 @@ Structure and polish:
       selected items into it with the shell's own move, so conflicts and
       progress behave as in Explorer, then edit the name. The undo entry holds
       the moves and the folder. The command bar's New button is a later step.
+- [ ] Toolbar selection actions in Columns: Select all, Invert selection and
+      Select none (Ctrl+A already works), acting on the active column and
+      mirrored into Explorer's view. Later, Ari's call 2026-11-14.
+- [ ] Mod ideas to note, 2026-11-14, separate mods or later features:
+      sidebar overhaul (Ari already has a mod for the sidebar, so look at it
+      first and don't duplicate), preview and details pane overhaul, status
+      bar options.
 - [ ] Better archive extraction flow
 - [ ] Toolbar customization
 - [ ] Status bar and info bar customization

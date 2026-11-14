@@ -45,7 +45,9 @@ All under `columns` in the mod's settings.
 | `desktopRealOnly` | off | Hide This PC, Recycle Bin and the other virtual items in the Desktop column. |
 | `remoteMarks` | on | The cloud, network and phone glyphs. |
 | `rememberSort`, `rememberWidth`, `rememberLayout` | on | The per folder memory. |
-| `dragOut` | off | Experimental: start a real drag when rows leave the panel. |
+| `harmonizeWidths` | on | Shift and double-click a border: every column gets the average fitted width. |
+| `keepStale` | on | Columns to the right of a chosen file stay, dimmed. Off: they close. |
+| `dragOut` | on | Start a real drag when rows leave the panel, to drop them on the desktop, in another window or app. |
 | `debugLog` | on | Write a log file for debugging. |
 
 ## Build from source

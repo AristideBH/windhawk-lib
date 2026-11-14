@@ -1,3 +1,7 @@
+void LogRowTree(mux::DependencyObject const& node, int depth);
+void RestoreViewButtonIcon(WindowState* state);
+void HoverOn(WindowState* state);
+void HoverOff(WindowState* state);
 // ---- Columns ----
 
 int ColumnIndexOfList(WindowState* state, muxc::ListView const& list) {
@@ -267,11 +271,8 @@ double MeasureText(const std::wstring& text) {
 // own margins.
 const double kRowChrome = 24 + 16 + 18 + 22 + 10;  // The last 10 is the gutter.
 
-// Sets the column's width from its longest names, unless the user sized it.
-void FitWidth(Column* column) {
-    if (column->userSized) {
-        return;
-    }
+// The width a column's longest names ask for, inside the limits.
+double FittedWidth(Column* column) {
     // Measure only the longest names, by character count.
     std::vector<const std::wstring*> names;
     for (auto& entry : column->entries) {
@@ -303,7 +304,15 @@ void FitWidth(Column* column) {
     if (width > maxWidth) {
         width = maxWidth;
     }
-    column->list.Width(width);
+    return width;
+}
+
+// Sets the column's width from its longest names, unless the user sized it.
+void FitWidth(Column* column) {
+    if (column->userSized) {
+        return;
+    }
+    column->list.Width(FittedWidth(column));
 }
 
 size_t NameCapacity(Column* column) {
@@ -989,7 +998,7 @@ bool SameListing(const FolderResult& data, const Column& column) {
 }
 
 void LiftStale(WindowState* state, int columnIndex);
-void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder);
+void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay = 350);
 void SetActiveColumn(WindowState* state, int index, bool ensureVisible);
 
 // A folder on disk that is no longer there: deleted, renamed or moved.
@@ -1163,6 +1172,167 @@ void OnColumnKey(muxc::ListView const& list,
 
 // Adds an empty column for `folder` at the right end and asks the worker to
 // read it. Takes ownership of `folder`.
+// ---- The handle on a column's border: it grows where the pointer is, follows it
+// up and down the border, and shrinks away when the pointer leaves.
+
+void PillGoTo(muxc::Border const& pill, double scaleTo, double offsetTo, int milliseconds, bool hideAtEnd) {
+    try {
+        auto motion = pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+        if (!motion) {
+            return;
+        }
+        namespace anim = mux::Media::Animation;
+        anim::CubicEase ease;
+        ease.EasingMode(anim::EasingMode::EaseOut);
+        auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(milliseconds));
+        anim::Storyboard board;
+        auto add = [&](const wchar_t* property, double from, double to) {
+            anim::DoubleAnimation step;
+            step.From(from);
+            step.To(to);
+            step.Duration(length);
+            step.EasingFunction(ease);
+            step.EnableDependentAnimation(true);
+            step.FillBehavior(anim::FillBehavior::HoldEnd);
+            anim::Storyboard::SetTarget(step, pill);
+            anim::Storyboard::SetTargetProperty(step, property);
+            board.Children().Append(step);
+        };
+        add(L"(UIElement.RenderTransform).(CompositeTransform.ScaleY)", motion.ScaleY(), scaleTo);
+        add(L"(UIElement.RenderTransform).(CompositeTransform.TranslateY)", motion.TranslateY(), offsetTo);
+        if (hideAtEnd) {
+            board.Completed([pill](Inspectable const&, Inspectable const&) {
+                if (!winrt::unbox_value_or<bool>(pill.Tag(), false)) {
+                    pill.Opacity(0);
+                }
+            });
+        }
+        board.Begin();
+    } catch (...) {
+        LogHresult(L"animating the border handle");
+    }
+}
+
+// Where the handle sits for a pointer at `y` in the grip: its middle follows
+// the pointer, kept inside the grip.
+double PillOffset(Column* column, double y) {
+    double height = column->grip.ActualHeight();
+    double half = column->pill.Height() / 2;
+    double centre = y < half ? half : (y > height - half ? height - half : y);
+    return centre - height / 2;
+}
+
+void PillShow(Column* column, double y) {
+    if (!column->pill || !column->grip) {
+        return;
+    }
+    try {
+        auto motion = column->pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+        if (!motion) {
+            return;
+        }
+        bool wasShown = winrt::unbox_value_or<bool>(column->pill.Tag(), false) && column->pill.Opacity() > 0;
+        double offset = PillOffset(column, y);
+        column->pill.Tag(winrt::box_value(true));
+        column->pill.Opacity(1);
+        if (!wasShown) {
+            motion.TranslateY(offset);  // It appears at the pointer, then grows.
+        }
+        PillGoTo(column->pill, 1.0, offset, wasShown ? 80 : 150, false);
+    } catch (...) {
+        LogHresult(L"showing the border handle");
+    }
+}
+
+void PillFollow(Column* column, double y) {
+    if (!column->pill || !column->grip || !winrt::unbox_value_or<bool>(column->pill.Tag(), false)) {
+        return;
+    }
+    PillGoTo(column->pill, 1.0, PillOffset(column, y), 35, false);
+}
+
+void PillHide(Column* column) {
+    if (!column->pill || !winrt::unbox_value_or<bool>(column->pill.Tag(), false)) {
+        return;
+    }
+    column->pill.Tag(winrt::box_value(false));
+    auto motion = column->pill.RenderTransform().try_as<mux::Media::CompositeTransform>();
+    PillGoTo(column->pill, 0.0, motion ? motion.TranslateY() : 0.0, 110, true);
+}
+
+// Shift and double-click on a border: every column takes the average of the
+// widths their names would fit, gliding there, and keeps it like a width
+// dragged by hand.
+void HarmonizeWidths(WindowState* state) {
+    double total = 0;
+    int counted = 0;
+    for (auto& column : state->columns) {
+        if (column->list && column->filled && !column->entries.empty()) {
+            total += FittedWidth(column.get());
+            counted++;
+        }
+    }
+    if (counted == 0) {
+        return;
+    }
+    double target = std::round(total / counted);
+    target = std::clamp(target, (double)g_minWidth, (double)g_maxWidth);
+    namespace anim = mux::Media::Animation;
+    anim::CubicEase ease;
+    ease.EasingMode(anim::EasingMode::EaseInOut);
+    auto length = mux::DurationHelper::FromTimeSpan(std::chrono::milliseconds(260));
+    anim::Storyboard board;
+    for (auto& column : state->columns) {
+        if (!column->list) {
+            continue;
+        }
+        double from = column->list.ActualWidth();
+        column->userSized = true;
+        column->list.Width(target);
+        if (std::abs(from - target) < 1) {
+            continue;
+        }
+        anim::DoubleAnimation glide;
+        glide.From(from);
+        glide.To(target);
+        glide.Duration(length);
+        glide.EasingFunction(ease);
+        glide.EnableDependentAnimation(true);
+        glide.FillBehavior(anim::FillBehavior::Stop);
+        anim::Storyboard::SetTarget(glide, column->list);
+        anim::Storyboard::SetTargetProperty(glide, L"Width");
+        board.Children().Append(glide);
+    }
+    board.Begin();
+    // The active marker follows the widths while they change; the names are cut
+    // again for the new width at the end.
+    auto timer = state->queue.CreateTimer();
+    timer.Interval(std::chrono::milliseconds(16));
+    auto frames = std::make_shared<int>(0);
+    timer.Tick([frames](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->on) {
+            sender.Stop();
+            return;
+        }
+        UpdatePill(state, false);
+        if (++*frames >= 20) {
+            sender.Stop();
+            for (auto& column : state->columns) {
+                if (column->list) {
+                    RefreshNames(column.get());
+                    if (column->folder) {
+                        RememberFolderWidth(PathOf(column->folder.get()), column->list.Width());
+                    }
+                }
+            }
+            UpdatePill(state, false);
+        }
+    });
+    timer.Start();
+    Out(L"widths harmonized to %d across %d columns", (int)target, (int)state->columns.size());
+}
+
 void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archive = false) {
     auto column = std::make_unique<Column>();
     column->folder = std::move(folder);
@@ -1204,7 +1374,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     list.FocusVisualPrimaryThickness(mux::Thickness{0, 0, 0, 0});
     list.FocusVisualSecondaryThickness(mux::Thickness{0, 0, 0, 0});
     list.SelectionMode(muxc::ListViewSelectionMode::Extended);
-    list.Padding(mux::Thickness{0, 12, 10, 4});
+    list.Padding(mux::Thickness{5, 12, 10, 4});
     column->selectionToken = list.SelectionChanged(
         [](Inspectable const& sender,
            muxc::SelectionChangedEventArgs const&) {
@@ -1446,6 +1616,13 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     pill.HorizontalAlignment(mux::HorizontalAlignment::Center);
     pill.VerticalAlignment(mux::VerticalAlignment::Center);
     pill.Opacity(0);
+    {
+        mux::Media::CompositeTransform motion;
+        motion.ScaleY(0);
+        pill.RenderTransformOrigin(winrt::Windows::Foundation::Point{0.5f, 0.5f});
+        pill.RenderTransform(motion);
+        pill.Tag(winrt::box_value(false));
+    }
     muxc::Grid gripContent;
     gripContent.Children().Append(line);
     gripContent.Children().Append(pill);
@@ -1466,11 +1643,15 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     }
     column->gripEnteredToken = grip.PointerEntered(
         [](Inspectable const& sender,
-           mux::Input::PointerRoutedEventArgs const&) {
+           mux::Input::PointerRoutedEventArgs const& args) {
             WindowState* state = StateForThisThread(false);
             int index = state ? ColumnIndexOfGrip(state, sender) : -1;
             if (index >= 0) {
-                state->columns[index]->hoverSince = GetTickCount64();
+                Column* column = state->columns[index].get();
+                column->hoverSince = GetTickCount64();
+                if (state->dragColumn < 0) {
+                    PillShow(column, args.GetCurrentPoint(column->grip).Position().Y);
+                }
             }
         });
     column->gripExitedToken = grip.PointerExited(
@@ -1481,7 +1662,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             if (index >= 0) {
                 state->columns[index]->hoverSince = 0;
                 if (state->columns[index]->pill && state->dragColumn != index) {
-                    state->columns[index]->pill.Opacity(0);
+                    PillHide(state->columns[index].get());
                 }
             }
         });
@@ -1512,12 +1693,16 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         [](Inspectable const& sender,
            mux::Input::PointerRoutedEventArgs const& args) {
             WindowState* state = StateForThisThread(false);
-            if (!state || !state->on || state->dragColumn < 0) {
+            if (!state || !state->on) {
                 return;
             }
             try {
                 int index = ColumnIndexOfGrip(state, sender);
-                if (index != state->dragColumn) {
+                if (index >= 0) {
+                    Column* column = state->columns[index].get();
+                    PillFollow(column, args.GetCurrentPoint(column->grip).Position().Y);
+                }
+                if (state->dragColumn < 0 || index != state->dragColumn) {
                     return;
                 }
                 double x = args.GetCurrentPoint(state->strip).Position().X;
@@ -1550,7 +1735,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             }
             if (index < (int)state->columns.size()) {
                 if (state->columns[index]->pill) {
-                    state->columns[index]->pill.Opacity(0);
+                    PillHide(state->columns[index].get());
                 }
                 RefreshNames(state->columns[index].get());
                 RememberFolderWidth(PathOf(state->columns[index]->folder.get()),
@@ -1574,6 +1759,10 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             try {
                 int index = ColumnIndexOfGrip(state, sender);
                 if (index < 0) {
+                    return;
+                }
+                if (g_harmonize && (GetKeyState(VK_SHIFT) & 0x8000)) {
+                    HarmonizeWidths(state);
                     return;
                 }
                 Column* column = state->columns[index].get();
@@ -1823,8 +2012,10 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 }
 
 // Explorer follows after a short pause, so a run of quick selections costs
-// one navigation.
-void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
+// one navigation. A selection in the folder Explorer already shows needs no
+// navigation: it is mirrored at once, so a previewer that asks Explorer for the
+// selected item (QuickLook on Space) finds it there.
+void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay) {
     if (!g_follow) {
         return;
     }
@@ -1835,23 +2026,48 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         state->selectChild.reset();
         return;
     }
+    if (state->lastSeen && !state->expected && ILIsEqual(state->lastSeen.get(), folder)) {
+        state->pendingNav.reset();
+        if (state->selectChild && state->selectFolder && ILIsEqual(state->selectFolder.get(), folder)) {
+            if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+                if (SelectInExplorer(browser, state->selectChild.get())) {
+                    if (!state->selectExtra.empty()) {
+                        AddToSelectionInExplorer(browser, state->selectExtra);
+                        state->selectExtra.clear();
+                    }
+                    state->selectFolder.reset();
+                    state->selectChild.reset();
+                }
+            }
+        }
+        return;
+    }
     state->pendingNav.reset(ILClone(folder));
-    state->navDue = GetTickCount64() + 350;
+    state->navDue = GetTickCount64() + delay;
 }
 
 // While the columns to the right of `columnIndex` are stale, the chevron of the
-// folder that leads to them is drawn stronger, a quiet thread of the hierarchy.
+// folder that leads to them sits on a small rounded badge, a quiet thread of the
+// hierarchy.
 void SetStaleHint(WindowState* state, int columnIndex, bool on) {
     if (columnIndex < 0 || columnIndex >= (int)state->columns.size()) {
         return;
     }
     Column* column = state->columns[columnIndex].get();
     try {
+        if (column->hintBadge) {
+            if (auto parent = mux::Media::VisualTreeHelper::GetParent(column->hintBadge).try_as<muxc::Panel>()) {
+                uint32_t index = 0;
+                if (parent.Children().IndexOf(column->hintBadge, index)) {
+                    parent.Children().RemoveAt(index);
+                }
+            }
+            column->hintBadge = nullptr;
+        }
         if (column->hintEntry >= 0 &&
             column->hintEntry < (int)column->chevrons.size() &&
             column->chevrons[column->hintEntry]) {
             column->chevrons[column->hintEntry].Opacity(0.6);
-            column->chevrons[column->hintEntry].FontSize(10);
         }
         column->hintEntry = -1;
         if (!on || columnIndex + 1 >= (int)state->columns.size()) {
@@ -1864,11 +2080,31 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
         for (size_t i = 0; i < column->entries.size() && i < column->chevrons.size(); i++) {
             if (ILIsEqual(column->entries[i].child.get(), leading.get())) {
                 EnsureRowBuilt(column, i);
-                if (!column->chevrons[i]) {
+                auto chevron = column->chevrons[i];
+                if (!chevron) {
                     break;
                 }
-                column->chevrons[i].Opacity(1.0);
-                column->chevrons[i].FontSize(13);
+                if (auto grid = mux::Media::VisualTreeHelper::GetParent(chevron).try_as<muxc::Panel>()) {
+                    uint32_t at = 0;
+                    if (grid.Children().IndexOf(chevron, at)) {
+                        bool dark = chevron.ActualTheme() == mux::ElementTheme::Dark;
+                        muxc::Border badge;
+                        // A circle whose middle is the chevron's middle.
+                        double glyph = chevron.ActualWidth() > 1 ? chevron.ActualWidth() : 10;
+                        badge.Width(15);
+                        badge.Height(15);
+                        badge.CornerRadius(mux::CornerRadius{7.5, 7.5, 7.5, 7.5});
+                        badge.Margin(mux::Thickness{0, 0, glyph / 2 - 7.5, 0});
+                        badge.Background(dark ? Brush(13, 255, 255, 255) : Brush(10, 0, 0, 0));
+                        badge.HorizontalAlignment(mux::HorizontalAlignment::Right);
+                        badge.VerticalAlignment(mux::VerticalAlignment::Center);
+                        badge.IsHitTestVisible(false);
+                        muxc::Grid::SetColumn(badge, 3);
+                        grid.Children().InsertAt(at, badge);  // Under the chevron.
+                        column->hintBadge = badge;
+                    }
+                }
+                chevron.Opacity(0.9);
                 column->hintEntry = (int)i;
                 break;
             }
@@ -1941,6 +2177,87 @@ std::vector<size_t> SelectedEntries(Column* column,
     return result;
 }
 
+// The background of a selected row is a border inside its presenter, inset by
+// 4 px at the sides and 2.3 px above and below. Rows that are selected next to
+// each other share one background, as in Finder: the border loses the inset
+// where it meets the next one, and its corners there are square. Only the rows
+// touched by the last pass are put back, so a long column costs nothing when
+// the selection does not change.
+muxc::Border SelectionBorderOf(muxc::ListViewItem const& item) {
+    try {
+        if (mux::Media::VisualTreeHelper::GetChildrenCount(item) > 0) {
+            auto presenter = mux::Media::VisualTreeHelper::GetChild(item, 0);
+            if (presenter && mux::Media::VisualTreeHelper::GetChildrenCount(presenter) > 0) {
+                return mux::Media::VisualTreeHelper::GetChild(presenter, 0).try_as<muxc::Border>();
+            }
+        }
+    } catch (...) {
+    }
+    return nullptr;
+}
+
+void ShapeSelectionRuns(Column* column, muxc::ListView const& list) {
+    static bool known = false;
+    static mux::Thickness defaultMargin{4, 2.3, 4, 2.3};
+    static mux::CornerRadius defaultCorner{4, 4, 4, 4};
+    try {
+        auto items = list.Items();
+        uint32_t count = items.Size();
+        auto rowAt = [&](uint32_t r) -> muxc::ListViewItem {
+            return r < count ? items.GetAt(r).try_as<muxc::ListViewItem>() : muxc::ListViewItem{nullptr};
+        };
+        auto selectedAt = [&](uint32_t r) {
+            if (r >= count || r >= column->rowToEntry.size() || column->rowToEntry[r] < 0) {
+                return false;
+            }
+            auto item = rowAt(r);
+            return item && item.IsSelected() && item.Visibility() == mux::Visibility::Visible;
+        };
+        for (uint32_t r : column->shapedRows) {
+            if (auto item = rowAt(r)) {
+                if (auto border = SelectionBorderOf(item)) {
+                    border.Margin(defaultMargin);
+                    border.CornerRadius(defaultCorner);
+                }
+            }
+        }
+        column->shapedRows.clear();
+        auto selected = list.SelectedItems();
+        for (uint32_t i = 0; i < selected.Size(); i++) {
+            auto item = selected.GetAt(i).try_as<muxc::ListViewItem>();
+            if (!item) {
+                continue;
+            }
+            int index = list.IndexFromContainer(item);
+            if (index < 0) {
+                continue;
+            }
+            auto border = SelectionBorderOf(item);
+            if (!border) {
+                continue;
+            }
+            if (!known) {
+                known = true;
+                defaultMargin = border.Margin();
+                defaultCorner = border.CornerRadius();
+            }
+            uint32_t r = (uint32_t)index;
+            bool up = r > 0 && selectedAt(r - 1);
+            bool down = selectedAt(r + 1);
+            if (!up && !down) {
+                continue;
+            }
+            border.Margin(mux::Thickness{defaultMargin.Left, up ? 0.0 : defaultMargin.Top, defaultMargin.Right,
+                                         down ? 0.0 : defaultMargin.Bottom});
+            double top = up ? 0 : defaultCorner.TopLeft, bottom = down ? 0 : defaultCorner.BottomLeft;
+            border.CornerRadius(mux::CornerRadius{top, top, bottom, bottom});
+            column->shapedRows.push_back(r);
+        }
+    } catch (...) {
+        LogHresult(L"shaping runs of selected rows");
+    }
+}
+
 void OnRowSelected(muxc::ListView const& list) {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || state->building || g_unloading) {
@@ -1952,6 +2269,7 @@ void OnRowSelected(muxc::ListView const& list) {
             return;
         }
         Column* column = state->columns[columnIndex].get();
+        ShapeSelectionRuns(column, list);
         if (column->focusHeader >= 0) {
             SetHeaderFocus(column, list, -1);  // A row was chosen: the keyboard leaves the header.
         }
@@ -1996,6 +2314,14 @@ void OnRowSelected(muxc::ListView const& list) {
         // The columns to the right stay while the selection is a file, several
         // items or nothing, dimmed, until another folder is chosen here.
         auto dimAfter = [&](bool dim) {
+            if (dim && !g_keepStale) {
+                // The setting asks for them to go instead of waiting, dimmed.
+                state->building = true;
+                RemoveColumnsFrom(state, columnIndex + 1);
+                state->building = false;
+                SetStaleHint(state, columnIndex, false);
+                return;
+            }
             for (size_t j = columnIndex + 1; j < state->columns.size(); j++) {
                 if (state->columns[j]->cell) {
                     state->columns[j]->cell.Opacity(dim ? 0.5 : 1.0);
@@ -2020,7 +2346,7 @@ void OnRowSelected(muxc::ListView const& list) {
                     ILClone(column->entries[picked[i]].child.get()));
             }
             state->selectTries = 0;
-            ScheduleNavigation(state, column->folder.get());
+            ScheduleNavigation(state, column->folder.get(), 120);
             dimAfter(true);
             Out(L"%d items selected in column %d", (int)picked.size(),
                 columnIndex + 1);
@@ -2084,7 +2410,7 @@ void OnRowSelected(muxc::ListView const& list) {
             state->selectFolder.reset(ILClone(column->folder.get()));
             state->selectChild.reset(ILClone(entry.child.get()));
             state->selectTries = 0;
-            ScheduleNavigation(state, column->folder.get());
+            ScheduleNavigation(state, column->folder.get(), 120);
         }
     } catch (...) {
         state->building = false;
