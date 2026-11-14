@@ -143,7 +143,8 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | 0.21 | Done and tested in 0.21.2: OneDrive syncing mark (storage provider transfer progress), phone detection (Pixel 8 over MTP, Phone Link's CrossDevice folder), one log line per folder for the marks, one attribute call per item, a timing line for slow folders, and no more Copy/Move/Cancel popup on a drop coming in (the button of the drag is kept through the release). The Documents icon was fixed on the way. Left: focusing virtual Desktop items (Ari never described what fails). |
 | 0.22 | Done and tested in 0.22.0: icon requests newest first and for the rows on screen, folders ahead of icons, a cache-only icon pass before the full one, timing lines (`fill:` from 40 ms, `load:` from 500 ms). Measured on the Huge folder (1500 files), Photos Unsorted and a phone's Camera folder (972 items): no fill or load reached the thresholds, so diffing a folder on change is not needed now. |
 | 0.23 | Menus. 0.23.0 done: one `MenuBuilder` and `MenuStyle` shared by the item and folder menus. Next: the visual pass from Ari's mockups, see `explorer-extras/MENU-MOCKUP-NOTES.md` for what to send (waiting for them). |
-| 0.24 | Touch and pen, required before 1.0, Ari's call 2026-11-14. Drag and drop with a finger or a pen: see "Touch plan" below. |
+| 0.24 to 0.28 | Settings shell, spec in `explorer-extras/SPEC-settings-shell.md` (draft, 2026-11-14): schema and generated Windhawk block, the window (Mica, sidebar, Home and Columns pages), live apply and reset, the "..." menu entry, status and tips, upcoming pages behind a flag. Done before touch and release prep. |
+| 0.29 | Touch and pen, required before 1.0, Ari's call 2026-11-14. Drag and drop with a finger or a pen: see "Touch plan" below (it was 0.24). |
 | 0.9x, release candidates | Strings in a table for translation, remove the test settings (transparent and Mica background), settings review and defaults, x64 and arm64 builds, uninstall and reload safety, README with captures, the showcase video. |
 | 1.0 | The pull request to windhawk-mods, skills updated one last time. |
 | later | Labels, toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options. |
@@ -177,7 +178,7 @@ the split. Drag and drop and the flyout restyle are polish on a working
 whole. The three low priority items depend on things we don't control: a
 DirectUI hook, another author's mod, a design call.
 
-## Touch plan (0.24), drawn up 2026-11-14
+## Touch plan (0.29), drawn up 2026-11-14
 
 Goal: everything the mouse does for drag and drop works with a finger and a
 pen, without breaking panning, scrolling and tapping. To do on Ari's touch
