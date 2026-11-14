@@ -379,6 +379,9 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - Clang with mingw-w64, C++23. The effective flags are in `compile_flags.txt` in the editor.
 - The API headers are `windhawk_api.h` and `windhawk_utils.h` under `C:\Program Files\Windhawk\Compiler\include`. Read them before using a function this repo hasn't used.
 - Networking is limited to `Wh_GetUrlContent`, a synchronous HTTP fetch. For WebSockets use WinRT's `MessageWebSocket`.
+- WinUI headers: `winrt/Microsoft.UI.Xaml.Markup.h` for `XamlReader::Load` (a `PathIcon` from path data), `FontWeights` is in `Microsoft::UI::Text`, not `Windows::UI::Text`. A `ToolTip` control works as a free standing surface in an overlay canvas.
+- Patch scripts: write them with the Write tool, not a shell heredoc, and run them with Python; a heredoc turns `\n` and private-use glyphs into real characters. Search for a line with a private-use glyph by pattern, not by its text.
+- PowerShell: an alias beats a function of the same name, so a function called `Dir` runs `Get-ChildItem`.
 - Windhawk refuses to inject into a fixed list of critical processes, and into games by default. `svchost.exe`, `werfault.exe` and `winlogon.exe` can only be targeted by exact name.
 
 ## Sources

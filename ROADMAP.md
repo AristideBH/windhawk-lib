@@ -78,7 +78,7 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
-## Where we stopped, 2026-11-14 (version 0.15.0)
+## Where we stopped, 2026-11-14 (version 0.15.0, since passed: see the plan from 0.18.5)
 
 Done and tested by Ari: everything in the plan table through 0.12.3 (columns
 per tab, menus, per-folder memory with three toggles, drag between columns,
@@ -131,14 +131,13 @@ Branches: work happens on `claude/version-0-3-continuation-1f97fb`;
 
 ## Plan from 0.18.5, drawn up 2026-11-14
 
-State: 0.15.0 is the last commit. 0.16.0 to 0.18.5 are built and tested by Ari
-but not committed: the drag label, drop frame, keepStale, view button icon,
-stale badge, QuickLook speed, harmonize widths, border handle, connected
-selection.
+State: 0.18.6 is committed and tested by Ari (the drag label, drop frame,
+keepStale, view button icon, stale badge, QuickLook speed, harmonize widths,
+border handle, connected selection). 0.18.7 was the housekeeping.
 
 | Version | Content |
 | --- | --- |
-| 0.18.6 | Housekeeping: commit 0.16 to 0.18, update README, HANDOFF, PLAN and the skills (drag loop findings, MoveNudger, bridge drop target, ToolTip surface, AppBarButton icon, presenter border). |
+| 0.18.7 | Done: 0.16 to 0.18 committed, README, HANDOFF, PLAN and the skills updated (drag loop findings, MoveNudger, bridge drop target, ToolTip surface, AppBarButton icon, presenter border). |
 | 0.19 | Selection polish: one accent bar per run of selected rows, toolbar Select all, Invert selection and Select none, Space preview left to QuickLook. |
 | 0.20 | Drag polish: drag out of an archive column, a drop onto a tab or a breadcrumb, drag image outside the panel, autoscroll tuning, dragged label for a folder row dropped on a column header. |
 | 0.21 | Everyday gaps: focusing virtual Desktop items, OneDrive syncing state, MTP and phone detection, Documents icon, remote marks log lines. |

@@ -227,7 +227,7 @@ Drag and drop (0.10, 0.12, 0.13):
   before the button must still count, so the last time each was seen is kept
   and `Preferred DropEffect` is set in the data at the moment of release.
   Works onto the desktop (`Progman`, `SysListView32`) and for a move or a
-  copy. Does not work onto the navigation pane (`SysTreeView32`). The Windows 11
+  copy, and since 0.14.4 onto every target, see the next section. The Windows 11
   window has an invisible resize border of about 6 px: a release inside it is
   over the Explorer window, not the desktop.
 
@@ -242,3 +242,54 @@ Not solved, parked:
   of wheel events. Tried ChangeView to the same offset, a nudge, toggling the
   scroll mode and inertia, scrolling the vertical wheel in the mod and dropping
   turns after a press.
+
+## Findings from 0.14 to 0.18, 2026-11-14
+
+The shell's drag loop and the XAML island (0.14):
+- The panel's input is a XAML island that takes the mouse as pointer messages.
+  A drag started from it with `SHDoDragDrop` gets no `WM_MOUSEMOVE`: the loop
+  called `GiveFeedback` once, at the release, so a target only heard the
+  release point. The desktop and most views take a drop from that alone; the
+  navigation pane tree needs a hovered item and ignored it.
+- Fix (0.14.4): `MoveNudger`, a thread that posts `WM_MOUSEMOVE` with the real
+  position and key state to the drag loop's thread while it runs. Everything
+  then hovers and answers: the navigation pane, any view of another Explorer
+  window, the desktop, other applications.
+- Before that, 0.14.0 to 0.14.3 finished a release over the navigation pane by
+  hand: hit test the tree (`TVM_HITTEST`), walk the item's names to a folder
+  (Home, then the known folders, the Desktop, the profile, This PC), and give the
+  items to that folder's drop target. It stays as a fallback and runs only when
+  the tree left the effect at the whole offer (7).
+- Never call a drop target's `DragEnter` and `DragLeave` by hand from outside
+  the drag: it crashed Explorer twice in `explorerframe.dll` (0.13.8).
+- Drops coming in (0.15): the panel registers its own `IDropTarget` on the
+  bridge window (`RegisterDragDrop`, after `RevokeDragDrop` of the island's), and
+  hands the data object to the folder under the pointer through that folder's own
+  drop target (`CreateViewObject(IDropTarget)`), so the shell decides the effect
+  and does the work. A drag from elsewhere gets the shell's image through
+  `IDropTargetHelper`. Our own drag coming back gets the label it had.
+- Edge scroll: the tick scrolls a column near its top or bottom and the strip
+  near its left or right, for both kinds of drag.
+
+The drag label, the frame, the icon (0.16 to 0.18):
+- The label is a `ToolTip` control in the overlay canvas: that gives the default
+  tooltip surface with no stroke of its own. Icons are the row images' sources.
+  It fades and scales in and out with a `Storyboard` on opacity and a
+  `ScaleTransform`.
+- The drop target is an accent framed border in the overlay, placed from
+  `TransformToVisual`, re-placed on every move and scroll step.
+- The View button of the command bar is an `AppBarButton`: `Icon` holds an
+  `ImageIcon` inside a `Viewbox`. The Viewbox scales the icon to fill its box, so
+  a replacement must have the same square box (16 x 16 here) or it comes out
+  bigger; the drawing is then scaled and moved inside it. A `PathIcon` made with
+  `XamlReader::Load` takes `Foreground='{ThemeResource TextFillColorSecondaryBrush}'`.
+- A selected row's background is the first `Border` inside its
+  `ListViewItemPresenter`, inset 4 px at the sides and 2.3 px above and below.
+  Changing its `Margin` and `CornerRadius` joins a run of selected rows; the
+  item's own `CornerRadius` has no effect on it.
+- A row's hover under a resting pointer stays through keyboard navigation. The
+  rows are made not hit-testable on the first key and given back when the cursor
+  moves (polled in the tick) or the wheel turns.
+- QuickLook (and other previewers) read the selection from Explorer's own view:
+  a selection in the folder Explorer already shows is mirrored at once, others
+  after 120 ms for files (350 ms for folders).

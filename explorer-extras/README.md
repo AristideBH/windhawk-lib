@@ -12,12 +12,14 @@ Status: version 0.13.6, in daily use by its author, not yet published to the Win
 - **Selection.** Drag a rectangle, Ctrl and Shift click, collapsible group headers.
 - **Tabs.** Each tab keeps its own columns. A tab in another layout is left alone. Middle click on a folder, or "Open in new tab" in the menu, opens it in a new tab.
 - **Per folder memory.** Each column remembers its sort and group, its width, and whether the folder is shown in Columns. All three can be switched off.
-- **Drag and drop.** Drag rows onto a folder or into another column. Ctrl copies, Shift moves, Alt makes a shortcut, Escape cancels. The shell does the work, so conflict and progress dialogs are Explorer's.
+- **Drag and drop.** Drag rows onto a folder or into another column, out to the navigation pane, another Explorer window (any view), the desktop or another application, or drop files in from them. Ctrl copies, Shift moves, Alt makes a shortcut, Escape cancels. The shell does the work, so conflict and progress dialogs are Explorer's. A label with the icons, the name or count, and what a drop would do follows the pointer, the target row or column gets an accent frame, and columns scroll near their edges while dragging.
+- **Widths.** Drag a border to resize a column, double-click it to fit the names, Shift and double-click to give every column the average fitted width. A small handle follows the pointer along the border.
+- **Look.** Selected neighbouring rows share one background, the chevron of the folder that leads to dimmed columns sits on a small badge, and the View button wears a Columns icon while Columns is on.
 - **Archives (optional).** Zip, 7z, rar and tar files open as folders in the next column, with Extract here and Extract selected here.
 - **Undo.** Ctrl+Z takes back a delete, a rename, a new folder, or a group of renames.
 - **Marks.** Cloud files that are not downloaded, always-kept and downloaded cloud files, network items and phones get a small glyph.
 
-Not done yet: dropping files onto the panel from other windows, auto-scroll while dragging, dragging out of an archive. Dragging rows out of the panel to the desktop works but is experimental and off by default. Dropping onto Explorer's navigation pane does not work yet. See [`../ROADMAP.md`](../ROADMAP.md).
+Not done yet: dragging out of an archive column, toolbar Select all, Invert and Select none, translations. See [`../ROADMAP.md`](../ROADMAP.md). `SHOWCASE-TESTS.md` describes a rich test folder built by `make-columns-showcase.ps1`.
 
 ## Install
 

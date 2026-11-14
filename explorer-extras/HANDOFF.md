@@ -12,14 +12,16 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.13.6,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.18.6,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
-  2026-11-14 (late evening). `ROADMAP.md` says what is done, tested and open.
+  2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).
-- What is tested by Ari, in short: everything through 0.12.3 (columns,
+- What is tested by Ari, in short: everything through 0.18.6 (columns,
   keys, menus, archives, columns per tab, per-folder memory, drag between
-  columns). Drag out to the desktop works (0.13.6, move and copy). Drag out to
-  the navigation pane does not work yet, see the roadmap's "Where we stopped".
+  columns, drag out to the navigation pane, other windows, the desktop and
+  other apps, drops coming in, the drag label and drop frame, harmonized
+  widths, the border handle, the Columns icon on the View button, connected
+  selection). `ROADMAP.md` has the plan from here.
 - Architecture in one paragraph. One WinUI panel per Explorer window, hosted
   as a `DesktopWindowXamlSource` over the file list, with a per-window
   `WindowState` used only on that window's UI thread. Folders and icons are
@@ -57,9 +59,13 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   restoreOnOpen, maxItems (5000), sidebarRoot, focusRect, compactScrollbars,
   doubleClickUp (off), headerKeyboard (off), archives (off), desktopRealOnly
   (off), remoteMarks (on), rememberSort, rememberWidth, rememberLayout (all on),
-  dragOut (on), background (a test setting), debugLog.
+  harmonizeWidths (on), keepStale (on), dragOut (on), background (a test
+  setting), debugLog.
   Settings YAML rule: a `$name` or `$description` must not contain a colon
   followed by a space, it breaks the whole block (happened twice).
+- Test folders: `make-columns-demo.ps1` (small) and `make-columns-showcase.ps1`
+  (about 1 900 files, real pictures, PDFs, archives, edge cases, see
+  `SHOWCASE-TESTS.md`). `assets/columns.svg` is the Columns icon.
 - Things that cost time and are worth knowing:
   - Compile check: `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`, flags
     at the end of this file. `clang++` is not on PATH in the Bash tool, and a
