@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.23.0
+// @version         0.24.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -60,79 +60,7 @@ Not yet: drag and drop.
 
 // ==WindhawkModSettings==
 /*
-- columns:
-  - enabled: true
-    $name: Enabled
-    $description: Adds the Columns entry to the View menu. Off removes it.
-  - restoreOnOpen: true
-    $name: Open new windows in Columns
-    $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
-  - desktopRealOnly: false
-    $name: Desktop column shows only real items
-    $description: Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.
-  - remoteMarks: true
-    $name: Mark cloud, network and device items
-    $description: A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.
-  - rememberSort: true
-    $name: Remember sort and group per folder
-    $description: Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder.
-  - rememberWidth: true
-    $name: Remember column width per folder
-    $description: A column dragged to a width reopens at that width the next time the folder is shown.
-  - rememberLayout: true
-    $name: Remember Columns per folder
-    $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
-  - springLoad: true
-    $name: Open a folder you hover on while dragging
-    $description: Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.
-  - harmonizeWidths: true
-    $name: Shift and double-click a border to even the widths
-    $description: Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.
-  - keepStale: true
-    $name: Keep the columns after a file is chosen
-    $description: When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.
-  - dragOut: true
-    $name: Drag items out of the panel
-    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.
-  - archives: false
-    $name: Browse archives in columns
-    $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
-  - headerKeyboard: false
-    $name: Keyboard on group headers
-    $description: Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.
-  - doubleClickUp: false
-    $name: Double-click on empty space goes up
-    $description: A double-click on the empty space of a column goes up one folder, as in the "Explorer double-click up" mod. In the first column the parent folder is added in front.
-  - compactScrollbars: false
-    $name: Compact scrollbars
-    $description: Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.
-  - focusRect: true
-    $name: Show the focus outline on the active item
-    $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
-  - background: explorer
-    $name: Panel background
-    $description: Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.
-    $options:
-    - explorer: Explorer's file list colour
-    - theme: Theme colour
-    - transparent: Transparent (test)
-  - sidebarRoot: false
-    $name: Sidebar sets the first column
-    $description: A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.
-  - minWidth: 160
-    $name: Minimum column width
-  - maxWidth: 420
-    $name: Maximum column width
-    $description: Columns fit their longest name up to this width. Longer names are cut in the middle.
-  - followActiveColumn: true
-    $name: Explorer follows the active column
-    $description: Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.
-  - maxItems: 5000
-    $name: Maximum items per column
-  $name: Columns
-- debugLog: true
-  $name: Write a debug log
-  $description: Writes to Code\windhawk-lib\probes\logs\explorer-extras.log in your user folder, if that folder exists.
+@@SETTINGS_BLOCK@@
 */
 // ==/WindhawkModSettings==
 

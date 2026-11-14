@@ -27,43 +27,35 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 }
 
 void LoadSettings() {
-    g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
-    g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
-    g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
-    g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
-    g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
-    g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
-    g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
-    g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
-    g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
-    g_keepStale = Wh_GetIntSetting(L"columns.keepStale") != 0;
-    g_harmonize = Wh_GetIntSetting(L"columns.harmonizeWidths") != 0;
-    g_springLoad = Wh_GetIntSetting(L"columns.springLoad") != 0;
-    g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
-    g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
-    g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
-    g_remoteMarks = Wh_GetIntSetting(L"columns.remoteMarks") != 0;
-    g_desktopRealOnly = Wh_GetIntSetting(L"columns.desktopRealOnly") != 0;
+    g_enabled = SettingBool(L"enabled");
+    g_restore = SettingBool(L"restoreOnOpen");
+    g_sidebarRoot = SettingBool(L"sidebarRoot");
+    g_focusRect = SettingBool(L"focusRect");
+    g_compactScroll = SettingBool(L"compactScrollbars");
+    g_doubleClickUp = SettingBool(L"doubleClickUp");
+    g_headerKeyboard = SettingBool(L"headerKeyboard");
+    g_archives = SettingBool(L"archives");
+    g_dragOut = SettingBool(L"dragOut");
+    g_keepStale = SettingBool(L"keepStale");
+    g_harmonize = SettingBool(L"harmonizeWidths");
+    g_springLoad = SettingBool(L"springLoad");
+    g_rememberSort = SettingBool(L"rememberSort");
+    g_rememberWidth = SettingBool(L"rememberWidth");
+    g_rememberLayout = SettingBool(L"rememberLayout");
+    g_remoteMarks = SettingBool(L"remoteMarks");
+    g_desktopRealOnly = SettingBool(L"desktopRealOnly");
     {
-        const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
-        g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
-                           : mode && wcscmp(mode, L"transparent") == 0 ? 2
-                                                                       : 0;
-        if (mode) {
-            Wh_FreeStringSetting(mode);
-        }
+        std::wstring mode = SettingText(L"background");
+        g_backgroundMode = mode == L"theme" ? 1 : mode == L"transparent" ? 2 : 0;
     }
     g_styleVersion++;
-    int minWidth = Wh_GetIntSetting(L"columns.minWidth");
-    int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
-    minWidth = minWidth < 80 ? 80 : (minWidth > 800 ? 800 : minWidth);
-    maxWidth = maxWidth < minWidth ? minWidth : (maxWidth > 1200 ? 1200 : maxWidth);
+    int minWidth = SettingInt(L"minWidth");
+    int maxWidth = std::max(SettingInt(L"maxWidth"), minWidth);
     g_minWidth = minWidth;
     g_maxWidth = maxWidth;
-    g_follow = Wh_GetIntSetting(L"columns.followActiveColumn") != 0;
-    int maxItems = Wh_GetIntSetting(L"columns.maxItems");
-    g_maxItems = maxItems < 50 ? 50 : (maxItems > 20000 ? 20000 : maxItems);
-    g_debugLog = Wh_GetIntSetting(L"debugLog") != 0;
+    g_follow = SettingBool(L"followActiveColumn");
+    g_maxItems = SettingInt(L"maxItems");
+    g_debugLog = SettingBool(L"debugLog");
 }
 
 }  // namespace
@@ -78,7 +70,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.23.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.24.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

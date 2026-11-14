@@ -61,8 +61,14 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   (off), remoteMarks (on), rememberSort, rememberWidth, rememberLayout (all on),
   harmonizeWidths (on), keepStale (on), dragOut (on), background (a test
   setting), debugLog.
-  Settings YAML rule: a `$name` or `$description` must not contain a colon
-  followed by a space, it breaks the whole block (happened twice).
+  Since 0.24 every setting is declared once in `explorer-extras/settings.schema.json`
+  (id, group, type, default, limits, name, description, page and card for the
+  settings window). `build.py` writes the Windhawk settings block (marker
+  `@@SETTINGS_BLOCK@@` in `00-header.cpp`) and the C++ table (`@@SETTINGS_TABLE@@`
+  in `02a-settings.cpp`) from it: never edit the block in the header by hand, and
+  read a setting with `SettingBool`, `SettingInt` or `SettingText` by its id.
+  The build refuses a `$name` or `$description` with a colon followed by a space,
+  which breaks the whole block (happened twice).
 - Test folders: `make-columns-demo.ps1` (small) and `make-columns-showcase.ps1`
   (about 1 900 files, real pictures, PDFs, archives, edge cases, see
   `SHOWCASE-TESTS.md`). `assets/columns.svg` is the Columns icon.

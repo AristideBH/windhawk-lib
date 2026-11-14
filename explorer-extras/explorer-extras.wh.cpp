@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.23.0
+// @version         0.24.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -488,6 +488,140 @@ struct Entry {
     Pidl linkTarget;
 };
 
+
+// ---- Settings ----
+//
+// Every setting is declared once in settings.schema.json. build.py writes the
+// block Windhawk reads and the table below from it. The rest of the mod reads a
+// setting by its id, never by Windhawk's key, so the window that comes next can put
+// its own value in front of Windhawk's in one place.
+
+enum class SettingKind { Bool, Int, Enum, String };
+
+struct SettingInfo {
+    const wchar_t* id;            // "dragOut".
+    const wchar_t* key;           // Windhawk's name for it: "columns.dragOut", "debugLog".
+    SettingKind kind;
+    int defaultInt;               // Bool and Int.
+    const wchar_t* defaultText;   // Enum and String.
+    int minValue;                 // Int: the limits, both 0 for none.
+    int maxValue;
+    const wchar_t* name;
+    const wchar_t* description;
+};
+
+constexpr SettingInfo kSettings[] = {
+    {L"enabled", L"columns.enabled", SettingKind::Bool, 1, L"", 0, 0,
+     L"Enabled",
+     L"Adds the Columns entry to the View menu. Off removes it."},
+    {L"restoreOnOpen", L"columns.restoreOnOpen", SettingKind::Bool, 1, L"", 0, 0,
+     L"Open new windows in Columns",
+     L"When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off."},
+    {L"desktopRealOnly", L"columns.desktopRealOnly", SettingKind::Bool, 0, L"", 0, 0,
+     L"Desktop column shows only real items",
+     L"Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop."},
+    {L"remoteMarks", L"columns.remoteMarks", SettingKind::Bool, 1, L"", 0, 0,
+     L"Mark cloud, network and device items",
+     L"A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera."},
+    {L"rememberSort", L"columns.rememberSort", SettingKind::Bool, 1, L"", 0, 0,
+     L"Remember sort and group per folder",
+     L"Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder."},
+    {L"rememberWidth", L"columns.rememberWidth", SettingKind::Bool, 1, L"", 0, 0,
+     L"Remember column width per folder",
+     L"A column dragged to a width reopens at that width the next time the folder is shown."},
+    {L"rememberLayout", L"columns.rememberLayout", SettingKind::Bool, 1, L"", 0, 0,
+     L"Remember Columns per folder",
+     L"Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on."},
+    {L"springLoad", L"columns.springLoad", SettingKind::Bool, 1, L"", 0, 0,
+     L"Open a folder you hover on while dragging",
+     L"Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go."},
+    {L"harmonizeWidths", L"columns.harmonizeWidths", SettingKind::Bool, 1, L"", 0, 0,
+     L"Shift and double-click a border to even the widths",
+     L"Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own."},
+    {L"keepStale", L"columns.keepStale", SettingKind::Bool, 1, L"", 0, 0,
+     L"Keep the columns after a file is chosen",
+     L"When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead."},
+    {L"dragOut", L"columns.dragOut", SettingKind::Bool, 1, L"", 0, 0,
+     L"Drag items out of the panel",
+     L"Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel."},
+    {L"archives", L"columns.archives", SettingKind::Bool, 0, L"", 0, 0,
+     L"Browse archives in columns",
+     L"A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files."},
+    {L"headerKeyboard", L"columns.headerKeyboard", SettingKind::Bool, 0, L"", 0, 0,
+     L"Keyboard on group headers",
+     L"Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items."},
+    {L"doubleClickUp", L"columns.doubleClickUp", SettingKind::Bool, 0, L"", 0, 0,
+     L"Double-click on empty space goes up",
+     L"A double-click on the empty space of a column goes up one folder, as in the \"Explorer double-click up\" mod. In the first column the parent folder is added in front."},
+    {L"compactScrollbars", L"columns.compactScrollbars", SettingKind::Bool, 0, L"", 0, 0,
+     L"Compact scrollbars",
+     L"Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked."},
+    {L"focusRect", L"columns.focusRect", SettingKind::Bool, 1, L"", 0, 0,
+     L"Show the focus outline on the active item",
+     L"The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays."},
+    {L"background", L"columns.background", SettingKind::Enum, 0, L"explorer", 0, 0,
+     L"Panel background",
+     L"Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode."},
+    {L"sidebarRoot", L"columns.sidebarRoot", SettingKind::Bool, 0, L"", 0, 0,
+     L"Sidebar sets the first column",
+     L"A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before."},
+    {L"minWidth", L"columns.minWidth", SettingKind::Int, 160, L"", 80, 800,
+     L"Minimum column width",
+     L""},
+    {L"maxWidth", L"columns.maxWidth", SettingKind::Int, 420, L"", 80, 1200,
+     L"Maximum column width",
+     L"Columns fit their longest name up to this width. Longer names are cut in the middle."},
+    {L"followActiveColumn", L"columns.followActiveColumn", SettingKind::Bool, 1, L"", 0, 0,
+     L"Explorer follows the active column",
+     L"Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step."},
+    {L"maxItems", L"columns.maxItems", SettingKind::Int, 5000, L"", 50, 20000,
+     L"Maximum items per column",
+     L""},
+    {L"debugLog", L"debugLog", SettingKind::Bool, 1, L"", 0, 0,
+     L"Write a debug log",
+     L"Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists."},
+};
+constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
+
+const SettingInfo* FindSetting(const wchar_t* id) {
+    for (size_t i = 0; i < kSettingCount; i++) {
+        if (wcscmp(kSettings[i].id, id) == 0) {
+            return &kSettings[i];
+        }
+    }
+    return nullptr;
+}
+
+// The value of a setting. For now it is Windhawk's; the settings window's own
+// overrides will be looked up here first.
+int SettingInt(const wchar_t* id) {
+    const SettingInfo* info = FindSetting(id);
+    if (!info) {
+        return 0;
+    }
+    int value = Wh_GetIntSetting(info->key);
+    if (info->minValue || info->maxValue) {
+        value = std::clamp(value, info->minValue, info->maxValue);
+    }
+    return value;
+}
+
+bool SettingBool(const wchar_t* id) {
+    return SettingInt(id) != 0;
+}
+
+std::wstring SettingText(const wchar_t* id) {
+    const SettingInfo* info = FindSetting(id);
+    if (!info) {
+        return L"";
+    }
+    std::wstring result = info->defaultText;
+    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
+        result = value;
+        Wh_FreeStringSetting(value);
+    }
+    return result;
+}
 // ---- Who navigates Explorer's view? ----
 //
 // Explorer's view jumped to another folder after a paste, in a way this mod
@@ -12849,43 +12983,35 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 }
 
 void LoadSettings() {
-    g_enabled = Wh_GetIntSetting(L"columns.enabled") != 0;
-    g_restore = Wh_GetIntSetting(L"columns.restoreOnOpen") != 0;
-    g_sidebarRoot = Wh_GetIntSetting(L"columns.sidebarRoot") != 0;
-    g_focusRect = Wh_GetIntSetting(L"columns.focusRect") != 0;
-    g_compactScroll = Wh_GetIntSetting(L"columns.compactScrollbars") != 0;
-    g_doubleClickUp = Wh_GetIntSetting(L"columns.doubleClickUp") != 0;
-    g_headerKeyboard = Wh_GetIntSetting(L"columns.headerKeyboard") != 0;
-    g_archives = Wh_GetIntSetting(L"columns.archives") != 0;
-    g_dragOut = Wh_GetIntSetting(L"columns.dragOut") != 0;
-    g_keepStale = Wh_GetIntSetting(L"columns.keepStale") != 0;
-    g_harmonize = Wh_GetIntSetting(L"columns.harmonizeWidths") != 0;
-    g_springLoad = Wh_GetIntSetting(L"columns.springLoad") != 0;
-    g_rememberSort = Wh_GetIntSetting(L"columns.rememberSort") != 0;
-    g_rememberWidth = Wh_GetIntSetting(L"columns.rememberWidth") != 0;
-    g_rememberLayout = Wh_GetIntSetting(L"columns.rememberLayout") != 0;
-    g_remoteMarks = Wh_GetIntSetting(L"columns.remoteMarks") != 0;
-    g_desktopRealOnly = Wh_GetIntSetting(L"columns.desktopRealOnly") != 0;
+    g_enabled = SettingBool(L"enabled");
+    g_restore = SettingBool(L"restoreOnOpen");
+    g_sidebarRoot = SettingBool(L"sidebarRoot");
+    g_focusRect = SettingBool(L"focusRect");
+    g_compactScroll = SettingBool(L"compactScrollbars");
+    g_doubleClickUp = SettingBool(L"doubleClickUp");
+    g_headerKeyboard = SettingBool(L"headerKeyboard");
+    g_archives = SettingBool(L"archives");
+    g_dragOut = SettingBool(L"dragOut");
+    g_keepStale = SettingBool(L"keepStale");
+    g_harmonize = SettingBool(L"harmonizeWidths");
+    g_springLoad = SettingBool(L"springLoad");
+    g_rememberSort = SettingBool(L"rememberSort");
+    g_rememberWidth = SettingBool(L"rememberWidth");
+    g_rememberLayout = SettingBool(L"rememberLayout");
+    g_remoteMarks = SettingBool(L"remoteMarks");
+    g_desktopRealOnly = SettingBool(L"desktopRealOnly");
     {
-        const wchar_t* mode = Wh_GetStringSetting(L"columns.background");
-        g_backgroundMode = mode && wcscmp(mode, L"theme") == 0 ? 1
-                           : mode && wcscmp(mode, L"transparent") == 0 ? 2
-                                                                       : 0;
-        if (mode) {
-            Wh_FreeStringSetting(mode);
-        }
+        std::wstring mode = SettingText(L"background");
+        g_backgroundMode = mode == L"theme" ? 1 : mode == L"transparent" ? 2 : 0;
     }
     g_styleVersion++;
-    int minWidth = Wh_GetIntSetting(L"columns.minWidth");
-    int maxWidth = Wh_GetIntSetting(L"columns.maxWidth");
-    minWidth = minWidth < 80 ? 80 : (minWidth > 800 ? 800 : minWidth);
-    maxWidth = maxWidth < minWidth ? minWidth : (maxWidth > 1200 ? 1200 : maxWidth);
+    int minWidth = SettingInt(L"minWidth");
+    int maxWidth = std::max(SettingInt(L"maxWidth"), minWidth);
     g_minWidth = minWidth;
     g_maxWidth = maxWidth;
-    g_follow = Wh_GetIntSetting(L"columns.followActiveColumn") != 0;
-    int maxItems = Wh_GetIntSetting(L"columns.maxItems");
-    g_maxItems = maxItems < 50 ? 50 : (maxItems > 20000 ? 20000 : maxItems);
-    g_debugLog = Wh_GetIntSetting(L"debugLog") != 0;
+    g_follow = SettingBool(L"followActiveColumn");
+    g_maxItems = SettingInt(L"maxItems");
+    g_debugLog = SettingBool(L"debugLog");
 }
 
 }  // namespace
@@ -12900,7 +13026,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.23.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.24.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
