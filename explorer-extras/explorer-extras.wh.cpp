@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.25.2
+// @version         0.26.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -512,6 +512,7 @@ struct SettingInfo {
     const wchar_t* card;          // The card of the page it sits in.
     bool windhawkOnly;            // Not shown in the settings window.
     const wchar_t* options;       // Enum: "value=Label|value=Label".
+    bool rebuild;                 // A change needs the columns read or fitted again.
 };
 
 struct SettingCard {
@@ -523,95 +524,95 @@ constexpr SettingInfo kSettings[] = {
     {L"enabled", L"columns.enabled", SettingKind::Bool, 1, L"", 0, 0,
      L"Enabled",
      L"Adds the Columns entry to the View menu. Off removes it.",
-     L"home", L"feature", false, L""},
+     L"home", L"feature", false, L"", false},
     {L"restoreOnOpen", L"columns.restoreOnOpen", SettingKind::Bool, 1, L"", 0, 0,
      L"Open new windows in Columns",
      L"When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"desktopRealOnly", L"columns.desktopRealOnly", SettingKind::Bool, 0, L"", 0, 0,
      L"Desktop column shows only real items",
      L"Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.",
-     L"columns", L"content", false, L""},
+     L"columns", L"content", false, L"", true},
     {L"remoteMarks", L"columns.remoteMarks", SettingKind::Bool, 1, L"", 0, 0,
      L"Mark cloud, network and device items",
      L"A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.",
-     L"columns", L"content", false, L""},
+     L"columns", L"content", false, L"", true},
     {L"rememberSort", L"columns.rememberSort", SettingKind::Bool, 1, L"", 0, 0,
      L"Remember sort and group per folder",
      L"Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder.",
-     L"columns", L"dragmemory", false, L""},
+     L"columns", L"dragmemory", false, L"", false},
     {L"rememberWidth", L"columns.rememberWidth", SettingKind::Bool, 1, L"", 0, 0,
      L"Remember column width per folder",
      L"A column dragged to a width reopens at that width the next time the folder is shown.",
-     L"columns", L"dragmemory", false, L""},
+     L"columns", L"dragmemory", false, L"", false},
     {L"rememberLayout", L"columns.rememberLayout", SettingKind::Bool, 1, L"", 0, 0,
      L"Remember Columns per folder",
      L"Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.",
-     L"columns", L"dragmemory", false, L""},
+     L"columns", L"dragmemory", false, L"", false},
     {L"springLoad", L"columns.springLoad", SettingKind::Bool, 1, L"", 0, 0,
      L"Open a folder you hover on while dragging",
      L"Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.",
-     L"columns", L"dragmemory", false, L""},
+     L"columns", L"dragmemory", false, L"", false},
     {L"harmonizeWidths", L"columns.harmonizeWidths", SettingKind::Bool, 1, L"", 0, 0,
      L"Shift and double-click a border to even the widths",
      L"Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.",
-     L"columns", L"layout", false, L""},
+     L"columns", L"layout", false, L"", true},
     {L"keepStale", L"columns.keepStale", SettingKind::Bool, 1, L"", 0, 0,
      L"Keep the columns after a file is chosen",
      L"When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"dragOut", L"columns.dragOut", SettingKind::Bool, 1, L"", 0, 0,
      L"Drag items out of the panel",
      L"Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.",
-     L"columns", L"dragmemory", false, L""},
+     L"columns", L"dragmemory", false, L"", false},
     {L"archives", L"columns.archives", SettingKind::Bool, 0, L"", 0, 0,
      L"Browse archives in columns",
      L"A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.",
-     L"columns", L"content", false, L""},
+     L"columns", L"content", false, L"", true},
     {L"headerKeyboard", L"columns.headerKeyboard", SettingKind::Bool, 0, L"", 0, 0,
      L"Keyboard on group headers",
      L"Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"doubleClickUp", L"columns.doubleClickUp", SettingKind::Bool, 0, L"", 0, 0,
      L"Double-click on empty space goes up",
      L"A double-click on the empty space of a column goes up one folder, as in the \"Explorer double-click up\" mod. In the first column the parent folder is added in front.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"compactScrollbars", L"columns.compactScrollbars", SettingKind::Bool, 0, L"", 0, 0,
      L"Compact scrollbars",
      L"Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.",
-     L"columns", L"layout", false, L""},
+     L"columns", L"layout", false, L"", true},
     {L"focusRect", L"columns.focusRect", SettingKind::Bool, 1, L"", 0, 0,
      L"Show the focus outline on the active item",
      L"The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.",
-     L"columns", L"layout", false, L""},
+     L"columns", L"layout", false, L"", true},
     {L"background", L"columns.background", SettingKind::Enum, 0, L"explorer", 0, 0,
      L"Panel background",
      L"Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.",
-     L"columns", L"layout", false, L"explorer=Explorer's file list colour|theme=Theme colour|transparent=Transparent (test)"},
+     L"columns", L"layout", false, L"explorer=Explorer's file list colour|theme=Theme colour|transparent=Transparent (test)", true},
     {L"sidebarRoot", L"columns.sidebarRoot", SettingKind::Bool, 0, L"", 0, 0,
      L"Sidebar sets the first column",
      L"A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"minWidth", L"columns.minWidth", SettingKind::Int, 160, L"", 80, 800,
      L"Minimum column width",
      L"",
-     L"columns", L"layout", false, L""},
+     L"columns", L"layout", false, L"", true},
     {L"maxWidth", L"columns.maxWidth", SettingKind::Int, 420, L"", 80, 1200,
      L"Maximum column width",
      L"Columns fit their longest name up to this width. Longer names are cut in the middle.",
-     L"columns", L"layout", false, L""},
+     L"columns", L"layout", false, L"", true},
     {L"followActiveColumn", L"columns.followActiveColumn", SettingKind::Bool, 1, L"", 0, 0,
      L"Explorer follows the active column",
      L"Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.",
-     L"columns", L"behaviour", false, L""},
+     L"columns", L"behaviour", false, L"", false},
     {L"maxItems", L"columns.maxItems", SettingKind::Int, 5000, L"", 50, 20000,
      L"Maximum items per column",
      L"",
-     L"columns", L"content", false, L""},
+     L"columns", L"content", false, L"", true},
     {L"debugLog", L"debugLog", SettingKind::Bool, 1, L"", 0, 0,
      L"Write a debug log",
      L"Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
-     L"", L"", true, L""},
+     L"", L"", true, L"", false},
 };
 
 constexpr SettingCard kCards[] = {
@@ -632,14 +633,84 @@ const SettingInfo* FindSetting(const wchar_t* id) {
     return nullptr;
 }
 
-// The value of a setting. For now it is Windhawk's; the settings window's own
-// overrides will be looked up here first.
+// ---- Where a value comes from ----
+//
+// Windhawk's page holds the default. The settings window writes an override, kept
+// in the mod's own storage as text under "ui.<id>", together with the value
+// Windhawk's page had at that moment under "ui.seen.<id>". The value in use is the
+// override, unless Windhawk's page has been edited since: that difference is a new
+// edit on the page, and it wins and clears the override.
+
+std::wstring WindhawkValueText(const SettingInfo* info) {
+    if (info->kind == SettingKind::Bool || info->kind == SettingKind::Int) {
+        return std::to_wstring(Wh_GetIntSetting(info->key));
+    }
+    std::wstring result = info->defaultText;
+    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
+        result = value;
+        Wh_FreeStringSetting(value);
+    }
+    return result;
+}
+
+bool ReadStored(const std::wstring& name, std::wstring* out) {
+    wchar_t buffer[256];
+    size_t length = Wh_GetStringValue(name.c_str(), buffer, ARRAYSIZE(buffer));
+    if (!length) {
+        return false;
+    }
+    *out = buffer;
+    return true;
+}
+
+std::wstring EffectiveText(const SettingInfo* info) {
+    std::wstring windhawk = WindhawkValueText(info);
+    std::wstring override;
+    if (ReadStored(std::wstring(L"ui.") + info->id, &override)) {
+        std::wstring seen;
+        if (ReadStored(std::wstring(L"ui.seen.") + info->id, &seen) && seen != windhawk) {
+            Wh_DeleteValue((std::wstring(L"ui.") + info->id).c_str());
+            Wh_DeleteValue((std::wstring(L"ui.seen.") + info->id).c_str());
+            return windhawk;  // Edited on Windhawk's page since: the page wins.
+        }
+        return override;
+    }
+    return windhawk;
+}
+
+bool SettingIsOverridden(const SettingInfo* info) {
+    std::wstring stored;
+    return ReadStored(std::wstring(L"ui.") + info->id, &stored);
+}
+
+// The window's choice. The same as Windhawk's value needs no override, and the
+// override that was there goes.
+void WriteSettingOverride(const SettingInfo* info, const std::wstring& text) {
+    std::wstring name = std::wstring(L"ui.") + info->id;
+    std::wstring seenName = std::wstring(L"ui.seen.") + info->id;
+    std::wstring windhawk = WindhawkValueText(info);
+    if (text == windhawk) {
+        Wh_DeleteValue(name.c_str());
+        Wh_DeleteValue(seenName.c_str());
+        return;
+    }
+    Wh_SetStringValue(name.c_str(), text.c_str());
+    Wh_SetStringValue(seenName.c_str(), windhawk.c_str());
+}
+
+void ClearAllOverrides() {
+    for (size_t i = 0; i < kSettingCount; i++) {
+        Wh_DeleteValue((std::wstring(L"ui.") + kSettings[i].id).c_str());
+        Wh_DeleteValue((std::wstring(L"ui.seen.") + kSettings[i].id).c_str());
+    }
+}
+
 int SettingInt(const wchar_t* id) {
     const SettingInfo* info = FindSetting(id);
     if (!info) {
         return 0;
     }
-    int value = Wh_GetIntSetting(info->key);
+    int value = _wtoi(EffectiveText(info).c_str());
     if (info->minValue || info->maxValue) {
         value = std::clamp(value, info->minValue, info->maxValue);
     }
@@ -652,15 +723,7 @@ bool SettingBool(const wchar_t* id) {
 
 std::wstring SettingText(const wchar_t* id) {
     const SettingInfo* info = FindSetting(id);
-    if (!info) {
-        return L"";
-    }
-    std::wstring result = info->defaultText;
-    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
-        result = value;
-        Wh_FreeStringSetting(value);
-    }
-    return result;
+    return info ? EffectiveText(info) : std::wstring();
 }
 // ---- Who navigates Explorer's view? ----
 //
@@ -12591,6 +12654,9 @@ void LogRowTree(mux::DependencyObject const& node, int depth) {
 // In this version the Columns page is read only: it shows the settings as they are.
 
 extern bool g_hooked;  // Defined with the hooks, later.
+void LoadSettings();
+void CloseEverything();
+void ReloadAll(WindowState* state);
 
 constexpr wchar_t kSettingsClass[] = L"ExplorerExtrasSettingsWindow";
 
@@ -12609,6 +12675,7 @@ DWORD g_settingsThread = 0;
 SettingsUi* g_settingsUi = nullptr;
 bool g_settingsClassMade = false;
 std::atomic<bool> g_settingsAbandon{false};  // The mod is unloading.
+bool g_settingsBuilding = false;  // A page is being built: its controls change nothing.
 
 constexpr wchar_t kXamlNs[] = L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'";
 
@@ -12669,7 +12736,92 @@ muxc::Grid MakeSettingRow(std::wstring const& name, std::wstring const& descript
     return row;
 }
 
-// The control of a setting, showing its value. Read only here.
+// ---- Applying a setting chosen in the window ----
+
+// What a window does when a setting changed that affects columns already built:
+// the widths the user has not set are fitted again, and the folders are read again.
+void RebuildForSettings() {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        for (auto& column : state->columns) {
+            if (column->list && column->filled && !column->userSized) {
+                FitWidth(column.get());
+                RefreshNames(column.get());
+            }
+        }
+        ReloadAll(state);
+        UpdatePill(state, false);
+    } catch (...) {
+        LogHresult(L"rebuilding after a setting");
+    }
+}
+
+void RebuildEverywhere() {
+    std::vector<mud::DispatcherQueue> queues;
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto& state : g_states) {
+            if (state->queue) {
+                queues.push_back(state->queue);
+            }
+        }
+    }
+    for (auto& queue : queues) {
+        try {
+            queue.TryEnqueue([]() { RebuildForSettings(); });
+        } catch (...) {
+        }
+    }
+}
+
+// Switched off from the window: every window is cleaned up from another thread, since
+// the cleanup waits for this one to run its part.
+void TurnColumnsOffEverywhere() {
+    std::thread([]() { CloseEverything(); }).detach();
+}
+
+void ApplySettingChanged(const SettingInfo& info) {
+    LoadSettings();
+    Out(L"setting \"%s\" changed in the settings window, now \"%s\"", info.id, EffectiveText(&info).c_str());
+    if (!g_enabled) {
+        TurnColumnsOffEverywhere();
+    } else if (info.rebuild) {
+        RebuildEverywhere();
+    }
+}
+
+void CommitSetting(std::wstring const& id, std::wstring const& text) {
+    if (g_settingsBuilding || g_unloading) {
+        return;
+    }
+    const SettingInfo* info = FindSetting(id.c_str());
+    if (!info || EffectiveText(info) == text) {
+        return;
+    }
+    WriteSettingOverride(info, text);
+    ApplySettingChanged(*info);
+}
+
+void ShowSettingsPage(SettingsUi* ui, int page);
+
+void ResetSettingsToWindhawk() {
+    ClearAllOverrides();
+    LoadSettings();
+    Out(L"settings reset to Windhawk's page");
+    if (!g_enabled) {
+        TurnColumnsOffEverywhere();
+    } else {
+        RebuildEverywhere();
+    }
+    if (g_settingsUi) {
+        ShowSettingsPage(g_settingsUi, g_settingsUi->page);
+    }
+}
+
+// The control of a setting: it shows the value in use and writes the user's choice.
 mux::UIElement MakeSettingControl(SettingInfo const& info) {
     switch (info.kind) {
         case SettingKind::Bool: {
@@ -12678,7 +12830,12 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             toggle.OffContent(winrt::box_value(L""));
             toggle.MinWidth(0);
             toggle.IsOn(SettingBool(info.id));
-            toggle.IsEnabled(false);
+            std::wstring id = info.id;
+            toggle.Toggled([id](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
+                    CommitSetting(id, changed.IsOn() ? L"1" : L"0");
+                }
+            });
             return toggle;
         }
         case SettingKind::Int: {
@@ -12687,7 +12844,15 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             box.Maximum(info.maxValue ? info.maxValue : 1000000);
             box.Value(SettingInt(info.id));
             box.Width(140);
-            box.IsEnabled(false);
+            box.SpinButtonPlacementMode(muxc::NumberBoxSpinButtonPlacementMode::Compact);
+            box.ValidationMode(muxc::NumberBoxValidationMode::InvalidInputOverwritten);
+            std::wstring id = info.id;
+            box.ValueChanged([id](muxc::NumberBox const&, muxc::NumberBoxValueChangedEventArgs const& args) {
+                double value = args.NewValue();
+                if (value == value) {  // Not a number while the box is cleared.
+                    CommitSetting(id, std::to_wstring((int)value));
+                }
+            });
             return box;
         }
         case SettingKind::Enum: {
@@ -12714,7 +12879,31 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             }
             combo.SelectedIndex(selected);
             combo.MinWidth(220);
-            combo.IsEnabled(false);
+            std::wstring id = info.id;
+            std::wstring choices = info.options;
+            combo.SelectionChanged([id, choices](Inspectable const& sender, muxc::SelectionChangedEventArgs const&) {
+                auto box = sender.try_as<muxc::ComboBox>();
+                int index = box ? box.SelectedIndex() : -1;
+                if (index < 0) {
+                    return;
+                }
+                size_t at = 0;
+                for (int i = 0;; i++) {
+                    size_t end = choices.find(L'|', at);
+                    std::wstring pair = choices.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at);
+                    if (i == index) {
+                        size_t equals = pair.find(L'=');
+                        if (equals != std::wstring::npos) {
+                            CommitSetting(id, pair.substr(0, equals));
+                        }
+                        return;
+                    }
+                    if (end == std::wstring::npos) {
+                        return;
+                    }
+                    at = end + 1;
+                }
+            });
             return combo;
         }
         default:
@@ -12765,7 +12954,11 @@ mux::UIElement BuildHomePage() {
         toggle.OffContent(winrt::box_value(L""));
         toggle.MinWidth(0);
         toggle.IsOn(SettingBool(L"enabled"));
-        toggle.IsEnabled(false);
+        toggle.Toggled([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
+                CommitSetting(L"enabled", changed.IsOn() ? L"1" : L"0");
+            }
+        });
         card.Child(MakeSettingRow(L"Columns", enabled ? enabled->description : L"", toggle));
         page.Children().Append(card);
     }
@@ -12794,9 +12987,13 @@ mux::UIElement BuildHomePage() {
         for (auto const& label : {L"Open the log", L"Copy diagnostics", L"Reset to Windhawk's settings"}) {
             muxc::Button button;
             button.Content(winrt::box_value(label));
-            button.IsEnabled(false);
             button.MinWidth(180);
-            rows.Children().Append(MakeSettingRow(label, L"", button));
+            bool isReset = wcsncmp(label, L"Reset", 5) == 0;
+            button.IsEnabled(isReset);
+            if (isReset) {
+                button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
+            }
+            rows.Children().Append(MakeSettingRow(label, isReset ? L"Every setting goes back to what Windhawk's page for the mod says." : L"", button));
         }
         card.Child(rows);
         page.Children().Append(card);
@@ -12812,7 +13009,7 @@ mux::UIElement BuildColumnsPage() {
     {
         auto note = MakeCard();
         note.Child(MakeText(
-            L"Read only for now. Change these on Windhawk's page for the mod; editing here, live, comes in the next version.",
+            L"Changes apply at once. The mod keeps them in front of Windhawk's page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk's values.",
             12, false, true));
         page.Children().Append(note);
     }
@@ -12846,8 +13043,16 @@ mux::UIElement BuildColumnsPage() {
 
 void ShowSettingsPage(SettingsUi* ui, int page) {
     ui->page = page;
-    mux::UIElement content = page == 0 ? BuildHomePage() : BuildColumnsPage();
+    g_settingsBuilding = true;
+    mux::UIElement content{nullptr};
+    try {
+        content = page == 0 ? BuildHomePage() : BuildColumnsPage();
+    } catch (...) {
+        g_settingsBuilding = false;
+        throw;
+    }
     ui->content.Content(content);
+    g_settingsBuilding = false;
     ui->content.ChangeView(nullptr, 0.0, nullptr, true);
 }
 
@@ -13684,7 +13889,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.25.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.26.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

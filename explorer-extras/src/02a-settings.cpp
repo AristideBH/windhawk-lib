@@ -22,6 +22,7 @@ struct SettingInfo {
     const wchar_t* card;          // The card of the page it sits in.
     bool windhawkOnly;            // Not shown in the settings window.
     const wchar_t* options;       // Enum: "value=Label|value=Label".
+    bool rebuild;                 // A change needs the columns read or fitted again.
 };
 
 struct SettingCard {
@@ -42,14 +43,84 @@ const SettingInfo* FindSetting(const wchar_t* id) {
     return nullptr;
 }
 
-// The value of a setting. For now it is Windhawk's; the settings window's own
-// overrides will be looked up here first.
+// ---- Where a value comes from ----
+//
+// Windhawk's page holds the default. The settings window writes an override, kept
+// in the mod's own storage as text under "ui.<id>", together with the value
+// Windhawk's page had at that moment under "ui.seen.<id>". The value in use is the
+// override, unless Windhawk's page has been edited since: that difference is a new
+// edit on the page, and it wins and clears the override.
+
+std::wstring WindhawkValueText(const SettingInfo* info) {
+    if (info->kind == SettingKind::Bool || info->kind == SettingKind::Int) {
+        return std::to_wstring(Wh_GetIntSetting(info->key));
+    }
+    std::wstring result = info->defaultText;
+    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
+        result = value;
+        Wh_FreeStringSetting(value);
+    }
+    return result;
+}
+
+bool ReadStored(const std::wstring& name, std::wstring* out) {
+    wchar_t buffer[256];
+    size_t length = Wh_GetStringValue(name.c_str(), buffer, ARRAYSIZE(buffer));
+    if (!length) {
+        return false;
+    }
+    *out = buffer;
+    return true;
+}
+
+std::wstring EffectiveText(const SettingInfo* info) {
+    std::wstring windhawk = WindhawkValueText(info);
+    std::wstring override;
+    if (ReadStored(std::wstring(L"ui.") + info->id, &override)) {
+        std::wstring seen;
+        if (ReadStored(std::wstring(L"ui.seen.") + info->id, &seen) && seen != windhawk) {
+            Wh_DeleteValue((std::wstring(L"ui.") + info->id).c_str());
+            Wh_DeleteValue((std::wstring(L"ui.seen.") + info->id).c_str());
+            return windhawk;  // Edited on Windhawk's page since: the page wins.
+        }
+        return override;
+    }
+    return windhawk;
+}
+
+bool SettingIsOverridden(const SettingInfo* info) {
+    std::wstring stored;
+    return ReadStored(std::wstring(L"ui.") + info->id, &stored);
+}
+
+// The window's choice. The same as Windhawk's value needs no override, and the
+// override that was there goes.
+void WriteSettingOverride(const SettingInfo* info, const std::wstring& text) {
+    std::wstring name = std::wstring(L"ui.") + info->id;
+    std::wstring seenName = std::wstring(L"ui.seen.") + info->id;
+    std::wstring windhawk = WindhawkValueText(info);
+    if (text == windhawk) {
+        Wh_DeleteValue(name.c_str());
+        Wh_DeleteValue(seenName.c_str());
+        return;
+    }
+    Wh_SetStringValue(name.c_str(), text.c_str());
+    Wh_SetStringValue(seenName.c_str(), windhawk.c_str());
+}
+
+void ClearAllOverrides() {
+    for (size_t i = 0; i < kSettingCount; i++) {
+        Wh_DeleteValue((std::wstring(L"ui.") + kSettings[i].id).c_str());
+        Wh_DeleteValue((std::wstring(L"ui.seen.") + kSettings[i].id).c_str());
+    }
+}
+
 int SettingInt(const wchar_t* id) {
     const SettingInfo* info = FindSetting(id);
     if (!info) {
         return 0;
     }
-    int value = Wh_GetIntSetting(info->key);
+    int value = _wtoi(EffectiveText(info).c_str());
     if (info->minValue || info->maxValue) {
         value = std::clamp(value, info->minValue, info->maxValue);
     }
@@ -62,13 +133,5 @@ bool SettingBool(const wchar_t* id) {
 
 std::wstring SettingText(const wchar_t* id) {
     const SettingInfo* info = FindSetting(id);
-    if (!info) {
-        return L"";
-    }
-    std::wstring result = info->defaultText;
-    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
-        result = value;
-        Wh_FreeStringSetting(value);
-    }
-    return result;
+    return info ? EffectiveText(info) : std::wstring();
 }

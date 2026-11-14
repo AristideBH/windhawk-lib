@@ -9,6 +9,9 @@
 // In this version the Columns page is read only: it shows the settings as they are.
 
 extern bool g_hooked;  // Defined with the hooks, later.
+void LoadSettings();
+void CloseEverything();
+void ReloadAll(WindowState* state);
 
 constexpr wchar_t kSettingsClass[] = L"ExplorerExtrasSettingsWindow";
 
@@ -27,6 +30,7 @@ DWORD g_settingsThread = 0;
 SettingsUi* g_settingsUi = nullptr;
 bool g_settingsClassMade = false;
 std::atomic<bool> g_settingsAbandon{false};  // The mod is unloading.
+bool g_settingsBuilding = false;  // A page is being built: its controls change nothing.
 
 constexpr wchar_t kXamlNs[] = L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'";
 
@@ -87,7 +91,92 @@ muxc::Grid MakeSettingRow(std::wstring const& name, std::wstring const& descript
     return row;
 }
 
-// The control of a setting, showing its value. Read only here.
+// ---- Applying a setting chosen in the window ----
+
+// What a window does when a setting changed that affects columns already built:
+// the widths the user has not set are fitted again, and the folders are read again.
+void RebuildForSettings() {
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->on || g_unloading) {
+        return;
+    }
+    try {
+        for (auto& column : state->columns) {
+            if (column->list && column->filled && !column->userSized) {
+                FitWidth(column.get());
+                RefreshNames(column.get());
+            }
+        }
+        ReloadAll(state);
+        UpdatePill(state, false);
+    } catch (...) {
+        LogHresult(L"rebuilding after a setting");
+    }
+}
+
+void RebuildEverywhere() {
+    std::vector<mud::DispatcherQueue> queues;
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto& state : g_states) {
+            if (state->queue) {
+                queues.push_back(state->queue);
+            }
+        }
+    }
+    for (auto& queue : queues) {
+        try {
+            queue.TryEnqueue([]() { RebuildForSettings(); });
+        } catch (...) {
+        }
+    }
+}
+
+// Switched off from the window: every window is cleaned up from another thread, since
+// the cleanup waits for this one to run its part.
+void TurnColumnsOffEverywhere() {
+    std::thread([]() { CloseEverything(); }).detach();
+}
+
+void ApplySettingChanged(const SettingInfo& info) {
+    LoadSettings();
+    Out(L"setting \"%s\" changed in the settings window, now \"%s\"", info.id, EffectiveText(&info).c_str());
+    if (!g_enabled) {
+        TurnColumnsOffEverywhere();
+    } else if (info.rebuild) {
+        RebuildEverywhere();
+    }
+}
+
+void CommitSetting(std::wstring const& id, std::wstring const& text) {
+    if (g_settingsBuilding || g_unloading) {
+        return;
+    }
+    const SettingInfo* info = FindSetting(id.c_str());
+    if (!info || EffectiveText(info) == text) {
+        return;
+    }
+    WriteSettingOverride(info, text);
+    ApplySettingChanged(*info);
+}
+
+void ShowSettingsPage(SettingsUi* ui, int page);
+
+void ResetSettingsToWindhawk() {
+    ClearAllOverrides();
+    LoadSettings();
+    Out(L"settings reset to Windhawk's page");
+    if (!g_enabled) {
+        TurnColumnsOffEverywhere();
+    } else {
+        RebuildEverywhere();
+    }
+    if (g_settingsUi) {
+        ShowSettingsPage(g_settingsUi, g_settingsUi->page);
+    }
+}
+
+// The control of a setting: it shows the value in use and writes the user's choice.
 mux::UIElement MakeSettingControl(SettingInfo const& info) {
     switch (info.kind) {
         case SettingKind::Bool: {
@@ -96,7 +185,12 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             toggle.OffContent(winrt::box_value(L""));
             toggle.MinWidth(0);
             toggle.IsOn(SettingBool(info.id));
-            toggle.IsEnabled(false);
+            std::wstring id = info.id;
+            toggle.Toggled([id](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
+                    CommitSetting(id, changed.IsOn() ? L"1" : L"0");
+                }
+            });
             return toggle;
         }
         case SettingKind::Int: {
@@ -105,7 +199,15 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             box.Maximum(info.maxValue ? info.maxValue : 1000000);
             box.Value(SettingInt(info.id));
             box.Width(140);
-            box.IsEnabled(false);
+            box.SpinButtonPlacementMode(muxc::NumberBoxSpinButtonPlacementMode::Compact);
+            box.ValidationMode(muxc::NumberBoxValidationMode::InvalidInputOverwritten);
+            std::wstring id = info.id;
+            box.ValueChanged([id](muxc::NumberBox const&, muxc::NumberBoxValueChangedEventArgs const& args) {
+                double value = args.NewValue();
+                if (value == value) {  // Not a number while the box is cleared.
+                    CommitSetting(id, std::to_wstring((int)value));
+                }
+            });
             return box;
         }
         case SettingKind::Enum: {
@@ -132,7 +234,31 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             }
             combo.SelectedIndex(selected);
             combo.MinWidth(220);
-            combo.IsEnabled(false);
+            std::wstring id = info.id;
+            std::wstring choices = info.options;
+            combo.SelectionChanged([id, choices](Inspectable const& sender, muxc::SelectionChangedEventArgs const&) {
+                auto box = sender.try_as<muxc::ComboBox>();
+                int index = box ? box.SelectedIndex() : -1;
+                if (index < 0) {
+                    return;
+                }
+                size_t at = 0;
+                for (int i = 0;; i++) {
+                    size_t end = choices.find(L'|', at);
+                    std::wstring pair = choices.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at);
+                    if (i == index) {
+                        size_t equals = pair.find(L'=');
+                        if (equals != std::wstring::npos) {
+                            CommitSetting(id, pair.substr(0, equals));
+                        }
+                        return;
+                    }
+                    if (end == std::wstring::npos) {
+                        return;
+                    }
+                    at = end + 1;
+                }
+            });
             return combo;
         }
         default:
@@ -183,7 +309,11 @@ mux::UIElement BuildHomePage() {
         toggle.OffContent(winrt::box_value(L""));
         toggle.MinWidth(0);
         toggle.IsOn(SettingBool(L"enabled"));
-        toggle.IsEnabled(false);
+        toggle.Toggled([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
+                CommitSetting(L"enabled", changed.IsOn() ? L"1" : L"0");
+            }
+        });
         card.Child(MakeSettingRow(L"Columns", enabled ? enabled->description : L"", toggle));
         page.Children().Append(card);
     }
@@ -212,9 +342,13 @@ mux::UIElement BuildHomePage() {
         for (auto const& label : {L"Open the log", L"Copy diagnostics", L"Reset to Windhawk's settings"}) {
             muxc::Button button;
             button.Content(winrt::box_value(label));
-            button.IsEnabled(false);
             button.MinWidth(180);
-            rows.Children().Append(MakeSettingRow(label, L"", button));
+            bool isReset = wcsncmp(label, L"Reset", 5) == 0;
+            button.IsEnabled(isReset);
+            if (isReset) {
+                button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
+            }
+            rows.Children().Append(MakeSettingRow(label, isReset ? L"Every setting goes back to what Windhawk's page for the mod says." : L"", button));
         }
         card.Child(rows);
         page.Children().Append(card);
@@ -230,7 +364,7 @@ mux::UIElement BuildColumnsPage() {
     {
         auto note = MakeCard();
         note.Child(MakeText(
-            L"Read only for now. Change these on Windhawk's page for the mod; editing here, live, comes in the next version.",
+            L"Changes apply at once. The mod keeps them in front of Windhawk's page, and a later edit on that page for the same setting wins. Reset on Home goes back to Windhawk's values.",
             12, false, true));
         page.Children().Append(note);
     }
@@ -264,8 +398,16 @@ mux::UIElement BuildColumnsPage() {
 
 void ShowSettingsPage(SettingsUi* ui, int page) {
     ui->page = page;
-    mux::UIElement content = page == 0 ? BuildHomePage() : BuildColumnsPage();
+    g_settingsBuilding = true;
+    mux::UIElement content{nullptr};
+    try {
+        content = page == 0 ? BuildHomePage() : BuildColumnsPage();
+    } catch (...) {
+        g_settingsBuilding = false;
+        throw;
+    }
     ui->content.Content(content);
+    g_settingsBuilding = false;
     ui->content.ChangeView(nullptr, 0.0, nullptr, true);
 }
 
