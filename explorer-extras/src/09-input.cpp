@@ -1056,10 +1056,13 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     HoverOn(state);
     g_panelWindow = nullptr;
     RevokePanelDropTarget(state);
-    RestoreNativeList(state);
     CancelRename(state);
     CloseContextMenu(state);
     try {
+        if (state->fadeTimer) {
+            state->fadeTimer.Stop();  // A removal waiting behind a fade must not run after the panel or the mod is gone.
+            state->fadeTimer = nullptr;
+        }
         if (state->timer) {
             state->timer.Stop();
             state->timer.Tick(state->tickToken);
@@ -1367,7 +1370,6 @@ void SoftHidePanel(WindowState* state) {
     }
     CancelRename(state);
     CloseContextMenu(state);
-    RestoreNativeList(state);
     try {
         state->bridge.Hide();
         if (state->menuItem) {
@@ -1977,13 +1979,6 @@ void OnTick() {
         }
 
         // The theme changed: take the list's colour again.
-        // Transparent mode: the native list is kept invisible, also after
-        // Explorer replaces it. Any other mode gives it back.
-        if (g_backgroundMode == 2) {
-            ClearNativeLists(state);
-        } else if (!state->cleared.empty()) {
-            RestoreNativeList(state);
-        }
         if (state->rootGrid && fileList &&
             (state->shownMode != g_backgroundMode ||
              (state->ticks % 20 == 0 && IsDarkMode() != state->shownDark))) {
@@ -2268,11 +2263,6 @@ void ShowPanel(WindowState* state) {
             root.Background(PanelBackground(fileList, dark));
             state->shownDark = dark;
             state->shownMode = g_backgroundMode;
-            // Transparent mode: the native list is cleared before the panel
-            // shows, so it never flashes.
-            if (g_backgroundMode == 2) {
-                ClearNativeLists(state);
-            }
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);

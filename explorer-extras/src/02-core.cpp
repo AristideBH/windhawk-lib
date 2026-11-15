@@ -1,18 +1,18 @@
 namespace {
 
 std::atomic<bool> g_unloading{false};
-std::atomic<bool> g_debugLog{true};
+std::atomic<bool> g_debugLog{false};
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
-std::atomic<bool> g_compactScroll{false};
+std::atomic<bool> g_compactScroll{true};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_lastEdge{false};
 std::atomic<bool> g_headerKeyboard{false};
-std::atomic<bool> g_archives{false};
-std::atomic<bool> g_dragOut{false};
+std::atomic<bool> g_archives{true};
+std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_harmonize{true};
 std::atomic<bool> g_springLoad{true};
@@ -21,7 +21,7 @@ std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
 std::atomic<bool> g_remoteMarks{true};
 std::atomic<bool> g_desktopRealOnly{false};
-std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
+std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};

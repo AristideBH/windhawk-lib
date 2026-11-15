@@ -30,15 +30,6 @@ struct SettingCard {
     const wchar_t* name;
 };
 
-// A feature that is planned and not built: a placeholder page in the settings window.
-struct FeatureInfo {
-    const wchar_t* id;
-    const wchar_t* name;
-    const wchar_t* glyph;     // Segoe Fluent Icons.
-    const wchar_t* summary;
-    const wchar_t* planned;   // Lines joined by '|'.
-};
-
 // A text of the mod's own windows and menus, by id. English now; the table is where
 // translations will come in.
 struct StringInfo {
@@ -50,7 +41,6 @@ struct StringInfo {
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
-constexpr size_t kFeatureCount = sizeof(kFeatures) / sizeof(kFeatures[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
 
 // The text for an id. A missing id shows as itself, so a gap is seen at once.

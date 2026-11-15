@@ -235,10 +235,6 @@ struct WindowState {
     ULONGLONG cursorFixUntil = 0;  // While Explorer navigates, a busy cursor over the panel is put right.
     bool shownDark = false;  // The theme the panel background was made for.
     int shownMode = 0;       // And the background mode.
-    // The native lists made invisible, in transparent mode, and whether this mod
-    // gave each the layered style. A tab can hold more than one view window
-    // after layouts change, so every visible one is cleared.
-    std::vector<std::pair<HWND, bool>> cleared;
     // A click on the name of the item that is already selected starts a
     // rename once the double-click time has passed.
     // After a command of Explorer's own toolbar: read the columns again, and
@@ -443,104 +439,9 @@ mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return mux::Media::SolidColorBrush(winrt::Windows::UI::Color{a, r, g, b});
 }
 
-// Transparent mode: Explorer's own file list stays, but is drawn fully
-// transparent, so nothing shows through the panel except the window's backdrop.
-// Undone whenever the panel goes away.
-BOOL CALLBACK CollectViewsProc(HWND hwnd, LPARAM lParam) {
-    wchar_t name[32];
-    if (GetClassNameW(hwnd, name, ARRAYSIZE(name)) &&
-        wcscmp(name, L"SHELLDLL_DefView") == 0 && IsWindowVisible(hwnd)) {
-        ((std::vector<HWND>*)lParam)->push_back(hwnd);
-    }
-    return TRUE;
-}
-
-void ClearOne(WindowState* state, HWND list) {
-    LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-    bool added = !(ex & WS_EX_LAYERED);
-    if (added) {
-        SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED);
-    }
-    BOOL ok = SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
-    DWORD error = ok ? 0 : GetLastError();
-    bool known = false;
-    for (auto& entry : state->cleared) {
-        if (entry.first == list) {
-            entry.second = entry.second || added;
-            known = true;
-        }
-    }
-    if (!known) {
-        state->cleared.emplace_back(list, added);
-    }
-    Out(L"the native file list is made transparent (window %p, %s, result %d, error %lu)",
-        list, ClassNameOf(list).c_str(), ok ? 1 : 0, error);
-}
-
-// Every visible view window of this window is made transparent, and one that
-// something else made visible again is cleared again.
-void ClearNativeLists(WindowState* state) {
-    std::vector<HWND> views;
-    EnumChildWindows(state->topLevel, CollectViewsProc, (LPARAM)&views);
-    for (HWND view : views) {
-        bool known = false;
-        for (auto& entry : state->cleared) {
-            known = known || entry.first == view;
-        }
-        if (!known) {
-            ClearOne(state, view);
-            continue;
-        }
-        // The style or the alpha can be put back by Explorer, or by a mod that
-        // fades the view in when the layout changes.
-        BYTE alpha = 255;
-        DWORD flags = 0;
-        bool intact = (GetWindowLongPtrW(view, GWL_EXSTYLE) & WS_EX_LAYERED) &&
-                      GetLayeredWindowAttributes(view, nullptr, &alpha, &flags) &&
-                      (flags & LWA_ALPHA) && alpha == 0;
-        if (!intact) {
-            Out(L"the native list %p was made visible again by something else (alpha %d), clearing it again",
-                view, (int)alpha);
-            ClearOne(state, view);
-        }
-    }
-    // Windows that are gone are forgotten.
-    for (size_t i = 0; i < state->cleared.size();) {
-        if (!IsWindow(state->cleared[i].first)) {
-            state->cleared.erase(state->cleared.begin() + i);
-        } else {
-            i++;
-        }
-    }
-}
-
-void RestoreNativeList(WindowState* state) {
-    auto cleared = std::move(state->cleared);
-    state->cleared.clear();
-    for (auto& entry : cleared) {
-        HWND list = entry.first;
-        if (!list || !IsWindow(list)) {
-            continue;
-        }
-        SetLayeredWindowAttributes(list, 0, 255, LWA_ALPHA);
-        if (entry.second) {
-            LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-            SetWindowLongPtrW(list, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED);
-        }
-        RedrawWindow(list, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    }
-    if (!cleared.empty()) {
-        Out(L"the native file list is visible again");
-    }
-}
-
 // The panel's background, as the setting says.
 mux::Media::SolidColorBrush PanelBackground(HWND fileList, bool dark) {
     int mode = g_backgroundMode;
-    if (mode == 2) {
-        Out(L"panel background: transparent (test)");
-        return Brush(0, 0, 0, 0);
-    }
     COLORREF sampled = mode == 0 ? SampleListBackground(fileList) : CLR_INVALID;
     Out(L"panel background: %s",
         mode == 1            ? L"the theme colour, by setting"

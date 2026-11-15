@@ -23,6 +23,15 @@ struct SettingsUi {
     muxc::ScrollViewer content{nullptr};
     int page = 0;
     int navCount = 0;  // The pages in the sidebar.
+    // Narrow window: the sidebar is a rail of icons, opened over the page by its button.
+    muxc::ColumnDefinition sidebarColumn{nullptr};
+    muxc::Grid navHost{nullptr};
+    muxc::Button navToggle{nullptr};
+    mux::Media::Brush overlayBrush{nullptr};
+    std::vector<muxc::TextBlock> navLabels;
+    std::vector<std::wstring> navNames;
+    bool compact = false;
+    bool expanded = false;
     bool abandon = false;  // Let the XAML objects go without releasing them.
 };
 
@@ -506,44 +515,9 @@ mux::UIElement BuildColumnsPage() {
     return page;
 }
 
-// A feature that is planned: what it is for, and a note that it is not built.
-mux::UIElement BuildComingSoonPage(const FeatureInfo& feature) {
-    muxc::StackPanel page;
-    page.Spacing(8);
-    page.Children().Append(MakePageHeader(feature.name, feature.summary));
-    {
-        auto card = MakeCard();
-        muxc::StackPanel lines;
-        lines.Spacing(2);
-        lines.Children().Append(MakeText(Str(L"soon.title"), 14, true, false));
-        lines.Children().Append(MakeText(Str(L"soon.body"), 13, false, true));
-        card.Child(lines);
-        page.Children().Append(card);
-    }
-    auto title = MakeText(Str(L"soon.planned"), 14, true, false);
-    title.Margin(mux::Thickness{0, 12, 0, 0});
-    page.Children().Append(title);
-    auto card = MakeCard();
-    muxc::StackPanel items;
-    items.Spacing(8);
-    std::wstring planned = feature.planned;
-    size_t at = 0;
-    while (at <= planned.size() && !planned.empty()) {
-        size_t end = planned.find(L'|', at);
-        items.Children().Append(MakeText(planned.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at), 13, false, false));
-        if (end == std::wstring::npos) {
-            break;
-        }
-        at = end + 1;
-    }
-    card.Child(items);
-    page.Children().Append(card);
-    return page;
-}
-
-// Home and Columns, then the planned features when the flag asks for them.
+// Explorer Extras (the overview) and Columns. A feature gets its page when it is built.
 int SettingsPageCount() {
-    return 2 + (SettingBool(L"showUpcoming") ? (int)kFeatureCount : 0);
+    return 2;
 }
 
 void ShowSettingsPage(SettingsUi* ui, int page) {
@@ -551,9 +525,7 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
     g_settingsBuilding = true;
     mux::UIElement content{nullptr};
     try {
-        content = page == 0 ? BuildHomePage()
-                  : page == 1 ? BuildColumnsPage()
-                  : page - 2 < (int)kFeatureCount ? BuildComingSoonPage(kFeatures[page - 2]) : BuildHomePage();
+        content = page == 1 ? BuildColumnsPage() : BuildHomePage();
     } catch (...) {
         g_settingsBuilding = false;
         throw;
@@ -564,9 +536,13 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
 }
 
 // The sidebar: its pages, as the flag has them.
+void ApplyNavMode(SettingsUi* ui);
+
 void FillNav(SettingsUi* ui) {
     auto items = ui->nav.Items();
     items.Clear();
+    ui->navLabels.clear();
+    ui->navNames.clear();
     int count = SettingsPageCount();
     for (int i = 0; i < count; i++) {
         muxc::ListViewItem item;
@@ -582,14 +558,16 @@ void FillNav(SettingsUi* ui) {
         } else {
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-            icon.Glyph(i == 0 ? L"" : kFeatures[i - 2].glyph);
+            icon.Glyph(L"");
             icon.FontSize(16);
             line.Children().Append(icon);
-            name = i == 0 ? Str(L"page.home") : kFeatures[i - 2].name;
+            name = Str(L"page.home");
         }
         auto label = MakeText(name, 14, false, false);
         label.VerticalAlignment(mux::VerticalAlignment::Center);
         line.Children().Append(label);
+        ui->navLabels.push_back(label);
+        ui->navNames.push_back(name);
         item.Content(line);
         item.Height(40);
         items.Append(item);
@@ -599,6 +577,39 @@ void FillNav(SettingsUi* ui) {
         ui->page = 0;
     }
     ui->nav.SelectedIndex(ui->page);
+    ApplyNavMode(ui);
+}
+
+// The sidebar's look for the window's width: full names, or a rail of icons (with the names
+// as tooltips) that a button opens over the page.
+void ApplyNavMode(SettingsUi* ui) {
+    if (!ui->navHost || !ui->sidebarColumn) {
+        return;
+    }
+    bool rail = ui->compact && !ui->expanded;
+    ui->sidebarColumn.Width(mux::GridLength{ui->compact ? 56.0 : 248.0, mux::GridUnitType::Pixel});
+    ui->navHost.Width(rail ? 56.0 : 248.0);
+    // Opened over the page, the sidebar spans both columns: a child wider than its cell is clipped to it.
+    muxc::Grid::SetColumnSpan(ui->navHost, ui->compact && ui->expanded ? 2 : 1);
+    ui->navHost.Background(ui->compact && ui->expanded ? ui->overlayBrush : mux::Media::Brush{nullptr});
+    ui->navToggle.Visibility(ui->compact ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    for (auto const& label : ui->navLabels) {
+        label.Visibility(rail ? mux::Visibility::Collapsed : mux::Visibility::Visible);
+    }
+    // A rail item holds only its icon, centred in the item with no side padding, so nothing is cut.
+    ui->nav.Margin(rail ? mux::Thickness{4, 8, 4, 8} : mux::Thickness{8, 8, 8, 8});
+    muxc::ScrollViewer::SetHorizontalScrollBarVisibility(ui->nav, muxc::ScrollBarVisibility::Disabled);
+    auto items = ui->nav.Items();
+    for (uint32_t i = 0; i < items.Size() && i < ui->navNames.size(); i++) {
+        if (auto item = items.GetAt(i).try_as<muxc::ListViewItem>()) {
+            item.MinWidth(0);  // A list item is 88 wide at least, which is wider than the rail.
+            item.Padding(rail ? mux::Thickness{0, 0, 0, 0} : mux::Thickness{12, 0, 12, 0});
+            item.HorizontalContentAlignment(rail ? mux::HorizontalAlignment::Center : mux::HorizontalAlignment::Left);
+            muxc::ToolTipService::SetToolTip(item, rail ? winrt::box_value(winrt::hstring{ui->navNames[i]})
+                                                        : Inspectable{nullptr});
+        }
+    }
+    ui->content.Padding(ui->compact ? mux::Thickness{16, 16, 16, 24} : mux::Thickness{32, 24, 32, 32});
 }
 
 
@@ -744,6 +755,11 @@ void DestroySettingsUi(bool abandon) {
     try {
         ui->nav = nullptr;
         ui->content = nullptr;
+        ui->navHost = nullptr;
+        ui->navToggle = nullptr;
+        ui->sidebarColumn = nullptr;
+        ui->overlayBrush = nullptr;
+        ui->navLabels.clear();
         if (ui->source) {
             ui->source.Content(nullptr);
             ui->source.Close();
@@ -775,7 +791,7 @@ LRESULT CALLBACK SettingsWindowProc(HWND window, UINT message, WPARAM wparam, LP
         case WM_GETMINMAXINFO: {
             auto* limits = (MINMAXINFO*)lparam;
             UINT dpi = GetDpiForWindow(window);
-            limits->ptMinTrackSize.x = MulDiv(760, dpi, 96);
+            limits->ptMinTrackSize.x = MulDiv(440, dpi, 96);
             limits->ptMinTrackSize.y = MulDiv(520, dpi, 96);
             return 0;
         }
@@ -904,13 +920,52 @@ void OpenSettingsWindow(WindowState* state) {
         root.ColumnDefinitions().Append(sidebarColumn);
         root.ColumnDefinitions().Append(pageColumn);
         ui->root = root;
+        ui->sidebarColumn = sidebarColumn;
 
         muxc::ListView nav;
-        nav.Margin(mux::Thickness{8, 16, 8, 8});
+        nav.Margin(mux::Thickness{8, 8, 8, 8});
         nav.SelectionMode(muxc::ListViewSelectionMode::Single);
-        muxc::Grid::SetColumn(nav, 0);
-        root.Children().Append(nav);
         ui->nav = nav;
+
+        // The sidebar sits in a host that can be wider than its column: on a narrow window it
+        // is a rail of icons, and the button at its top opens it over the page.
+        auto host = LoadXaml(std::wstring(L"<Grid ") + kXamlNs +
+                             L" HorizontalAlignment='Left' Background='{ThemeResource SolidBackgroundFillColorSecondaryBrush}'>"
+                             L"<Grid.RowDefinitions><RowDefinition Height='Auto'/><RowDefinition Height='*'/></Grid.RowDefinitions>"
+                             L"</Grid>")
+                        .as<muxc::Grid>();
+        ui->overlayBrush = host.Background();
+        host.Background(nullptr);
+        muxc::Button toggle;
+        toggle.Margin(mux::Thickness{8, 12, 8, 0});
+        toggle.Width(40);
+        toggle.Height(36);
+        toggle.Padding(mux::Thickness{0, 0, 0, 0});
+        toggle.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+        toggle.BorderThickness(mux::Thickness{0, 0, 0, 0});
+        muxc::FontIcon bars;
+        bars.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+        bars.Glyph(L"\uE700");
+        bars.FontSize(16);
+        toggle.Content(bars);
+        toggle.Visibility(mux::Visibility::Collapsed);
+        muxc::ToolTipService::SetToolTip(toggle, winrt::box_value(winrt::hstring{L"Menu"}));
+        muxc::Grid::SetRow(toggle, 0);
+        muxc::Grid::SetRow(nav, 1);
+        host.Children().Append(toggle);
+        host.Children().Append(nav);
+        muxc::Grid::SetColumn(host, 0);
+        muxc::Canvas::SetZIndex(host, 10);
+        root.Children().Append(host);
+        ui->navHost = host;
+        ui->navToggle = toggle;
+        toggle.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+            SettingsUi* now = g_settingsUi;
+            if (now) {
+                now->expanded = !now->expanded;
+                ApplyNavMode(now);
+            }
+        });
 
         muxc::ScrollViewer content;
         content.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
@@ -918,6 +973,30 @@ void OpenSettingsWindow(WindowState* state) {
         muxc::Grid::SetColumn(content, 1);
         root.Children().Append(content);
         ui->content = content;
+        // A press on the page closes the sidebar that was opened over it.
+        content.AddHandler(mux::UIElement::PointerPressedEvent(),
+                           winrt::box_value(mux::Input::PointerEventHandler(
+                               [](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+                                   SettingsUi* now = g_settingsUi;
+                                   if (now && now->compact && now->expanded) {
+                                       now->expanded = false;
+                                       ApplyNavMode(now);
+                                   }
+                               })),
+                           true);
+        // The width decides: below 760 px the sidebar is a rail.
+        root.SizeChanged([](Inspectable const&, mux::SizeChangedEventArgs const& sizeArgs) {
+            SettingsUi* now = g_settingsUi;
+            if (!now) {
+                return;
+            }
+            bool narrow = sizeArgs.NewSize().Width < 760;
+            if (narrow != now->compact) {
+                now->compact = narrow;
+                now->expanded = false;
+                ApplyNavMode(now);
+            }
+        });
 
         nav.SelectionChanged([](Inspectable const&, muxc::SelectionChangedEventArgs const&) {
             SettingsUi* now = g_settingsUi;
@@ -925,6 +1004,10 @@ void OpenSettingsWindow(WindowState* state) {
                 int selected = now->nav.SelectedIndex();
                 if (selected >= 0 && selected != now->page) {
                     ShowSettingsPage(now, selected);
+                }
+                if (now->compact && now->expanded) {
+                    now->expanded = false;
+                    ApplyNavMode(now);
                 }
             }
         });

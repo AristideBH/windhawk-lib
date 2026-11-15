@@ -31,12 +31,12 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_focusRect = SettingBool(L"focusRect");
-    g_compactScroll = SettingBool(L"compactScrollbars");
+    g_compactScroll = true;
     g_doubleClickUp = SettingBool(L"doubleClickUp");
     g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
-    g_archives = SettingBool(L"archives");
-    g_dragOut = SettingBool(L"dragOut");
+    g_archives = true;
+    g_dragOut = true;
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_springLoad = SettingBool(L"springLoad");
@@ -47,14 +47,14 @@ void LoadSettings() {
     g_desktopRealOnly = SettingBool(L"desktopRealOnly");
     {
         std::wstring mode = SettingText(L"background");
-        g_backgroundMode = mode == L"theme" ? 1 : mode == L"transparent" ? 2 : 0;
+        g_backgroundMode = mode == L"theme" ? 1 : 0;
     }
     g_styleVersion++;
     int minWidth = SettingInt(L"minWidth");
     int maxWidth = std::max(SettingInt(L"maxWidth"), minWidth);
     g_minWidth = minWidth;
     g_maxWidth = maxWidth;
-    g_follow = SettingBool(L"followActiveColumn");
+    g_follow = true;
     g_maxItems = SettingInt(L"maxItems");
     g_debugLog = SettingBool(L"debugLog");
 }
@@ -71,7 +71,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.35.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.36.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

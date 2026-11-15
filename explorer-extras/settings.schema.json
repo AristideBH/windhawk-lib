@@ -17,8 +17,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Enabled",
-      "description": "Adds the Columns entry to the View menu. Off removes it.",
+      "name": "Enable Columns",
+      "description": "Adds Columns to the View menu. Off removes it.",
       "page": "home",
       "card": "feature"
     },
@@ -28,7 +28,7 @@
       "type": "bool",
       "default": true,
       "name": "Open new windows in Columns",
-      "description": "When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.",
+      "description": "New Explorer windows open in Columns if it was your last layout. Picking another layout turns this off.",
       "page": "columns",
       "card": "behaviour",
       "needs": "now"
@@ -38,8 +38,8 @@
       "group": "columns",
       "type": "bool",
       "default": false,
-      "name": "Desktop column shows only real items",
-      "description": "Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.",
+      "name": "Desktop column shows real items only",
+      "description": "Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.",
       "page": "columns",
       "card": "content",
       "needs": "rebuild"
@@ -49,8 +49,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Mark cloud, network and device items",
-      "description": "A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.",
+      "name": "Mark remote items",
+      "description": "Shows a small icon on cloud-only files and on items on a network or a phone.",
       "page": "columns",
       "card": "content",
       "needs": "rebuild"
@@ -60,8 +60,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Remember sort and group per folder",
-      "description": "Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder.",
+      "name": "Remember sort and grouping",
+      "description": "Each folder keeps its own sort and grouping. When off, every column uses the first folder’s.",
       "page": "columns",
       "card": "dragmemory",
       "needs": "now"
@@ -71,8 +71,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Remember column width per folder",
-      "description": "A column dragged to a width reopens at that width the next time the folder is shown.",
+      "name": "Remember column widths",
+      "description": "A column you resize reopens at that width.",
       "page": "columns",
       "card": "dragmemory",
       "needs": "now"
@@ -83,7 +83,7 @@
       "type": "bool",
       "default": true,
       "name": "Remember Columns per folder",
-      "description": "Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.",
+      "description": "Each folder remembers whether it was left in Columns. Opening it turns Columns on or off to match.",
       "page": "columns",
       "card": "dragmemory",
       "needs": "now"
@@ -93,8 +93,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Open a folder you hover on while dragging",
-      "description": "Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.",
+      "name": "Open folders while dragging",
+      "description": "Hold dragged items on a folder for about 0.7 s to open it in the next column.",
       "page": "columns",
       "card": "dragmemory",
       "needs": "now"
@@ -104,8 +104,8 @@
       "group": "columns",
       "type": "bool",
       "default": false,
-      "name": "Show a border after the last column",
-      "description": "The last column has no separator line on its right, so the columns end cleanly against the window. Switch it on to draw that line too.",
+      "name": "Border after the last column",
+      "description": "Draws a separator line on the right of the last column.",
       "page": "columns",
       "card": "layout",
       "needs": "rebuild"
@@ -115,8 +115,8 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Shift and double-click a border to even the widths",
-      "description": "Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.",
+      "name": "Shift + double-click to even widths",
+      "description": "Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.",
       "page": "columns",
       "card": "layout",
       "needs": "rebuild"
@@ -126,33 +126,11 @@
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Keep the columns after a file is chosen",
-      "description": "When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.",
+      "name": "Keep columns after choosing a file",
+      "description": "Columns to the right stay, dimmed, when you choose a file or several items. Off closes them.",
       "page": "columns",
       "card": "behaviour",
       "needs": "now"
-    },
-    {
-      "id": "dragOut",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Drag items out of the panel",
-      "description": "Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.",
-      "page": "columns",
-      "card": "dragmemory",
-      "needs": "now"
-    },
-    {
-      "id": "archives",
-      "group": "columns",
-      "type": "bool",
-      "default": false,
-      "name": "Browse archives in columns",
-      "description": "A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.",
-      "page": "columns",
-      "card": "content",
-      "needs": "rebuild"
     },
     {
       "id": "headerKeyboard",
@@ -160,7 +138,7 @@
       "type": "bool",
       "default": false,
       "name": "Keyboard on group headers",
-      "description": "Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.",
+      "description": "Arrow keys reach group headers. Left, Right and Enter collapse and expand them.",
       "page": "columns",
       "card": "behaviour",
       "needs": "now"
@@ -170,30 +148,19 @@
       "group": "columns",
       "type": "bool",
       "default": false,
-      "name": "Double-click on empty space goes up",
-      "description": "A double-click on the empty space of a column goes up one folder, as in the \"Explorer double-click up\" mod. In the first column the parent folder is added in front.",
+      "name": "Double-click empty space to go up",
+      "description": "Goes up one folder. In the first column, the parent folder is added in front.",
       "page": "columns",
       "card": "behaviour",
       "needs": "now"
-    },
-    {
-      "id": "compactScrollbars",
-      "group": "columns",
-      "type": "bool",
-      "default": false,
-      "name": "Compact scrollbars",
-      "description": "Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
     },
     {
       "id": "focusRect",
       "group": "columns",
       "type": "bool",
       "default": true,
-      "name": "Show the focus outline on the active item",
-      "description": "The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.",
+      "name": "Show the focus outline",
+      "description": "Draws an outline around the item under the keyboard cursor. The selection highlight always shows.",
       "page": "columns",
       "card": "layout",
       "needs": "rebuild"
@@ -206,19 +173,15 @@
       "options": [
         {
           "value": "explorer",
-          "label": "Explorer's file list colour"
+          "label": "Explorer colour"
         },
         {
           "value": "theme",
           "label": "Theme colour"
-        },
-        {
-          "value": "transparent",
-          "label": "Transparent (test)"
         }
       ],
       "name": "Panel background",
-      "description": "Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.",
+      "description": "Explorer uses its own file list colour. Theme uses the standard dark or light colour.",
       "page": "columns",
       "card": "layout",
       "needs": "rebuild"
@@ -229,7 +192,7 @@
       "type": "bool",
       "default": false,
       "name": "Sidebar sets the first column",
-      "description": "A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.",
+      "description": "Clicking Home, Gallery, OneDrive or a pinned folder makes it the first column. The tree (This PC, drives, Network) still follows the columns.",
       "page": "columns",
       "card": "behaviour",
       "needs": "now"
@@ -254,21 +217,10 @@
       "min": 80,
       "max": 1200,
       "name": "Maximum column width",
-      "description": "Columns fit their longest name up to this width. Longer names are cut in the middle.",
+      "description": "Columns fit their longest name up to this width. Longer names are shortened.",
       "page": "columns",
       "card": "layout",
       "needs": "rebuild"
-    },
-    {
-      "id": "followActiveColumn",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Explorer follows the active column",
-      "description": "Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
     },
     {
       "id": "maxItems",
@@ -286,18 +238,9 @@
       "id": "debugLog",
       "group": null,
       "type": "bool",
-      "default": true,
-      "name": "Write a debug log",
-      "description": "Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
-      "windhawkOnly": true
-    },
-    {
-      "id": "showUpcoming",
-      "group": null,
-      "type": "bool",
       "default": false,
-      "name": "Show upcoming features in the settings window",
-      "description": "Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.",
+      "name": "Write a debug log",
+      "description": "Writes Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if it exists.",
       "windhawkOnly": true
     }
   ],
@@ -307,74 +250,6 @@
     "Drag rows to another window, the desktop, the navigation pane or the tab strip. Hold them on a folder to open it.",
     "Archives can be dragged out of, and a phone’s folders and OneDrive syncing show their own marks.",
     "The toolbar’s Select all, Invert selection and Select none reach the columns."
-  ],
-  "features": [
-    {
-      "id": "desktop",
-      "name": "Desktop",
-      "glyph": "\uE7F4",
-      "summary": "Options for the desktop and its icons.",
-      "planned": [
-        "Group icons into stacks",
-        "Keep icons where you put them, on every display",
-        "Quick actions on the desktop’s own menu"
-      ]
-    },
-    {
-      "id": "home",
-      "name": "Home",
-      "glyph": "\uE80F",
-      "summary": "File Explorer’s Home page, made your own.",
-      "planned": [
-        "Choose and order the sections of Home",
-        "Pin folders and files to Home",
-        "A quieter look for Quick access and Recent"
-      ]
-    },
-    {
-      "id": "labels",
-      "name": "Labels",
-      "glyph": "",
-      "summary": "Colour labels and tags on files and folders, as on macOS.",
-      "planned": [
-        "Colour labels shown on rows and in the details",
-        "Set from the right-click menu and the keyboard",
-        "Filter and group by label"
-      ]
-    },
-    {
-      "id": "sidebar",
-      "name": "Sidebar",
-      "glyph": "",
-      "summary": "A rebuilt navigation pane.",
-      "planned": [
-        "Pinned and recent folders in one place",
-        "Sections of your own",
-        "Drag a folder to pin it"
-      ]
-    },
-    {
-      "id": "preview",
-      "name": "Preview panel",
-      "glyph": "",
-      "summary": "The preview and details panes, redone.",
-      "planned": [
-        "Preview and details together in one pane",
-        "Quicker switching between items",
-        "More properties, chosen by you"
-      ]
-    },
-    {
-      "id": "statusbar",
-      "name": "Status bar",
-      "glyph": "",
-      "summary": "Options for the status bar and the info bar.",
-      "planned": [
-        "Choose what the status bar shows",
-        "Selection size and count at a glance",
-        "A quieter look"
-      ]
-    }
   ],
   "strings": {
     "window.title": "Explorer Extras",
@@ -408,9 +283,6 @@
     "action.reset.detail": "Every setting goes back to what Windhawk’s page for the mod says.",
     "columns.title": "Columns",
     "columns.subtitle": "A Columns layout in the View menu: Miller columns drawn with Explorer’s own controls.",
-    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values.",
-    "soon.title": "Coming soon",
-    "soon.body": "This feature is not built yet. Its switch and its settings will appear on this page when it is.",
-    "soon.planned": "Planned"
+    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values."
   }
 }

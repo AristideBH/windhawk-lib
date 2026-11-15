@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#f3f3f3"/><rect x="24" y="24" width="1232" height="672" rx="12" fill="none" stroke="#999" stroke-width="3" stroke-dasharray="14 10"/>
+<text x="640" y="340" font-family="Segoe UI, sans-serif" font-size="44" font-weight="600" text-anchor="middle" fill="#333">Touch</text>
+<text x="640" y="390" font-family="Segoe UI, sans-serif" font-size="26" text-anchor="middle" fill="#666">Press and hold, drag and rubber band</text>
+<text x="640" y="440" font-family="Segoe UI, sans-serif" font-size="20" text-anchor="middle" fill="#999">Placeholder, replace with assets/captures/touch.png</text>
+</svg>

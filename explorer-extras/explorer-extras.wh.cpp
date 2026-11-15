@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.35.5
+// @description     A Columns layout for File Explorer: Miller columns in the View menu, with drag and drop, a restyled context menu, touch support and per-folder memory.
+// @version         0.36.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -15,46 +15,24 @@
 /*
 # Explorer Extras
 
-Optional additions to File Explorer. Each one has its own settings section
-and can be switched off, in which case it leaves no trace.
+Optional additions to File Explorer. Each one has its own settings page and can be switched off, in which case it leaves no trace. Open the settings window from **Extras** at the bottom of the toolbar's ... menu, or from the View menu.
 
 ## Columns
 
-Adds a **Columns** entry to File Explorer's View menu, next to Details and
-List. It shows the folder as Miller columns: click a folder and its content
-opens in the next column.
+Adds a **Columns** entry to File Explorer's View menu, next to Details and List. The folder is shown as Miller columns: click a folder and its content opens in the next column. The columns are WinUI 3 controls hosted in the Explorer window, so they use Explorer's own styles. The mod needs no symbol file from Microsoft for System32 modules, so it keeps working right after a Windows update.
 
-The columns are WinUI 3 controls hosted in the Explorer window, so they use
-Explorer's own styles. The mod needs no symbol file from Microsoft for
-System32 modules, so it keeps working right after a Windows update.
+- **Native behaviour.** Explorer's own view follows the active column, so the address bar, tab title, toolbar, details pane, preview pane and status bar act on the selection. Sort and group, file icons, thumbnails and cloud marks come from the shell.
+- **Context menu.** A restyled menu: a row of quick actions, the usual commands, and "Show more options" for the full shell menu. Submenus open on hover. Archives get Extract and Compress entries.
+- **Keyboard and selection.** Arrow keys, type to jump, Enter, Backspace, F2 (also for several items), Delete, Ctrl+C, X, V, Z, Y, Ctrl+Shift+N for a new folder, and a rubber band to select. Ctrl+Z takes back a delete, a rename or a new folder.
+- **Drag and drop.** Between columns, to the navigation pane, other windows, tabs, the desktop and other apps, and into the columns from them. Hold items on a folder to open it. Ctrl copies, Shift moves, Alt makes a shortcut.
+- **Touch.** Tap, press and hold, drag and drop, and a rubber band by touch.
+- **Tabs.** Each tab keeps its own columns. Middle click on a folder opens it in a new tab.
+- **Memory.** Each folder remembers its sort, group, column widths and whether it is shown in Columns.
+- **Widths.** Drag a border to resize a column, double-click to fit the names, Shift and double-click to give every column the same width.
+- **Archives.** Zip, 7z, rar and tar files open as folders in the next column.
+- **Settings window.** Every setting applies at once. It has a sidebar of pages that turns into an icon rail in a narrow window.
 
-In 0.2:
-
-- Sort and group come from the folder where you turned Columns on, and apply
-  to every column. Pick something in the Sort menu and every column follows.
-  The mod never changes a folder's saved view.
-- Group headers use Explorer's own names.
-- Selecting a file selects it in Explorer's own view too, so the preview
-  pane, the details pane, the status bar and the command bar act on it.
-- Columns fit their longest name, between a minimum and a maximum width. Long
-  names are cut in the middle. Drag a column's right edge to resize it,
-  double-click the edge to refit.
-- Folders load on a background thread.
-- Hidden files and compact view follow Explorer's own settings.
-
-In 0.3 the Columns entry is in the View menu as soon as a window opens, with
-no click on the command bar needed. When Columns was the last layout you
-chose, new windows open in it, also after Explorer restarts. Turn this off
-with "Open new windows in Columns".
-
-Also in 0.3: real file icons and thumbnails, read on a background thread (a
-glyph shows until each icon arrives), and a right-click menu that shows the
-shell's own commands for the item as a flyout.
-
-Also in 0.3: select several items with Ctrl and Shift, and type a few
-letters to jump to a name.
-
-Not yet: drag and drop.
+Tested on Windows 11 24H2 on ARM64. The x86-64 build compiles but has not been run. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
 */
 // ==/WindhawkModReadme==
 
@@ -62,83 +40,67 @@ Not yet: drag and drop.
 /*
 - columns:
   - enabled: true
-    $name: Enabled
-    $description: Adds the Columns entry to the View menu. Off removes it.
+    $name: Enable Columns
+    $description: Adds Columns to the View menu. Off removes it.
   - restoreOnOpen: true
     $name: Open new windows in Columns
-    $description: When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.
+    $description: New Explorer windows open in Columns if it was your last layout. Picking another layout turns this off.
   - desktopRealOnly: false
-    $name: Desktop column shows only real items
-    $description: Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.
+    $name: Desktop column shows real items only
+    $description: Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.
   - remoteMarks: true
-    $name: Mark cloud, network and device items
-    $description: A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.
+    $name: Mark remote items
+    $description: Shows a small icon on cloud-only files and on items on a network or a phone.
   - rememberSort: true
-    $name: Remember sort and group per folder
-    $description: Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder.
+    $name: Remember sort and grouping
+    $description: Each folder keeps its own sort and grouping. When off, every column uses the first folder’s.
   - rememberWidth: true
-    $name: Remember column width per folder
-    $description: A column dragged to a width reopens at that width the next time the folder is shown.
+    $name: Remember column widths
+    $description: A column you resize reopens at that width.
   - rememberLayout: true
     $name: Remember Columns per folder
-    $description: Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.
+    $description: Each folder remembers whether it was left in Columns. Opening it turns Columns on or off to match.
   - springLoad: true
-    $name: Open a folder you hover on while dragging
-    $description: Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.
+    $name: Open folders while dragging
+    $description: Hold dragged items on a folder for about 0.7 s to open it in the next column.
   - lastEdge: false
-    $name: Show a border after the last column
-    $description: The last column has no separator line on its right, so the columns end cleanly against the window. Switch it on to draw that line too.
+    $name: Border after the last column
+    $description: Draws a separator line on the right of the last column.
   - harmonizeWidths: true
-    $name: Shift and double-click a border to even the widths
-    $description: Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.
+    $name: Shift + double-click to even widths
+    $description: Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.
   - keepStale: true
-    $name: Keep the columns after a file is chosen
-    $description: When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.
-  - dragOut: true
-    $name: Drag items out of the panel
-    $description: Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.
-  - archives: false
-    $name: Browse archives in columns
-    $description: A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.
+    $name: Keep columns after choosing a file
+    $description: Columns to the right stay, dimmed, when you choose a file or several items. Off closes them.
   - headerKeyboard: false
     $name: Keyboard on group headers
-    $description: Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.
+    $description: Arrow keys reach group headers. Left, Right and Enter collapse and expand them.
   - doubleClickUp: false
-    $name: Double-click on empty space goes up
-    $description: A double-click on the empty space of a column goes up one folder, as in the "Explorer double-click up" mod. In the first column the parent folder is added in front.
-  - compactScrollbars: false
-    $name: Compact scrollbars
-    $description: Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.
+    $name: Double-click empty space to go up
+    $description: Goes up one folder. In the first column, the parent folder is added in front.
   - focusRect: true
-    $name: Show the focus outline on the active item
-    $description: The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.
+    $name: Show the focus outline
+    $description: Draws an outline around the item under the keyboard cursor. The selection highlight always shows.
   - background: explorer
     $name: Panel background
-    $description: Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.
+    $description: Explorer uses its own file list colour. Theme uses the standard dark or light colour.
     $options:
-    - explorer: Explorer's file list colour
+    - explorer: Explorer colour
     - theme: Theme colour
-    - transparent: Transparent (test)
   - sidebarRoot: false
     $name: Sidebar sets the first column
-    $description: A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.
+    $description: Clicking Home, Gallery, OneDrive or a pinned folder makes it the first column. The tree (This PC, drives, Network) still follows the columns.
   - minWidth: 160
     $name: Minimum column width
   - maxWidth: 420
     $name: Maximum column width
-    $description: Columns fit their longest name up to this width. Longer names are cut in the middle.
-  - followActiveColumn: true
-    $name: Explorer follows the active column
-    $description: Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.
+    $description: Columns fit their longest name up to this width. Longer names are shortened.
   - maxItems: 5000
     $name: Maximum items per column
   $name: Columns
-- debugLog: true
+- debugLog: false
   $name: Write a debug log
-  $description: Writes to Code\windhawk-lib\probes\logs\explorer-extras.log in your user folder, if that folder exists.
-- showUpcoming: false
-  $name: Show upcoming features in the settings window
-  $description: Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.
+  $description: Writes Code\windhawk-lib\probes\logs\explorer-extras.log in your user folder, if it exists.
 */
 // ==/WindhawkModSettings==
 
@@ -208,18 +170,18 @@ namespace mud = winrt::Microsoft::UI::Dispatching;
 namespace {
 
 std::atomic<bool> g_unloading{false};
-std::atomic<bool> g_debugLog{true};
+std::atomic<bool> g_debugLog{false};
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
-std::atomic<bool> g_compactScroll{false};
+std::atomic<bool> g_compactScroll{true};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_lastEdge{false};
 std::atomic<bool> g_headerKeyboard{false};
-std::atomic<bool> g_archives{false};
-std::atomic<bool> g_dragOut{false};
+std::atomic<bool> g_archives{true};
+std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_harmonize{true};
 std::atomic<bool> g_springLoad{true};
@@ -228,7 +190,7 @@ std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
 std::atomic<bool> g_remoteMarks{true};
 std::atomic<bool> g_desktopRealOnly{false};
-std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme, 2 transparent
+std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme
 std::atomic<int> g_styleVersion{0};
 std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
@@ -531,15 +493,6 @@ struct SettingCard {
     const wchar_t* name;
 };
 
-// A feature that is planned and not built: a placeholder page in the settings window.
-struct FeatureInfo {
-    const wchar_t* id;
-    const wchar_t* name;
-    const wchar_t* glyph;     // Segoe Fluent Icons.
-    const wchar_t* summary;
-    const wchar_t* planned;   // Lines joined by '|'.
-};
-
 // A text of the mod's own windows and menus, by id. English now; the table is where
 // translations will come in.
 struct StringInfo {
@@ -549,80 +502,68 @@ struct StringInfo {
 
 constexpr SettingInfo kSettings[] = {
     {L"enabled", L"columns.enabled", SettingKind::Bool, 1, L"", 0, 0,
-     L"Enabled",
-     L"Adds the Columns entry to the View menu. Off removes it.",
+     L"Enable Columns",
+     L"Adds Columns to the View menu. Off removes it.",
      L"home", L"feature", false, L"", false},
     {L"restoreOnOpen", L"columns.restoreOnOpen", SettingKind::Bool, 1, L"", 0, 0,
      L"Open new windows in Columns",
-     L"When the last layout you chose was Columns, a new Explorer window opens in Columns too. Choosing any other layout in the View menu turns this off.",
+     L"New Explorer windows open in Columns if it was your last layout. Picking another layout turns this off.",
      L"columns", L"behaviour", false, L"", false},
     {L"desktopRealOnly", L"columns.desktopRealOnly", SettingKind::Bool, 0, L"", 0, 0,
-     L"Desktop column shows only real items",
-     L"Hides the virtual items of the Desktop column (This PC, Recycle Bin, Control Panel, Libraries and so on) and keeps the files, folders and shortcuts that are on the Desktop.",
+     L"Desktop column shows real items only",
+     L"Hides virtual items (This PC, Recycle Bin, Control Panel\u2026) from the Desktop column.",
      L"columns", L"content", false, L"", true},
     {L"remoteMarks", L"columns.remoteMarks", SettingKind::Bool, 1, L"", 0, 0,
-     L"Mark cloud, network and device items",
-     L"A small glyph at the end of a row for a cloud file that is not downloaded, an item on a network location, or an item on a phone or camera.",
+     L"Mark remote items",
+     L"Shows a small icon on cloud-only files and on items on a network or a phone.",
      L"columns", L"content", false, L"", true},
     {L"rememberSort", L"columns.rememberSort", SettingKind::Bool, 1, L"", 0, 0,
-     L"Remember sort and group per folder",
-     L"Each column keeps its own sort and group, taken from Explorer's view of that folder, and shows it again next time. When off, all columns share the sort of the first folder.",
+     L"Remember sort and grouping",
+     L"Each folder keeps its own sort and grouping. When off, every column uses the first folder\u2019s.",
      L"columns", L"dragmemory", false, L"", false},
     {L"rememberWidth", L"columns.rememberWidth", SettingKind::Bool, 1, L"", 0, 0,
-     L"Remember column width per folder",
-     L"A column dragged to a width reopens at that width the next time the folder is shown.",
+     L"Remember column widths",
+     L"A column you resize reopens at that width.",
      L"columns", L"dragmemory", false, L"", false},
     {L"rememberLayout", L"columns.rememberLayout", SettingKind::Bool, 1, L"", 0, 0,
      L"Remember Columns per folder",
-     L"Choosing another layout in a folder, or Columns in it, is remembered for that folder. Going to a folder left in another layout turns Columns off for the tab, and going to a folder shown in Columns turns it on.",
+     L"Each folder remembers whether it was left in Columns. Opening it turns Columns on or off to match.",
      L"columns", L"dragmemory", false, L"", false},
     {L"springLoad", L"columns.springLoad", SettingKind::Bool, 1, L"", 0, 0,
-     L"Open a folder you hover on while dragging",
-     L"Holding dragged items on a folder row for about two thirds of a second opens the folder in the next column, so a drop can go deeper without letting go.",
+     L"Open folders while dragging",
+     L"Hold dragged items on a folder for about 0.7 s to open it in the next column.",
      L"columns", L"dragmemory", false, L"", false},
     {L"lastEdge", L"columns.lastEdge", SettingKind::Bool, 0, L"", 0, 0,
-     L"Show a border after the last column",
-     L"The last column has no separator line on its right, so the columns end cleanly against the window. Switch it on to draw that line too.",
+     L"Border after the last column",
+     L"Draws a separator line on the right of the last column.",
      L"columns", L"layout", false, L"", true},
     {L"harmonizeWidths", L"columns.harmonizeWidths", SettingKind::Bool, 1, L"", 0, 0,
-     L"Shift and double-click a border to even the widths",
-     L"Holding Shift while double-clicking the border of a column sets every column to the average of the widths their names would fit. The widths then stay, as if dragged by hand, until a border is double-clicked on its own.",
+     L"Shift + double-click to even widths",
+     L"Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.",
      L"columns", L"layout", false, L"", true},
     {L"keepStale", L"columns.keepStale", SettingKind::Bool, 1, L"", 0, 0,
-     L"Keep the columns after a file is chosen",
-     L"When a file, several items or nothing is chosen in a column, the columns to its right stay, dimmed, and come back when the folder is chosen again. Switch it off to close them instead.",
+     L"Keep columns after choosing a file",
+     L"Columns to the right stay, dimmed, when you choose a file or several items. Off closes them.",
      L"columns", L"behaviour", false, L"", false},
-    {L"dragOut", L"columns.dragOut", SettingKind::Bool, 1, L"", 0, 0,
-     L"Drag items out of the panel",
-     L"Dragging rows past the edge of the panel starts a real drag, so they can be dropped on the desktop, in another window or in another application. Switch it off if rows should never leave the panel.",
-     L"columns", L"dragmemory", false, L"", false},
-    {L"archives", L"columns.archives", SettingKind::Bool, 0, L"", 0, 0,
-     L"Browse archives in columns",
-     L"A zip, 7z, rar or tar file opens as a folder in the next column, read by the shell's own archive support. Only on local fixed drives, and not above 512 MB. Archives that Windows cannot open as folders stay files.",
-     L"columns", L"content", false, L"", true},
     {L"headerKeyboard", L"columns.headerKeyboard", SettingKind::Bool, 0, L"", 0, 0,
      L"Keyboard on group headers",
-     L"Up from the first item of a group goes to its header, and Left, Right and Enter collapse and open it. Off, the arrow keys only move between items.",
+     L"Arrow keys reach group headers. Left, Right and Enter collapse and expand them.",
      L"columns", L"behaviour", false, L"", false},
     {L"doubleClickUp", L"columns.doubleClickUp", SettingKind::Bool, 0, L"", 0, 0,
-     L"Double-click on empty space goes up",
-     L"A double-click on the empty space of a column goes up one folder, as in the \"Explorer double-click up\" mod. In the first column the parent folder is added in front.",
+     L"Double-click empty space to go up",
+     L"Goes up one folder. In the first column, the parent folder is added in front.",
      L"columns", L"behaviour", false, L"", false},
-    {L"compactScrollbars", L"columns.compactScrollbars", SettingKind::Bool, 0, L"", 0, 0,
-     L"Compact scrollbars",
-     L"Keeps the scrollbars of the columns thin, also when the pointer is over them. They can still be dragged and clicked.",
-     L"columns", L"layout", false, L"", true},
     {L"focusRect", L"columns.focusRect", SettingKind::Bool, 1, L"", 0, 0,
-     L"Show the focus outline on the active item",
-     L"The outline around the item under the keyboard cursor while you navigate with the arrow keys. Off hides it, the selection highlight stays.",
+     L"Show the focus outline",
+     L"Draws an outline around the item under the keyboard cursor. The selection highlight always shows.",
      L"columns", L"layout", false, L"", true},
     {L"background", L"columns.background", SettingKind::Enum, 0, L"explorer", 0, 0,
      L"Panel background",
-     L"Explorer takes the colour of Explorer's own file list. Theme uses the standard dark or light colour. Transparent makes Explorer's own list invisible, not removed, and lets the window's own backdrop show through the panel. Test mode.",
-     L"columns", L"layout", false, L"explorer=Explorer's file list colour|theme=Theme colour|transparent=Transparent (test)", true},
+     L"Explorer uses its own file list colour. Theme uses the standard dark or light colour.",
+     L"columns", L"layout", false, L"explorer=Explorer colour|theme=Theme colour", true},
     {L"sidebarRoot", L"columns.sidebarRoot", SettingKind::Bool, 0, L"", 0, 0,
      L"Sidebar sets the first column",
-     L"A click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes that folder the first column. The expandable tree (This PC, drives, Network) keeps following the columns as before.",
+     L"Clicking Home, Gallery, OneDrive or a pinned folder makes it the first column. The tree (This PC, drives, Network) still follows the columns.",
      L"columns", L"behaviour", false, L"", false},
     {L"minWidth", L"columns.minWidth", SettingKind::Int, 160, L"", 80, 800,
      L"Minimum column width",
@@ -630,23 +571,15 @@ constexpr SettingInfo kSettings[] = {
      L"columns", L"layout", false, L"", true},
     {L"maxWidth", L"columns.maxWidth", SettingKind::Int, 420, L"", 80, 1200,
      L"Maximum column width",
-     L"Columns fit their longest name up to this width. Longer names are cut in the middle.",
+     L"Columns fit their longest name up to this width. Longer names are shortened.",
      L"columns", L"layout", false, L"", true},
-    {L"followActiveColumn", L"columns.followActiveColumn", SettingKind::Bool, 1, L"", 0, 0,
-     L"Explorer follows the active column",
-     L"Explorer's own file list navigates to the folder of the column you are in, so the address bar, Back, the preview pane and the status bar stay in step.",
-     L"columns", L"behaviour", false, L"", false},
     {L"maxItems", L"columns.maxItems", SettingKind::Int, 5000, L"", 50, 20000,
      L"Maximum items per column",
      L"",
      L"columns", L"content", false, L"", true},
-    {L"debugLog", L"debugLog", SettingKind::Bool, 1, L"", 0, 0,
+    {L"debugLog", L"debugLog", SettingKind::Bool, 0, L"", 0, 0,
      L"Write a debug log",
-     L"Writes to Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if that folder exists.",
-     L"", L"", true, L"", false},
-    {L"showUpcoming", L"showUpcoming", SettingKind::Bool, 0, L"", 0, 0,
-     L"Show upcoming features in the settings window",
-     L"Adds the features that are planned and not built yet, Labels, Sidebar, Preview panel and Status bar, to the settings window as placeholder pages.",
+     L"Writes Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if it exists.",
      L"", L"", true, L"", false},
 };
 
@@ -663,15 +596,6 @@ constexpr const wchar_t* kWhatsNew[] = {
     L"Drag rows to another window, the desktop, the navigation pane or the tab strip. Hold them on a folder to open it.",
     L"Archives can be dragged out of, and a phone\u2019s folders and OneDrive syncing show their own marks.",
     L"The toolbar\u2019s Select all, Invert selection and Select none reach the columns.",
-};
-
-constexpr FeatureInfo kFeatures[] = {
-    {L"desktop", L"Desktop", L"\uE7F4", L"Options for the desktop and its icons.", L"Group icons into stacks|Keep icons where you put them, on every display|Quick actions on the desktop\u2019s own menu"},
-    {L"home", L"Home", L"\uE80F", L"File Explorer\u2019s Home page, made your own.", L"Choose and order the sections of Home|Pin folders and files to Home|A quieter look for Quick access and Recent"},
-    {L"labels", L"Labels", L"\uE8EC", L"Colour labels and tags on files and folders, as on macOS.", L"Colour labels shown on rows and in the details|Set from the right-click menu and the keyboard|Filter and group by label"},
-    {L"sidebar", L"Sidebar", L"\uE700", L"A rebuilt navigation pane.", L"Pinned and recent folders in one place|Sections of your own|Drag a folder to pin it"},
-    {L"preview", L"Preview panel", L"\uE7B3", L"The preview and details panes, redone.", L"Preview and details together in one pane|Quicker switching between items|More properties, chosen by you"},
-    {L"statusbar", L"Status bar", L"\uE946", L"Options for the status bar and the info bar.", L"Choose what the status bar shows|Selection size and count at a glance|A quieter look"},
 };
 
 constexpr StringInfo kStrings[] = {
@@ -707,14 +631,10 @@ constexpr StringInfo kStrings[] = {
     {L"columns.title", L"Columns"},
     {L"columns.subtitle", L"A Columns layout in the View menu: Miller columns drawn with Explorer\u2019s own controls."},
     {L"columns.note", L"Changes apply at once. The mod keeps them in front of Windhawk\u2019s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk\u2019s values."},
-    {L"soon.title", L"Coming soon"},
-    {L"soon.body", L"This feature is not built yet. Its switch and its settings will appear on this page when it is."},
-    {L"soon.planned", L"Planned"},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
-constexpr size_t kFeatureCount = sizeof(kFeatures) / sizeof(kFeatures[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
 
 // The text for an id. A missing id shows as itself, so a gap is seen at once.
@@ -2470,10 +2390,6 @@ struct WindowState {
     ULONGLONG cursorFixUntil = 0;  // While Explorer navigates, a busy cursor over the panel is put right.
     bool shownDark = false;  // The theme the panel background was made for.
     int shownMode = 0;       // And the background mode.
-    // The native lists made invisible, in transparent mode, and whether this mod
-    // gave each the layered style. A tab can hold more than one view window
-    // after layouts change, so every visible one is cleared.
-    std::vector<std::pair<HWND, bool>> cleared;
     // A click on the name of the item that is already selected starts a
     // rename once the double-click time has passed.
     // After a command of Explorer's own toolbar: read the columns again, and
@@ -2678,104 +2594,9 @@ mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return mux::Media::SolidColorBrush(winrt::Windows::UI::Color{a, r, g, b});
 }
 
-// Transparent mode: Explorer's own file list stays, but is drawn fully
-// transparent, so nothing shows through the panel except the window's backdrop.
-// Undone whenever the panel goes away.
-BOOL CALLBACK CollectViewsProc(HWND hwnd, LPARAM lParam) {
-    wchar_t name[32];
-    if (GetClassNameW(hwnd, name, ARRAYSIZE(name)) &&
-        wcscmp(name, L"SHELLDLL_DefView") == 0 && IsWindowVisible(hwnd)) {
-        ((std::vector<HWND>*)lParam)->push_back(hwnd);
-    }
-    return TRUE;
-}
-
-void ClearOne(WindowState* state, HWND list) {
-    LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-    bool added = !(ex & WS_EX_LAYERED);
-    if (added) {
-        SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED);
-    }
-    BOOL ok = SetLayeredWindowAttributes(list, 0, 0, LWA_ALPHA);
-    DWORD error = ok ? 0 : GetLastError();
-    bool known = false;
-    for (auto& entry : state->cleared) {
-        if (entry.first == list) {
-            entry.second = entry.second || added;
-            known = true;
-        }
-    }
-    if (!known) {
-        state->cleared.emplace_back(list, added);
-    }
-    Out(L"the native file list is made transparent (window %p, %s, result %d, error %lu)",
-        list, ClassNameOf(list).c_str(), ok ? 1 : 0, error);
-}
-
-// Every visible view window of this window is made transparent, and one that
-// something else made visible again is cleared again.
-void ClearNativeLists(WindowState* state) {
-    std::vector<HWND> views;
-    EnumChildWindows(state->topLevel, CollectViewsProc, (LPARAM)&views);
-    for (HWND view : views) {
-        bool known = false;
-        for (auto& entry : state->cleared) {
-            known = known || entry.first == view;
-        }
-        if (!known) {
-            ClearOne(state, view);
-            continue;
-        }
-        // The style or the alpha can be put back by Explorer, or by a mod that
-        // fades the view in when the layout changes.
-        BYTE alpha = 255;
-        DWORD flags = 0;
-        bool intact = (GetWindowLongPtrW(view, GWL_EXSTYLE) & WS_EX_LAYERED) &&
-                      GetLayeredWindowAttributes(view, nullptr, &alpha, &flags) &&
-                      (flags & LWA_ALPHA) && alpha == 0;
-        if (!intact) {
-            Out(L"the native list %p was made visible again by something else (alpha %d), clearing it again",
-                view, (int)alpha);
-            ClearOne(state, view);
-        }
-    }
-    // Windows that are gone are forgotten.
-    for (size_t i = 0; i < state->cleared.size();) {
-        if (!IsWindow(state->cleared[i].first)) {
-            state->cleared.erase(state->cleared.begin() + i);
-        } else {
-            i++;
-        }
-    }
-}
-
-void RestoreNativeList(WindowState* state) {
-    auto cleared = std::move(state->cleared);
-    state->cleared.clear();
-    for (auto& entry : cleared) {
-        HWND list = entry.first;
-        if (!list || !IsWindow(list)) {
-            continue;
-        }
-        SetLayeredWindowAttributes(list, 0, 255, LWA_ALPHA);
-        if (entry.second) {
-            LONG_PTR ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
-            SetWindowLongPtrW(list, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED);
-        }
-        RedrawWindow(list, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    }
-    if (!cleared.empty()) {
-        Out(L"the native file list is visible again");
-    }
-}
-
 // The panel's background, as the setting says.
 mux::Media::SolidColorBrush PanelBackground(HWND fileList, bool dark) {
     int mode = g_backgroundMode;
-    if (mode == 2) {
-        Out(L"panel background: transparent (test)");
-        return Brush(0, 0, 0, 0);
-    }
     COLORREF sampled = mode == 0 ? SampleListBackground(fileList) : CLR_INVALID;
     Out(L"panel background: %s",
         mode == 1            ? L"the theme colour, by setting"
@@ -10275,10 +10096,13 @@ void HidePanel(WindowState* state, const wchar_t* why) {
     HoverOn(state);
     g_panelWindow = nullptr;
     RevokePanelDropTarget(state);
-    RestoreNativeList(state);
     CancelRename(state);
     CloseContextMenu(state);
     try {
+        if (state->fadeTimer) {
+            state->fadeTimer.Stop();  // A removal waiting behind a fade must not run after the panel or the mod is gone.
+            state->fadeTimer = nullptr;
+        }
         if (state->timer) {
             state->timer.Stop();
             state->timer.Tick(state->tickToken);
@@ -10586,7 +10410,6 @@ void SoftHidePanel(WindowState* state) {
     }
     CancelRename(state);
     CloseContextMenu(state);
-    RestoreNativeList(state);
     try {
         state->bridge.Hide();
         if (state->menuItem) {
@@ -11196,13 +11019,6 @@ void OnTick() {
         }
 
         // The theme changed: take the list's colour again.
-        // Transparent mode: the native list is kept invisible, also after
-        // Explorer replaces it. Any other mode gives it back.
-        if (g_backgroundMode == 2) {
-            ClearNativeLists(state);
-        } else if (!state->cleared.empty()) {
-            RestoreNativeList(state);
-        }
         if (state->rootGrid && fileList &&
             (state->shownMode != g_backgroundMode ||
              (state->ticks % 20 == 0 && IsDarkMode() != state->shownDark))) {
@@ -11487,11 +11303,6 @@ void ShowPanel(WindowState* state) {
             root.Background(PanelBackground(fileList, dark));
             state->shownDark = dark;
             state->shownMode = g_backgroundMode;
-            // Transparent mode: the native list is cleared before the panel
-            // shows, so it never flashes.
-            if (g_backgroundMode == 2) {
-                ClearNativeLists(state);
-            }
         }
         root.RequestedTheme(dark ? mux::ElementTheme::Dark
                                  : mux::ElementTheme::Light);
@@ -14646,6 +14457,15 @@ struct SettingsUi {
     muxc::ScrollViewer content{nullptr};
     int page = 0;
     int navCount = 0;  // The pages in the sidebar.
+    // Narrow window: the sidebar is a rail of icons, opened over the page by its button.
+    muxc::ColumnDefinition sidebarColumn{nullptr};
+    muxc::Grid navHost{nullptr};
+    muxc::Button navToggle{nullptr};
+    mux::Media::Brush overlayBrush{nullptr};
+    std::vector<muxc::TextBlock> navLabels;
+    std::vector<std::wstring> navNames;
+    bool compact = false;
+    bool expanded = false;
     bool abandon = false;  // Let the XAML objects go without releasing them.
 };
 
@@ -15129,44 +14949,9 @@ mux::UIElement BuildColumnsPage() {
     return page;
 }
 
-// A feature that is planned: what it is for, and a note that it is not built.
-mux::UIElement BuildComingSoonPage(const FeatureInfo& feature) {
-    muxc::StackPanel page;
-    page.Spacing(8);
-    page.Children().Append(MakePageHeader(feature.name, feature.summary));
-    {
-        auto card = MakeCard();
-        muxc::StackPanel lines;
-        lines.Spacing(2);
-        lines.Children().Append(MakeText(Str(L"soon.title"), 14, true, false));
-        lines.Children().Append(MakeText(Str(L"soon.body"), 13, false, true));
-        card.Child(lines);
-        page.Children().Append(card);
-    }
-    auto title = MakeText(Str(L"soon.planned"), 14, true, false);
-    title.Margin(mux::Thickness{0, 12, 0, 0});
-    page.Children().Append(title);
-    auto card = MakeCard();
-    muxc::StackPanel items;
-    items.Spacing(8);
-    std::wstring planned = feature.planned;
-    size_t at = 0;
-    while (at <= planned.size() && !planned.empty()) {
-        size_t end = planned.find(L'|', at);
-        items.Children().Append(MakeText(planned.substr(at, end == std::wstring::npos ? std::wstring::npos : end - at), 13, false, false));
-        if (end == std::wstring::npos) {
-            break;
-        }
-        at = end + 1;
-    }
-    card.Child(items);
-    page.Children().Append(card);
-    return page;
-}
-
-// Home and Columns, then the planned features when the flag asks for them.
+// Explorer Extras (the overview) and Columns. A feature gets its page when it is built.
 int SettingsPageCount() {
-    return 2 + (SettingBool(L"showUpcoming") ? (int)kFeatureCount : 0);
+    return 2;
 }
 
 void ShowSettingsPage(SettingsUi* ui, int page) {
@@ -15174,9 +14959,7 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
     g_settingsBuilding = true;
     mux::UIElement content{nullptr};
     try {
-        content = page == 0 ? BuildHomePage()
-                  : page == 1 ? BuildColumnsPage()
-                  : page - 2 < (int)kFeatureCount ? BuildComingSoonPage(kFeatures[page - 2]) : BuildHomePage();
+        content = page == 1 ? BuildColumnsPage() : BuildHomePage();
     } catch (...) {
         g_settingsBuilding = false;
         throw;
@@ -15187,9 +14970,13 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
 }
 
 // The sidebar: its pages, as the flag has them.
+void ApplyNavMode(SettingsUi* ui);
+
 void FillNav(SettingsUi* ui) {
     auto items = ui->nav.Items();
     items.Clear();
+    ui->navLabels.clear();
+    ui->navNames.clear();
     int count = SettingsPageCount();
     for (int i = 0; i < count; i++) {
         muxc::ListViewItem item;
@@ -15205,14 +14992,16 @@ void FillNav(SettingsUi* ui) {
         } else {
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-            icon.Glyph(i == 0 ? L"" : kFeatures[i - 2].glyph);
+            icon.Glyph(L"");
             icon.FontSize(16);
             line.Children().Append(icon);
-            name = i == 0 ? Str(L"page.home") : kFeatures[i - 2].name;
+            name = Str(L"page.home");
         }
         auto label = MakeText(name, 14, false, false);
         label.VerticalAlignment(mux::VerticalAlignment::Center);
         line.Children().Append(label);
+        ui->navLabels.push_back(label);
+        ui->navNames.push_back(name);
         item.Content(line);
         item.Height(40);
         items.Append(item);
@@ -15222,6 +15011,39 @@ void FillNav(SettingsUi* ui) {
         ui->page = 0;
     }
     ui->nav.SelectedIndex(ui->page);
+    ApplyNavMode(ui);
+}
+
+// The sidebar's look for the window's width: full names, or a rail of icons (with the names
+// as tooltips) that a button opens over the page.
+void ApplyNavMode(SettingsUi* ui) {
+    if (!ui->navHost || !ui->sidebarColumn) {
+        return;
+    }
+    bool rail = ui->compact && !ui->expanded;
+    ui->sidebarColumn.Width(mux::GridLength{ui->compact ? 56.0 : 248.0, mux::GridUnitType::Pixel});
+    ui->navHost.Width(rail ? 56.0 : 248.0);
+    // Opened over the page, the sidebar spans both columns: a child wider than its cell is clipped to it.
+    muxc::Grid::SetColumnSpan(ui->navHost, ui->compact && ui->expanded ? 2 : 1);
+    ui->navHost.Background(ui->compact && ui->expanded ? ui->overlayBrush : mux::Media::Brush{nullptr});
+    ui->navToggle.Visibility(ui->compact ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    for (auto const& label : ui->navLabels) {
+        label.Visibility(rail ? mux::Visibility::Collapsed : mux::Visibility::Visible);
+    }
+    // A rail item holds only its icon, centred in the item with no side padding, so nothing is cut.
+    ui->nav.Margin(rail ? mux::Thickness{4, 8, 4, 8} : mux::Thickness{8, 8, 8, 8});
+    muxc::ScrollViewer::SetHorizontalScrollBarVisibility(ui->nav, muxc::ScrollBarVisibility::Disabled);
+    auto items = ui->nav.Items();
+    for (uint32_t i = 0; i < items.Size() && i < ui->navNames.size(); i++) {
+        if (auto item = items.GetAt(i).try_as<muxc::ListViewItem>()) {
+            item.MinWidth(0);  // A list item is 88 wide at least, which is wider than the rail.
+            item.Padding(rail ? mux::Thickness{0, 0, 0, 0} : mux::Thickness{12, 0, 12, 0});
+            item.HorizontalContentAlignment(rail ? mux::HorizontalAlignment::Center : mux::HorizontalAlignment::Left);
+            muxc::ToolTipService::SetToolTip(item, rail ? winrt::box_value(winrt::hstring{ui->navNames[i]})
+                                                        : Inspectable{nullptr});
+        }
+    }
+    ui->content.Padding(ui->compact ? mux::Thickness{16, 16, 16, 24} : mux::Thickness{32, 24, 32, 32});
 }
 
 
@@ -15367,6 +15189,11 @@ void DestroySettingsUi(bool abandon) {
     try {
         ui->nav = nullptr;
         ui->content = nullptr;
+        ui->navHost = nullptr;
+        ui->navToggle = nullptr;
+        ui->sidebarColumn = nullptr;
+        ui->overlayBrush = nullptr;
+        ui->navLabels.clear();
         if (ui->source) {
             ui->source.Content(nullptr);
             ui->source.Close();
@@ -15398,7 +15225,7 @@ LRESULT CALLBACK SettingsWindowProc(HWND window, UINT message, WPARAM wparam, LP
         case WM_GETMINMAXINFO: {
             auto* limits = (MINMAXINFO*)lparam;
             UINT dpi = GetDpiForWindow(window);
-            limits->ptMinTrackSize.x = MulDiv(760, dpi, 96);
+            limits->ptMinTrackSize.x = MulDiv(440, dpi, 96);
             limits->ptMinTrackSize.y = MulDiv(520, dpi, 96);
             return 0;
         }
@@ -15527,13 +15354,52 @@ void OpenSettingsWindow(WindowState* state) {
         root.ColumnDefinitions().Append(sidebarColumn);
         root.ColumnDefinitions().Append(pageColumn);
         ui->root = root;
+        ui->sidebarColumn = sidebarColumn;
 
         muxc::ListView nav;
-        nav.Margin(mux::Thickness{8, 16, 8, 8});
+        nav.Margin(mux::Thickness{8, 8, 8, 8});
         nav.SelectionMode(muxc::ListViewSelectionMode::Single);
-        muxc::Grid::SetColumn(nav, 0);
-        root.Children().Append(nav);
         ui->nav = nav;
+
+        // The sidebar sits in a host that can be wider than its column: on a narrow window it
+        // is a rail of icons, and the button at its top opens it over the page.
+        auto host = LoadXaml(std::wstring(L"<Grid ") + kXamlNs +
+                             L" HorizontalAlignment='Left' Background='{ThemeResource SolidBackgroundFillColorSecondaryBrush}'>"
+                             L"<Grid.RowDefinitions><RowDefinition Height='Auto'/><RowDefinition Height='*'/></Grid.RowDefinitions>"
+                             L"</Grid>")
+                        .as<muxc::Grid>();
+        ui->overlayBrush = host.Background();
+        host.Background(nullptr);
+        muxc::Button toggle;
+        toggle.Margin(mux::Thickness{8, 12, 8, 0});
+        toggle.Width(40);
+        toggle.Height(36);
+        toggle.Padding(mux::Thickness{0, 0, 0, 0});
+        toggle.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+        toggle.BorderThickness(mux::Thickness{0, 0, 0, 0});
+        muxc::FontIcon bars;
+        bars.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+        bars.Glyph(L"\uE700");
+        bars.FontSize(16);
+        toggle.Content(bars);
+        toggle.Visibility(mux::Visibility::Collapsed);
+        muxc::ToolTipService::SetToolTip(toggle, winrt::box_value(winrt::hstring{L"Menu"}));
+        muxc::Grid::SetRow(toggle, 0);
+        muxc::Grid::SetRow(nav, 1);
+        host.Children().Append(toggle);
+        host.Children().Append(nav);
+        muxc::Grid::SetColumn(host, 0);
+        muxc::Canvas::SetZIndex(host, 10);
+        root.Children().Append(host);
+        ui->navHost = host;
+        ui->navToggle = toggle;
+        toggle.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+            SettingsUi* now = g_settingsUi;
+            if (now) {
+                now->expanded = !now->expanded;
+                ApplyNavMode(now);
+            }
+        });
 
         muxc::ScrollViewer content;
         content.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
@@ -15541,6 +15407,30 @@ void OpenSettingsWindow(WindowState* state) {
         muxc::Grid::SetColumn(content, 1);
         root.Children().Append(content);
         ui->content = content;
+        // A press on the page closes the sidebar that was opened over it.
+        content.AddHandler(mux::UIElement::PointerPressedEvent(),
+                           winrt::box_value(mux::Input::PointerEventHandler(
+                               [](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+                                   SettingsUi* now = g_settingsUi;
+                                   if (now && now->compact && now->expanded) {
+                                       now->expanded = false;
+                                       ApplyNavMode(now);
+                                   }
+                               })),
+                           true);
+        // The width decides: below 760 px the sidebar is a rail.
+        root.SizeChanged([](Inspectable const&, mux::SizeChangedEventArgs const& sizeArgs) {
+            SettingsUi* now = g_settingsUi;
+            if (!now) {
+                return;
+            }
+            bool narrow = sizeArgs.NewSize().Width < 760;
+            if (narrow != now->compact) {
+                now->compact = narrow;
+                now->expanded = false;
+                ApplyNavMode(now);
+            }
+        });
 
         nav.SelectionChanged([](Inspectable const&, muxc::SelectionChangedEventArgs const&) {
             SettingsUi* now = g_settingsUi;
@@ -15548,6 +15438,10 @@ void OpenSettingsWindow(WindowState* state) {
                 int selected = now->nav.SelectedIndex();
                 if (selected >= 0 && selected != now->page) {
                     ShowSettingsPage(now, selected);
+                }
+                if (now->compact && now->expanded) {
+                    now->expanded = false;
+                    ApplyNavMode(now);
                 }
             }
         });
@@ -16091,12 +15985,12 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_focusRect = SettingBool(L"focusRect");
-    g_compactScroll = SettingBool(L"compactScrollbars");
+    g_compactScroll = true;
     g_doubleClickUp = SettingBool(L"doubleClickUp");
     g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
-    g_archives = SettingBool(L"archives");
-    g_dragOut = SettingBool(L"dragOut");
+    g_archives = true;
+    g_dragOut = true;
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_springLoad = SettingBool(L"springLoad");
@@ -16107,14 +16001,14 @@ void LoadSettings() {
     g_desktopRealOnly = SettingBool(L"desktopRealOnly");
     {
         std::wstring mode = SettingText(L"background");
-        g_backgroundMode = mode == L"theme" ? 1 : mode == L"transparent" ? 2 : 0;
+        g_backgroundMode = mode == L"theme" ? 1 : 0;
     }
     g_styleVersion++;
     int minWidth = SettingInt(L"minWidth");
     int maxWidth = std::max(SettingInt(L"maxWidth"), minWidth);
     g_minWidth = minWidth;
     g_maxWidth = maxWidth;
-    g_follow = SettingBool(L"followActiveColumn");
+    g_follow = true;
     g_maxItems = SettingInt(L"maxItems");
     g_debugLog = SettingBool(L"debugLog");
 }
@@ -16131,7 +16025,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.35.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.36.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
