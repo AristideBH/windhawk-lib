@@ -2086,6 +2086,14 @@ struct MenuBuilder {
     // closed, and shows it at `position` of `anchor`.
     void Show(muxc::Flyout const& flyout, mux::UIElement const& anchor, winrt::Windows::Foundation::Point position,
               std::optional<winrt::Windows::Foundation::Rect> avoid = std::nullopt) {
+        if (!list && quickLine) {
+            // Only the quick row: no line under it.
+            uint32_t at = 0;
+            if (root.Children().IndexOf(quickLine, at)) {
+                root.Children().RemoveAt(at);
+            }
+            quickLine = nullptr;
+        }
         flyout.Content(root);
         if (styled && g_presenterStyle) {
             flyout.FlyoutPresenterStyle(g_presenterStyle);
@@ -2111,7 +2119,9 @@ struct MenuBuilder {
                         if (kids.IndexOf(line, at)) {
                             kids.RemoveAt(at);
                         }
-                        kids.Append(line);
+                        if (line) {
+                            kids.Append(line);
+                        }
                         kids.Append(header);
                     }
                 } catch (...) {
@@ -2572,26 +2582,23 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
             };
             header.push_back(std::move(item));
         }
-        builder.QuickRow(header);
-    }
-
-    // The list: the folder's properties.
-    {
-        MenuRowSpec spec;
-        spec.text = desktop ? L"Personalize" : L"Folder properties";
-        spec.icon = desktop ? L"Personalize" : L"";
-        if (!desktop) {
-            spec.glyph = L"\uE946";  // Info.
-            spec.glyphOnly = true;
-        }
-        spec.enabled = !inArchive;
-        spec.action = []() {
+        // The folder's properties, or Personalize on the Desktop, pinned at the right end.
+        MenuQuick props;
+        props.label = desktop ? L"Personalize" : L"Folder properties";
+        props.tip = props.label;
+        props.icon = desktop ? L"Personalize" : L"";
+        props.glyph = L"\uE946";  // Info.
+        props.glyphOnly = !desktop;
+        props.pinned = true;
+        props.enabled = !inArchive;
+        props.action = []() {
             WindowState* now = StateForThisThread(false);
             if (now && now->context && !g_unloading) {
                 RunBackgroundAction(now, now->context->column, L"properties");
             }
         };
-        builder.Row(spec);
+        header.push_back(std::move(props));
+        builder.QuickRow(header);
     }
 
     builder.Show(flyout, list, args.GetPosition(list));

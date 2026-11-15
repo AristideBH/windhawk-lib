@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Optional additions to File Explorer. First one: a Columns layout in the View menu, Miller columns drawn with Explorer's own WinUI 3 controls.
-// @version         0.34.1
+// @version         0.35.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -173,6 +173,7 @@ Not yet: drag and drop.
 #ifndef MOD_NO_WINRT
 #include <windhawk_utils.h>
 
+#include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.Graphics.Imaging.h>
@@ -2565,6 +2566,7 @@ struct WindowState {
         std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};
+    mud::DispatcherQueueTimer fadeTimer{nullptr};  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
     // Drops coming in from other windows and applications, and the scroll that
@@ -4185,25 +4187,92 @@ void UnshapeRows(Column* column);
 // of items that are still there stay as they are (with their icons, selection and place in the
 // scroll), the rows of items that went are removed, and rows are made only for new items. A
 // rename, a delete, a paste, a new folder or an extraction then touches a few rows. The
-// listings are in the same order, so the items that stayed form a run in both; a longest such
-// run is kept and the others (an item whose sort key changed too) go out and come back.
-// False, with nothing changed, when the column is grouped or cut short, was or becomes empty,
-// or when most of it changed: a full fill is cheaper then.
-bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
-    if (!column->filled || data.truncated || !data.groupNames.empty()) {
+// listings are in the same order, so the rows that stayed form a run in both; a longest such
+// run is kept and the others (an item whose sort key changed too) go out and come back. The
+// group headers and the "more items" row are rows like the others: a header stays when its
+// group is still there (the title is its identity), and a new group gets a new header.
+// False, with nothing changed, when the column was or becomes empty, or when most of it
+// changed: a full fill is cheaper then.
+struct PlanRow {
+    int entry = -1;
+    int group = -1;
+    int kind = 0;  // 0 an item, 1 a group header, 2 the "more items" row.
+    std::wstring title;
+};
+
+// A quick fade for rows that come or go: the row's opacity changes over 100 ms by itself.
+void SetQuickFade(muxc::ListViewItem const& row) {
+    try {
+        mux::ScalarTransition fade;
+        fade.Duration(std::chrono::milliseconds(100));
+        row.OpacityTransition(fade);
+    } catch (...) {
+    }
+}
+
+bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> const& loaded, bool allowDefer) {
+    FolderResult& data = loaded->data;
+    if (!column->filled) {
         return false;
     }
     auto items = column->list.Items();
     size_t oldCount = column->entries.size(), newCount = data.entries.size();
-    if (oldCount == 0 || newCount == 0 || items.Size() != oldCount || column->rowToEntry.size() != oldCount ||
-        column->built.size() != oldCount) {
+    size_t oldRows = items.Size();
+    if (oldCount == 0 || newCount == 0 || oldRows != column->rowToEntry.size() || oldRows != column->rowGroup.size() ||
+        oldRows != column->headerIcons.size() || column->built.size() != oldCount) {
         return false;
     }
-    for (size_t i = 0; i < oldCount; i++) {
-        if (column->rowToEntry[i] != (int)i) {
-            return false;  // Group headers or a "more items" row are in the list.
+    // What the column shows now, row by row.
+    std::vector<PlanRow> oldPlan(oldRows);
+    std::map<std::wstring, size_t> oldHeader;
+    std::vector<int> oldRowOfEntry(oldCount, -1);
+    for (size_t r = 0; r < oldRows; r++) {
+        int entry = column->rowToEntry[r];
+        if (entry >= 0) {
+            if ((size_t)entry >= oldCount) {
+                return false;
+            }
+            oldPlan[r].entry = entry;
+            oldPlan[r].group = column->rowGroup[r];
+            oldRowOfEntry[entry] = (int)r;
+        } else if (column->rowGroup[r] >= 0) {
+            if ((size_t)column->rowGroup[r] >= column->groupTitles.size()) {
+                return false;
+            }
+            oldPlan[r].kind = 1;
+            oldPlan[r].group = column->rowGroup[r];
+            oldPlan[r].title = column->groupTitles[column->rowGroup[r]];
+            oldHeader.emplace(oldPlan[r].title, r);
+        } else {
+            oldPlan[r].kind = 2;
         }
     }
+    // What it should show, the way a full fill would lay it out.
+    bool grouped = data.groupOf.size() == newCount && !data.groupNames.empty();
+    std::vector<PlanRow> newPlan;
+    newPlan.reserve(newCount + 16);
+    for (size_t i = 0; i < newCount; i++) {
+        int group = grouped ? data.groupOf[i] : -1;
+        if (grouped && (i == 0 || data.groupOf[i] != data.groupOf[i - 1])) {
+            PlanRow header;
+            header.kind = 1;
+            header.group = group;
+            header.title = group >= 0 && group < (int)data.groupNames.size() ? data.groupNames[group] : L"";
+            newPlan.push_back(std::move(header));
+        }
+        PlanRow row;
+        row.entry = (int)i;
+        row.group = group;
+        newPlan.push_back(std::move(row));
+    }
+    if (data.truncated) {
+        PlanRow more;
+        more.kind = 2;
+        newPlan.push_back(std::move(more));
+    }
+    size_t newRows = newPlan.size();
+
+    // Which new item is which old one.
     auto keyOf = [](Entry const& entry) {
         return std::string((const char*)entry.child.get(), ILGetSize(entry.child.get()));
     };
@@ -4211,7 +4280,7 @@ bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
     for (size_t i = 0; i < oldCount; i++) {
         oldIndex.emplace(keyOf(column->entries[i]), i);
     }
-    std::vector<int> match(newCount, -1);  // For each new entry, the old one it is, or -1.
+    std::vector<int> match(newCount, -1);
     for (size_t j = 0; j < newCount; j++) {
         auto found = oldIndex.find(keyOf(data.entries[j]));
         if (found == oldIndex.end()) {
@@ -4224,63 +4293,212 @@ bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
             match[j] = (int)found->second;
         }
     }
-    // The longest run of items that keep their order.
-    std::vector<int> tails, previous(newCount, -1);
-    for (size_t j = 0; j < newCount; j++) {
-        if (match[j] < 0) {
+    // The old row of each new row, when it has one, and the longest run that keeps its order.
+    std::vector<int> matchRow(newRows, -1);
+    for (size_t p = 0; p < newRows; p++) {
+        if (newPlan[p].kind == 0) {
+            matchRow[p] = match[newPlan[p].entry] >= 0 ? oldRowOfEntry[match[newPlan[p].entry]] : -1;
+        } else if (newPlan[p].kind == 1) {
+            auto found = oldHeader.find(newPlan[p].title);
+            matchRow[p] = found != oldHeader.end() ? (int)found->second : -1;
+        }
+    }
+    std::vector<int> tails, previous(newRows, -1);
+    for (size_t p = 0; p < newRows; p++) {
+        if (matchRow[p] < 0) {
             continue;
         }
         size_t low = 0, high = tails.size();
         while (low < high) {
             size_t mid = (low + high) / 2;
-            if (match[tails[mid]] < match[j]) {
+            if (matchRow[tails[mid]] < matchRow[p]) {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
-        previous[j] = low > 0 ? tails[low - 1] : -1;
+        previous[p] = low > 0 ? tails[low - 1] : -1;
         if (low == tails.size()) {
-            tails.push_back((int)j);
+            tails.push_back((int)p);
         } else {
-            tails[low] = (int)j;
+            tails[low] = (int)p;
         }
     }
-    std::vector<char> keep(newCount, 0);
+    std::vector<char> keepRow(newRows, 0);
     size_t kept = 0;
-    for (int j = tails.empty() ? -1 : tails.back(); j >= 0; j = previous[j]) {
-        keep[j] = 1;
+    for (int p = tails.empty() ? -1 : tails.back(); p >= 0; p = previous[p]) {
+        keepRow[p] = 1;
         kept++;
     }
-    size_t removed = oldCount - kept, inserted = newCount - kept;
-    if (removed + inserted > std::max<size_t>(40, oldCount / 2)) {
+    size_t removed = oldRows - kept, inserted = newRows - kept;
+    if (removed + inserted > std::max<size_t>(40, oldRows / 2)) {
         return false;
+    }
+    bool cutLook = !state->cutPaths.empty();  // The cut look sets opacities of its own: no fades then.
+    if (allowDefer && !cutLook && state->queue && removed > 0 && removed <= 15) {
+        // Rows that go fade out first; the rows are taken out a moment later, with the same
+        // listing, unless this column asks for another one in between.
+        bool any = false;
+        std::vector<char> staying(oldRows, 0);
+        for (size_t p = 0; p < newRows; p++) {
+            if (keepRow[p]) {
+                staying[matchRow[p]] = 1;
+            }
+        }
+        for (size_t r = 0; r < oldRows; r++) {
+            if (!staying[r]) {
+                if (auto row = items.GetAt((uint32_t)r).try_as<muxc::ListViewItem>()) {
+                    SetQuickFade(row);
+                    row.Opacity(0);
+                    any = true;
+                }
+            }
+        }
+        if (any) {
+            unsigned generation = column->generation;
+            try {
+                auto timer = state->queue.CreateTimer();
+                state->fadeTimer = timer;
+                timer.Interval(std::chrono::milliseconds(110));
+                timer.IsRepeating(false);
+                timer.Tick([column, generation, loaded](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                    sender.Stop();
+                    WindowState* now = StateForThisThread(false);
+                    if (!now || !now->on || g_unloading) {
+                        return;
+                    }
+                    bool known = false;
+                    for (auto& c : now->columns) {
+                        known = known || c.get() == column;
+                    }
+                    if (!known || column->generation != generation) {
+                        return;
+                    }
+                    bool wasBuilding = now->building;
+                    now->building = true;
+                    try {
+                        if (!PatchColumn(now, column, loaded, false)) {
+                            FillColumn(now, column, std::move(loaded->data));
+                        }
+                        now->scroller.UpdateLayout();
+                    } catch (...) {
+                        LogHresult(L"the patch after the fade");
+                    }
+                    now->building = wasBuilding;
+                });
+                timer.Start();
+                return true;
+            } catch (...) {
+                LogHresult(L"scheduling the patch after the fade");
+            }
+        }
     }
     if (state->rename && state->rename->column == column) {
         CancelRename(state);
     }
     UnshapeRows(column);
 
-    std::vector<char> keepOld(oldCount, 0);
-    std::vector<int> newOf(oldCount, -1);
-    for (size_t j = 0; j < newCount; j++) {
-        if (keep[j]) {
-            keepOld[match[j]] = 1;
-            newOf[match[j]] = (int)j;
+    std::vector<char> keepOldRow(oldRows, 0);
+    for (size_t p = 0; p < newRows; p++) {
+        if (keepRow[p]) {
+            keepOldRow[matchRow[p]] = 1;
         }
     }
-    for (size_t i = oldCount; i-- > 0;) {
-        if (!keepOld[i]) {
-            items.RemoveAt((uint32_t)i);
+    auto isCollapsed = [&](int group) {
+        return grouped && group >= 0 && group < (int)data.groupNames.size() &&
+               std::find(column->collapsed.begin(), column->collapsed.end(), data.groupNames[group]) !=
+                   column->collapsed.end();
+    };
+    for (size_t r = oldRows; r-- > 0;) {
+        if (!keepOldRow[r]) {
+            items.RemoveAt((uint32_t)r);
         }
     }
-    for (size_t j = 0; j < newCount; j++) {
-        if (!keep[j]) {
-            items.InsertAt((uint32_t)j, MakeRowShell(column->rowHeight));
+    std::vector<muxc::FontIcon> newHeaderIcon(newRows, muxc::FontIcon{nullptr});
+    std::vector<muxc::ListViewItem> fadingIn;
+    for (size_t p = 0; p < newRows; p++) {
+        if (keepRow[p]) {
+            if (!cutLook) {
+                if (auto shell = items.GetAt((uint32_t)p).try_as<muxc::ListViewItem>()) {
+                    if (shell.Opacity() < 1.0) {
+                        shell.Opacity(1.0);  // Faded for a removal that did not happen.
+                    }
+                }
+            }
+            continue;
+        }
+        PlanRow const& row = newPlan[p];
+        if (row.kind == 1) {
+            items.InsertAt((uint32_t)p, MakeHeaderRow(row.title, column->rowHeight, isCollapsed(row.group), &newHeaderIcon[p]));
+        } else if (row.kind == 2) {
+            muxc::ListViewItem more;
+            size_t hidden = data.total > newCount ? data.total - newCount : 0;
+            std::wstring text = hidden > 0 ? std::to_wstring(hidden) + (data.total >= (size_t)kReadCap ? L"+" : L"") +
+                                                 L" more items not shown"
+                                           : std::wstring(L"More items not shown");
+            more.Content(winrt::box_value(winrt::hstring{text}));
+            more.IsEnabled(false);
+            items.InsertAt((uint32_t)p, more);
+        } else {
+            auto shell = MakeRowShell(column->rowHeight);
+            if (isCollapsed(row.group)) {
+                shell.Visibility(mux::Visibility::Collapsed);
+            }
+            if (!cutLook && inserted <= 30) {
+                SetQuickFade(shell);
+                shell.Opacity(0);
+                fadingIn.push_back(shell);
+            }
+            items.InsertAt((uint32_t)p, shell);
+        }
+    }
+    if (!fadingIn.empty()) {
+        // After the rows have been laid out once, so that the change of opacity is animated.
+        bool queued = false;
+        try {
+            queued = state->queue && state->queue.TryEnqueue([fadingIn]() {
+                for (auto const& shell : fadingIn) {
+                    try {
+                        shell.Opacity(1.0);
+                    } catch (...) {
+                    }
+                }
+            });
+        } catch (...) {
+        }
+        if (!queued) {
+            for (auto const& shell : fadingIn) {
+                shell.Opacity(1.0);
+            }
+        }
+    }
+    // A kept item that changed group follows its new group's open or closed state.
+    for (size_t p = 0; p < newRows; p++) {
+        if (keepRow[p] && newPlan[p].kind == 0) {
+            if (auto shell = items.GetAt((uint32_t)p).try_as<muxc::ListViewItem>()) {
+                auto wanted = isCollapsed(newPlan[p].group) ? mux::Visibility::Collapsed : mux::Visibility::Visible;
+                if (shell.Visibility() != wanted) {
+                    shell.Visibility(wanted);
+                }
+            }
         }
     }
 
-    // The per-entry lists follow the new order.
+    // The per-item lists follow the new order, the per-row lists the new rows.
+    std::vector<char> keep(newCount, 0);
+    std::vector<int> newOf(oldCount, -1);
+    std::vector<int> rowOfNew(newCount, 0);
+    for (size_t p = 0; p < newRows; p++) {
+        if (newPlan[p].kind != 0) {
+            continue;
+        }
+        size_t j = (size_t)newPlan[p].entry;
+        rowOfNew[j] = (int)p;
+        if (keepRow[p]) {
+            keep[j] = 1;
+            newOf[match[j]] = (int)j;
+        }
+    }
     auto follow = [&](auto& list, auto blank) {
         std::decay_t<decltype(list)> out(newCount, blank);
         for (size_t j = 0; j < newCount; j++) {
@@ -4296,15 +4514,21 @@ bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
     follow(column->built, (char)0);
     follow(column->iconAsked, (char)0);
     follow(column->tipBuilt, (char)0);
-    column->entryToRow.assign(newCount, 0);
-    column->rowToEntry.assign(newCount, 0);
-    for (size_t j = 0; j < newCount; j++) {
-        column->entryToRow[j] = (int)j;
-        column->rowToEntry[j] = (int)j;
+    std::vector<muxc::FontIcon> headerIcons(newRows, muxc::FontIcon{nullptr});
+    column->entryToRow = rowOfNew;
+    column->rowToEntry.assign(newRows, -1);
+    column->rowGroup.assign(newRows, -1);
+    for (size_t p = 0; p < newRows; p++) {
+        column->rowToEntry[p] = newPlan[p].kind == 0 ? newPlan[p].entry : -1;
+        column->rowGroup[p] = newPlan[p].kind == 2 ? -1 : newPlan[p].group;
+        if (newPlan[p].kind == 1) {
+            headerIcons[p] = keepRow[p] ? column->headerIcons[matchRow[p]] : newHeaderIcon[p];
+        }
     }
-    column->rowGroup.assign(newCount, -1);
-    column->headerIcons.assign(newCount, muxc::FontIcon{nullptr});
-    column->groupTitles.clear();
+    column->headerIcons = std::move(headerIcons);
+    column->groupTitles = data.groupNames;
+    column->hoverHeader = -1;
+    column->focusHeader = -1;
     {
         std::vector<size_t> wanted;
         for (size_t old : column->iconWanted) {
@@ -4327,13 +4551,13 @@ bool PatchColumn(WindowState* state, Column* column, FolderResult& data) {
     FitWidth(column);
     for (size_t j = 0; j < newCount; j++) {
         if (!keep[j]) {
-            BuildRowRange(column, (int)j, (int)j);  // The new rows have their content at once.
+            BuildRowRange(column, rowOfNew[j], rowOfNew[j]);  // The new rows have their content at once.
         }
     }
     FinishFill(state, column);
     ShapeSelectionRuns(column, column->list);
-    Out(L"column \"%s\": patched, %d removed, %d new, %d kept", PathOf(column->folder.get()).c_str(), (int)removed,
-        (int)inserted, (int)kept);
+    Out(L"column \"%s\": patched, %d row(s) removed, %d new, %d kept%s", PathOf(column->folder.get()).c_str(),
+        (int)removed, (int)inserted, (int)kept, grouped ? L", grouped" : L"");
     return true;
 }
 
@@ -4394,7 +4618,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 if (changed) {
                     ULONGLONG fillStarted = GetTickCount64();
                     size_t fillCount = loaded->data.entries.size();
-                    if (!firstListing && PatchColumn(state, column.get(), loaded->data)) {
+                    if (!firstListing && PatchColumn(state, column.get(), loaded, true)) {
                         fillCount = 0;
                     } else {
                         FillColumn(state, column.get(), std::move(loaded->data));
@@ -4689,6 +4913,9 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     column->notifyId = WatchFolder(state->notifyWindow, column->folder.get());
 
     muxc::ListView list;
+    // No fade or slide when rows come and go (a rename, a delete, a new folder): the list changes
+    // at once, as Explorer's own does. The default transitions took a quarter of a second.
+    list.ItemContainerTransitions(mux::Media::Animation::TransitionCollection());
     list.Width(g_minWidth);
     {
         FolderMemory memory = GetFolderMemory(PathOf(column->folder.get()));
@@ -7949,6 +8176,14 @@ struct MenuBuilder {
     // closed, and shows it at `position` of `anchor`.
     void Show(muxc::Flyout const& flyout, mux::UIElement const& anchor, winrt::Windows::Foundation::Point position,
               std::optional<winrt::Windows::Foundation::Rect> avoid = std::nullopt) {
+        if (!list && quickLine) {
+            // Only the quick row: no line under it.
+            uint32_t at = 0;
+            if (root.Children().IndexOf(quickLine, at)) {
+                root.Children().RemoveAt(at);
+            }
+            quickLine = nullptr;
+        }
         flyout.Content(root);
         if (styled && g_presenterStyle) {
             flyout.FlyoutPresenterStyle(g_presenterStyle);
@@ -7974,7 +8209,9 @@ struct MenuBuilder {
                         if (kids.IndexOf(line, at)) {
                             kids.RemoveAt(at);
                         }
-                        kids.Append(line);
+                        if (line) {
+                            kids.Append(line);
+                        }
                         kids.Append(header);
                     }
                 } catch (...) {
@@ -8435,26 +8672,23 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
             };
             header.push_back(std::move(item));
         }
-        builder.QuickRow(header);
-    }
-
-    // The list: the folder's properties.
-    {
-        MenuRowSpec spec;
-        spec.text = desktop ? L"Personalize" : L"Folder properties";
-        spec.icon = desktop ? L"Personalize" : L"";
-        if (!desktop) {
-            spec.glyph = L"\uE946";  // Info.
-            spec.glyphOnly = true;
-        }
-        spec.enabled = !inArchive;
-        spec.action = []() {
+        // The folder's properties, or Personalize on the Desktop, pinned at the right end.
+        MenuQuick props;
+        props.label = desktop ? L"Personalize" : L"Folder properties";
+        props.tip = props.label;
+        props.icon = desktop ? L"Personalize" : L"";
+        props.glyph = L"\uE946";  // Info.
+        props.glyphOnly = !desktop;
+        props.pinned = true;
+        props.enabled = !inArchive;
+        props.action = []() {
             WindowState* now = StateForThisThread(false);
             if (now && now->context && !g_unloading) {
                 RunBackgroundAction(now, now->context->column, L"properties");
             }
         };
-        builder.Row(spec);
+        header.push_back(std::move(props));
+        builder.QuickRow(header);
     }
 
     builder.Show(flyout, list, args.GetPosition(list));
@@ -15897,7 +16131,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.34.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.35.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

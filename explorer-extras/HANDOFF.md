@@ -12,11 +12,11 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.34.1,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.35.5,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
   2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).
-- What is tested by Ari, in short: everything through 0.34.1 (menu, surgical refresh, touch, settings window, columns,
+- What is tested by Ari, in short: everything through 0.35.5 (menu, surgical refresh, touch, settings window, columns,
   keys, menus, archives, columns per tab, per-folder memory, drag between
   columns, drag out to the navigation pane, other windows, the desktop and
   other apps, drops coming in, the drag label and drop frame, harmonized

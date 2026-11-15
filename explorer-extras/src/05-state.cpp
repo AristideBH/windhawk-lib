@@ -331,6 +331,7 @@ struct WindowState {
         std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};
+    mud::DispatcherQueueTimer fadeTimer{nullptr};  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
     // Drops coming in from other windows and applications, and the scroll that

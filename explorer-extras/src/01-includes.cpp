@@ -29,6 +29,7 @@
 #ifndef MOD_NO_WINRT
 #include <windhawk_utils.h>
 
+#include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.Graphics.Imaging.h>
