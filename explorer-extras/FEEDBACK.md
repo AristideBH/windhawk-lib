@@ -6,7 +6,7 @@ How bug reports, questions and ideas are received and handled. Explorer Extras i
 
 GitHub Issues of this repository, with one of the forms:
 
-- **Bug report.** Something does not work. Fill in the version, the Windows build, the processor, the steps, and the diagnostics.
+- **Bug report.** Something does not work. Fill in the version, the Windows build, the processor, the steps, and the log.
 - **Feature suggestion.** An idea for an existing area or a new one. Start from the problem, not the solution.
 
 Questions go in an issue too (label `type: question`). Reports about the other mods in the repository use the "Another mod" form; those mods are not released.
@@ -35,7 +35,7 @@ Every issue carries `mod: explorer-extras`, an `area:` label (`columns`, `detail
 ## How an issue is worked on
 
 1. Read it, add the labels, ask for what is missing.
-2. Reproduce from the diagnostics, or from the steps on a test folder (`make-columns-showcase.ps1` builds one).
+2. Reproduce from the log, or from the steps on a test folder (`make-columns-showcase.ps1` builds one).
 3. Branch `fix/explorer-extras-<number>-<short-name>` (or `feat/...`).
 4. Change the parts under `src/`, bump `@version`, run `python explorer-extras/build.py`, and the syntax check in [`HANDOFF.md`](HANDOFF.md).
 5. Try it on a device. Say in the issue what was tried, and on which Windows build and processor.

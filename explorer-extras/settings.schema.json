@@ -99,7 +99,8 @@
       "max": 800,
       "name": "Minimum column width",
       "needs": "rebuild",
-      "sub": "layout"
+      "sub": "layout",
+      "description": "Columns fit their longest name, but not below this width (in pixels)."
     },
     {
       "id": "maxWidth",
@@ -109,7 +110,7 @@
       "min": 80,
       "max": 1200,
       "name": "Maximum column width",
-      "description": "Columns fit their longest name up to this width. Longer names are shortened.",
+      "description": "Columns fit their longest name up to this width (in pixels). Longer names are shortened.",
       "needs": "rebuild",
       "sub": "layout"
     },
@@ -209,7 +210,7 @@
       "type": "bool",
       "default": true,
       "name": "Details pane",
-      "description": "Replaces Explorer’s Details pane with a preview and the details of what is selected.",
+      "description": "Replaces Explorer’s Details and Preview panes with one pane that holds a preview and the details of what is selected.",
       "needs": "now"
     },
     {
@@ -218,7 +219,7 @@
       "type": "bool",
       "default": true,
       "name": "Preview pane opens this pane",
-      "description": "Choosing Explorer’s Preview pane (Alt+P) shows this pane instead.",
+      "description": "When Explorer’s Preview pane is turned on (Alt+P or the View menu), this pane opens in its place.",
       "needs": "now",
       "sub": "pane"
     },
@@ -280,7 +281,8 @@
       "min": 50,
       "max": 20000,
       "name": "Maximum items per column",
-      "needs": "rebuild"
+      "needs": "rebuild",
+      "description": "A column lists at most this many items. A bigger folder shows the first ones in the sort order."
     },
     {
       "id": "previewMaxMb",

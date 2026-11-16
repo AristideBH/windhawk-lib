@@ -10,6 +10,7 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 - A change on Windhawk's page applies at once, and the columns are fitted and read again when it needs it.
 - The settings keys changed with the groups, so every setting returns to its default once.
 - The "Extras" entry of the toolbar's ... menu is gone, since it only opened the window.
+- 0.66.1: the texts of the settings, the readme in Windhawk and the documents are brought up to date (the minimum width and the item limit had no description).
 
 ## 0.65 (2026-11-16)
 

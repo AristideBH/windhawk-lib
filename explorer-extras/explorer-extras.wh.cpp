@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.66.0
+// @version         0.66.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -40,15 +40,15 @@ One pane in place of Explorer's Details and Preview panes, in Columns and in eve
 - The details of what is selected, by type. A folder's size and contents are counted in the background.
 - A fanned stack of thumbnails when several items are selected.
 - Alt+P, the View menu and the toolbar button show and hide it.
-- Each kind of preview can be switched off, and has a size limit, in the settings.
+- Each kind of preview can be switched off, and has a size limit, in the settings (Limits).
 
 Works with QuickLook.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
-Tested on Windows 11 24H2, on ARM64 and x86-64, in French and English. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
+Tested daily on Windows 11 24H2 on ARM64, in French and English; x86-64 was tested up to 0.55. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
 
-Bug reports and ideas: https://github.com/AristideBH/windhawk-lib/issues (the issue forms ask for the mod's version and diagnostics).
+Bug reports and ideas: https://github.com/AristideBH/windhawk-lib/issues (the issue forms ask for the mod's version and the log).
 
 If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 */
@@ -85,9 +85,10 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
   - layout:
     - minWidth: 160
       $name: Minimum column width
+      $description: Columns fit their longest name, but not below this width (in pixels).
     - maxWidth: 420
       $name: Maximum column width
-      $description: Columns fit their longest name up to this width. Longer names are shortened.
+      $description: Columns fit their longest name up to this width (in pixels). Longer names are shortened.
     - harmonizeWidths: true
       $name: Shift + double-click to even widths
       $description: Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.
@@ -122,11 +123,11 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 - details:
   - detailsPane: true
     $name: Details pane
-    $description: Replaces Explorer’s Details pane with a preview and the details of what is selected.
+    $description: Replaces Explorer’s Details and Preview panes with one pane that holds a preview and the details of what is selected.
   - pane:
     - previewRedirect: true
       $name: Preview pane opens this pane
-      $description: Choosing Explorer’s Preview pane (Alt+P) shows this pane instead.
+      $description: When Explorer’s Preview pane is turned on (Alt+P or the View menu), this pane opens in its place.
     - paneAnimation: true
       $name: Animate the pane
       $description: The content slides and fades in when the selection changes.
@@ -149,6 +150,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 - limits:
   - maxItems: 5000
     $name: Maximum items per column
+    $description: A column lists at most this many items. A bigger folder shows the first ones in the sort order.
   - previewMaxMb: 60
     $name: Largest document to preview (MB)
     $description: Bigger PDFs and Office files keep the thumbnail.
@@ -19488,7 +19490,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.66.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.66.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

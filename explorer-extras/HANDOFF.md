@@ -12,10 +12,11 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.66.0,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.66.1,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
   2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).
+- The settings window (0.24 to 0.65) is gone since 0.66. Settings are on Windhawk's page only, in the groups of `settings.schema.json`; the notes on the window are in `docs/settings-window-notes.md` and the code is at commit `ab3852a`.
 - What is tested by Ari, in short: everything through 0.35.5 (menu, surgical refresh, touch, settings window, columns,
   keys, menus, archives, columns per tab, per-folder memory, drag between
   columns, drag out to the navigation pane, other windows, the desktop and

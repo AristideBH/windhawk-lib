@@ -30,8 +30,8 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Minimum column width | 160 | (80 to 800) |
-| Maximum column width | 420 | Columns fit their longest name up to this width. Longer names are shortened. (80 to 1200) |
+| Minimum column width | 160 | Columns fit their longest name, but not below this width (in pixels). (80 to 800) |
+| Maximum column width | 420 | Columns fit their longest name up to this width (in pixels). Longer names are shortened. (80 to 1200) |
 | Shift + double-click to even widths | on | Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone. |
 | Show the focus outline | on | Draws an outline around the item under the keyboard cursor. The selection highlight always shows. |
 | Panel background | Explorer colour | Explorer uses its own file list colour. Theme uses the standard dark or light colour. |
@@ -50,13 +50,13 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Details pane | on | Replaces Explorer’s Details pane with a preview and the details of what is selected. |
+| Details pane | on | Replaces Explorer’s Details and Preview panes with one pane that holds a preview and the details of what is selected. |
 
 ### Pane
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Preview pane opens this pane | on | Choosing Explorer’s Preview pane (Alt+P) shows this pane instead. |
+| Preview pane opens this pane | on | When Explorer’s Preview pane is turned on (Alt+P or the View menu), this pane opens in its place. |
 | Animate the pane | on | The content slides and fades in when the selection changes. |
 | Open previews by themselves | on | When off, a button on the preview opens it, and switches back to the thumbnail. |
 
@@ -72,7 +72,7 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Maximum items per column | 5000 | (50 to 20000) |
+| Maximum items per column | 5000 | A column lists at most this many items. A bigger folder shows the first ones in the sort order. (50 to 20000) |
 | Largest document to preview (MB) | 60 | Bigger PDFs and Office files keep the thumbnail. (1 to 1024) |
 | Largest image to open at once (megapixels) | 40 | Bigger pictures wait for a click on the card's button. (4 to 400) |
 
