@@ -84,7 +84,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.63.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.64.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -116,8 +116,12 @@ void Wh_ModSettingsChanged() {
         g_enabled ? 1 : 0, g_minWidth.load(), g_maxWidth.load(),
         g_follow ? 1 : 0, g_maxItems.load());
     if (!g_enabled) {
-        // Off means gone: take the entry and the panel out of every window.
-        CloseEverything();
+        // Off means gone: the Columns entry and the panel go from every window. The details pane stays.
+        if (g_detailsPane) {
+            ColumnsOffEverywhere();
+        } else {
+            CloseEverything();
+        }
     }
 }
 

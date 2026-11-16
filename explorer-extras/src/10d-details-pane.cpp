@@ -1091,6 +1091,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                                  info.lpVerb = L"properties";
                                  info.lpIDList = (void*)pane->shownItems[0].get();
                                  info.nShow = SW_SHOW;
+                                 ModalScope modal;
                                  ShellExecuteExW(&info);
                              }});
         }
@@ -1236,8 +1237,9 @@ void PaneStopMedia(DetailsPane* pane) {
 
 // The wheel over the preview is sent to the window under the mouse by the pane itself: the
 // handler's window is in another process, and the wheel did not scroll it by itself.
-static HHOOK g_wheelHook = nullptr;
-static HWND g_wheelHost = nullptr;
+// A low-level hook runs on the thread that installed it, so each window thread has its own.
+static thread_local HHOOK g_wheelHook = nullptr;
+static thread_local HWND g_wheelHost = nullptr;
 
 LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HC_ACTION && wParam == WM_MOUSEWHEEL && g_wheelHost && IsWindowVisible(g_wheelHost)) {
@@ -1257,6 +1259,15 @@ LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
         }
     }
     return CallNextHookEx(nullptr, code, wParam, lParam);
+}
+
+// On while the pointer is over the preview: every mouse event of the system goes through this
+// thread's message loop while it is on.
+void PaneWheelOn(HWND host) {
+    g_wheelHost = host;
+    if (!g_wheelHook) {
+        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
+    }
 }
 
 void PaneWheelOff(HWND host) {
@@ -2502,10 +2513,6 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
         return;
     }
     pane->handler = handler;
-    g_wheelHost = pane->host;
-    if (!g_wheelHook) {
-        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
-    }
     Wh_Log(L"preview: %s loading, started in %llu ms", data.previewPath.c_str(), GetTickCount64() - started);
     static const wchar_t* const heavy[] = {L".pdf", L".doc", L".docx", L".xls", L".xlsx", L".ppt", L".pptx", L".odt", L".htm", L".html"};
     const wchar_t* dot = wcsrchr(data.previewPath.c_str(), L'.');
@@ -3605,6 +3612,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(pane->host, &hostRect);
         bool over = IsWindowVisible(pane->host) && PtInRect(&hostRect, cursor);
         if (over) {
+            PaneWheelOn(pane->host);
             pane->overTicks++;
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
@@ -3614,6 +3622,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                 pane->previewFocused = true;
             }
         } else {
+            PaneWheelOff(pane->host);
             pane->overTicks = 0;
             if (pane->previewFocused) {
                 pane->previewFocused = false;

@@ -93,6 +93,15 @@ struct CoroutineGuard {
     ~CoroutineGuard() { g_coroutines--; }
 };
 
+// A call of the shell that runs a message loop of its own (a menu command, a delete with its
+// confirmation, Properties, a drag) can be on this thread's stack when the cleanup comes. The cleanup
+// must not delete what those frames use: it waits until the count is back to zero.
+thread_local int t_modalDepth = 0;
+struct ModalScope {
+    ModalScope() { t_modalDepth++; }
+    ~ModalScope() { t_modalDepth--; }
+};
+
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.

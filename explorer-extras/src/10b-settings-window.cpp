@@ -11,6 +11,7 @@
 extern bool g_hooked;  // Defined with the hooks, later.
 void LoadSettings();
 void CloseEverything();
+void ColumnsOffEverywhere();
 void ReloadAll(WindowState* state);
 
 constexpr wchar_t kSettingsClass[] = L"ExplorerExtrasSettingsWindow";
@@ -170,7 +171,14 @@ void RebuildEverywhere() {
 // Switched off from the window: every window is cleaned up from another thread, since
 // the cleanup waits for this one to run its part.
 void TurnColumnsOffEverywhere() {
-    StartModThread([]() { CloseEverything(); });
+    // The details pane stays when only Columns goes.
+    StartModThread([]() {
+        if (g_detailsPane) {
+            ColumnsOffEverywhere();
+        } else {
+            CloseEverything();
+        }
+    });
 }
 
 void ApplySettingChanged(const SettingInfo& info) {

@@ -370,6 +370,21 @@ struct TouchPrep {
 };
 [[clang::no_destroy]] thread_local TouchPrep g_touchPrep;
 
+// The operations a touch-drag coroutine is waiting on, so the unload can cancel them.
+[[clang::no_destroy]] thread_local winrt::Windows::Foundation::IAsyncInfo g_prepOp{nullptr};
+[[clang::no_destroy]] thread_local winrt::Windows::Foundation::IAsyncInfo g_dragOp{nullptr};
+
+void CancelTouchDragOps() {
+    for (auto* held : {&g_prepOp, &g_dragOp}) {
+        try {
+            if (*held) {
+                held->Cancel();
+            }
+        } catch (...) {
+        }
+    }
+}
+
 winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::shared_ptr<std::vector<uint8_t>> cida) {
     CoroutineGuard counted;
     namespace st = winrt::Windows::Storage;
@@ -381,9 +396,13 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
         for (auto const& path : paths) {
             DWORD attributes = GetFileAttributesW(path.c_str());
             if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                items.push_back(co_await st::StorageFolder::GetFolderFromPathAsync(path));
+                auto op = st::StorageFolder::GetFolderFromPathAsync(path);
+                g_prepOp = op.as<winrt::Windows::Foundation::IAsyncInfo>();
+                items.push_back(co_await op);
             } else {
-                items.push_back(co_await st::StorageFile::GetFileFromPathAsync(path));
+                auto op = st::StorageFile::GetFileFromPathAsync(path);
+                g_prepOp = op.as<winrt::Windows::Foundation::IAsyncInfo>();
+                items.push_back(co_await op);
             }
         }
     } catch (...) {
@@ -547,7 +566,10 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
             dropHooked = true;
         }
         Wh_Log(L"touch: asking the system to drag %d item(s)", (int)items.size());
-        auto result = co_await list.StartDragAsync(*point);
+        auto dragOp = list.StartDragAsync(*point);
+        g_dragOp = dragOp.as<winrt::Windows::Foundation::IAsyncInfo>();
+        auto result = co_await dragOp;
+        g_dragOp = nullptr;
         Wh_Log(L"touch: the system's drag ended, operation %d", (int)result);
     } catch (winrt::hresult_error const& error) {
         Wh_Log(L"touch: the system's drag failed, hr=0x%08lX %s", (unsigned long)error.code().value, error.message().c_str());
@@ -1535,6 +1557,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     nudger.Start(GetCurrentThreadId(), g_outPointerId);
     state->outDragActive = true;
     ULONGLONG outStarted = GetTickCount64();
+    ModalScope modal;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       state->outFromArchive ? DROPEFFECT_COPY : (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK),
                       &effect);

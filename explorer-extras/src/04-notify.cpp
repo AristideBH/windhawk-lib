@@ -30,7 +30,8 @@ HWND CreateNotifyWindow(ULONGLONG* due) {
             windowClass.lpfnWndProc = NotifyProc;
             windowClass.hInstance = instance;
             windowClass.lpszClassName = kNotifyClass;
-            if (RegisterClassW(&windowClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            // "Already exists" can only be a class an earlier load left behind, still pointing at its code.
+            if (RegisterClassW(&windowClass)) {
                 g_notifyClassRegistered = true;
             } else {
                 Wh_Log(L"notify window: the class could not be registered, gle=%lu", GetLastError());
@@ -98,6 +99,7 @@ void OpenItem(HWND owner, PCIDLIST_ABSOLUTE pidl) {
         info.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
         info.lpIDList = (void*)pidl;
     }
+    ModalScope modal;
     bool ok = ShellExecuteExW(&info);
     Wh_Log(L"OpenItem %s: %s, gle=%lu, hInstApp=%llu", byPath ? L"by path" : L"by pidl",
         ok ? L"ok" : L"failed", ok ? 0 : GetLastError(), (unsigned long long)(ULONG_PTR)info.hInstApp);

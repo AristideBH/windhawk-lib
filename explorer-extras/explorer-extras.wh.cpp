@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.63.2
+// @version         0.64.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -322,6 +322,15 @@ std::atomic<int> g_coroutines{0};
 struct CoroutineGuard {
     CoroutineGuard() { g_coroutines++; }
     ~CoroutineGuard() { g_coroutines--; }
+};
+
+// A call of the shell that runs a message loop of its own (a menu command, a delete with its
+// confirmation, Properties, a drag) can be on this thread's stack when the cleanup comes. The cleanup
+// must not delete what those frames use: it waits until the count is back to zero.
+thread_local int t_modalDepth = 0;
+struct ModalScope {
+    ModalScope() { t_modalDepth++; }
+    ~ModalScope() { t_modalDepth--; }
 };
 
 std::atomic<bool> g_follow{true};
@@ -1192,8 +1201,7 @@ void InstallBrowseTrace(IShellBrowser* browser) {
     // RemoveMenusSB, SetStatusTextSB, EnableModelessSB, TranslateAcceleratorSB,
     // and BrowseObject at slot 11.
     void* target = vtable[11];
-    BOOL ok = Wh_SetFunctionHook(target, (void*)BrowseObject_Hook,
-                                 (void**)&BrowseObject_Original);
+    BOOL ok = WindhawkUtils::SetFunctionHook((BrowseObject_t)target, BrowseObject_Hook, &BrowseObject_Original);
     if (ok) {
         Wh_ApplyHookOperations();
     }
@@ -2146,7 +2154,8 @@ HWND CreateNotifyWindow(ULONGLONG* due) {
             windowClass.lpfnWndProc = NotifyProc;
             windowClass.hInstance = instance;
             windowClass.lpszClassName = kNotifyClass;
-            if (RegisterClassW(&windowClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            // "Already exists" can only be a class an earlier load left behind, still pointing at its code.
+            if (RegisterClassW(&windowClass)) {
                 g_notifyClassRegistered = true;
             } else {
                 Wh_Log(L"notify window: the class could not be registered, gle=%lu", GetLastError());
@@ -2214,6 +2223,7 @@ void OpenItem(HWND owner, PCIDLIST_ABSOLUTE pidl) {
         info.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
         info.lpIDList = (void*)pidl;
     }
+    ModalScope modal;
     bool ok = ShellExecuteExW(&info);
     Wh_Log(L"OpenItem %s: %s, gle=%lu, hInstApp=%llu", byPath ? L"by path" : L"by pidl",
         ok ? L"ok" : L"failed", ok ? 0 : GetLastError(), (unsigned long long)(ULONG_PTR)info.hInstApp);
@@ -6650,6 +6660,7 @@ HRESULT RestoreFromRecycleBin(WindowState* state,
                 invoke.hwnd = state->topLevel;
                 invoke.lpVerb = "undelete";
                 invoke.nShow = SW_SHOWNORMAL;
+                ModalScope modal;
                 hr = menu->InvokeCommand(&invoke);
             }
             DestroyMenu(hmenu);
@@ -6741,6 +6752,7 @@ bool RedoLast(WindowState* state) {
         op.wFunc = FO_DELETE;
         op.pFrom = names.c_str();
         op.fFlags = FOF_ALLOWUNDO;
+        ModalScope modal;
         int result = SHFileOperationW(&op);
         hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
         Wh_Log(L"Redo delete of %d item(s): result %d", (int)entry.paths.size(), result);
@@ -7240,6 +7252,7 @@ void RunContextCommand(UINT id) {
                     invoke.nShow = SW_SHOWNORMAL;
                     invoke.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
                     GetCursorPos(&invoke.ptInvoke);
+                    ModalScope modal;
                     HRESULT hr = context->menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
                     Wh_Log(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
@@ -7442,6 +7455,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     op.pFrom = names.c_str();
     op.pTo = target.c_str();
     op.fFlags = FOF_ALLOWUNDO;
+    ModalScope modal;
     int result = SHFileOperationW(&op);
     Wh_Log(L"new folder \"%s\" with %d item(s): result %d", candidate.c_str(), (int)from.size(), result);
 
@@ -7461,7 +7475,51 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     RequestLoad(state, column);
 }
 
-// Opens a folder in a new tab of this window: the folder's "opennewtab" verb makes the tab, and once
+// The "add tab" button of the window's tab strip (AutomationId "AddButton"), found in the XAML tree.
+mux::FrameworkElement FindAddTabButton(mux::DependencyObject const& node, int depth, int* visited) {
+    if (!node || depth > 40 || ++*visited > 6000) {
+        return nullptr;
+    }
+    if (auto element = node.try_as<mux::FrameworkElement>()) {
+        if (element.Name() == L"AddButton") {
+            return element;
+        }
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = FindAddTabButton(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// Presses it as a click would, with no key sent.
+bool PressAddTabButton(WindowState* state) {
+    try {
+        if (!state->xamlRoot) {
+            return false;
+        }
+        auto content = state->xamlRoot.Content().try_as<mux::DependencyObject>();
+        int visited = 0;
+        auto button = FindAddTabButton(content, 0, &visited);
+        if (!button) {
+            Wh_Log(L"open in a new tab: the tab strip's add button was not found (%d elements looked at)", visited);
+            return false;
+        }
+        auto peer = mux::Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(button);
+        if (auto invoke = peer.GetPattern(mux::Automation::Peers::PatternInterface::Invoke)
+                              .try_as<mux::Automation::Provider::IInvokeProvider>()) {
+            invoke.Invoke();
+            return true;
+        }
+    } catch (...) {
+        LogHresult(L"the tab strip's add button");
+    }
+    return false;
+}
+
+// Opens a folder in a new tab of this window: the tab strip's add button makes the tab, and once
 // Explorer has built it, the folder is shown in it.
 void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     if (!folder || FolderGone(folder)) {
@@ -7470,11 +7528,11 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     state->openTabFolder.reset(ILClone(folder));
     state->openTabUntil = GetTickCount64() + 4000;
     state->newTab = nullptr;
-    // The folder's own "Open in new tab" verb makes the tab. No key is sent: a key goes to whichever
-    // window has the focus at that moment.
-    HRESULT verb = InvokeVerbOnFolder(state, folder, "opennewtab");
-    if (FAILED(verb)) {
-        Wh_Log(L"open in a new tab: the folder has no such verb, hr=0x%08lX", (unsigned long)verb);
+    // The tab strip's own add button makes the tab. No key is sent: a key goes to whichever window has the
+    // focus at that moment. (The folder's "opennewtab" verb was tried: it opens a window of its own.)
+    if (!PressAddTabButton(state)) {
+        state->openTabFolder.reset();
+        state->openTabUntil = 0;
         return;
     }
     Wh_Log(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
@@ -7559,6 +7617,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             list->Release();
         }
         if (copied > 0) {
+            ModalScope modal;
             hr = operation->PerformOperations();
         }
     }
@@ -7669,6 +7728,7 @@ void ExtractSelected(WindowState* state, Column* column, std::vector<size_t> con
             }
         }
         if (copied > 0) {
+            ModalScope modal;
             hr = operation->PerformOperations();
         }
     }
@@ -8473,10 +8533,14 @@ struct MenuBuilder {
             // Like a cascading menu: beside the row, top aligned with it.
             spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
             auto sub = spec.submenu;
-            Keep(spec.submenu, spec.submenu.Opened(winrt::auto_revoke, [sub](Inspectable const&, Inspectable const&) {
+            // Weak: a handler that holds the element it is on keeps both alive for as long as the window.
+            auto weakSub = winrt::make_weak(sub);
+            auto weakButton = winrt::make_weak(button);
+            Keep(spec.submenu, spec.submenu.Opened(winrt::auto_revoke, [weakSub](Inspectable const&, Inspectable const&) {
                 WindowState* open = StateForThisThread(false);
-                if (open && open->context) {
-                    open->context->openSub = sub;
+                auto strong = weakSub.get();
+                if (open && open->context && strong) {
+                    open->context->openSub = strong;
                 }
             }));
             Keep(spec.submenu, spec.submenu.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
@@ -8491,10 +8555,14 @@ struct MenuBuilder {
                 }
             }));
             // Right arrow opens it from the keyboard.
-            Keep(button, button.KeyDown(winrt::auto_revoke, [sub, button](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
+            Keep(button, button.KeyDown(winrt::auto_revoke, [weakSub, weakButton](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
                 if (keyArgs.Key() == winrt::Windows::System::VirtualKey::Right) {
                     try {
-                        sub.ShowAt(button);
+                        auto strongSub = weakSub.get();
+                        auto strongButton = weakButton.get();
+                        if (strongSub && strongButton) {
+                            strongSub.ShowAt(strongButton);
+                        }
                     } catch (...) {
                     }
                     keyArgs.Handled(true);
@@ -8505,9 +8573,11 @@ struct MenuBuilder {
         // after a short moment if the pointer stays.
         {
             auto hovering = std::make_shared<bool>(false);
-            auto sub = spec.submenu;
-            Keep(button, button.PointerEntered(winrt::auto_revoke, [hovering, sub, button](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            auto weakSub = winrt::make_weak(spec.submenu);
+            auto weakButton = winrt::make_weak(button);
+            Keep(button, button.PointerEntered(winrt::auto_revoke, [hovering, weakSub, weakButton](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
                 *hovering = true;
+                auto sub = weakSub.get();
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->queue || g_unloading) {
                     return;
@@ -8529,10 +8599,12 @@ struct MenuBuilder {
                     ctx.hover = timer;
                     timer.Interval(std::chrono::milliseconds(200));
                     timer.IsRepeating(false);
-                    Keep(timer, timer.Tick(winrt::auto_revoke, [hovering, sub, button](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                    Keep(timer, timer.Tick(winrt::auto_revoke, [hovering, weakSub, weakButton](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                         sender.Stop();
                         WindowState* now = StateForThisThread(false);
-                        if (!*hovering || !now || !now->context || g_unloading || now->context->openSub == sub) {
+                        auto sub = weakSub.get();
+                        auto button = weakButton.get();
+                        if (!*hovering || !now || !now->context || g_unloading || !sub || !button || now->context->openSub == sub) {
                             return;
                         }
                         try {
@@ -9227,6 +9299,7 @@ HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
         if (GetKeyState(VK_SHIFT) & 0x8000) {
             invoke.fMask |= CMIC_MASK_SHIFT_DOWN;
         }
+        ModalScope modal;
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);
@@ -9260,6 +9333,7 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
         invoke.hwnd = state->topLevel;
         invoke.lpVerb = verb;
         invoke.nShow = SW_SHOWNORMAL;
+        ModalScope modal;
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);
@@ -12540,6 +12614,21 @@ struct TouchPrep {
 };
 [[clang::no_destroy]] thread_local TouchPrep g_touchPrep;
 
+// The operations a touch-drag coroutine is waiting on, so the unload can cancel them.
+[[clang::no_destroy]] thread_local winrt::Windows::Foundation::IAsyncInfo g_prepOp{nullptr};
+[[clang::no_destroy]] thread_local winrt::Windows::Foundation::IAsyncInfo g_dragOp{nullptr};
+
+void CancelTouchDragOps() {
+    for (auto* held : {&g_prepOp, &g_dragOp}) {
+        try {
+            if (*held) {
+                held->Cancel();
+            }
+        } catch (...) {
+        }
+    }
+}
+
 winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::shared_ptr<std::vector<uint8_t>> cida) {
     CoroutineGuard counted;
     namespace st = winrt::Windows::Storage;
@@ -12551,9 +12640,13 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
         for (auto const& path : paths) {
             DWORD attributes = GetFileAttributesW(path.c_str());
             if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                items.push_back(co_await st::StorageFolder::GetFolderFromPathAsync(path));
+                auto op = st::StorageFolder::GetFolderFromPathAsync(path);
+                g_prepOp = op.as<winrt::Windows::Foundation::IAsyncInfo>();
+                items.push_back(co_await op);
             } else {
-                items.push_back(co_await st::StorageFile::GetFileFromPathAsync(path));
+                auto op = st::StorageFile::GetFileFromPathAsync(path);
+                g_prepOp = op.as<winrt::Windows::Foundation::IAsyncInfo>();
+                items.push_back(co_await op);
             }
         }
     } catch (...) {
@@ -12717,7 +12810,10 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
             dropHooked = true;
         }
         Wh_Log(L"touch: asking the system to drag %d item(s)", (int)items.size());
-        auto result = co_await list.StartDragAsync(*point);
+        auto dragOp = list.StartDragAsync(*point);
+        g_dragOp = dragOp.as<winrt::Windows::Foundation::IAsyncInfo>();
+        auto result = co_await dragOp;
+        g_dragOp = nullptr;
         Wh_Log(L"touch: the system's drag ended, operation %d", (int)result);
     } catch (winrt::hresult_error const& error) {
         Wh_Log(L"touch: the system's drag failed, hr=0x%08lX %s", (unsigned long)error.code().value, error.message().c_str());
@@ -13705,6 +13801,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     nudger.Start(GetCurrentThreadId(), g_outPointerId);
     state->outDragActive = true;
     ULONGLONG outStarted = GetTickCount64();
+    ModalScope modal;
     hr = SHDoDragDrop(state->topLevel, data, dropSource,
                       state->outFromArchive ? DROPEFFECT_COPY : (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK),
                       &effect);
@@ -14484,6 +14581,29 @@ void RememberColumns(bool on) {
     Wh_SetIntValue(L"lastLayoutColumns", on ? 1 : 0);
 }
 
+// Only the Columns entry of the View menu: Columns is switched off, the rest stays.
+void RemoveColumnsEntry(WindowState* state) {
+    try {
+        for (auto& sibling : state->siblings) {
+            if (sibling.item) {
+                sibling.item.Click(sibling.token);
+            }
+        }
+        state->siblings.clear();
+        if (state->menuItem) {
+            state->menuItem.Click(state->menuClickToken);
+            uint32_t index = 0;
+            if (state->menuItems && state->menuItems.IndexOf(state->menuItem, index)) {
+                state->menuItems.RemoveAt(index);
+            }
+        }
+    } catch (...) {
+        LogHresult(L"RemoveColumnsEntry");
+    }
+    state->menuItem = nullptr;
+    state->menuItems = nullptr;
+}
+
 void RemoveMenuEntry(WindowState* state) {
     try {
         for (auto& sibling : state->siblings) {
@@ -15064,6 +15184,7 @@ void UpdateLastEdge(WindowState* state) {
 extern bool g_hooked;  // Defined with the hooks, later.
 void LoadSettings();
 void CloseEverything();
+void ColumnsOffEverywhere();
 void ReloadAll(WindowState* state);
 
 constexpr wchar_t kSettingsClass[] = L"ExplorerExtrasSettingsWindow";
@@ -15223,7 +15344,14 @@ void RebuildEverywhere() {
 // Switched off from the window: every window is cleaned up from another thread, since
 // the cleanup waits for this one to run its part.
 void TurnColumnsOffEverywhere() {
-    StartModThread([]() { CloseEverything(); });
+    // The details pane stays when only Columns goes.
+    StartModThread([]() {
+        if (g_detailsPane) {
+            ColumnsOffEverywhere();
+        } else {
+            CloseEverything();
+        }
+    });
 }
 
 void ApplySettingChanged(const SettingInfo& info) {
@@ -17267,6 +17395,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                                  info.lpVerb = L"properties";
                                  info.lpIDList = (void*)pane->shownItems[0].get();
                                  info.nShow = SW_SHOW;
+                                 ModalScope modal;
                                  ShellExecuteExW(&info);
                              }});
         }
@@ -17412,8 +17541,9 @@ void PaneStopMedia(DetailsPane* pane) {
 
 // The wheel over the preview is sent to the window under the mouse by the pane itself: the
 // handler's window is in another process, and the wheel did not scroll it by itself.
-static HHOOK g_wheelHook = nullptr;
-static HWND g_wheelHost = nullptr;
+// A low-level hook runs on the thread that installed it, so each window thread has its own.
+static thread_local HHOOK g_wheelHook = nullptr;
+static thread_local HWND g_wheelHost = nullptr;
 
 LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HC_ACTION && wParam == WM_MOUSEWHEEL && g_wheelHost && IsWindowVisible(g_wheelHost)) {
@@ -17433,6 +17563,15 @@ LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
         }
     }
     return CallNextHookEx(nullptr, code, wParam, lParam);
+}
+
+// On while the pointer is over the preview: every mouse event of the system goes through this
+// thread's message loop while it is on.
+void PaneWheelOn(HWND host) {
+    g_wheelHost = host;
+    if (!g_wheelHook) {
+        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
+    }
 }
 
 void PaneWheelOff(HWND host) {
@@ -18678,10 +18817,6 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
         return;
     }
     pane->handler = handler;
-    g_wheelHost = pane->host;
-    if (!g_wheelHook) {
-        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
-    }
     Wh_Log(L"preview: %s loading, started in %llu ms", data.previewPath.c_str(), GetTickCount64() - started);
     static const wchar_t* const heavy[] = {L".pdf", L".doc", L".docx", L".xls", L".xlsx", L".ppt", L".pptx", L".odt", L".htm", L".html"};
     const wchar_t* dot = wcsrchr(data.previewPath.c_str(), L'.');
@@ -19781,6 +19916,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(pane->host, &hostRect);
         bool over = IsWindowVisible(pane->host) && PtInRect(&hostRect, cursor);
         if (over) {
+            PaneWheelOn(pane->host);
             pane->overTicks++;
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
@@ -19790,6 +19926,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                 pane->previewFocused = true;
             }
         } else {
+            PaneWheelOff(pane->host);
             pane->overTicks = 0;
             if (pane->previewFocused) {
                 pane->previewFocused = false;
@@ -20505,18 +20642,45 @@ void DrainUi(mud::DispatcherQueue const& queue) {
 // The touch-drag coroutines resume on the thread that started them. Until they have ended, their
 // thread's messages are handled, so they can run to their end while the mod is still mapped.
 void WaitForCoroutines() {
+    // Their operations are cancelled (a drag that is still held, a file on a slow network): they end
+    // with an error that they handle. Then each is waited for as long as it takes.
     ULONGLONG began = GetTickCount64();
-    while (g_coroutines > 0 && GetTickCount64() - began < 3000) {
+    ULONGLONG cancelledAt = 0;
+    while (g_coroutines > 0) {
+        if (GetTickCount64() - cancelledAt >= 500) {
+            CancelTouchDragOps();
+            cancelledAt = GetTickCount64();
+        }
         MSG msg;
-        while (GetTickCount64() - began < 3000 && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        if (GetTickCount64() - began == 10000) {
+            Wh_Log(L"%d coroutine(s) of the mod are still waiting after 10 s", g_coroutines.load());
+        }
     }
-    if (g_coroutines > 0) {
-        Wh_Log(L"%d coroutine(s) of the mod were still waiting after 3 s", g_coroutines.load());
+}
+
+// Work for a window's thread that must not run inside a message loop of the mod's own (see ModalScope):
+// it waits, by a one-shot timer, until none is on the stack.
+void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work) {
+    if (t_modalDepth == 0) {
+        (*work)();
+        return;
     }
+    static int logged = 0;
+    if (logged++ < 3) {
+        Wh_Log(L"window cleanup waits: a dialog or a drag of the mod is open on this thread");
+    }
+    auto timer = queue.CreateTimer();
+    timer.Interval(std::chrono::milliseconds(100));
+    Keep(timer, timer.Tick(winrt::auto_revoke, [queue, work](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        sender.Stop();
+        RunOutsideModal(queue, work);
+    }));
+    timer.Start();
 }
 
 void CloseEverything() {
@@ -20531,7 +20695,8 @@ void CloseEverything() {
         bool queued = false;
         try {
             if (state->queue) {
-                queued = state->queue.TryEnqueue([state, done]() {
+                mud::DispatcherQueue windowQueue = state->queue;
+                auto work = std::make_shared<std::function<void()>>([state, done]() {
                     mud::DispatcherQueue queue = state->queue;
                     if (state->topLevel && IsWindow(state->topLevel)) {
                         RemoveWindowSubclass(state->topLevel, CloseSubclassProc, kCloseSubclassId);
@@ -20556,6 +20721,7 @@ void CloseEverything() {
                         SetEvent(done);
                     }
                 });
+                queued = windowQueue.TryEnqueue([windowQueue, work]() { RunOutsideModal(windowQueue, work); });
             }
         } catch (...) {
             LogHresult(L"CloseEverything");
@@ -20579,6 +20745,45 @@ void CloseEverything() {
             if (done) {
                 CloseHandle(done);
             }
+        }
+    }
+}
+
+// Columns is switched off while the details pane stays: the panel and the Columns entry go from every
+// window, and the windows' state, pane and entries stay.
+void ColumnsOffEverywhere() {
+    std::vector<mud::DispatcherQueue> queues;
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto& state : g_states) {
+            if (state->queue) {
+                queues.push_back(state->queue);
+            }
+        }
+    }
+    for (auto& queue : queues) {
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        bool queued = false;
+        try {
+            auto work = std::make_shared<std::function<void()>>([done]() {
+                if (WindowState* now = StateForThisThread(false)) {
+                    HidePanel(now, L"Columns switched off");
+                    RemoveColumnsEntry(now);
+                }
+                if (done) {
+                    SetEvent(done);
+                }
+            });
+            queued = queue.TryEnqueue([queue, work]() { RunOutsideModal(queue, work); });
+        } catch (...) {
+            LogHresult(L"ColumnsOffEverywhere");
+        }
+        if (queued && done) {
+            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
+            }
+        }
+        if (done) {
+            CloseHandle(done);
         }
     }
 }
@@ -20668,7 +20873,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.63.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.64.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -20700,8 +20905,12 @@ void Wh_ModSettingsChanged() {
         g_enabled ? 1 : 0, g_minWidth.load(), g_maxWidth.load(),
         g_follow ? 1 : 0, g_maxItems.load());
     if (!g_enabled) {
-        // Off means gone: take the entry and the panel out of every window.
-        CloseEverything();
+        // Off means gone: the Columns entry and the panel go from every window. The details pane stays.
+        if (g_detailsPane) {
+            ColumnsOffEverywhere();
+        } else {
+            CloseEverything();
+        }
     }
 }
 

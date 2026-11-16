@@ -132,8 +132,7 @@ void InstallBrowseTrace(IShellBrowser* browser) {
     // RemoveMenusSB, SetStatusTextSB, EnableModelessSB, TranslateAcceleratorSB,
     // and BrowseObject at slot 11.
     void* target = vtable[11];
-    BOOL ok = Wh_SetFunctionHook(target, (void*)BrowseObject_Hook,
-                                 (void**)&BrowseObject_Original);
+    BOOL ok = WindhawkUtils::SetFunctionHook((BrowseObject_t)target, BrowseObject_Hook, &BrowseObject_Original);
     if (ok) {
         Wh_ApplyHookOperations();
     }

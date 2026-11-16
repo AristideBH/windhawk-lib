@@ -368,7 +368,7 @@ Windhawk calls `Wh_ModBeforeUninit`, then `Wh_ModUninit`, then `FreeLibrary` at 
 - **Draining.** After the cleanup, run the window's queue and message loop for a short, bounded time (`DrainUi`). Bound the inner `PeekMessage` loop by time too, or a thread that keeps posting messages never leaves it.
 - **Classes and hooks.** Register window classes with the mod's own module (`GetModuleHandleExW` from an address in the mod), not `GetModuleHandleW(nullptr)`. Unregister after the windows are gone and check the result.
 - **Per-window work belongs to events, not a timer in every window.** Where a timer stays, slow it for idle and background windows (`TickIntervalMs`).
-- **Never inject keys or attach input** (`SendInput`, `AttachThreadInput`, a low-level keyboard hook): take the key in `TranslateAcceleratorW` and call the thing it stands for (Explorer's own control, through its automation peer; a folder's own verb for "open in new tab").
+- **Never inject keys or attach input** (`SendInput`, `AttachThreadInput`, a low-level keyboard hook): take the key in `TranslateAcceleratorW` and call the thing it stands for (Explorer's own control, through its automation peer: the Details toggle, the tab strip's add button). A verb of a context menu is not a safe substitute for a key: `opennewtab` opened a window.
 - **Raw pointers to rows.** A menu, a drag or a rename that keeps a column pointer and row numbers must be closed when that column's listing changes or the column goes.
 
 ## Test checklist before calling a mod done

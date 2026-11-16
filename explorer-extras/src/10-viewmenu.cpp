@@ -20,6 +20,29 @@ void RememberColumns(bool on) {
     Wh_SetIntValue(L"lastLayoutColumns", on ? 1 : 0);
 }
 
+// Only the Columns entry of the View menu: Columns is switched off, the rest stays.
+void RemoveColumnsEntry(WindowState* state) {
+    try {
+        for (auto& sibling : state->siblings) {
+            if (sibling.item) {
+                sibling.item.Click(sibling.token);
+            }
+        }
+        state->siblings.clear();
+        if (state->menuItem) {
+            state->menuItem.Click(state->menuClickToken);
+            uint32_t index = 0;
+            if (state->menuItems && state->menuItems.IndexOf(state->menuItem, index)) {
+                state->menuItems.RemoveAt(index);
+            }
+        }
+    } catch (...) {
+        LogHresult(L"RemoveColumnsEntry");
+    }
+    state->menuItem = nullptr;
+    state->menuItems = nullptr;
+}
+
 void RemoveMenuEntry(WindowState* state) {
     try {
         for (auto& sibling : state->siblings) {

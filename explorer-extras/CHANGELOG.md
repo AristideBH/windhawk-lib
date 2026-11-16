@@ -2,6 +2,18 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.64 (2026-11-16)
+
+From the second catalog review.
+
+### Changed
+- The cleanup at unload no longer runs inside a dialog or a drag the mod started (a Delete confirmation, Properties, a paste, a drag out): it waits until that ends. The touch-drag operations that are still waiting are cancelled, and waited for without a time limit.
+- The mouse-wheel hook for out-of-process previews belongs to one window thread, and is on only while the pointer is over the preview.
+- A context menu no longer keeps its submenus and buttons alive until the window closes.
+- Switching Columns off keeps the details pane; before, the pane went with it.
+- The notify window's class counts any registration failure as a failure.
+- "Open in new tab" presses the tab strip's add button, as a click would. 0.60 had changed it to the folder's `opennewtab` verb, which opened a new window.
+
 ## 0.63 (2026-11-16)
 
 Smaller fixes, from the Windhawk catalog review.

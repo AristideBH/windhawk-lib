@@ -167,6 +167,7 @@ HRESULT RestoreFromRecycleBin(WindowState* state,
                 invoke.hwnd = state->topLevel;
                 invoke.lpVerb = "undelete";
                 invoke.nShow = SW_SHOWNORMAL;
+                ModalScope modal;
                 hr = menu->InvokeCommand(&invoke);
             }
             DestroyMenu(hmenu);
@@ -258,6 +259,7 @@ bool RedoLast(WindowState* state) {
         op.wFunc = FO_DELETE;
         op.pFrom = names.c_str();
         op.fFlags = FOF_ALLOWUNDO;
+        ModalScope modal;
         int result = SHFileOperationW(&op);
         hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
         Wh_Log(L"Redo delete of %d item(s): result %d", (int)entry.paths.size(), result);
@@ -757,6 +759,7 @@ void RunContextCommand(UINT id) {
                     invoke.nShow = SW_SHOWNORMAL;
                     invoke.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
                     GetCursorPos(&invoke.ptInvoke);
+                    ModalScope modal;
                     HRESULT hr = context->menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
                     Wh_Log(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
@@ -959,6 +962,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     op.pFrom = names.c_str();
     op.pTo = target.c_str();
     op.fFlags = FOF_ALLOWUNDO;
+    ModalScope modal;
     int result = SHFileOperationW(&op);
     Wh_Log(L"new folder \"%s\" with %d item(s): result %d", candidate.c_str(), (int)from.size(), result);
 
@@ -978,7 +982,51 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     RequestLoad(state, column);
 }
 
-// Opens a folder in a new tab of this window: the folder's "opennewtab" verb makes the tab, and once
+// The "add tab" button of the window's tab strip (AutomationId "AddButton"), found in the XAML tree.
+mux::FrameworkElement FindAddTabButton(mux::DependencyObject const& node, int depth, int* visited) {
+    if (!node || depth > 40 || ++*visited > 6000) {
+        return nullptr;
+    }
+    if (auto element = node.try_as<mux::FrameworkElement>()) {
+        if (element.Name() == L"AddButton") {
+            return element;
+        }
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = FindAddTabButton(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// Presses it as a click would, with no key sent.
+bool PressAddTabButton(WindowState* state) {
+    try {
+        if (!state->xamlRoot) {
+            return false;
+        }
+        auto content = state->xamlRoot.Content().try_as<mux::DependencyObject>();
+        int visited = 0;
+        auto button = FindAddTabButton(content, 0, &visited);
+        if (!button) {
+            Wh_Log(L"open in a new tab: the tab strip's add button was not found (%d elements looked at)", visited);
+            return false;
+        }
+        auto peer = mux::Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(button);
+        if (auto invoke = peer.GetPattern(mux::Automation::Peers::PatternInterface::Invoke)
+                              .try_as<mux::Automation::Provider::IInvokeProvider>()) {
+            invoke.Invoke();
+            return true;
+        }
+    } catch (...) {
+        LogHresult(L"the tab strip's add button");
+    }
+    return false;
+}
+
+// Opens a folder in a new tab of this window: the tab strip's add button makes the tab, and once
 // Explorer has built it, the folder is shown in it.
 void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     if (!folder || FolderGone(folder)) {
@@ -987,11 +1035,11 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     state->openTabFolder.reset(ILClone(folder));
     state->openTabUntil = GetTickCount64() + 4000;
     state->newTab = nullptr;
-    // The folder's own "Open in new tab" verb makes the tab. No key is sent: a key goes to whichever
-    // window has the focus at that moment.
-    HRESULT verb = InvokeVerbOnFolder(state, folder, "opennewtab");
-    if (FAILED(verb)) {
-        Wh_Log(L"open in a new tab: the folder has no such verb, hr=0x%08lX", (unsigned long)verb);
+    // The tab strip's own add button makes the tab. No key is sent: a key goes to whichever window has the
+    // focus at that moment. (The folder's "opennewtab" verb was tried: it opens a window of its own.)
+    if (!PressAddTabButton(state)) {
+        state->openTabFolder.reset();
+        state->openTabUntil = 0;
         return;
     }
     Wh_Log(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
@@ -1076,6 +1124,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             list->Release();
         }
         if (copied > 0) {
+            ModalScope modal;
             hr = operation->PerformOperations();
         }
     }
@@ -1186,6 +1235,7 @@ void ExtractSelected(WindowState* state, Column* column, std::vector<size_t> con
             }
         }
         if (copied > 0) {
+            ModalScope modal;
             hr = operation->PerformOperations();
         }
     }
@@ -1990,10 +2040,14 @@ struct MenuBuilder {
             // Like a cascading menu: beside the row, top aligned with it.
             spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
             auto sub = spec.submenu;
-            Keep(spec.submenu, spec.submenu.Opened(winrt::auto_revoke, [sub](Inspectable const&, Inspectable const&) {
+            // Weak: a handler that holds the element it is on keeps both alive for as long as the window.
+            auto weakSub = winrt::make_weak(sub);
+            auto weakButton = winrt::make_weak(button);
+            Keep(spec.submenu, spec.submenu.Opened(winrt::auto_revoke, [weakSub](Inspectable const&, Inspectable const&) {
                 WindowState* open = StateForThisThread(false);
-                if (open && open->context) {
-                    open->context->openSub = sub;
+                auto strong = weakSub.get();
+                if (open && open->context && strong) {
+                    open->context->openSub = strong;
                 }
             }));
             Keep(spec.submenu, spec.submenu.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
@@ -2008,10 +2062,14 @@ struct MenuBuilder {
                 }
             }));
             // Right arrow opens it from the keyboard.
-            Keep(button, button.KeyDown(winrt::auto_revoke, [sub, button](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
+            Keep(button, button.KeyDown(winrt::auto_revoke, [weakSub, weakButton](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
                 if (keyArgs.Key() == winrt::Windows::System::VirtualKey::Right) {
                     try {
-                        sub.ShowAt(button);
+                        auto strongSub = weakSub.get();
+                        auto strongButton = weakButton.get();
+                        if (strongSub && strongButton) {
+                            strongSub.ShowAt(strongButton);
+                        }
                     } catch (...) {
                     }
                     keyArgs.Handled(true);
@@ -2022,9 +2080,11 @@ struct MenuBuilder {
         // after a short moment if the pointer stays.
         {
             auto hovering = std::make_shared<bool>(false);
-            auto sub = spec.submenu;
-            Keep(button, button.PointerEntered(winrt::auto_revoke, [hovering, sub, button](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            auto weakSub = winrt::make_weak(spec.submenu);
+            auto weakButton = winrt::make_weak(button);
+            Keep(button, button.PointerEntered(winrt::auto_revoke, [hovering, weakSub, weakButton](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
                 *hovering = true;
+                auto sub = weakSub.get();
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->queue || g_unloading) {
                     return;
@@ -2046,10 +2106,12 @@ struct MenuBuilder {
                     ctx.hover = timer;
                     timer.Interval(std::chrono::milliseconds(200));
                     timer.IsRepeating(false);
-                    Keep(timer, timer.Tick(winrt::auto_revoke, [hovering, sub, button](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                    Keep(timer, timer.Tick(winrt::auto_revoke, [hovering, weakSub, weakButton](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                         sender.Stop();
                         WindowState* now = StateForThisThread(false);
-                        if (!*hovering || !now || !now->context || g_unloading || now->context->openSub == sub) {
+                        auto sub = weakSub.get();
+                        auto button = weakButton.get();
+                        if (!*hovering || !now || !now->context || g_unloading || !sub || !button || now->context->openSub == sub) {
                             return;
                         }
                         try {
@@ -2744,6 +2806,7 @@ HRESULT InvokeVerbOnItems(WindowState* state, Column* column,
         if (GetKeyState(VK_SHIFT) & 0x8000) {
             invoke.fMask |= CMIC_MASK_SHIFT_DOWN;
         }
+        ModalScope modal;
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);
@@ -2777,6 +2840,7 @@ HRESULT InvokeVerbOnFolder(WindowState* state, PCIDLIST_ABSOLUTE folder,
         invoke.hwnd = state->topLevel;
         invoke.lpVerb = verb;
         invoke.nShow = SW_SHOWNORMAL;
+        ModalScope modal;
         hr = menu->InvokeCommand(&invoke);
     }
     DestroyMenu(hmenu);

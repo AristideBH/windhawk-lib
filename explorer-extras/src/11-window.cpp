@@ -535,18 +535,45 @@ void DrainUi(mud::DispatcherQueue const& queue) {
 // The touch-drag coroutines resume on the thread that started them. Until they have ended, their
 // thread's messages are handled, so they can run to their end while the mod is still mapped.
 void WaitForCoroutines() {
+    // Their operations are cancelled (a drag that is still held, a file on a slow network): they end
+    // with an error that they handle. Then each is waited for as long as it takes.
     ULONGLONG began = GetTickCount64();
-    while (g_coroutines > 0 && GetTickCount64() - began < 3000) {
+    ULONGLONG cancelledAt = 0;
+    while (g_coroutines > 0) {
+        if (GetTickCount64() - cancelledAt >= 500) {
+            CancelTouchDragOps();
+            cancelledAt = GetTickCount64();
+        }
         MSG msg;
-        while (GetTickCount64() - began < 3000 && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        if (GetTickCount64() - began == 10000) {
+            Wh_Log(L"%d coroutine(s) of the mod are still waiting after 10 s", g_coroutines.load());
+        }
     }
-    if (g_coroutines > 0) {
-        Wh_Log(L"%d coroutine(s) of the mod were still waiting after 3 s", g_coroutines.load());
+}
+
+// Work for a window's thread that must not run inside a message loop of the mod's own (see ModalScope):
+// it waits, by a one-shot timer, until none is on the stack.
+void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work) {
+    if (t_modalDepth == 0) {
+        (*work)();
+        return;
     }
+    static int logged = 0;
+    if (logged++ < 3) {
+        Wh_Log(L"window cleanup waits: a dialog or a drag of the mod is open on this thread");
+    }
+    auto timer = queue.CreateTimer();
+    timer.Interval(std::chrono::milliseconds(100));
+    Keep(timer, timer.Tick(winrt::auto_revoke, [queue, work](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        sender.Stop();
+        RunOutsideModal(queue, work);
+    }));
+    timer.Start();
 }
 
 void CloseEverything() {
@@ -561,7 +588,8 @@ void CloseEverything() {
         bool queued = false;
         try {
             if (state->queue) {
-                queued = state->queue.TryEnqueue([state, done]() {
+                mud::DispatcherQueue windowQueue = state->queue;
+                auto work = std::make_shared<std::function<void()>>([state, done]() {
                     mud::DispatcherQueue queue = state->queue;
                     if (state->topLevel && IsWindow(state->topLevel)) {
                         RemoveWindowSubclass(state->topLevel, CloseSubclassProc, kCloseSubclassId);
@@ -586,6 +614,7 @@ void CloseEverything() {
                         SetEvent(done);
                     }
                 });
+                queued = windowQueue.TryEnqueue([windowQueue, work]() { RunOutsideModal(windowQueue, work); });
             }
         } catch (...) {
             LogHresult(L"CloseEverything");
@@ -609,6 +638,45 @@ void CloseEverything() {
             if (done) {
                 CloseHandle(done);
             }
+        }
+    }
+}
+
+// Columns is switched off while the details pane stays: the panel and the Columns entry go from every
+// window, and the windows' state, pane and entries stay.
+void ColumnsOffEverywhere() {
+    std::vector<mud::DispatcherQueue> queues;
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto& state : g_states) {
+            if (state->queue) {
+                queues.push_back(state->queue);
+            }
+        }
+    }
+    for (auto& queue : queues) {
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        bool queued = false;
+        try {
+            auto work = std::make_shared<std::function<void()>>([done]() {
+                if (WindowState* now = StateForThisThread(false)) {
+                    HidePanel(now, L"Columns switched off");
+                    RemoveColumnsEntry(now);
+                }
+                if (done) {
+                    SetEvent(done);
+                }
+            });
+            queued = queue.TryEnqueue([queue, work]() { RunOutsideModal(queue, work); });
+        } catch (...) {
+            LogHresult(L"ColumnsOffEverywhere");
+        }
+        if (queued && done) {
+            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
+            }
+        }
+        if (done) {
+            CloseHandle(done);
         }
     }
 }
