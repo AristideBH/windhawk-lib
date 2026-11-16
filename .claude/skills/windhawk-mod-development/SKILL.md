@@ -308,34 +308,68 @@ A crash can also hide other evidence. "No log line appeared" proves nothing if t
 
 ## The build and test loop
 
-Ari compiles and tests on his own Windows machine. You usually can't run the mod.
+Ari tests on his own Windows machine (ARM64 here, with Windhawk 2). You build, he enables the mod and uses it, you read what it wrote.
 
-Run Windhawk's own clang over the file before every handover, and prove the check ran:
+**Build.** `python explorer-extras/build.py` joins the parts. `python explorer-extras/build.py --debug <logfile>` writes `explorer-extras.debug.wh.cpp` instead (git-ignored): the same mod, and every `Wh_Log` line is also appended to that file, because Windhawk 2 keeps the log only in its live panel and you cannot read it. Use the debug build for every test, and the plain one for the commit.
 
-- The compiler is `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`. It is not on PATH in the Bash tool. A call to `clang++` fails with "command not found", and a pipe into `grep error` then prints nothing, which looks like a clean result. Call the full path, and count matches (`grep -cE "error|warning"`) or read the exit code.
-- The flags are in `explorer-extras/HANDOFF.md`, "Compile check without the Windhawk editor". The check does not link, so a missing `-l` flag shows only in Windhawk.
-- When a patch is applied with a Python script inside a Bash heredoc, backslashes in the replacement text get halved: a char literal for a backslash ends up in the file with one backslash and does not compile. Build such strings with `chr(92)`, or use the Edit tool. After a patch, grep the lines you touched.
-- Every handover bumps `@version` and the version in the start log line, copies the file to `C:/ProgramData/Windhawk/EditorWorkspaces/1/mod.wh.cpp` and compares the two with `cmp`. The editor sometimes shows an old version, so check `grep @version` there too.
-- Read the mod's own log before guessing. It tells which path ran: a restricted menu that still showed ten entries, and an archive column the mod did not recognise, were both found by reading one log line.
+**Check.** Run Windhawk's clang over the file and count the errors, so a failed check cannot look clean:
 
-1. Hand over the full file, never a fragment to merge by hand.
-2. He replaces the editor source, compiles with Ctrl+B and checks the compiler output.
-3. He enables the mod, reproduces, and pastes back the full log.
+- The compiler is `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`, not on PATH. Call the full path and count matches (`grep -c error`), or read the exit code.
+- The flags are in `explorer-extras/HANDOFF.md`, "Compile check without the Windhawk editor". Without `-include windhawk_api.h` and the `-D` flags you get dozens of false errors (`Wh_SetFunctionHook` undeclared).
+- A script that patches a file from a Bash heredoc halves backslashes. Write the script with the Write tool, or build a backslash with `chr(92)`. Check the patched lines afterwards. Files here are CRLF: read, normalise to LF, edit, and write back with the original ending.
 
-Rules for that loop:
+**Version.** Every build that goes to Ari bumps `@version` and the version in the start log line, test builds included. Ari tells builds apart by the version in the log, and a fix rebuilt under the same number looks like the old one.
 
-- Mark every fix you couldn't run as "unverified live" in PLAN.md, and remove the mark only when a test confirms it.
-- List the exact steps and the expected log lines for the next retest.
+**Deploy.** One command does the whole build and deploy, and you can run it yourself: `pwsh -NoProfile -File tools\deploy-explorer-extras.ps1 -Log <logfile>` joins the parts, makes the debug build, compiles both architectures and deploys. The deploy step opens one UAC prompt on Ari's screen, which he accepts. You cannot elevate by yourself, but you can start this and let him click. Say so before you run it. `-CompileOnly` needs no prompt. Two ways underneath, and the first is the default now:
+
+1. `tools/windhawk-build/build.ps1` (Dan Rotaru's script, MIT, see its NOTICE.md) compiles with Windhawk's own clang, links both architectures, and deploys like the editor's Compile: it copies the DLL to `ProgramData\Windhawk\Engine\Mods\<arch>`, updates the mod's registry key and writes `LibraryFileName` last, which makes every injected process reload the mod. `-CompileOnly` checks the build and links, and needs no rights. A real deploy needs admin rights: Ari runs it once in an elevated PowerShell (`pwsh -NoProfile -File tools\windhawk-build\build.ps1 -Source explorer-extras\explorer-extras.debug.wh.cpp`). You cannot elevate. Do not install its scheduled task unless Ari asks. The Windhawk editor can stay closed.
+2. Copy the generated file into the editor (`C:/ProgramData/Windhawk/EditorWorkspaces/1/mod.wh.cpp`). Windhawk 2 made the editor a separate window and the folder write-protected: Ari grants write access once with `icacls`. Compare with `cmp` and `grep @version`.
+
+A mod reload does not rebuild what Explorer already built. To test code that runs when a window or its command bar is created, Ari must open a **new** Explorer window after the deploy. A log from a window that was open before the reload proves nothing about that code.
+
+**Read.** After each test read the log file the debug build writes, then check `%LOCALAPPDATA%\CrashDumps` for a dump newer than the test. An Explorer crash on a disable shows in the log as a clean `explorer-extras end` followed by nothing: the crash came after the unload. See "Reading a crash dump".
+
+Rules for the loop:
+
+- Mark every fix you couldn't run as "unverified" in the notes, and remove the mark only when a test or a log line confirms it. A log with none of the lines the fix would write means the fix did not run (the test used another folder, or an old window), not that it passed.
+- List the exact steps and the log lines to expect for the next test.
 - Expect link errors on first build of new code. Missing `-l` flags are common, such as `-lcomctl32` for subclassing and `-ladvapi32` for the registry.
-- C++/WinRT methods with deduced return types need the full header, for example `winrt/Windows.Foundation.Collections.h` for `IVector::Append`. The forward-declaring headers compile until the first call.
+- C++/WinRT methods with deduced return types need the full header, for example `winrt/Windows.Foundation.Collections.h` for `IVector::Append`.
 - `WindhawkUtils`' subclass procedure takes five parameters. It has no `dwRefData`.
 - `UIElementCollection` has no `Remove(value)`. Use `IndexOf` then `RemoveAt`.
-- Put `#undef GetCurrentTime` after `<windows.h>` and before any WinUI 3 header. `winbase.h` defines it as a macro and the WinUI animation headers declare a method with that name.
-- Remove diagnostic logging once the bug is confirmed fixed, and say so in PLAN.md.
+- Put `#undef GetCurrentTime` after `<windows.h>` and before any WinUI 3 header.
+- `Wh_Log` is a macro in `windhawk_api.h`; to wrap it, call it by name inside the wrapper and `#undef` it before redefining.
+- Remove diagnostic logging once the bug is confirmed fixed.
 
 For a mod that crash-loops a process which restarts itself, the wiki has a snippet that makes the mod refuse to load at process startup. Use it while developing.
 
-Debugging with a debugger: install CodeLLDB in the Windhawk editor, add `--optimize=0 --debug` to `@compilerOptions`, and attach by process id. Without a debugger: turn on "Detailed debug logs" in the mod's Advanced tab.
+Debugging with a debugger: install CodeLLDB in the Windhawk editor, add `--optimize=0 --debug` to `@compilerOptions`, and attach by process id.
+
+## Reading a crash dump
+
+Windows keeps a minidump of every Explorer crash in `%LOCALAPPDATA%\CrashDumps`. There is no debugger here, but two scripts in `tools/crash-analysis/` are enough for the commonest mod crash:
+
+1. `python -I tools/crash-analysis/dump.py <dump>` prints the exception, the faulting module and offset, the address a read or write failed at (`AVADDR`), and whether the mod's DLL was still loaded.
+2. If the fault is in `Microsoft.UI.Xaml.dll` or another host DLL, and `AVADDR` lies where the mod's DLL used to be (an address in no loaded module), the host called into code that was unmapped. `python -I tools/crash-analysis/rd.py <the mod's DLL from Engine\Mods\<arch>> <low 16 bits of AVADDR>` names the C++ type there. Use the DLL of the **same build** as the crash: the offset moves with every change.
+
+What the type tells you: `winrt::impl::delegate<...Handler, lambda in Function>` with slot 2 is `Release` of an event handler the mod gave to a XAML element. XAML freed it late, after the mod was gone. The function name is the place that registered it. The same low 16 bits on every dump of one build means one object; different bits between scenarios means more than one.
+
+Same fault offset in the host DLL on many crashes does not mean the same bug in your code: it is the host reading a dead object. Decode each dump.
+
+## Unloading cleanly (shell mods with XAML)
+
+Windhawk calls `Wh_ModBeforeUninit`, then `Wh_ModUninit`, then `FreeLibrary` at once. Nothing of the mod may run, or be released, after that. What went wrong in Explorer Extras, in the order it was found:
+
+- **Threads.** Every thread goes through one registry (`StartModThread`) and is joined at unload, never detached. Long jobs read a stop flag or a stop event, and `CancelSynchronousIo` frees one stuck on a network folder. A wait that gives up after a timeout leaves a thread in unmapped code. `fire_and_forget` coroutines count themselves, and the unload pumps messages until the count is zero.
+- **Handlers.** A lambda given to an element is a heap object whose methods live in the mod. XAML releases it late, after `Close()`, on later turns of the queue. Keep every handler as a revoker (`winrt::auto_revoke`, `AddHandler` with the boxed handler kept for `RemoveHandler`), and take them all off first in each window's cleanup. A script that wraps every `x.Event([...])` finds them. Check that it also matches events not on your list, and `AddHandler`.
+- **Elements you do not own** (Explorer's toolbar, menus) keep your handlers after you leave. Revoke those by token, and hold such elements by `weak_ref`.
+- **Thread-locals** with a destructor run it at thread exit, after the mod is gone: `[[clang::no_destroy]]` and reset them in the cleanup.
+- **Closed windows.** Subclass the top-level window and release everything in `WM_DESTROY`, while its children still exist. Polling `IsWindow` after the fact can only leak.
+- **Draining.** After the cleanup, run the window's queue and message loop for a short, bounded time (`DrainUi`). Bound the inner `PeekMessage` loop by time too, or a thread that keeps posting messages never leaves it.
+- **Classes and hooks.** Register window classes with the mod's own module (`GetModuleHandleExW` from an address in the mod), not `GetModuleHandleW(nullptr)`. Unregister after the windows are gone and check the result.
+- **Per-window work belongs to events, not a timer in every window.** Where a timer stays, slow it for idle and background windows (`TickIntervalMs`).
+- **Never inject keys or attach input** (`SendInput`, `AttachThreadInput`, a low-level keyboard hook): take the key in `TranslateAcceleratorW` and call the thing it stands for (Explorer's own control, through its automation peer; a folder's own verb for "open in new tab").
+- **Raw pointers to rows.** A menu, a drag or a rename that keeps a column pointer and row numbers must be closed when that column's listing changes or the column goes.
 
 ## Test checklist before calling a mod done
 

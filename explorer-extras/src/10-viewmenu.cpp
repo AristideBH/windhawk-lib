@@ -266,13 +266,13 @@ void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
 
 void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node);  // 10d
 
-void OnCommandBarPointer(Inspectable const& sender) {
+void OnCommandBarPointer(Inspectable const& sender, bool force = false) {
     if (g_unloading) {
         return;
     }
     ULONGLONG now = GetTickCount64();
-    if (now - g_lastWalk < 1000) {
-        return;
+    if (!force && now - g_lastWalk < 1000) {
+        return;  // A click: not more than once a second. A command bar that was just built is always looked at.
     }
     g_lastWalk = now;
     try {

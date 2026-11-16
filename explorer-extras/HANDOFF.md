@@ -12,7 +12,7 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.63.0,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.63.2,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
   2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).
@@ -163,6 +163,14 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 - When grouping is on, the group's property is also the first sort column.
 - Two interfaces of one XAML object don't compare equal. Convert to the
   same type before comparing.
+
+## Build, deploy and read (current workflow, since 0.60)
+
+`python explorer-extras/build.py --debug <logfile>` makes `explorer-extras.debug.wh.cpp`, which also
+writes the log to a file. `tools/windhawk-build/build.ps1 -Source <that file>` compiles and links both
+architectures (`-CompileOnly` needs no rights); a real deploy runs once in an elevated PowerShell and
+reloads the mod in every process. Crash dumps are decoded with `tools/crash-analysis/`. Details in the
+windhawk-mod-development skill ("The build and test loop", "Reading a crash dump").
 
 ## Compile check without the Windhawk editor
 

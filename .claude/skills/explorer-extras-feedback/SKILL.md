@@ -50,3 +50,7 @@ Labels `mod: explorer-extras` and `mod: other`; pull request titles start with `
 3. Merge to `main`, tag `explorer-extras-v<version>`, create the release with the entry as its notes and `explorer-extras/explorer-extras.wh.cpp` attached (`gh release create`). Only on Ari's say.
 4. Close the issues labelled `status: fixed in next` with a link to the release.
 5. The Windhawk catalog is a pull request to windhawk-mods, a separate step.
+
+## A crash report
+
+Ask for the minidump in `%LOCALAPPDATA%\CrashDumps` (explorer.exe.<pid>.dmp) and the mod version. Decode it with `tools/crash-analysis/dump.py` and `rd.py` (see the windhawk-mod-development skill, "Reading a crash dump"): they name the object behind a crash in the host DLL. Use the DLL of the reporter's exact version from `ProgramData\Windhawk\Engine\Mods`, if they can send it, or rebuild that tag.

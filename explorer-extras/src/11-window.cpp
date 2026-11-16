@@ -414,6 +414,50 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
     }
 }
 
+// Explorer hands a command bar to its manager when it builds one. That is the moment to look for
+// the View menu, so the entry does not wait for the next 50 ms tick, or for a click (the idea of
+// Explorer Command Bar by DanRotaru, who hooks the same method).
+using CommandBarManagerCommandBar_t = void(WINAPI*)(void* pThis, void* commandBar);
+CommandBarManagerCommandBar_t CommandBarManagerCommandBar_Original;
+void WINAPI CommandBarManagerCommandBar_Hook(void* pThis, void* commandBar) {
+    CommandBarManagerCommandBar_Original(pThis, commandBar);
+    if (g_unloading || !commandBar) {
+        return;
+    }
+    try {
+        auto const& bar = *reinterpret_cast<muxc::CommandBar const*>(commandBar);
+        if (!bar) {
+            return;
+        }
+        Wh_Log(L"command bar \"%s\" was built, thread %lu", bar.Name().c_str(), GetCurrentThreadId());
+        if (auto queue = mud::DispatcherQueue::GetForCurrentThread()) {
+            Inspectable held = bar;
+            queue.TryEnqueue([held, queue]() {
+                if (g_unloading) {
+                    return;
+                }
+                // What a click on the toolbar used to bring: the toolbar's toggle and the "..." entry.
+                OnCommandBarPointer(held, true);
+                EntryTick();  // The View entry search, now: the bar is in the tree by this turn.
+                // And again a moment later, when Explorer has filled the bar and built its menus.
+                try {
+                    auto timer = queue.CreateTimer();
+                    timer.Interval(std::chrono::milliseconds(400));
+                    Keep(timer, timer.Tick(winrt::auto_revoke, [held](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                        sender.Stop();
+                        if (!g_unloading) {
+                            OnCommandBarPointer(held, true);
+                        }
+                    }));
+                    timer.Start();
+                } catch (...) {
+                }
+            });
+        }
+    } catch (...) {
+    }
+}
+
 bool g_hooked = false;
 
 void HookExtensions(HMODULE module) {
@@ -430,6 +474,10 @@ void HookExtensions(HMODULE module) {
         {{LR"(public: struct winrt::fire_and_forget __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::OnDpiChanged(struct winrt::Microsoft::UI::Xaml::XamlRoot,struct winrt::Microsoft::UI::Xaml::XamlRootChangedEventArgs))"},
          &DpiChanged_Original,
          DpiChanged_Hook,
+         true},
+        {{LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarManager::CommandBar(struct winrt::Microsoft::UI::Xaml::Controls::CommandBar const &))"},
+         &CommandBarManagerCommandBar_Original,
+         CommandBarManagerCommandBar_Hook,
          true},
         {{LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarManager::InvokeMenuItem(struct winrt::WindowsUdk::UI::MenuItem const &))"},
          &InvokeMenuItem_Original,
