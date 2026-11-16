@@ -362,6 +362,7 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
 bool g_hooked = false;
 
 void HookExtensions(HMODULE module) {
+    // FileExplorerExtensions.dll
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         {{LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::PointerPressedHandler(struct winrt::Windows::Foundation::IInspectable const &,struct winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const &))"},
          &PointerPressed_Original,

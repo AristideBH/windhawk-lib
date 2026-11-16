@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.55.0
+// @version         0.55.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -20318,6 +20318,7 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
 bool g_hooked = false;
 
 void HookExtensions(HMODULE module) {
+    // FileExplorerExtensions.dll
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         {{LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::PointerPressedHandler(struct winrt::Windows::Foundation::IInspectable const &,struct winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const &))"},
          &PointerPressed_Original,
@@ -20519,7 +20520,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.55.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.55.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
