@@ -2,8 +2,6 @@
 
 A **Columns** layout in File Explorer's View menu: Miller columns, one column per folder level, drawn with Explorer's own WinUI 3 controls. Choose Columns in the View menu of an Explorer window. Each folder opens in the next column, with a chevron on folders. Explorer's own view follows the active column, so the address bar, tab title, toolbar, panes and status bar act on the selection.
 
-![The Columns layout](../assets/captures/columns.svg)
-
 ## Look and feel
 
 - **Native feel.** Sort and group come from Explorer's view. File icons, thumbnails and the context menu come from the shell.

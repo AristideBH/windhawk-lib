@@ -14,7 +14,7 @@ Status: public beta, in daily use by its author, not yet in the Windhawk catalog
 
 More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
 
-![The Columns layout](assets/captures/columns.svg)
+![Columns, the View menu and the details pane in File Explorer](assets/captures/hero.png)
 
 ## Install
 
@@ -27,8 +27,6 @@ The mod hooks `FileExplorerExtensions.dll`. Windhawk must be able to download Mi
 ## Settings
 
 Each area has its own page, and every area has an off switch, so you can use only the part you like. The full list is in [`docs/settings.md`](docs/settings.md). Settings apply at once, and the same ones are on the mod's page in Windhawk.
-
-![The settings window](assets/captures/settings.svg)
 
 ## Feedback
 
