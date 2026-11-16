@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.61.0
+// @version         0.62.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -3471,9 +3471,52 @@ int ColumnIndexOfGrip(WindowState* state, Inspectable const& sender) {
     return -1;
 }
 
+void CloseContextMenu(WindowState* state);
+void CancelRename(WindowState* state);
+void EndBand(WindowState* state, bool apply);
+
+// Whatever holds a column, or row numbers of it, lets go before the column changes or goes: a menu,
+// a drag or a rename that went on would act on other files (Compress, Move, Delete, Rename).
+// `gone`: the column is about to be freed, so the pointers to it are cleared too.
+void ForgetColumnUsers(WindowState* state, Column* column, bool gone) {
+    if (state->context && state->context->column == column) {
+        Wh_Log(L"a column changed under its context menu, the menu is closed");
+        CloseContextMenu(state);
+    }
+    if (state->drag.column == column || state->drag.targetColumn == column) {
+        Wh_Log(L"a column changed under a drag, the drag is cancelled");
+        CancelDrag(state);
+    }
+    if (state->rename && state->rename->column == column && !state->rename->done) {
+        Wh_Log(L"a column changed under a rename, the rename is cancelled");
+        CancelRename(state);
+    }
+    if (state->band.column == column && (state->band.pending || state->band.active)) {
+        EndBand(state, false);
+    }
+    if (gone) {
+        if (state->drag.column == column) {
+            state->drag.column = nullptr;
+        }
+        if (state->drag.targetColumn == column) {
+            state->drag.targetColumn = nullptr;
+        }
+        if (state->band.column == column) {
+            state->band.column = nullptr;
+        }
+        for (Column** held : {&state->selectNamesColumn, &state->slowRenameColumn, &state->renameColumn,
+                              &state->springColumn, &state->focusColumn}) {
+            if (*held == column) {
+                *held = nullptr;
+            }
+        }
+    }
+}
+
 void RemoveColumnsFrom(WindowState* state, size_t index) {
     while (state->columns.size() > index) {
         auto& column = state->columns.back();
+        ForgetColumnUsers(state, column.get(), true);
         try {
             if (column->list) {
                 column->list.SelectionChanged(column->selectionToken);
@@ -4906,6 +4949,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                 bool firstListing = !column->filled;
                 bool changed = !SameListing(loaded->data, *column);
                 if (changed) {
+                    ForgetColumnUsers(state, column.get(), false);  // The rows move: no menu, drag or rename goes on.
                     ULONGLONG fillStarted = GetTickCount64();
                     size_t fillCount = loaded->data.entries.size();
                     if (!firstListing && PatchColumn(state, column.get(), loaded, true)) {
@@ -20574,7 +20618,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.61.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.62.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

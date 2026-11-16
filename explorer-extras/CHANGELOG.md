@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.62 (2026-11-16)
+
+### Changed
+- A context menu, a drag or a rename in a column is closed or cancelled when that column's listing changes under it (a download finishing in the folder, for example), or when the column is removed. It kept row numbers, so Compress, Move or Rename could act on other files. The pointers to a removed column are cleared too.
+
 ## 0.61 (2026-11-16)
 
 ### Changed
