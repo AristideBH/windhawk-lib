@@ -47,19 +47,22 @@ def yaml_value(setting):
 def windhawk_block(schema):
     """The text of the settings block, grouped as the schema lists the settings."""
     lines = []
+    done = set()
     settings = schema['settings']
-    index = 0
-    while index < len(settings):
-        group = settings[index].get('group')
+    for setting in settings:
+        group = setting.get('group')
         if group:
+            # Windhawk refuses a section named twice: all its settings go together.
+            if group in done:
+                continue
+            done.add(group)
             lines.append('- %s:' % group)
-            while index < len(settings) and settings[index].get('group') == group:
-                lines.extend(entry_lines(settings[index], '  - ', '    '))
-                index += 1
+            for member in settings:
+                if member.get('group') == group:
+                    lines.extend(entry_lines(member, '  - ', '    '))
             lines.append('  $name: %s' % schema['groups'][group]['name'])
         else:
-            lines.extend(entry_lines(settings[index], '- ', '  '))
-            index += 1
+            lines.extend(entry_lines(setting, '- ', '  '))
     return '\n'.join(lines) + '\n'
 
 
@@ -137,6 +140,37 @@ for marker, text in ((b'@@SETTINGS_BLOCK@@\n', windhawk_block(schema)), (b'@@SET
     if joined.count(marker) != 1:
         sys.exit('the parts must hold %s exactly once' % marker.decode().strip())
     joined = joined.replace(marker, text.encode('utf8'))
+
+
+def strip_no_winrt(data):
+    """The parts keep a MOD_NO_WINRT guard for a compile check without WinRT headers.
+    The catalog's validator cannot resolve it, so the generated file keeps the WinRT side only."""
+    out = []
+    state = 0  # 0 outside, 1 inside #ifndef MOD_NO_WINRT, 2 inside its #else
+    depth = 0
+    for line in data.split(b'\n'):
+        text = line.strip()
+        if text.startswith(b'#ifndef MOD_NO_WINRT'):
+            state, depth = 1, 0
+            continue
+        if state:
+            if text.startswith((b'#if', b'#ifdef', b'#ifndef')):
+                depth += 1
+            elif text.startswith(b'#endif'):
+                if depth == 0:
+                    state = 0
+                    continue
+                depth -= 1
+            elif depth == 0 and text.startswith(b'#else'):
+                state = 2
+                continue
+            if state == 2:
+                continue
+        out.append(line)
+    return b'\n'.join(out)
+
+
+joined = strip_no_winrt(joined)
 target = os.path.join(here, 'explorer-extras.wh.cpp')
 
 if '--check' in sys.argv:
