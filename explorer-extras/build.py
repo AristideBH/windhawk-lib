@@ -45,24 +45,33 @@ def yaml_value(setting):
 
 
 def windhawk_block(schema):
-    """The text of the settings block, grouped as the schema lists the settings."""
+    """The text of the settings block. A group of the schema is a section of Windhawk's page, a sub-group a
+    section inside it. The first settings of a group (no sub-group) come before its sub-groups, in the
+    order the schema lists them."""
     lines = []
-    done = set()
     settings = schema['settings']
+    done = []
     for setting in settings:
-        group = setting.get('group')
-        if group:
-            # Windhawk refuses a section named twice: all its settings go together.
-            if group in done:
-                continue
-            done.add(group)
-            lines.append('- %s:' % group)
-            for member in settings:
-                if member.get('group') == group:
-                    lines.extend(entry_lines(member, '  - ', '    '))
-            lines.append('  $name: %s' % schema['groups'][group]['name'])
-        else:
-            lines.extend(entry_lines(setting, '- ', '  '))
+        group = setting['group']
+        if group in done:
+            continue
+        done.append(group)
+        info = schema['groups'][group]
+        lines.append('- %s:' % group)
+        members = [s for s in settings if s['group'] == group]
+        subs = []
+        for member in members:
+            sub = member.get('sub')
+            if not sub:
+                lines.extend(entry_lines(member, '  - ', '    '))
+            elif sub not in subs:
+                subs.append(sub)
+                lines.append('  - %s:' % sub)
+                for inner in members:
+                    if inner.get('sub') == sub:
+                        lines.extend(entry_lines(inner, '    - ', '      '))
+                lines.append('    $name: %s' % info['subs'][sub])
+        lines.append('  $name: %s' % info['name'])
     return '\n'.join(lines) + '\n'
 
 
@@ -101,36 +110,23 @@ def cpp_string(text):
 def cpp_table(schema):
     rows = []
     for setting in schema['settings']:
-        group = setting.get('group')
-        key = '%s.%s' % (group, setting['id']) if group else setting['id']
+        group = setting['group']
+        sub = setting.get('sub')
+        key = '.'.join([group] + ([sub] if sub else []) + [setting['id']])
         kind = {'bool': 'Bool', 'int': 'Int', 'enum': 'Enum', 'string': 'String'}[setting['type']]
         default = setting['default']
         default_int = int(default) if setting['type'] in ('bool', 'int') else 0
         default_text = cpp_string(default) if setting['type'] in ('enum', 'string') else 'L""'
-        minimum = setting.get('min', 0)
-        maximum = setting.get('max', 0)
-        options = '|'.join('%s=%s' % (o['value'], o['label']) for o in setting.get('options', []))
-        rows.append('    {%s, %s, SettingKind::%s, %d, %s, %d, %d,\n     %s,\n     %s,\n     %s, %s, %s, %s, %s}' % (
+        rows.append('    {%s, %s, SettingKind::%s, %d, %s, %d, %d, %s}' % (
             cpp_string(setting['id']), cpp_string(key), kind, default_int, default_text,
-            minimum, maximum, cpp_string(setting['name']), cpp_string(setting.get('description', '')),
-            cpp_string(setting.get('page', '')), cpp_string(setting.get('card', '')),
-            'true' if setting.get('windhawkOnly') else 'false', cpp_string(options),
+            setting.get('min', 0), setting.get('max', 0),
             'true' if setting.get('needs') == 'rebuild' else 'false'))
-    cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema['cards'].items())
-    news = ',\n'.join('    %s' % cpp_string(item) for item in schema.get('whatsNew', []))
     strings = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema.get('strings', {}).items())
-    fr = schema.get('fr', {})
-    fr_strings = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in fr.get('strings', {}).items())
-    fr_cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in fr.get('cards', {}).items())
-    fr_settings = ',\n'.join('    {%s, %s, %s}' % (cpp_string(k), cpp_string(v['name']), cpp_string(v['description']))
-                             for k, v in fr.get('settings', {}).items())
+    fr_strings = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v))
+                            for k, v in schema.get('fr', {}).get('strings', {}).items())
     return ('constexpr SettingInfo kSettings[] = {\n%s,\n};\n\n'
-            'constexpr SettingCard kCards[] = {\n%s,\n};\n\n'
-            'constexpr const wchar_t* kWhatsNew[] = {\n%s,\n};\n\n'
             'constexpr StringInfo kStrings[] = {\n%s,\n};\n\n'
-            'constexpr StringInfo kStringsFr[] = {\n%s,\n};\n\n'
-            'constexpr SettingCard kCardsFr[] = {\n%s,\n};\n\n'
-            'constexpr SettingText kSettingsFr[] = {\n%s,\n};\n') % (',\n'.join(rows), cards, news, strings, fr_strings, fr_cards, fr_settings)
+            'constexpr StringInfo kStringsFr[] = {\n%s,\n};\n') % (',\n'.join(rows), strings, fr_strings)
 
 
 schema = load_schema()

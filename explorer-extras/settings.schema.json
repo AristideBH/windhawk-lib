@@ -2,19 +2,24 @@
   "$comment": "Every setting of Explorer Extras, declared once. build.py writes the Windhawk settings block and the C++ settings table from it. See SPEC-settings-shell.md.",
   "groups": {
     "columns": {
-      "name": "Columns"
+      "name": "Columns",
+      "subs": {
+        "behaviour": "Behaviour",
+        "content": "Content",
+        "layout": "Layout",
+        "memory": "Memory"
+      }
     },
     "details": {
-      "name": "Details pane"
+      "name": "Details pane",
+      "subs": {
+        "pane": "Pane",
+        "previews": "Previews"
+      }
+    },
+    "limits": {
+      "name": "Limits"
     }
-  },
-  "cards": {
-    "layout": "Layout and look",
-    "behaviour": "Behaviour",
-    "dragmemory": "Drag and drop and memory",
-    "content": "Content and advanced",
-    "pane": "Details pane",
-    "types": "Previews"
   },
   "settings": [
     {
@@ -23,9 +28,7 @@
       "type": "bool",
       "default": true,
       "name": "Enable Columns",
-      "description": "Adds Columns to the View menu. Off removes it.",
-      "page": "home",
-      "card": "feature"
+      "description": "Adds Columns to the View menu. Off removes it."
     },
     {
       "id": "restoreOnOpen",
@@ -34,141 +37,8 @@
       "default": true,
       "name": "Open new windows in Columns",
       "description": "New Explorer windows open in Columns if it was your last layout. Picking another layout turns this off.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
-    },
-    {
-      "id": "desktopRealOnly",
-      "group": "columns",
-      "type": "bool",
-      "default": false,
-      "name": "Desktop column shows real items only",
-      "description": "Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.",
-      "page": "columns",
-      "card": "content",
-      "needs": "rebuild"
-    },
-    {
-      "id": "remoteMarks",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Mark remote items",
-      "description": "Shows a small icon on cloud-only files and on items on a network or a phone.",
-      "page": "columns",
-      "card": "content",
-      "needs": "rebuild"
-    },
-    {
-      "id": "rememberSort",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Remember sort and grouping",
-      "description": "Each folder keeps its own sort and grouping. When off, every column uses the first folder’s.",
-      "page": "columns",
-      "card": "dragmemory",
-      "needs": "now"
-    },
-    {
-      "id": "rememberWidth",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Remember column widths",
-      "description": "A column you resize reopens at that width.",
-      "page": "columns",
-      "card": "dragmemory",
-      "needs": "now"
-    },
-    {
-      "id": "rememberLayout",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Remember Columns per folder",
-      "description": "Each folder remembers whether it was left in Columns. Opening it turns Columns on or off to match.",
-      "page": "columns",
-      "card": "dragmemory",
-      "needs": "now"
-    },
-    {
-      "id": "springLoad",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Open folders while dragging",
-      "description": "Hold dragged items on a folder for about 0.7 s to open it in the next column.",
-      "page": "columns",
-      "card": "dragmemory",
-      "needs": "now"
-    },
-    {
-      "id": "lastEdge",
-      "group": "columns",
-      "type": "bool",
-      "default": false,
-      "name": "Border after the last column",
-      "description": "Draws a separator line on the right of the last column.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
-    },
-    {
-      "id": "staleAccent",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Accent badge on the path chevron",
-      "description": "The chevron of the folder you came from sits in a round accent badge, instead of a muted one.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
-    },
-    {
-      "id": "oddRows",
-      "group": "columns",
-      "type": "bool",
-      "default": false,
-      "name": "Alternate row shading",
-      "description": "Every other row is a shade apart, to follow a line across a wide column.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
-    },
-    {
-      "id": "autoPreview",
-      "group": "details",
-      "type": "bool",
-      "default": true,
-      "name": "Open previews by themselves",
-      "description": "When off, a button on the preview opens it, and switches back to the thumbnail.",
-      "page": "details",
-      "card": "pane",
-      "needs": "now"
-    },
-    {
-      "id": "foldersFirst",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Folders first",
-      "description": "Folders are listed before files in each column, whatever the sort.",
-      "page": "columns",
-      "card": "content",
-      "needs": "rebuild"
-    },
-    {
-      "id": "harmonizeWidths",
-      "group": "columns",
-      "type": "bool",
-      "default": true,
-      "name": "Shift + double-click to even widths",
-      "description": "Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
+      "needs": "now",
+      "sub": "behaviour"
     },
     {
       "id": "keepStale",
@@ -177,9 +47,8 @@
       "default": true,
       "name": "Keep columns after choosing a file",
       "description": "Columns to the right stay, dimmed, when you choose a file or several items. Off closes them.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
+      "needs": "now",
+      "sub": "behaviour"
     },
     {
       "id": "headerKeyboard",
@@ -188,9 +57,8 @@
       "default": false,
       "name": "Keyboard on group headers",
       "description": "Arrow keys reach group headers. Left, Right and Enter collapse and expand them.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
+      "needs": "now",
+      "sub": "behaviour"
     },
     {
       "id": "doubleClickUp",
@@ -199,9 +67,61 @@
       "default": false,
       "name": "Double-click empty space to go up",
       "description": "Goes up one folder. In the first column, the parent folder is added in front.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
+      "needs": "now",
+      "sub": "behaviour"
+    },
+    {
+      "id": "foldersFirst",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Folders first",
+      "description": "Folders are listed before files in each column, whatever the sort.",
+      "needs": "rebuild",
+      "sub": "content"
+    },
+    {
+      "id": "desktopRealOnly",
+      "group": "columns",
+      "type": "bool",
+      "default": false,
+      "name": "Desktop column shows real items only",
+      "description": "Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.",
+      "needs": "rebuild",
+      "sub": "content"
+    },
+    {
+      "id": "minWidth",
+      "group": "columns",
+      "type": "int",
+      "default": 160,
+      "min": 80,
+      "max": 800,
+      "name": "Minimum column width",
+      "needs": "rebuild",
+      "sub": "layout"
+    },
+    {
+      "id": "maxWidth",
+      "group": "columns",
+      "type": "int",
+      "default": 420,
+      "min": 80,
+      "max": 1200,
+      "name": "Maximum column width",
+      "description": "Columns fit their longest name up to this width. Longer names are shortened.",
+      "needs": "rebuild",
+      "sub": "layout"
+    },
+    {
+      "id": "harmonizeWidths",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Shift + double-click to even widths",
+      "description": "Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.",
+      "needs": "rebuild",
+      "sub": "layout"
     },
     {
       "id": "focusRect",
@@ -210,9 +130,8 @@
       "default": true,
       "name": "Show the focus outline",
       "description": "Draws an outline around the item under the keyboard cursor. The selection highlight always shows.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
+      "needs": "rebuild",
+      "sub": "layout"
     },
     {
       "id": "background",
@@ -231,57 +150,58 @@
       ],
       "name": "Panel background",
       "description": "Explorer uses its own file list colour. Theme uses the standard dark or light colour.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
+      "needs": "rebuild",
+      "sub": "layout"
     },
     {
-      "id": "sidebarRoot",
+      "id": "staleAccent",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Accent badge on the path chevron",
+      "description": "The chevron of the folder you came from sits in a round accent badge, instead of a muted one.",
+      "needs": "rebuild",
+      "sub": "layout"
+    },
+    {
+      "id": "oddRows",
       "group": "columns",
       "type": "bool",
       "default": false,
-      "name": "Sidebar sets the first column",
-      "description": "Clicking Home, Gallery, OneDrive or a pinned folder makes it the first column. The tree (This PC, drives, Network) still follows the columns.",
-      "page": "columns",
-      "card": "behaviour",
-      "needs": "now"
+      "name": "Alternate row shading",
+      "description": "Every other row is a shade apart, to follow a line across a wide column.",
+      "needs": "rebuild",
+      "sub": "layout"
     },
     {
-      "id": "minWidth",
+      "id": "rememberSort",
       "group": "columns",
-      "type": "int",
-      "default": 160,
-      "min": 80,
-      "max": 800,
-      "name": "Minimum column width",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
+      "type": "bool",
+      "default": true,
+      "name": "Remember sort and grouping",
+      "description": "Each folder keeps its own sort and grouping. When off, every column uses the first folder’s.",
+      "needs": "now",
+      "sub": "memory"
     },
     {
-      "id": "maxWidth",
+      "id": "rememberWidth",
       "group": "columns",
-      "type": "int",
-      "default": 420,
-      "min": 80,
-      "max": 1200,
-      "name": "Maximum column width",
-      "description": "Columns fit their longest name up to this width. Longer names are shortened.",
-      "page": "columns",
-      "card": "layout",
-      "needs": "rebuild"
+      "type": "bool",
+      "default": true,
+      "name": "Remember column widths",
+      "description": "A column you resize reopens at that width.",
+      "needs": "now",
+      "sub": "memory"
     },
     {
-      "id": "maxItems",
+      "id": "rememberLayout",
       "group": "columns",
-      "type": "int",
-      "default": 5000,
-      "min": 50,
-      "max": 20000,
-      "name": "Maximum items per column",
-      "page": "columns",
-      "card": "content",
-      "needs": "rebuild"
+      "type": "bool",
+      "default": true,
+      "name": "Remember Columns per folder",
+      "description": "Each folder remembers whether it was left in Columns. Opening it turns Columns on or off to match.",
+      "needs": "now",
+      "sub": "memory"
     },
     {
       "id": "detailsPane",
@@ -290,8 +210,6 @@
       "default": true,
       "name": "Details pane",
       "description": "Replaces Explorer’s Details pane with a preview and the details of what is selected.",
-      "page": "home",
-      "card": "feature",
       "needs": "now"
     },
     {
@@ -301,9 +219,8 @@
       "default": true,
       "name": "Preview pane opens this pane",
       "description": "Choosing Explorer’s Preview pane (Alt+P) shows this pane instead.",
-      "page": "details",
-      "card": "pane",
-      "needs": "now"
+      "needs": "now",
+      "sub": "pane"
     },
     {
       "id": "paneAnimation",
@@ -312,57 +229,18 @@
       "default": true,
       "name": "Animate the pane",
       "description": "The content slides and fades in when the selection changes.",
-      "page": "details",
-      "card": "pane",
-      "needs": "now"
+      "needs": "now",
+      "sub": "pane"
     },
     {
-      "id": "previewImages",
+      "id": "autoPreview",
       "group": "details",
       "type": "bool",
       "default": true,
-      "name": "Preview images",
-      "description": "Shows pictures at full size in the pane, with zoom and pan.",
-      "page": "details",
-      "card": "types",
-      "needs": "now"
-    },
-    {
-      "id": "previewMedia",
-      "group": "details",
-      "type": "bool",
-      "default": true,
-      "name": "Preview video and sound",
-      "description": "Plays video and sound files in the pane.",
-      "page": "details",
-      "card": "types",
-      "needs": "now"
-    },
-    {
-      "id": "previewMaxMb",
-      "group": "details",
-      "type": "int",
-      "default": 60,
-      "min": 1,
-      "max": 1024,
-      "name": "Largest document to preview (MB)",
-      "description": "Bigger PDFs and Office files keep the thumbnail.",
-      "page": "details",
-      "card": "types",
-      "needs": "now"
-    },
-    {
-      "id": "previewMaxMp",
-      "group": "details",
-      "type": "int",
-      "default": 40,
-      "min": 4,
-      "max": 400,
-      "name": "Largest image to open at once (megapixels)",
-      "description": "Bigger pictures wait for a click on the card's button.",
-      "page": "details",
-      "card": "types",
-      "needs": "now"
+      "name": "Open previews by themselves",
+      "description": "When off, a button on the preview opens it, and switches back to the thumbnail.",
+      "needs": "now",
+      "sub": "pane"
     },
     {
       "id": "livePreview",
@@ -371,52 +249,64 @@
       "default": true,
       "name": "Preview documents and code",
       "description": "Shows PDF, text, Markdown and Office files in the pane.",
-      "page": "details",
-      "card": "pane",
+      "needs": "now",
+      "sub": "previews"
+    },
+    {
+      "id": "previewImages",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview images",
+      "description": "Shows pictures at full size in the pane, with zoom and pan.",
+      "needs": "now",
+      "sub": "previews"
+    },
+    {
+      "id": "previewMedia",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview video and sound",
+      "description": "Plays video and sound files in the pane.",
+      "needs": "now",
+      "sub": "previews"
+    },
+    {
+      "id": "maxItems",
+      "group": "limits",
+      "type": "int",
+      "default": 5000,
+      "min": 50,
+      "max": 20000,
+      "name": "Maximum items per column",
+      "needs": "rebuild"
+    },
+    {
+      "id": "previewMaxMb",
+      "group": "limits",
+      "type": "int",
+      "default": 60,
+      "min": 1,
+      "max": 1024,
+      "name": "Largest document to preview (MB)",
+      "description": "Bigger PDFs and Office files keep the thumbnail.",
+      "needs": "now"
+    },
+    {
+      "id": "previewMaxMp",
+      "group": "limits",
+      "type": "int",
+      "default": 40,
+      "min": 4,
+      "max": 400,
+      "name": "Largest image to open at once (megapixels)",
+      "description": "Bigger pictures wait for a click on the card's button.",
       "needs": "now"
     }
   ],
-  "whatsNew": [
-    "Extras in the View menu opens this window. Settings apply at once, and Reset goes back to Windhawk’s values.",
-    "Hold Shift and double-click a column border to give every column the same width.",
-    "Drag rows to another window, the desktop, the navigation pane or the tab strip. Hold them on a folder to open it.",
-    "Archives can be dragged out of, and a phone’s folders and OneDrive syncing show their own marks.",
-    "The toolbar’s Select all, Invert selection and Select none reach the columns."
-  ],
   "strings": {
-    "window.title": "Explorer Extras",
-    "menu.extras": "Extras",
     "menu.columns": "Columns",
-    "page.home": "Explorer Extras",
-    "home.title": "Explorer Extras",
-    "home.subtitle": "Optional additions to File Explorer, each one with its own page and switch.",
-    "tip.title": "Tip",
-    "tip.body": "Choose Columns in the View menu of a File Explorer window. The Extras entry at the bottom of the ... menu on the toolbar opens this window.",
-    "tip.gotit": "Got it",
-    "card.features": "Features",
-    "card.status": "Status",
-    "card.actions": "Quick actions",
-    "card.about": "About",
-    "about.creator": "Made by AristideBH",
-    "about.detail": "Explorer Extras is free and open source. Bug reports and ideas are welcome on GitHub.",
-    "about.link": "Source code on GitHub",
-    "status.version": "Version",
-    "status.windows": "Windows",
-    "status.hooks": "Hooks",
-    "status.hooks.detail": "The Explorer extension the mod hooks into.",
-    "status.found": "Found",
-    "status.notfound": "Not found",
-    "action.copy": "Copy diagnostics",
-    "action.copy.detail": "Version, settings and state, as text, to paste in a message.",
-    "action.copy.done": "Copied",
-    "action.copy.fail": "Could not copy",
-    "action.reset": "Reset to Windhawk’s settings",
-    "action.reset.detail": "Every setting goes back to what Windhawk’s page for the mod says.",
-    "columns.title": "Columns",
-    "columns.subtitle": "A Columns layout in the View menu: Miller columns drawn with Explorer’s own controls.",
-    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values.",
-    "details.title": "Details pane",
-    "details.subtitle": "One pane for the preview and the details of what is selected, in place of Explorer’s Details and Preview panes.",
     "pane.open": "Open",
     "pane.copypath": "Copy path",
     "pane.copypaths": "Copy paths",
@@ -429,7 +319,6 @@
     "pane.files": "Files",
     "pane.totalsize": "Total size",
     "pane.contains": "Contains",
-    "pane.location": "Location",
     "pane.types": "Types",
     "pane.clicktocopy": "Click to copy",
     "pane.more": "More details",
@@ -443,39 +332,7 @@
   },
   "fr": {
     "strings": {
-      "window.title": "Explorer Extras",
-      "menu.extras": "Extras",
       "menu.columns": "Colonnes",
-      "page.home": "Explorer Extras",
-      "home.title": "Explorer Extras",
-      "home.subtitle": "Ajouts facultatifs à l’Explorateur de fichiers, chacun avec sa page et son interrupteur.",
-      "tip.title": "Astuce",
-      "tip.body": "Choisissez Colonnes dans le menu Affichage d’une fenêtre de l’Explorateur. L’entrée Extras en bas du menu … de la barre d’outils ouvre cette fenêtre.",
-      "tip.gotit": "Compris",
-      "card.features": "Fonctionnalités",
-      "card.status": "État",
-      "card.actions": "Actions rapides",
-      "card.about": "À propos",
-      "about.creator": "Créé par AristideBH",
-      "about.detail": "Explorer Extras est libre et open source. Les rapports de bugs et les idées sont les bienvenus sur GitHub.",
-      "about.link": "Code source sur GitHub",
-      "status.version": "Version",
-      "status.windows": "Windows",
-      "status.hooks": "Crochets",
-      "status.hooks.detail": "L’extension de l’Explorateur sur laquelle le mod s’accroche.",
-      "status.found": "Trouvée",
-      "status.notfound": "Introuvable",
-      "action.copy": "Copier les diagnostics",
-      "action.copy.detail": "Version, réglages et état, en texte, à coller dans un message.",
-      "action.copy.done": "Copié",
-      "action.copy.fail": "Copie impossible",
-      "action.reset": "Revenir aux réglages de Windhawk",
-      "action.reset.detail": "Chaque réglage reprend la valeur de la page du mod dans Windhawk.",
-      "columns.title": "Colonnes",
-      "columns.subtitle": "Une disposition en colonnes dans le menu Affichage : des colonnes de Miller dessinées avec les contrôles de l’Explorateur.",
-      "columns.note": "Les changements s’appliquent tout de suite. Le mod les garde devant la page de Windhawk, et une modification ultérieure du même réglage sur cette page l’emporte. « Revenir aux réglages de Windhawk » sur la page Explorer Extras rétablit les valeurs de Windhawk.",
-      "details.title": "Volet des détails",
-      "details.subtitle": "Un seul volet pour l’aperçu et les détails de la sélection, à la place des volets Détails et Aperçu de l’Explorateur.",
       "pane.open": "Ouvrir",
       "pane.copypath": "Copier le chemin",
       "pane.copypaths": "Copier les chemins",
@@ -488,7 +345,6 @@
       "pane.files": "Fichiers",
       "pane.totalsize": "Taille totale",
       "pane.contains": "Contient",
-      "pane.location": "Emplacement",
       "pane.types": "Types",
       "pane.clicktocopy": "Cliquer pour copier",
       "pane.more": "Plus de détails",
@@ -499,140 +355,6 @@
       "pane.filesfolders": "%llu fichiers, %llu dossiers",
       "pane.showpreview": "Afficher l’aperçu",
       "pane.showthumb": "Afficher la miniature"
-    },
-    "cards": {
-      "layout": "Disposition et apparence",
-      "behaviour": "Comportement",
-      "dragmemory": "Glisser-déposer et mémoire",
-      "content": "Contenu et options avancées",
-      "pane": "Volet des détails",
-      "types": "Aperçus"
-    },
-    "settings": {
-      "enabled": {
-        "name": "Activer les colonnes",
-        "description": "Ajoute Colonnes au menu Affichage. Désactivé, l’entrée disparaît."
-      },
-      "restoreOnOpen": {
-        "name": "Ouvrir les nouvelles fenêtres en colonnes",
-        "description": "Les nouvelles fenêtres s’ouvrent en colonnes si c’était votre dernière disposition. Choisir une autre disposition désactive ce réglage."
-      },
-      "desktopRealOnly": {
-        "name": "La colonne Bureau n’affiche que les vrais éléments",
-        "description": "Masque les éléments virtuels (Ce PC, Corbeille, Panneau de configuration…) de la colonne Bureau."
-      },
-      "remoteMarks": {
-        "name": "Marquer les éléments distants",
-        "description": "Affiche une petite icône sur les fichiers cloud non téléchargés et sur les éléments d’un réseau ou d’un téléphone."
-      },
-      "rememberSort": {
-        "name": "Mémoriser le tri et le regroupement",
-        "description": "Chaque dossier garde son tri et son regroupement. Désactivé, toutes les colonnes reprennent ceux du premier dossier."
-      },
-      "rememberWidth": {
-        "name": "Mémoriser les largeurs de colonne",
-        "description": "Une colonne que vous redimensionnez se rouvre à cette largeur."
-      },
-      "rememberLayout": {
-        "name": "Mémoriser les colonnes par dossier",
-        "description": "Chaque dossier retient s’il a été quitté en colonnes. L’ouvrir active ou désactive les colonnes en conséquence."
-      },
-      "springLoad": {
-        "name": "Ouvrir les dossiers pendant un glissement",
-        "description": "Maintenez les éléments glissés sur un dossier environ 0,7 s pour l’ouvrir dans la colonne suivante."
-      },
-      "lastEdge": {
-        "name": "Bordure après la dernière colonne",
-        "description": "Trace un trait de séparation à droite de la dernière colonne."
-      },
-      "staleAccent": {
-        "name": "Pastille d’accent sur le chevron du chemin",
-        "description": "Le chevron du dossier d’où vous venez est dans une pastille ronde de la couleur d’accentuation, au lieu d’une pastille discrète."
-      },
-      "oddRows": {
-        "name": "Lignes alternées",
-        "description": "Une ligne sur deux est légèrement teintée, pour suivre une ligne dans une colonne large."
-      },
-      "autoPreview": {
-        "name": "Ouvrir les aperçus automatiquement",
-        "description": "Désactivé, un bouton sur l’aperçu l’ouvre et permet de revenir à la miniature."
-      },
-      "foldersFirst": {
-        "name": "Dossiers en premier",
-        "description": "Les dossiers sont listés avant les fichiers dans chaque colonne, quel que soit le tri."
-      },
-      "harmonizeWidths": {
-        "name": "Maj + double-clic pour égaliser les largeurs",
-        "description": "Maj + double-clic sur une bordure de colonne donne la même largeur à toutes les colonnes. Elles le restent jusqu’à un double-clic seul sur une bordure."
-      },
-      "keepStale": {
-        "name": "Garder les colonnes après le choix d’un fichier",
-        "description": "Les colonnes de droite restent, estompées, quand vous choisissez un fichier ou plusieurs éléments. Désactivé, elles se ferment."
-      },
-      "headerKeyboard": {
-        "name": "Clavier sur les en-têtes de groupe",
-        "description": "Les flèches atteignent les en-têtes de groupe. Gauche, Droite et Entrée les replient et les déplient."
-      },
-      "doubleClickUp": {
-        "name": "Double-clic sur le vide pour remonter",
-        "description": "Remonte d’un dossier. Dans la première colonne, le dossier parent est ajouté devant."
-      },
-      "focusRect": {
-        "name": "Afficher le contour de focus",
-        "description": "Trace un contour autour de l’élément sous le curseur du clavier. La sélection reste toujours visible."
-      },
-      "background": {
-        "name": "Arrière-plan du panneau",
-        "description": "L’Explorateur utilise la couleur de sa liste de fichiers. Thème utilise la couleur standard sombre ou claire."
-      },
-      "sidebarRoot": {
-        "name": "La barre latérale définit la première colonne",
-        "description": "Cliquer sur Accueil, Galerie, OneDrive ou un dossier épinglé en fait la première colonne. L’arborescence (Ce PC, lecteurs, Réseau) suit toujours les colonnes."
-      },
-      "minWidth": {
-        "name": "Largeur minimale des colonnes",
-        "description": ""
-      },
-      "maxWidth": {
-        "name": "Largeur maximale des colonnes",
-        "description": "Les colonnes s’ajustent à leur nom le plus long jusqu’à cette largeur. Les noms plus longs sont raccourcis."
-      },
-      "maxItems": {
-        "name": "Nombre maximal d’éléments par colonne",
-        "description": ""
-      },
-      "detailsPane": {
-        "name": "Volet des détails",
-        "description": "Remplace le volet Détails de l’Explorateur par un aperçu et les détails de la sélection."
-      },
-      "previewRedirect": {
-        "name": "Le volet Aperçu ouvre ce volet",
-        "description": "Choisir le volet Aperçu de l’Explorateur (Alt+P) affiche ce volet à la place."
-      },
-      "paneAnimation": {
-        "name": "Animer le volet",
-        "description": "Le contenu glisse et s’estompe à chaque changement de sélection."
-      },
-      "previewImages": {
-        "name": "Aperçu des images",
-        "description": "Affiche les images en taille réelle dans le volet, avec zoom et déplacement."
-      },
-      "previewMedia": {
-        "name": "Aperçu des vidéos et des sons",
-        "description": "Lit les fichiers vidéo et audio dans le volet."
-      },
-      "previewMaxMb": {
-        "name": "Document le plus gros à prévisualiser (Mo)",
-        "description": "Les PDF et fichiers Office plus gros gardent la miniature."
-      },
-      "previewMaxMp": {
-        "name": "Image la plus grande à ouvrir d’emblée (mégapixels)",
-        "description": "Les images plus grandes attendent un clic sur le bouton de la carte."
-      },
-      "livePreview": {
-        "name": "Aperçu des documents et du code",
-        "description": "Affiche les PDF, le texte, le Markdown et les fichiers Office dans le volet."
-      }
     }
   }
 }

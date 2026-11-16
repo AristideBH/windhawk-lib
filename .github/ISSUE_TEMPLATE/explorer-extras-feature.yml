@@ -9,7 +9,6 @@ body:
       options:
         - Columns
         - Details pane
-        - Settings window
         - A new area
     validations:
       required: true

@@ -561,23 +561,24 @@ function Invoke-Deploy($cfg, $meta, [string]$src, [string]$modId, [string]$outDi
     Set-ItemProperty $key -Name Exclude -Value ($meta.exclude -join '|') -Type String
     Set-ItemProperty $key -Name Architecture -Value ($meta.architecture -join '|') -Type String
 
-    # Default settings, as Windhawk's UI writes them on install. Only when
-    # the mod has none yet, so saved settings are never touched.
+    # Default settings, as Windhawk's UI writes them on install and on update: the ones the mod has
+    # no value for yet (a new mod, or settings that were added or renamed). Saved values are never touched.
     $settingsKey = Join-Path $key 'Settings'
-    $hasSettings = (Test-Path $settingsKey) -and (Get-Item $settingsKey).ValueCount -gt 0
-    if (-not $hasSettings) {
-        $defaults = Get-DefaultSettings $src
-        New-Item -Path $settingsKey -Force | Out-Null
-        foreach ($name in $defaults.Keys) {
-            $v = $defaults[$name]
-            if ($v -is [int]) {
-                New-ItemProperty $settingsKey -Name $name -PropertyType DWord -Value $v -Force | Out-Null
-            } else {
-                New-ItemProperty $settingsKey -Name $name -PropertyType String -Value $v.Str -Force | Out-Null
-            }
+    $defaults = Get-DefaultSettings $src
+    if (-not (Test-Path $settingsKey)) { New-Item -Path $settingsKey -Force | Out-Null }
+    $have = @((Get-Item $settingsKey).GetValueNames())
+    $added = 0
+    foreach ($name in $defaults.Keys) {
+        if ($have -contains $name) { continue }
+        $v = $defaults[$name]
+        if ($v -is [int]) {
+            New-ItemProperty $settingsKey -Name $name -PropertyType DWord -Value $v -Force | Out-Null
+        } else {
+            New-ItemProperty $settingsKey -Name $name -PropertyType String -Value $v.Str -Force | Out-Null
         }
-        Say "  wrote $($defaults.Count) default settings" Yellow
+        $added++
     }
+    if ($added -gt 0) { Say "  wrote $added default settings (the ones that were missing)" Yellow }
 
     # Written last: this is the value the engine reacts to.
     Set-ItemProperty $key -Name LibraryFileName -Value $fileName -Type String

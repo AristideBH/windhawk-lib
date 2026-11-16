@@ -13,9 +13,9 @@ Questions go in an issue too (label `type: question`). Reports about the other m
 
 ## What makes a report easy to act on
 
-1. **The version** of the mod (Home page of the settings window) and the **Windows build** (also on the Home page).
+1. **The version** of the mod (in Windhawk) and the **Windows build** (Settings, System, About).
 2. **Steps.** What you did, and whether by mouse, keyboard or touch.
-3. **The diagnostics.** Use "Copy diagnostics" (Home page) and paste the text. For a crash, say what you were doing; the Windows Reliability History entry or the crash dump helps.
+3. **The log.** Turn on logging in the mod's Advanced tab in Windhawk, repeat the problem and paste the log. For a crash, say what you were doing; the Windows Reliability History entry or the crash dump helps.
 4. **Whether it is only one Explorer window, one folder, or one kind of file.**
 
 ## What happens to a report

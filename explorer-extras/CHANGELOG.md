@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.66 (2026-11-16)
+
+### Changed
+- The mod's own settings window is gone: the settings are on the mod's page in Windhawk, in groups (Columns with its Behaviour, Content, Layout and Memory; Details pane with its Pane and Previews; and a new Limits group). The switch of each area is the first setting of its group. How it was built is kept in `docs/settings-window-notes.md`.
+- Four options are fixed in the code, at the values they had: the marks of cloud, network and device items, a folder held under a drag opening, no line on the last column, and a click in the navigation pane making its folder the first column (this one now on for everybody).
+- A change on Windhawk's page applies at once, and the columns are fitted and read again when it needs it.
+- The settings keys changed with the groups, so every setting returns to its default once.
+- The "Extras" entry of the toolbar's ... menu is gone, since it only opened the window.
+
 ## 0.65 (2026-11-16)
 
 ### Changed

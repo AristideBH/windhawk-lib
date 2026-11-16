@@ -1218,12 +1218,10 @@ void HidePanel(WindowState* state, const wchar_t* why) {
 // already destroyed the panel's window along with it, and closing or
 // releasing the panel's XAML objects at that point crashes Explorer. So they
 // are let go without being released: a small leak, once per closed window.
-void CloseSettingsWindowOfThread();
 
 void AbandonWindow(WindowState* state) {
     Wh_Log(L"window closed with the panel on, letting its objects go");
     AbandonDetails(state);
-    CloseSettingsWindowOfThread();
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
     (void)state->rename.release();

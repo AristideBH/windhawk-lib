@@ -9,7 +9,6 @@ muxc::IconElement MakeColumnsIcon() {
         .as<muxc::IconElement>();
 }
 
-void OpenSettingsWindow(WindowState* state);
 
 // The last layout the user chose, kept by Windhawk across restarts.
 bool LastLayoutWasColumns() {
@@ -51,15 +50,6 @@ void RemoveMenuEntry(WindowState* state) {
             }
         }
         state->siblings.clear();
-        if (state->settingsItem) {
-            state->settingsItem.Click(state->settingsClickToken);
-            uint32_t at = 0;
-            if (state->overflowBar && state->overflowBar.SecondaryCommands().IndexOf(state->settingsItem, at)) {
-                state->overflowBar.SecondaryCommands().RemoveAt(at);
-            }
-            state->settingsItem = nullptr;
-            state->overflowBar = nullptr;
-        }
         if (state->menuItem) {
             state->menuItem.Click(state->menuClickToken);
             uint32_t index = 0;
@@ -238,54 +228,6 @@ muxc::CommandBar FindCommandBar(mux::DependencyObject const& node, int depth, in
     return nullptr;
 }
 
-void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
-    try {
-        muxc::CommandBar bar = state->overflowBar;
-        if (!bar) {
-            int visited = 0;
-            bar = FindCommandBar(root, 0, visited);
-        }
-        if (!bar) {
-            return;
-        }
-        auto commands = bar.SecondaryCommands();
-        uint32_t at = 0;
-        if (state->settingsItem && state->overflowBar == bar && commands.IndexOf(state->settingsItem, at)) {
-            return;  // Already there.
-        }
-        if (!state->settingsItem) {
-            muxc::AppBarButton item;
-            item.Label(Str(L"menu.extras"));
-            muxc::FontIcon icon;
-            icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-            icon.Glyph(L"");  // ExploitProtection.
-            item.Icon(icon);
-            item.Name(L"WindhawkSettingsItem");
-            state->settingsClickToken = item.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
-                WindowState* now = StateForThisThread(false);
-                if (!now || g_unloading || !now->queue) {
-                    return;
-                }
-                // After the menu has closed and the click has been handled.
-                try {
-                    now->queue.TryEnqueue([]() {
-                        WindowState* later = StateForThisThread(false);
-                        if (later && !g_unloading) {
-                            OpenSettingsWindow(later);
-                        }
-                    });
-                } catch (...) {
-                }
-            });
-            state->settingsItem = item;
-        }
-        commands.Append(state->settingsItem);
-        state->overflowBar = bar;
-        Wh_Log(L"the Extras entry is in the \"...\" menu, window=%p", state->topLevel);
-    } catch (...) {
-        LogHresult(L"AddOverflowEntry");
-    }
-}
 
 void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node);  // 10d
 
@@ -361,7 +303,6 @@ void OnCommandBarPointer(Inspectable const& sender, bool force = false) {
                 }
             }
         }
-        AddOverflowEntry(state, root);
         PaneToolbarSetup(state, node);
     } catch (...) {
         LogHresult(L"OnCommandBarPointer");

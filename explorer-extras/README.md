@@ -1,6 +1,6 @@
 # Explorer Extras
 
-A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11. It is one mod with several areas, each with its own page and switch in a settings window. Switch on what you want; the rest stays out of the way.
+A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11. It is one mod with several areas, each with its own section and switch on the mod's page in Windhawk. Switch on what you want; the rest stays out of the way.
 
 > **Beta, and vibe-coded.** Explorer Extras is in public beta, in daily use by its author, not yet in the Windhawk catalog. It is built largely with AI assistance and tested by hand, without an independent code audit. Use it at your own judgment, and please report anything odd.
 
@@ -12,7 +12,7 @@ Tested on Windows 11 build 26100 (24H2), on ARM64 and x86-64, in French and Engl
 | --- | --- |
 | **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
 | **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
-| **Settings window** | Every option in one place, applied at once, in English or French. Open it from **Extras** in the toolbar's ... menu. |
+| **Settings** | On the mod's page in Windhawk, grouped by area, applied at once. |
 
 **Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does in any other view.
 
@@ -46,7 +46,7 @@ Each area has its own page, and every area has an off switch, so you can use onl
 
 ## Feedback
 
-Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the diagnostics (**Copy diagnostics** on the Home page). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
+Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (Windhawk, the mod's Advanced tab, logging). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
 
 ## Support
 

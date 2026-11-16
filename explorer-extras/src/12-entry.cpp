@@ -28,10 +28,8 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
 void LoadSettings() {
     g_enabled = SettingBool(L"enabled");
     g_restore = SettingBool(L"restoreOnOpen");
-    g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_focusRect = SettingBool(L"focusRect");
     g_doubleClickUp = SettingBool(L"doubleClickUp");
-    g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
@@ -45,11 +43,9 @@ void LoadSettings() {
     g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
     g_staleAccent = SettingBool(L"staleAccent");
     g_autoPreview = SettingBool(L"autoPreview");
-    g_springLoad = SettingBool(L"springLoad");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
-    g_remoteMarks = SettingBool(L"remoteMarks");
     g_desktopRealOnly = SettingBool(L"desktopRealOnly");
     {
         std::wstring mode = SettingText(L"background");
@@ -84,7 +80,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.65.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.66.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -111,10 +107,10 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModSettingsChanged() {
+    static unsigned long long rebuildSignature = RebuildSignature();
     LoadSettings();
-    Wh_Log(L"settings changed: columns=%d width=%d..%d follow=%d maxItems=%d",
-        g_enabled ? 1 : 0, g_minWidth.load(), g_maxWidth.load(),
-        g_follow ? 1 : 0, g_maxItems.load());
+    Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
+        g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
         // Off means gone: the Columns entry and the panel go from every window. The details pane stays.
         if (g_detailsPane) {
@@ -122,7 +118,10 @@ void Wh_ModSettingsChanged() {
         } else {
             CloseEverything();
         }
+    } else if (unsigned long long now = RebuildSignature(); now != rebuildSignature) {
+        RebuildEverywhere();  // Widths, shading, names or limits changed: the columns are fitted and read again.
     }
+    rebuildSignature = RebuildSignature();
 }
 
 void Wh_ModBeforeUninit() {
@@ -134,7 +133,6 @@ void Wh_ModBeforeUninit() {
 }
 
 void Wh_ModUninit() {
-    CloseSettingsWindowAtUnload();
     UnregisterNotifyClass();
     if (g_stopEvent) {
         CloseHandle(g_stopEvent);

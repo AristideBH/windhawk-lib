@@ -9,7 +9,6 @@ body:
       options:
         - Columns
         - Details pane
-        - Settings window
         - Other or not sure
     validations:
       required: true
@@ -17,7 +16,7 @@ body:
     id: version
     attributes:
       label: Mod version
-      description: On the Home page of the settings window (Extras, in the toolbar's ... menu), or in Windhawk.
+      description: In Windhawk, on the mod's page.
       placeholder: "0.55.0"
     validations:
       required: true
@@ -25,7 +24,7 @@ body:
     id: windows
     attributes:
       label: Windows build and language
-      description: For example, Windows 11 24H2 build 26100, English. The Home page of the settings window shows the build.
+      description: For example, Windows 11 24H2 build 26100, English. Settings, System, About shows the build.
     validations:
       required: true
   - type: dropdown
@@ -49,7 +48,7 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Use "Copy diagnostics" (Home page) and paste it here. For a crash, say so.
+      description: Turn on logging in the mod's Advanced tab in Windhawk, repeat the problem and paste the log here. For a crash, say so.
       render: text
   - type: textarea
     id: extra

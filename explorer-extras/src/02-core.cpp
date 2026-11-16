@@ -118,10 +118,10 @@ std::atomic<bool> g_paneAnim{true};         // The content of the pane slides an
 ULONGLONG g_paneLeaveUntil = 0;  // While the details pane slides out, the Columns panel stays behind it.
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
-std::atomic<bool> g_sidebarRoot{false};
+std::atomic<bool> g_sidebarRoot{true};   // Fixed: a click in the navigation pane makes its folder the first column.
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_doubleClickUp{false};
-std::atomic<bool> g_lastEdge{false};
+std::atomic<bool> g_lastEdge{false};      // Fixed: no line on the right of the last column.
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};
@@ -135,11 +135,11 @@ std::atomic<bool> g_paneMuted{false};
 std::atomic<bool> g_staleAccent{true};  // The chevron of the folder you came from sits in an accent badge.
 std::atomic<bool> g_autoPreview{true};  // The real preview opens by itself; otherwise a button opens it.
 std::atomic<bool> g_harmonize{true};
-std::atomic<bool> g_springLoad{true};
+std::atomic<bool> g_springLoad{true};     // Fixed: a folder held under a drag opens.
 std::atomic<bool> g_rememberSort{true};
 std::atomic<bool> g_rememberWidth{true};
 std::atomic<bool> g_rememberLayout{true};
-std::atomic<bool> g_remoteMarks{true};
+std::atomic<bool> g_remoteMarks{true};   // Fixed: the marks of cloud, network and device items.
 std::atomic<bool> g_desktopRealOnly{false};
 std::atomic<int> g_backgroundMode{0};  // 0 Explorer, 1 theme
 std::atomic<int> g_styleVersion{0};
