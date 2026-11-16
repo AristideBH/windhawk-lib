@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta, vibe-coded. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.54.8
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
+// @version         0.54.9
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
