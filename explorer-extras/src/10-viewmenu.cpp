@@ -85,7 +85,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
                 [](Inspectable const&, mux::RoutedEventArgs const&) {
                     WindowState* state = StateForThisThread(false);
                     if (state && !g_unloading) {
-                        Out(L"Columns chosen in the View menu");
+                        Wh_Log(L"Columns chosen in the View menu");
                         ChooseColumns(state);
                         if (state->on) {
                             RememberColumns(true);
@@ -119,7 +119,7 @@ void AddMenuEntry(WindowState* state, ItemsVector const& items) {
 
         }
 
-        Out(L"Columns entry added to the View menu, window=%p", state->topLevel);
+        Wh_Log(L"Columns entry added to the View menu, window=%p", state->topLevel);
     } catch (...) {
         LogHresult(L"AddMenuEntry");
     }
@@ -258,7 +258,7 @@ void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
         }
         commands.Append(state->settingsItem);
         state->overflowBar = bar;
-        Out(L"the Extras entry is in the \"...\" menu, window=%p", state->topLevel);
+        Wh_Log(L"the Extras entry is in the \"...\" menu, window=%p", state->topLevel);
     } catch (...) {
         LogHresult(L"AddOverflowEntry");
     }
@@ -319,7 +319,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
                     for (auto const& command : bar.PrimaryCommands()) {
                         if (auto button = command.try_as<muxc::Button>()) {
                             if (CheckViewButton(state, button)) {
-                                Out(L"the View button was found among the command bar's commands");
+                                Wh_Log(L"the View button was found among the command bar's commands");
                                 break;
                             }
                         }
@@ -328,7 +328,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
                         for (auto const& command : bar.SecondaryCommands()) {
                             if (auto button = command.try_as<muxc::Button>()) {
                                 if (CheckViewButton(state, button)) {
-                                    Out(L"the View button was found among the secondary commands");
+                                    Wh_Log(L"the View button was found among the secondary commands");
                                     break;
                                 }
                             }
@@ -365,17 +365,6 @@ mux::UIElement FindIconElement(mux::DependencyObject const& node, int depth, int
         }
     }
     return nullptr;
-}
-
-void LogTree(mux::DependencyObject const& node, int depth) {
-    if (!node || depth > 8) {
-        return;
-    }
-    Out(L"view button tree: %*s%s", depth * 2, L"", ClassOf(node).c_str());
-    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
-    for (int i = 0; i < children; i++) {
-        LogTree(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1);
-    }
 }
 
 // Puts the original icon back.
@@ -465,11 +454,6 @@ void SyncViewButtonIcon(WindowState* state) {
             }
         }
         if (!original || !where) {
-            if (!state->viewIconLogged) {
-                state->viewIconLogged = true;
-                Out(L"the View button has no icon this mod can replace, its tree:");
-                LogTree(button, 0);
-            }
             return;
         }
         auto ours = MakeColumnsIcon();
@@ -486,7 +470,7 @@ void SyncViewButtonIcon(WindowState* state) {
                 if (source.ActualWidth() > 1) {
                     width = source.ActualWidth();
                 }
-                Out(L"the View button's icon is %.1f x %.1f", source.ActualWidth(), source.ActualHeight());
+                Wh_Log(L"the View button's icon is %.1f x %.1f", source.ActualWidth(), source.ActualHeight());
             }
             // The toolbar scales the icon to fill its box, so the box must be the
             // one the original has (square); the drawing is then made smaller inside
@@ -521,7 +505,7 @@ void SyncViewButtonIcon(WindowState* state) {
         state->viewIconOurs = ours;
         state->viewIconWhere = where;
         state->viewIconShown = true;
-        Out(L"the View button shows the Columns icon (replaced a %s)", ClassOf(original).c_str());
+        Wh_Log(L"the View button shows the Columns icon (replaced a %s)", ClassOf(original).c_str());
     } catch (...) {
         LogHresult(L"showing the Columns icon on the View button");
     }
@@ -602,20 +586,3 @@ void UpdateLastEdge(WindowState* state) {
     }
 }
 
-void LogRowTree(mux::DependencyObject const& node, int depth) {
-    if (!node || depth > 6) {
-        return;
-    }
-    std::wstring extra;
-    if (auto element = node.try_as<mux::FrameworkElement>()) {
-        wchar_t text[96];
-        swprintf(text, 96, L" %.0fx%.0f margin %.1f,%.1f,%.1f,%.1f", element.ActualWidth(), element.ActualHeight(),
-                 element.Margin().Left, element.Margin().Top, element.Margin().Right, element.Margin().Bottom);
-        extra = text;
-    }
-    Out(L"row tree: %*s%s%s", depth * 2, L"", ClassOf(node).c_str(), extra.c_str());
-    int children = mux::Media::VisualTreeHelper::GetChildrenCount(node);
-    for (int i = 0; i < children; i++) {
-        LogRowTree(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1);
-    }
-}

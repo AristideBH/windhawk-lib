@@ -1,4 +1,3 @@
-void LogRowTree(mux::DependencyObject const& node, int depth);
 void RestoreViewButtonIcon(WindowState* state);
 void HoverOn(WindowState* state);
 void HoverOff(WindowState* state);
@@ -700,7 +699,7 @@ void SyncCutFromClipboard(WindowState* state) {
                     state->cutPaths.push_back(path);
                 }
             }
-            Out(L"cut from the clipboard: %d item(s) in \"%s\"",
+            Wh_Log(L"cut from the clipboard: %d item(s) in \"%s\"",
                 (int)state->cutPaths.size(), parentPath.c_str());
             ReleaseStgMedium(&medium);
         }
@@ -982,7 +981,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
         column->list.SelectedIndex(selectRow);
     }
     FinishFill(state, column);
-    Out(L"column \"%s\": %d items, %d groups%s, width %d",
+    Wh_Log(L"column \"%s\": %d items, %d groups%s, width %d",
         PathOf(column->folder.get()).c_str(), (int)column->entries.size(),
         grouped ? (int)data.groupNames.size() : 0,
         data.truncated ? L", truncated" : L"", (int)column->list.Width());
@@ -1403,7 +1402,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
     }
     FinishFill(state, column);
     ShapeSelectionRuns(column, column->list);
-    Out(L"column \"%s\": patched, %d row(s) removed, %d new, %d kept%s", PathOf(column->folder.get()).c_str(),
+    Wh_Log(L"column \"%s\": patched, %d row(s) removed, %d new, %d kept%s", PathOf(column->folder.get()).c_str(),
         (int)removed, (int)inserted, (int)kept, grouped ? L", grouped" : L"");
     return true;
 }
@@ -1434,7 +1433,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
             // removed, and the one before it shows its folder again, without
             // the row that led here.
             if (position > 0 && FolderGone(column->folder.get())) {
-                Out(L"a column's folder is gone, its columns are removed");
+                Wh_Log(L"a column's folder is gone, its columns are removed");
                 try {
                     bool wasBuilding = state->building;
                     state->building = true;
@@ -1472,7 +1471,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
                     }
                     ULONGLONG fillTook = GetTickCount64() - fillStarted;
                     if (fillTook >= 40 && fillCount > 0) {
-                        Out(L"fill: %d rows set up in %d ms on the UI thread", (int)fillCount, (int)fillTook);
+                        Wh_Log(L"fill: %d rows set up in %d ms on the UI thread", (int)fillCount, (int)fillTook);
                     }
                 } else if (column->cancel) {
                     // The rows and their icons are already there: the icon pass
@@ -1751,7 +1750,7 @@ void HarmonizeWidths(WindowState* state) {
         }
     });
     timer.Start();
-    Out(L"widths harmonized to %d across %d columns", (int)target, (int)state->columns.size());
+    Wh_Log(L"widths harmonized to %d across %d columns", (int)target, (int)state->columns.size());
 }
 
 void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archive = false) {
@@ -1899,7 +1898,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                         scroller.VerticalScrollMode(mode);
                         static int logged = 0;
                         if (logged++ < 6) {
-                            Out(L"a press stops the scroll of a list, offset %.1f", offset);
+                            Wh_Log(L"a press stops the scroll of a list, offset %.1f", offset);
                         }
                     }
                 }
@@ -1911,7 +1910,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     column->releaseToken = list.PointerReleased(
         [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& relArgs) {
             if (relArgs.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
-                Out(L"touch: pointer released, device=%d id=%u", (int)relArgs.Pointer().PointerDeviceType(),
+                Wh_Log(L"touch: pointer released, device=%d id=%u", (int)relArgs.Pointer().PointerDeviceType(),
                     relArgs.Pointer().PointerId());
                 if (WindowState* releaseState = StateForThisThread(false)) {
                     TouchTrack(releaseState, relArgs, true);
@@ -1938,7 +1937,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                                 contact = lostArgs.GetCurrentPoint(list).IsInContact();
                             } catch (...) {
                             }
-                            Out(L"touch: capture lost in a rectangle, xaml contact=%d", contact ? 1 : 0);
+                            Wh_Log(L"touch: capture lost in a rectangle, xaml contact=%d", contact ? 1 : 0);
                             if (contact && band.recaptures++ < 5) {
                                 try {
                                     list.CapturePointer(lostArgs.Pointer());
@@ -1956,7 +1955,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     POINTER_INFO win32Info{};
                     bool win32Ok = GetPointerInfo(drag.pointerId, &win32Info) != 0;
                     if (drag.active || drag.armed) {
-                        Out(L"touch: capture lost in a drag, xaml contact=%d, GetPointerInfo=%d (err %lu, flags 0x%lX)",
+                        Wh_Log(L"touch: capture lost in a drag, xaml contact=%d, GetPointerInfo=%d (err %lu, flags 0x%lX)",
                             xamlContact ? 1 : 0, win32Ok ? 1 : 0, win32Ok ? 0ul : GetLastError(),
                             (unsigned long)win32Info.pointerFlags);
                     }
@@ -1982,7 +1981,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         });
     // Touch, for the log: a hold, and a pointer that the system takes away (a pan).
     list.Holding([](Inspectable const& sender, mux::Input::HoldingRoutedEventArgs const& args) {
-        Out(L"touch: holding state=%d device=%d", (int)args.HoldingState(), (int)args.PointerDeviceType());
+        Wh_Log(L"touch: holding state=%d device=%d", (int)args.HoldingState(), (int)args.PointerDeviceType());
         if ((int)args.HoldingState() == 0 && (int)args.PointerDeviceType() == 0) {
             WindowState* holdState = StateForThisThread(false);
             if (auto list = sender.try_as<muxc::ListView>(); list && holdState && holdState->on && !g_unloading) {
@@ -1991,12 +1990,12 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         }
     });
     list.PointerCanceled([](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
-        Out(L"touch: the pointer was cancelled, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
+        Wh_Log(L"touch: the pointer was cancelled, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
             args.Pointer().PointerId());
     });
     list.PointerCaptureLost([](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
         if (args.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
-            Out(L"touch: the pointer capture was lost, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
+            Wh_Log(L"touch: the pointer capture was lost, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
                 args.Pointer().PointerId());
         }
     });
@@ -2238,7 +2237,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 RefreshNames(state->columns[index].get());
                 RememberFolderWidth(PathOf(state->columns[index]->folder.get()),
                                     state->columns[index]->list.Width());
-                Out(L"column %d resized to %d", index + 1,
+                Wh_Log(L"column %d resized to %d", index + 1,
                     (int)state->columns[index]->list.Width());
             }
         } catch (...) {
@@ -2268,7 +2267,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 FitWidth(column);
                 RefreshNames(column);
                 UpdatePill(state, false);
-                Out(L"column %d refitted to %d", index + 1,
+                Wh_Log(L"column %d refitted to %d", index + 1,
                     (int)column->list.Width());
             } catch (...) {
                 LogHresult(L"refitting a column");
@@ -2422,12 +2421,12 @@ bool IsFlatSidebarTarget(PCIDLIST_ABSOLUTE folder) {
 void RebuildFromExplorer(WindowState* state) {
     IShellBrowser* browser = BrowserOf(state->topLevel);
     if (!browser) {
-        Out(L"rebuild: no shell browser for this window");
+        Wh_Log(L"rebuild: no shell browser for this window");
         return;
     }
     Pidl current = CurrentFolder(browser);
     if (!current) {
-        Out(L"rebuild: can't read the current folder");
+        Wh_Log(L"rebuild: can't read the current folder");
         return;
     }
     state->lastSeen.reset(ILClone(current.get()));
@@ -2443,7 +2442,7 @@ void RebuildFromExplorer(WindowState* state) {
         if (ReadSortSpec(browser, &fresh)) {
             state->spec = fresh;
             RememberFolderSpec(PathOf(current.get()), fresh);
-            Out(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
+            Wh_Log(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
                 fresh.grouped ? 1 : 0);
         }
     }
@@ -2491,7 +2490,7 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         }
     }
     if (FolderGone(folder)) {
-        Out(L"not navigating Explorer to a folder that is gone");
+        Wh_Log(L"not navigating Explorer to a folder that is gone");
         return;
     }
     state->cursorFixUntil = GetTickCount64() + 2500;
@@ -2502,7 +2501,7 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         folder, SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
     g_ourBrowse = false;
     if (FAILED(hr)) {
-        Out(L"BrowseObject failed, hr=0x%08lX", hr);
+        Wh_Log(L"BrowseObject failed, hr=0x%08lX", hr);
         state->expected.reset();
     } else {
         state->specSyncDue = GetTickCount64() + 700;
@@ -2932,7 +2931,7 @@ void OnRowSelected(muxc::ListView const& list) {
             state->selectTries = 0;
             ScheduleNavigation(state, column->folder.get(), 120);
             dimAfter(true);
-            Out(L"%d items selected in column %d", (int)picked.size(),
+            Wh_Log(L"%d items selected in column %d", (int)picked.size(),
                 columnIndex + 1);
             return;
         }
@@ -2961,7 +2960,7 @@ void OnRowSelected(muxc::ListView const& list) {
         if (entry.folder && FolderGone(absolute.get())) {
             // The row is stale: the folder was deleted, renamed or moved. Read
             // the column again instead of opening a column on nothing.
-            Out(L"\"%s\" is gone, the column is read again", entry.name.c_str());
+            Wh_Log(L"\"%s\" is gone, the column is read again", entry.name.c_str());
             RequestLoad(state, column);
             return;
         }

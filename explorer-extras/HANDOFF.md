@@ -97,7 +97,7 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
     LF, so read with `newline=''` and normalise before matching.
   - Every handover bumps `@version` in `00-header.cpp` and the start log line
     in `12-entry.cpp`, builds, syntax-checks, copies to
-    `C:/ProgramData/Windhawk/EditorWorkspace/mod.wh.cpp` (compare with `cmp`),
+    `C:/ProgramData/Windhawk/EditorWorkspaces/1/mod.wh.cpp` (compare with `cmp`),
     and commits. Ari compiles and sends the log (`probes/logs/explorer-extras.log`).
   - Replacing the mod while a window is in Columns can hang or crash that
     window (a callback of the old DLL), seen once as `local@..._unloaded` in the
@@ -129,11 +129,11 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   That folder is in `.gitignore`: it holds the user's file names.
 - Windhawk's window runs elevated. A session driving the screen can't
   click in it. Ari clicks Edit and Compile.
-- With the computer linked and `C:\ProgramData\Windhawk\EditorWorkspace`
+- With the computer linked and `C:\ProgramData\Windhawk\EditorWorkspaces\1` (Windhawk 2: the editor is its own window; write access was granted once)
   writable for Ari's account, the source can be written straight into
-  `EditorWorkspace\mod.wh.cpp` while the mod is open in the editor. Check
+  `EditorWorkspaces\1\mod.wh.cpp` while the mod is open in the editor. Check
   the file's `@id` first, so another mod isn't overwritten.
-- Compile errors land in `EditorWorkspace\compiler_errors.log`.
+- Compile errors land in `EditorWorkspaces\1\compiler_errors.log`.
 - Compiled mods are in `C:\ProgramData\Windhawk\Engine\Mods\arm64`. The
   file name carries the version, which shows what Ari actually ran.
 - Copying a changed file from a cloud session to the PC has sent a stale

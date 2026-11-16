@@ -46,7 +46,7 @@ Each area has its own page, and every area has an off switch, so you can use onl
 
 ## Feedback
 
-Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (turn on "Write a debug log", then use **Copy diagnostics** on the Home page). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
+Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the diagnostics (**Copy diagnostics** on the Home page). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
 
 ## Support
 

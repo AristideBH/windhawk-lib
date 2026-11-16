@@ -2,6 +2,17 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.56 (2026-11-16)
+
+Fixes from the Windhawk catalog review.
+
+### Changed
+- The mod writes no log file and no icon files. The debug log setting and the "Open the log" action are gone; the mod logs through Windhawk.
+- Folder memory is stored one value per folder, so it no longer loses everything past 32,767 characters or in portable Windhawk.
+- Preview handlers run in their own process only. Undoing a new folder removes it only when it is empty. Compress ends its options with `--` and works at a drive root.
+- The notify window class is registered with the mod's own module and its result is checked.
+- A drag no longer sends tree-view messages to other programs. Probe and dead code removed.
+
 ## Beta, 0.55 (2026-11-16)
 
 The first public beta. Explorer Extras is now more than the Columns layout: it has a details pane and a settings window, each its own area.

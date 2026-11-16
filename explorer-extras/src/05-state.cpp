@@ -11,7 +11,7 @@ using ItemsVector =
 
 void LogHresult(const wchar_t* where) {
     HRESULT hr = winrt::to_hresult();
-    Out(L"  %s threw hr=0x%08lX", where, hr);
+    Wh_Log(L"  %s threw hr=0x%08lX", where, hr);
 }
 
 struct IconBits;
@@ -276,7 +276,6 @@ struct WindowState {
     mux::UIElement viewIconOurs{nullptr};
     int viewIconWhere = 0;  // 1: the button's content, 2: a child of a panel, 3: the child of a border.
     bool viewIconShown = false;
-    bool viewIconLogged = false;
     // While the keyboard is in use, rows do not show the hover of a pointer that
     // has not moved.
     bool kbHoverOff = false;
@@ -454,7 +453,7 @@ mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
 mux::Media::SolidColorBrush PanelBackground(HWND fileList, bool dark) {
     int mode = g_backgroundMode;
     COLORREF sampled = mode == 0 ? SampleListBackground(fileList) : CLR_INVALID;
-    Out(L"panel background: %s",
+    Wh_Log(L"panel background: %s",
         mode == 1            ? L"the theme colour, by setting"
         : sampled == CLR_INVALID ? L"not readable, using the theme colour"
                                  : L"taken from Explorer's file list");

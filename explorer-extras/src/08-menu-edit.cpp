@@ -150,7 +150,7 @@ HRESULT RestoreFromRecycleBin(WindowState* state,
             chosen.push_back(item.get());
         }
     }
-    Out(L"undo delete: %d of %d item(s) found in the Recycle Bin", (int)chosen.size(),
+    Wh_Log(L"undo delete: %d of %d item(s) found in the Recycle Bin", (int)chosen.size(),
         (int)paths.size());
     hr = chosen.empty() ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : S_OK;
     if (!chosen.empty()) {
@@ -191,18 +191,14 @@ bool UndoLast(WindowState* state) {
         for (size_t i = entry.moves.size(); i-- > 0;) {
             MoveFileW(entry.moves[i].second.c_str(), entry.moves[i].first.c_str());
         }
-        // A new folder is taken back to the Recycle Bin, with what is in it.
-        std::wstring names = entry.renamedTo;
-        names.push_back(L'\0');
-        names.push_back(L'\0');
-        SHFILEOPSTRUCTW op = {};
-        op.hwnd = state->topLevel;
-        op.wFunc = FO_DELETE;
-        op.pFrom = names.c_str();
-        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION;
-        int result = SHFileOperationW(&op);
-        hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
-        Out(L"Undo new folder \"%s\": result %d", entry.renamedTo.c_str(), result);
+        // A new folder is removed only when it is empty: whatever could not go back, or was put in
+        // since, stays where it is. Nothing is deleted for good.
+        if (RemoveDirectoryW(entry.renamedTo.c_str())) {
+            hr = S_OK;
+        } else {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+        }
+        Wh_Log(L"Undo new folder \"%s\": hr=0x%08lX", entry.renamedTo.c_str(), (unsigned long)hr);
     } else if (!entry.renames.empty()) {
         hr = S_OK;
         for (size_t i = entry.renames.size(); i-- > 0;) {
@@ -210,14 +206,14 @@ bool UndoLast(WindowState* state) {
                 hr = HRESULT_FROM_WIN32(GetLastError());
             }
         }
-        Out(L"Undo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
+        Wh_Log(L"Undo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
     } else if (entry.deletion) {
         hr = RestoreFromRecycleBin(state, entry.paths);
-        Out(L"Undo delete of %d item(s): hr=0x%08lX", (int)entry.paths.size(), hr);
+        Wh_Log(L"Undo delete of %d item(s): hr=0x%08lX", (int)entry.paths.size(), hr);
     } else {
         BOOL moved = MoveFileW(entry.renamedTo.c_str(), entry.renamedFrom.c_str());
         hr = moved ? S_OK : HRESULT_FROM_WIN32(GetLastError());
-        Out(L"Undo rename \"%s\" back to \"%s\": hr=0x%08lX", entry.renamedTo.c_str(),
+        Wh_Log(L"Undo rename \"%s\" back to \"%s\": hr=0x%08lX", entry.renamedTo.c_str(),
             entry.renamedFrom.c_str(), hr);
     }
     if (SUCCEEDED(hr)) {
@@ -242,14 +238,14 @@ bool RedoLast(WindowState* state) {
         for (auto& pair : entry.moves) {
             MoveFileW(pair.first.c_str(), pair.second.c_str());
         }
-        Out(L"Redo new folder \"%s\": hr=0x%08lX", entry.renamedTo.c_str(), hr);
+        Wh_Log(L"Redo new folder \"%s\": hr=0x%08lX", entry.renamedTo.c_str(), hr);
     } else if (!entry.renames.empty()) {
         for (auto& pair : entry.renames) {
             if (!MoveFileW(pair.first.c_str(), pair.second.c_str())) {
                 hr = HRESULT_FROM_WIN32(GetLastError());
             }
         }
-        Out(L"Redo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
+        Wh_Log(L"Redo of %d renames: hr=0x%08lX", (int)entry.renames.size(), hr);
     } else if (entry.deletion) {
         std::wstring names;
         for (auto& path : entry.paths) {
@@ -264,11 +260,11 @@ bool RedoLast(WindowState* state) {
         op.fFlags = FOF_ALLOWUNDO;
         int result = SHFileOperationW(&op);
         hr = result == 0 && !op.fAnyOperationsAborted ? S_OK : E_FAIL;
-        Out(L"Redo delete of %d item(s): result %d", (int)entry.paths.size(), result);
+        Wh_Log(L"Redo delete of %d item(s): result %d", (int)entry.paths.size(), result);
     } else {
         BOOL moved = MoveFileW(entry.renamedFrom.c_str(), entry.renamedTo.c_str());
         hr = moved ? S_OK : HRESULT_FROM_WIN32(GetLastError());
-        Out(L"Redo rename \"%s\" to \"%s\": hr=0x%08lX", entry.renamedFrom.c_str(),
+        Wh_Log(L"Redo rename \"%s\" to \"%s\": hr=0x%08lX", entry.renamedFrom.c_str(),
             entry.renamedTo.c_str(), hr);
     }
     if (SUCCEEDED(hr)) {
@@ -311,7 +307,7 @@ void CopyAsPath(WindowState* state, Column* column, std::vector<size_t> const& e
         }
     }
     CloseClipboard();
-    Out(L"copied %d path(s) as text", (int)entries.size());
+    Wh_Log(L"copied %d path(s) as text", (int)entries.size());
 }
 
 void CommitRename(WindowState* state) {
@@ -363,7 +359,7 @@ void CommitRename(WindowState* state) {
             PITEMID_CHILD renamed = nullptr;
             HRESULT hr = parent->SetNameOf(state->topLevel, column->entries[entry].child.get(),
                                            name.c_str(), SHGDN_INFOLDER, &renamed);
-            Out(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
+            Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
                 column->entries[entry].name.c_str(), name.c_str(), hr);
             if (SUCCEEDED(hr) && renamed) {
                 std::wstring newPath = FilePathOf(column->folder.get(), renamed);
@@ -399,7 +395,7 @@ void CommitRename(WindowState* state) {
                                       column->entries[entryIndex].child.get());
     hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
                            newName.c_str(), SHGDN_INFOLDER, &renamed);
-    Out(L"rename \"%s\" to \"%s\": hr=0x%08lX",
+    Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX",
         column->entries[entryIndex].name.c_str(), newName.c_str(), hr);
     parent->Release();
     if (SUCCEEDED(hr) && renamed) {
@@ -437,7 +433,7 @@ void BeginMultiRename(WindowState* state, Column* column, std::vector<size_t> co
     BeginRename(state, column, entries[0]);
     if (state->rename && entries.size() > 1) {
         state->rename->multi = entries;
-        Out(L"renaming %d items together", (int)entries.size());
+        Wh_Log(L"renaming %d items together", (int)entries.size());
     }
 }
 
@@ -522,7 +518,7 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
                          dot != std::wstring::npos && dot > 0;
     box.SelectionStart(0);
     box.SelectionLength((uint32_t)(keepExtension ? dot : name.size()));
-    Out(L"rename started for \"%s\"", name.c_str());
+    Wh_Log(L"rename started for \"%s\"", name.c_str());
 }
 
 // After a delete: rows whose file is gone are hidden at once. The reload that
@@ -626,7 +622,7 @@ bool CopyOrCut(WindowState* state, Column* column,
         state->cutSeq = GetClipboardSequenceNumber();
         ApplyCutState(state);
     }
-    Out(L"%s %d item(s): hr=0x%08lX", cut ? L"cut" : L"copy",
+    Wh_Log(L"%s %d item(s): hr=0x%08lX", cut ? L"cut" : L"copy",
         (int)children.size(), hr);
     return SUCCEEDED(hr);
 }
@@ -730,7 +726,7 @@ void RunContextCommand(UINT id) {
                     context->menu->GetCommandString(
                         id - context->idFirst, GCS_VERBW, nullptr,
                         (char*)verb, ARRAYSIZE(verb));
-                    Out(L"context menu verb \"%s\"", verb);
+                    Wh_Log(L"context menu verb \"%s\"", verb);
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
                         CopyOrCut(state, context->column, context->entries,
                                   !_wcsicmp(verb, L"cut"));
@@ -763,7 +759,7 @@ void RunContextCommand(UINT id) {
                     GetCursorPos(&invoke.ptInvoke);
                     HRESULT hr = context->menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
-                    Out(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
+                    Wh_Log(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
                     // The command may have changed the folder. Read it now
                     // instead of waiting for the change notification.
                     if (!_wcsicmp(verb, L"delete")) {
@@ -887,7 +883,7 @@ bool ClipboardHasFiles() {
 void CreateNewFolder(WindowState* state, Column* column) {
     wchar_t path[MAX_PATH] = L"";
     if (!SHGetPathFromIDListW(column->folder.get(), path) || !path[0]) {
-        Out(L"new folder: this folder isn't on disk");
+        Wh_Log(L"new folder: this folder isn't on disk");
         return;
     }
     std::wstring name = L"New folder";
@@ -904,9 +900,9 @@ void CreateNewFolder(WindowState* state, Column* column) {
                 state->renameName = candidate;
                 state->renameColumn = column;
                 RequestLoad(state, column);
-                Out(L"new folder \"%s\" created", candidate.c_str());
+                Wh_Log(L"new folder \"%s\" created", candidate.c_str());
             } else {
-                Out(L"new folder: CreateDirectory failed, gle=%lu",
+                Wh_Log(L"new folder: CreateDirectory failed, gle=%lu",
                     GetLastError());
             }
             return;
@@ -921,7 +917,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
                             std::vector<size_t> const& entries) {
     wchar_t path[MAX_PATH] = L"";
     if (entries.empty() || !SHGetPathFromIDListW(column->folder.get(), path) || !path[0]) {
-        Out(L"new folder with selection: not a folder on disk, or nothing selected");
+        Wh_Log(L"new folder with selection: not a folder on disk, or nothing selected");
         return;
     }
     std::vector<std::wstring> from;
@@ -946,7 +942,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
         }
     }
     if (!CreateDirectoryW(full.c_str(), nullptr)) {
-        Out(L"new folder with selection: CreateDirectory failed, gle=%lu", GetLastError());
+        Wh_Log(L"new folder with selection: CreateDirectory failed, gle=%lu", GetLastError());
         return;
     }
     std::wstring names;
@@ -964,7 +960,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     op.pTo = target.c_str();
     op.fFlags = FOF_ALLOWUNDO;
     int result = SHFileOperationW(&op);
-    Out(L"new folder \"%s\" with %d item(s): result %d", candidate.c_str(), (int)from.size(), result);
+    Wh_Log(L"new folder \"%s\" with %d item(s): result %d", candidate.c_str(), (int)from.size(), result);
 
     UndoEntry undo;
     undo.created = true;
@@ -1001,7 +997,7 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     keys[3] = keys[0];
     keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, keys, sizeof(INPUT));
-    Out(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
+    Wh_Log(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
     // Watched every 10 ms, not at the tick's pace: the folder is shown in the tab
     // and the columns follow the moment it exists.
     try {
@@ -1043,7 +1039,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             target = archivePath.substr(0, archivePath.rfind(L'.')) + L" (" + std::to_wstring(i) + L")";
         }
         if (!CreateDirectoryW(target.c_str(), nullptr)) {
-            Out(L"extract: can't make \"%s\", gle=%lu", target.c_str(), GetLastError());
+            Wh_Log(L"extract: can't make \"%s\", gle=%lu", target.c_str(), GetLastError());
             return;
         }
     } else {
@@ -1086,7 +1082,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             hr = operation->PerformOperations();
         }
     }
-    Out(L"extract \"%s\": %d item(s), hr=0x%08lX", target.c_str(), copied, hr);
+    Wh_Log(L"extract \"%s\": %d item(s), hr=0x%08lX", target.c_str(), copied, hr);
     if (copied > 0 && named) {
         const wchar_t* leaf = wcsrchr(target.c_str(), L'\\');
         state->selectNames.assign(1, leaf ? leaf + 1 : target.c_str());
@@ -1196,7 +1192,7 @@ void ExtractSelected(WindowState* state, Column* column, std::vector<size_t> con
             hr = operation->PerformOperations();
         }
     }
-    Out(L"extract selected: %d item(s) beside the archive, hr=0x%08lX", copied, hr);
+    Wh_Log(L"extract selected: %d item(s) beside the archive, hr=0x%08lX", copied, hr);
     if (operation) {
         operation->Release();
     }
@@ -1224,14 +1220,14 @@ void RunBackgroundAction(WindowState* state, Column* column,
     }
     if (action == L"paste") {
         HRESULT hr = PasteIntoFolder(state, column->folder.get());
-        Out(L"background Paste: hr=0x%08lX", hr);
+        Wh_Log(L"background Paste: hr=0x%08lX", hr);
     } else if (action == L"newfolder") {
         CreateNewFolder(state, column);
     } else if (action == L"refresh") {
         RequestLoad(state, column);
     } else if (action == L"properties") {
         HRESULT hr = InvokeVerbOnFolder(state, column->folder.get(), "properties");
-        Out(L"background Properties: hr=0x%08lX", hr);
+        Wh_Log(L"background Properties: hr=0x%08lX", hr);
     }
 }
 
@@ -1453,7 +1449,7 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
             copy.FontSize(size);
             return copy;
         }
-        Out(L"toolbar icon of \"%s\" is a kind that is not copied", label);
+        Wh_Log(L"toolbar icon of \"%s\" is a kind that is not copied", label);
     } catch (...) {
         LogHresult(L"ToolbarIcon");
     }
@@ -1503,13 +1499,16 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
     GetSystemDirectoryW(system, MAX_PATH);
     std::wstring command = L"\"" + std::wstring(system) + L"\\tar.exe\" -c ";
     command += kind == 0 ? L"--format zip " : kind == 1 ? L"--format 7zip " : L"";
-    command += L"-f \"" + destination + L"\" -C \"" + dir + L"\"";
+    // A folder of a drive root ends in a backslash, which would escape the closing quote.
+    std::wstring base = !dir.empty() && dir.back() == L'\\' ? dir + L"." : dir;
+    // "--" ends the options: a name that starts with a dash is a name, not an option.
+    command += L"-f \"" + destination + L"\" -C \"" + base + L"\" --";
     for (auto& name : names) {
         command += L" \"" + name + L"\"";
     }
     auto queue = state->queue;
     g_compressJobs++;
-    Out(L"compress: %s", command.c_str());
+    Wh_Log(L"compress: %s", command.c_str());
     std::thread([command, destination, dir, queue]() mutable {
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
@@ -1522,7 +1521,7 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
         }
-        Out(L"compress: \"%s\" done, exit code %lu", destination.c_str(), code);
+        Wh_Log(L"compress: \"%s\" done, exit code %lu", destination.c_str(), code);
         try {
             queue.TryEnqueue([destination, dir]() {
                 WindowState* now = StateForThisThread(false);
@@ -2061,7 +2060,7 @@ struct MenuBuilder {
                             sub.ShowAt(button, shown);
                             static int logged = 0;
                             if (logged++ < 3) {
-                                Out(L"menu: a submenu opened on hover");
+                                Wh_Log(L"menu: a submenu opened on hover");
                             }
                         } catch (...) {
                             LogHresult(L"opening a submenu on hover");
@@ -2209,7 +2208,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                          : SHBindToObject(nullptr, column->folder.get(),
                                           nullptr, IID_PPV_ARGS(&parent));
         if (FAILED(hr) || !parent) {
-            Out(L"context menu: can't bind the folder, hr=0x%08lX", hr);
+            Wh_Log(L"context menu: can't bind the folder, hr=0x%08lX", hr);
             return;
         }
         std::vector<PCUITEMID_CHILD> children;
@@ -2222,7 +2221,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                                    (void**)&menu);
         parent->Release();
         if (FAILED(hr) || !menu) {
-            Out(L"context menu: no IContextMenu, hr=0x%08lX", hr);
+            Wh_Log(L"context menu: no IContextMenu, hr=0x%08lX", hr);
             return;
         }
         HMENU hmenu = CreatePopupMenu();
@@ -2231,7 +2230,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         if (FAILED(hr)) {
             DestroyMenu(hmenu);
             menu->Release();
-            Out(L"context menu: QueryContextMenu hr=0x%08lX", hr);
+            Wh_Log(L"context menu: QueryContextMenu hr=0x%08lX", hr);
             return;
         }
 
@@ -2263,7 +2262,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
             menu->GetCommandString(info.wID - state->context->idFirst, GCS_VERBW, nullptr,
                                    (char*)verb, ARRAYSIZE(verb));
             row.verb = verb;
-            Out(L"menu entry %d: id=%u verb=\"%s\" text=\"%s\"%s", i, row.id, verb, text.c_str(),
+            Wh_Log(L"menu entry %d: id=%u verb=\"%s\" text=\"%s\"%s", i, row.id, verb, text.c_str(),
                 row.sub ? L" (submenu)" : L"");
             rows.push_back(std::move(row));
         }
@@ -2507,7 +2506,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         } catch (...) {
         }
         builder.Show(flyout, list, position, rowBox);
-        Out(L"context menu shown for %d item(s), first \"%s\": %u parts",
+        Wh_Log(L"context menu shown for %d item(s), first \"%s\": %u parts",
             (int)picked.size(), column->entries[picked[0]].name.c_str(), root.Children().Size());
     } catch (...) {
         LogHresult(L"ShowItemFlyout");
@@ -2602,13 +2601,13 @@ void ShowBackgroundMenu(WindowState* state, Column* column,
     }
 
     builder.Show(flyout, list, args.GetPosition(list));
-    Out(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
+    Wh_Log(L"background menu shown for \"%s\"", PathOf(column->folder.get()).c_str());
 }
 
 void OnRowRightTapped(muxc::ListView const& list,
                       mux::Input::RightTappedRoutedEventArgs const& args) {
     if (args.PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
-        Out(L"touch: a right tap, device=%d", (int)args.PointerDeviceType());
+        Wh_Log(L"touch: a right tap, device=%d", (int)args.PointerDeviceType());
     }
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || g_unloading) {
@@ -2695,7 +2694,7 @@ void OnRowDoubleTapped(muxc::ListView const& list) {
         Pidl absolute(ILCombine(column->folder.get(),
                                 column->entries[entryIndex].child.get()));
         if (absolute) {
-            Out(L"open \"%s\"", column->entries[entryIndex].name.c_str());
+            Wh_Log(L"open \"%s\"", column->entries[entryIndex].name.c_str());
             OpenItem(state->topLevel, absolute.get());
         }
     } catch (...) {
@@ -2810,7 +2809,7 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
         if (data) {
             data->Release();
         }
-        Out(L"paste: no drop target or clipboard (hr=0x%08lX), using the verb", hr);
+        Wh_Log(L"paste: no drop target or clipboard (hr=0x%08lX), using the verb", hr);
         return InvokeVerbOnFolder(state, folder, "paste");
     }
 
@@ -2842,7 +2841,7 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     } else {
         drop->DragLeave();
     }
-    Out(L"paste as %s: hr=0x%08lX", effect == DROPEFFECT_MOVE ? L"move" : L"copy",
+    Wh_Log(L"paste as %s: hr=0x%08lX", effect == DROPEFFECT_MOVE ? L"move" : L"copy",
         hr);
     data->Release();
     drop->Release();

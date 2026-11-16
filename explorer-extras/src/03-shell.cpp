@@ -100,34 +100,6 @@ std::wstring ModuleAt(void* address) {
 HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
                                             PCUIDLIST_RELATIVE pidl,
                                             UINT flags) {
-    if (g_debugLog) {
-        // SBSP_ABSOLUTE is 0: a pidl is absolute unless one of these is set.
-        const UINT notAbsolute = SBSP_RELATIVE | SBSP_PARENT |
-                                 SBSP_NAVIGATEBACK | SBSP_NAVIGATEFORWARD;
-        std::wstring target = L"(relative, parent, back or forward)";
-        if (!(flags & notAbsolute) && pidl) {
-            PWSTR name = nullptr;
-            if (SUCCEEDED(SHGetNameFromIDList((PCIDLIST_ABSOLUTE)pidl,
-                                              SIGDN_DESKTOPABSOLUTEPARSING,
-                                              &name)) &&
-                name) {
-                target = name;
-                CoTaskMemFree(name);
-            }
-        }
-        void* frames[14] = {};
-        USHORT count = CaptureStackBackTrace(1, ARRAYSIZE(frames), frames, nullptr);
-        std::wstring stack;
-        for (USHORT i = 0; i < count; i++) {
-            if (i) {
-                stack += L" < ";
-            }
-            stack += ModuleAt(frames[i]);
-        }
-        Out(L"BrowseObject %s flags=0x%X to \"%s\" from: %s",
-            g_ourBrowse ? L"(this mod)" : L"(not this mod)", flags,
-            target.c_str(), stack.c_str());
-    }
     // A click in the navigation pane: remember where it goes.
     if (g_sidebarRoot && !g_ourBrowse && pidl &&
         (flags & SBSP_ACTIVATE_NOFOCUS) &&
@@ -147,7 +119,7 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
 // tab's browser is the same class and shares that vtable.
 void InstallBrowseTrace(IShellBrowser* browser) {
     static std::atomic<bool> tried{false};
-    if ((!g_debugLog && !g_sidebarRoot) || !browser || tried.exchange(true)) {
+    if (!g_sidebarRoot || !browser || tried.exchange(true)) {
         return;
     }
     void** vtable = *(void***)browser;
@@ -160,7 +132,7 @@ void InstallBrowseTrace(IShellBrowser* browser) {
     if (ok) {
         Wh_ApplyHookOperations();
     }
-    Out(L"BrowseObject trace installed: %d, target=%s", ok ? 1 : 0,
+    Wh_Log(L"BrowseObject trace installed: %d, target=%s", ok ? 1 : 0,
         ModuleAt(target).c_str());
 }
 
@@ -251,15 +223,6 @@ bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::
     }
     ULONGLONG size = ((ULONGLONG)info.nFileSizeHigh << 32) | info.nFileSizeLow;
     return size <= 512ULL * 1024 * 1024;
-}
-
-bool IsFolderItem(IShellFolder* folder, PCUITEMID_CHILD child) {
-    SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
-    if (FAILED(folder->GetAttributesOf(1, &child, &attributes))) {
-        return false;
-    }
-    // Zip files and the like report both. Treat them as files.
-    return (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
 }
 
 // The parsing name of a child item, such as "::{GUID}" for a virtual folder.
@@ -386,14 +349,6 @@ Pidl FolderLinkTarget(IShellFolder* folder, PCUITEMID_CHILD child) {
         item->Release();
     }
     return result;
-}
-
-bool IsLauncherItem(IShellFolder* folder, PCUITEMID_CHILD child) {
-    SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM;
-    if (FAILED(folder->GetAttributesOf(1, &child, &attributes))) {
-        return false;
-    }
-    return !(attributes & (SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM));
 }
 
 std::wstring DisplayName(IShellFolder* folder, PCUITEMID_CHILD child) {
@@ -582,7 +537,7 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
     IShellFolder2* folder2 = nullptr;
     folder->QueryInterface(IID_PPV_ARGS(&folder2));
     if (!folder2) {
-        Out(L"group fallback: no IShellFolder2");
+        Wh_Log(L"group fallback: no IShellFolder2");
         return;
     }
     size_t count = result->entries.size();
@@ -694,7 +649,7 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
     for (auto& value : values) {
         VariantClear(&value);
     }
-    Out(L"group fallback: key pid=%lu, first value type=%d", key.pid, firstType);
+    Wh_Log(L"group fallback: key pid=%lu, first value type=%d", key.pid, firstType);
     folder2->Release();
 
     // The groups that occur, in display order.
@@ -727,11 +682,11 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         names.push_back(id >= 0 && id < (int)texts.size() ? texts[id] : L"");
     }
     if (names.size() == 1 && names[0] == L"Unspecified") {
-        Out(L"group fallback: the key gives no values here, not grouping");
+        Wh_Log(L"group fallback: the key gives no values here, not grouping");
         return;
     }
     ApplyGroups(result, ids, order, names);
-    Out(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
+    Wh_Log(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
         (int)order.size(), isDate ? 1 : 0, isSize ? 1 : 0, isName ? 1 : 0,
         column);
 }
@@ -758,12 +713,12 @@ void GroupEntries(IShellFolder* folder, const SortSpec& spec,
         }
         static std::atomic<int> logged{0};
         if (logged++ < 6) {
-            Out(L"group: key pid=%lu, CanCategorizeOnSCID=0x%08lX GetCategoryForSCID=0x%08lX CreateCategory=0x%08lX",
+            Wh_Log(L"group: key pid=%lu, CanCategorizeOnSCID=0x%08lX GetCategoryForSCID=0x%08lX CreateCategory=0x%08lX",
                 spec.groupKey.pid, can, forScid, create);
         }
         provider->Release();
     } else {
-        Out(L"group: no category provider, hr=0x%08lX", hr);
+        Wh_Log(L"group: no category provider, hr=0x%08lX", hr);
     }
     if (!categorizer) {
         GroupFallback(folder, spec, result);
@@ -777,7 +732,7 @@ void GroupEntries(IShellFolder* folder, const SortSpec& spec,
     std::vector<DWORD> raw(count, 0);
     hr = categorizer->GetCategory((UINT)count, children.data(), raw.data());
     if (FAILED(hr)) {
-        Out(L"group: GetCategory failed, hr=0x%08lX", hr);
+        Wh_Log(L"group: GetCategory failed, hr=0x%08lX", hr);
         categorizer->Release();
         GroupFallback(folder, spec, result);
         return;
@@ -831,7 +786,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                             IID_PPV_ARGS(&folder));
     }
     if (FAILED(hr) || !folder) {
-        Out(L"load: can't bind, hr=0x%08lX", hr);
+        Wh_Log(L"load: can't bind, hr=0x%08lX", hr);
         return;
     }
     SHCONTF flags = SHCONTF_FOLDERS | SHCONTF_NONFOLDERS;
@@ -907,7 +862,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
                 key = where;
                 CoTaskMemFree(where);
             }
-            Out(L"load: \"%s\" read %d items in %d ms, enumeration hr=0x%08lX", key.c_str(),
+            Wh_Log(L"load: \"%s\" read %d items in %d ms, enumeration hr=0x%08lX", key.c_str(),
                 (int)result->entries.size(), (int)took, hr);
         }
     }
@@ -930,7 +885,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         int summary = marked * 10000 + syncing;
         auto at = last.find(key);
         if ((at == last.end() ? marked != 0 || syncing != 0 : at->second != summary)) {
-            Out(L"marks in \"%s\": %d cloud, network or device, %d syncing", key.c_str(), marked, syncing);
+            Wh_Log(L"marks in \"%s\": %d cloud, network or device, %d syncing", key.c_str(), marked, syncing);
         }
         last[key] = summary;
     }
@@ -954,7 +909,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             int column = ColumnForKey(folder2, sortColumn.propkey);
             static std::atomic<int> logged{0};
             if (logged++ < 8) {
-                Out(L"sort: key pid=%lu maps to column %d, direction %d",
+                Wh_Log(L"sort: key pid=%lu maps to column %d, direction %d",
                     sortColumn.propkey.pid, column, (int)sortColumn.direction);
             }
             if (column >= 0) {
@@ -1027,7 +982,7 @@ void ClearExplorerSelection(IShellBrowser* browser) {
         }
         view->Release();
     }
-    Out(L"cleared Explorer's selection, %d items were selected", (int)selected.size());
+    Wh_Log(L"cleared Explorer's selection, %d items were selected", (int)selected.size());
 }
 
 // The items selected in Explorer's own view, as child ids.

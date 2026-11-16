@@ -120,10 +120,10 @@ void EntryTick() {
                 WalkForViewFlyout(state, root, 0, visited);
             }
             if (state->menuItem) {
-                Out(L"Columns entry added at window creation, after %d ticks",
+                Wh_Log(L"Columns entry added at window creation, after %d ticks",
                     state->entryTries);
             } else if (state->entryTries >= 40) {
-                Out(L"no View flyout found within 2 s of window creation, giving up");
+                Wh_Log(L"no View flyout found within 2 s of window creation, giving up");
                 StopEntry(state);
             }
             return;
@@ -138,7 +138,7 @@ void EntryTick() {
             FindVisibleChild(state->topLevel, L"ShellTabWindowClass") !=
                 state->armTab) {
             if (state->entryTries >= 100) {
-                Out(L"the new tab never became visible, not restoring Columns");
+                Wh_Log(L"the new tab never became visible, not restoring Columns");
                 StopEntry(state);
             }
             return;
@@ -153,11 +153,11 @@ void EntryTick() {
                 IShellBrowser* openBrowser = BrowserOf(state->topLevel);
                 Pidl openFolder = openBrowser ? CurrentFolder(openBrowser) : Pidl();
                 if (openFolder && RememberedColumns(PathOf(openFolder.get())) == 0) {
-                    Out(L"the folder this window opens on was left in its own layout, not restoring Columns");
+                    Wh_Log(L"the folder this window opens on was left in its own layout, not restoring Columns");
                     StopEntry(state);
                     return;
                 }
-                Out(L"restoring Columns, window=%p, tick %d", state->topLevel,
+                Wh_Log(L"restoring Columns, window=%p, tick %d", state->topLevel,
                     state->entryTries);
                 ShowPanel(state);
                 if (state->on && state->menuItem) {
@@ -166,7 +166,7 @@ void EntryTick() {
                 StopEntry(state);
             }
         } else if (state->entryTries >= 100) {
-            Out(L"no visible file list within 5 s, not restoring Columns");
+            Wh_Log(L"no visible file list within 5 s, not restoring Columns");
             StopEntry(state);
         }
     } catch (...) {
@@ -217,7 +217,7 @@ void OnTabCreated(HWND tab) {
         state->entryStopped = false;
         timer.Start();
         state->entryTimer = timer;
-        Out(L"new tab %p, waiting for it to show Columns", tab);
+        Wh_Log(L"new tab %p, waiting for it to show Columns", tab);
     } catch (...) {
         LogHresult(L"OnTabCreated");
         state->entryStopped = true;
@@ -282,7 +282,7 @@ void OnWindowCreated(Inspectable const& rootObject) {
     timer.Start();
     state->entryTimer = timer;
     StartDetails(state);
-    Out(L"window created, window=%p, looking for the View flyout", top);
+    Wh_Log(L"window created, window=%p, looking for the View flyout", top);
 }
 
 using DpiChanged_t = void*(WINAPI*)(void* pThis, void* ret, void* root,
@@ -355,7 +355,7 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
         state->syncSelAt = now + 70;
         state->postActionAt2 = now + 800;
         state->watchEditUntil = now + 1500;
-        Out(L"toolbar command invoked");
+        Wh_Log(L"toolbar command invoked");
     }
 }
 
@@ -384,17 +384,17 @@ void HookExtensions(HMODULE module) {
     if (!Wh_SetFunctionHook((void*)TranslateAcceleratorW,
                             (void*)TranslateAcceleratorW_Hook,
                             (void**)&TranslateAcceleratorW_Original)) {
-        Out(L"could not hook TranslateAcceleratorW, Backspace in the rename box may not work");
+        Wh_Log(L"could not hook TranslateAcceleratorW, Backspace in the rename box may not work");
     }
     if (!Wh_SetFunctionHook((void*)CreateWindowExW, (void*)CreateWindowExW_Hook,
                             (void**)&CreateWindowExW_Original)) {
-        Out(L"could not hook CreateWindowExW, new tabs won't open in Columns");
+        Wh_Log(L"could not hook CreateWindowExW, new tabs won't open in Columns");
     }
     bool ok = WindhawkUtils::HookSymbols(module, hooks, ARRAYSIZE(hooks));
-    Out(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
+    Wh_Log(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
         ok ? 1 : 0, (void*)PointerPressed_Original,
         (void*)PointerPressedWave1_Original, (void*)InvokeMenuItem_Original);
-    Out(L"OnDpiChanged=%p", (void*)DpiChanged_Original);
+    Wh_Log(L"OnDpiChanged=%p", (void*)DpiChanged_Original);
     g_hooked = PointerPressed_Original || PointerPressedWave1_Original ||
                DpiChanged_Original;
 }
@@ -433,7 +433,7 @@ void CloseEverything() {
         }
         if (queued && done) {
             DWORD wait = WaitForSingleObject(done, 4000);
-            Out(L"window cleanup %s",
+            Wh_Log(L"window cleanup %s",
                 wait == WAIT_OBJECT_0 ? L"done" : L"TIMED OUT");
             if (wait == WAIT_OBJECT_0) {
                 CloseHandle(done);
@@ -441,7 +441,7 @@ void CloseEverything() {
         } else {
             // The window's thread is gone. Its objects can't be released from
             // here, so the state is left alone on purpose.
-            Out(L"window cleanup skipped, its thread no longer takes work");
+            Wh_Log(L"window cleanup skipped, its thread no longer takes work");
             if (done) {
                 CloseHandle(done);
             }

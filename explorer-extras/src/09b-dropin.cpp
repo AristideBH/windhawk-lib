@@ -233,14 +233,14 @@ struct PanelDropTarget : IDropTarget {
                 if (SUCCEEDED(object->EnumFormatEtc(DATADIR_GET, &formats)) && formats) {
                     FORMATETC format;
                     ULONG got = 0;
-                    Out(L"drop in: a drag comes in, allowed effects %lu, keys 0x%lX", (unsigned long)*effect,
+                    Wh_Log(L"drop in: a drag comes in, allowed effects %lu, keys 0x%lX", (unsigned long)*effect,
                         (unsigned long)keys);
                     while (formats->Next(1, &format, &got) == S_OK && got == 1) {
                         wchar_t name[80] = L"";
                         if (format.cfFormat >= 0xC000) {
                             GetClipboardFormatNameW(format.cfFormat, name, 80);
                         }
-                        Out(L"drop in:   format %u %s tymed %lu", (unsigned)format.cfFormat, name, (unsigned long)format.tymed);
+                        Wh_Log(L"drop in:   format %u %s tymed %lu", (unsigned)format.cfFormat, name, (unsigned long)format.tymed);
                     }
                     formats->Release();
                 }
@@ -260,7 +260,7 @@ struct PanelDropTarget : IDropTarget {
         {
             static int enterLogs = 0;
             if (enterLogs++ < 12) {
-                Out(L"drop in: after the first look, effect %lu, folder target %s", (unsigned long)*effect, folder ? L"yes" : L"no");
+                Wh_Log(L"drop in: after the first look, effect %lu, folder target %s", (unsigned long)*effect, folder ? L"yes" : L"no");
             }
         }
         return S_OK;
@@ -304,7 +304,7 @@ struct PanelDropTarget : IDropTarget {
             DWORD dropKeys = (keys & ~(DWORD)(MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) | (buttons ? buttons : MK_LBUTTON);
             DWORD result = wanted;
             HRESULT hr = folder->Drop(data, dropKeys, pt, &result);
-            Out(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
+            Wh_Log(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
                 (unsigned long)result, hr);
             *effect = result;
             folder->Release();  // The drop ends the folder's part: no DragLeave.
@@ -336,13 +336,13 @@ void RegisterPanelDropTarget(WindowState* state) {
         hr = RegisterDragDrop(window, target);
     }
     if (FAILED(hr)) {
-        Out(L"the panel could not take drops coming in, hr=0x%08lX", hr);
+        Wh_Log(L"the panel could not take drops coming in, hr=0x%08lX", hr);
         target->Release();
         return;
     }
     state->panelDrop = target;
     state->panelDropWindow = window;
-    Out(L"the panel takes drops coming in, window %p", window);
+    Wh_Log(L"the panel takes drops coming in, window %p", window);
 }
 
 void RevokePanelDropTarget(WindowState* state) {
@@ -475,7 +475,7 @@ void SpringLoadTick(WindowState* state) {
             ILIsEqual(state->columns[index + 1]->folder.get(), folder.get())) {
             return;  // Already open there.
         }
-        Out(L"a folder held under a drag opens: \"%s\"", column->entries[entry].name.c_str());
+        Wh_Log(L"a folder held under a drag opens: \"%s\"", column->entries[entry].name.c_str());
         SelectChildInColumn(state, column, column->entries[entry].child.get());
         OnRowSelected(column->list);
     } catch (...) {

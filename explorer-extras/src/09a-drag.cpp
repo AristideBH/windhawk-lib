@@ -264,7 +264,7 @@ void TouchTrack(WindowState* state, mux::Input::PointerRoutedEventArgs const& ar
         g_touchY = screen.y;
         g_touchDown = down;
         if (g_outPointerId && g_touchEvents++ < 12) {
-            Out(L"touch: finger event during the drag out, down=%d at %ld,%ld", down ? 1 : 0, screen.x, screen.y);
+            Wh_Log(L"touch: finger event during the drag out, down=%d at %ld,%ld", down ? 1 : 0, screen.x, screen.y);
         }
     } catch (...) {
     }
@@ -294,7 +294,7 @@ LRESULT CALLBACK TouchSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (g_touchLogs++ < 30) {
                 wchar_t cls[64] = L"";
                 GetClassNameW(hwnd, cls, 64);
-                Out(L"touch: win32 message 0x%04X id=%u ok=%d at %ld,%ld hwnd=%p %s", msg, id, ok ? 1 : 0,
+                Wh_Log(L"touch: win32 message 0x%04X id=%u ok=%d at %ld,%ld hwnd=%p %s", msg, id, ok ? 1 : 0,
                     ok ? info.ptPixelLocation.x : 0L, ok ? info.ptPixelLocation.y : 0L, hwnd, cls);
             }
         }
@@ -322,7 +322,7 @@ void InstallTouchHook(WindowState* state) {
                 g_touchHooked.push_back(hwnd);
             }
         }
-        Out(L"touch: listening to the finger on %d window(s)", (int)g_touchHooked.size());
+        Wh_Log(L"touch: listening to the finger on %d window(s)", (int)g_touchHooked.size());
     } catch (...) {
         LogHresult(L"InstallTouchHook");
     }
@@ -387,7 +387,7 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
         }
     } catch (...) {
         items.clear();
-        Out(L"touch: the files of the drag could not be opened, only the shell items go");
+        Wh_Log(L"touch: the files of the drag could not be opened, only the shell items go");
     }
     // The label of the panel's own drag, drawn once into a bitmap: the system's drag shows that
     // instead of a snapshot of the row. It is built off screen, then taken away.
@@ -412,14 +412,14 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
                         pixels, winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8, width, height,
                         winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied);
                 }
-                Out(L"touch: the label was drawn for the drag, %d x %d", width, height);
+                Wh_Log(L"touch: the label was drawn for the drag, %d x %d", width, height);
             }
             if (WindowState* after = StateForThisThread(false)) {
                 RemoveGhost(after);
             }
         }
     } catch (...) {
-        Out(L"touch: the label could not be drawn, the row's picture will do");
+        Wh_Log(L"touch: the label could not be drawn, the row's picture will do");
         if (WindowState* after = StateForThisThread(false)) {
             RemoveGhost(after);
         }
@@ -429,7 +429,7 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
         g_touchPrep.cida = cida;
         g_touchPrep.picture = picture;
         g_touchPrep.ready = true;
-        Out(L"touch: the drag's items are ready (%d file(s))", (int)g_touchPrep.items.size());
+        Wh_Log(L"touch: the drag's items are ready (%d file(s))", (int)g_touchPrep.items.size());
     }
 }
 
@@ -454,7 +454,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                 } catch (...) {
                 }
             }
-            Out(L"touch: the system's drag is starting with %d file(s) and %d byte(s) of shell items", (int)items.size(),
+            Wh_Log(L"touch: the system's drag is starting with %d file(s) and %d byte(s) of shell items", (int)items.size(),
                 cida ? (int)cida->size() : 0);
             if (!items.empty()) {
                 args.Data().SetStorageItems(items);
@@ -506,7 +506,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                     POINT cursor{};
                     GetCursorPos(&cursor);
                     if (overLogs++ < 16) {
-                        Out(L"touch: over the panel at %.0f,%.0f (host), the cursor is at %ld,%ld", where.X, where.Y,
+                        Wh_Log(L"touch: over the panel at %.0f,%.0f (host), the cursor is at %ld,%ld", where.X, where.Y,
                             cursor.x, cursor.y);
                     }
                 }
@@ -534,7 +534,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                 }
                 auto where = args.GetPosition(now->rootGrid);
                 DragRefreshTarget(now, where);
-                Out(L"touch: dropped in the panel, target column %d entry %d ok=%d",
+                Wh_Log(L"touch: dropped in the panel, target column %d entry %d ok=%d",
                     now->drag.targetColumn ? ColumnIndexOfList(now, now->drag.targetColumn->list) + 1 : 0,
                     now->drag.targetEntry, now->drag.targetOk ? 1 : 0);
                 now->drag.platformDrag = false;
@@ -544,16 +544,16 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
             });
             dropHooked = true;
         }
-        Out(L"touch: asking the system to drag %d item(s)", (int)items.size());
+        Wh_Log(L"touch: asking the system to drag %d item(s)", (int)items.size());
         auto result = co_await list.StartDragAsync(*point);
-        Out(L"touch: the system's drag ended, operation %d", (int)result);
+        Wh_Log(L"touch: the system's drag ended, operation %d", (int)result);
     } catch (winrt::hresult_error const& error) {
-        Out(L"touch: the system's drag failed, hr=0x%08lX %s", (unsigned long)error.code().value, error.message().c_str());
+        Wh_Log(L"touch: the system's drag failed, hr=0x%08lX %s", (unsigned long)error.code().value, error.message().c_str());
         if (WindowState* state = StateForThisThread(false)) {
             state->drag.platformDrag = false;  // The shell's drag takes over at the first move.
         }
     } catch (...) {
-        Out(L"touch: the system's drag failed");
+        Wh_Log(L"touch: the system's drag failed");
         if (WindowState* state = StateForThisThread(false)) {
             state->drag.platformDrag = false;
         }
@@ -621,7 +621,7 @@ void OnDragHold(WindowState* state, muxc::ListView const& list) {
     } catch (...) {
         LogHresult(L"arming a touch drag");
     }
-    Out(L"touch: held, the drag is armed, scrollers locked=%d", (int)d.locked.size());
+    Wh_Log(L"touch: held, the drag is armed, scrollers locked=%d", (int)d.locked.size());
     // The system's drag, for what is on disk.
     try {
         std::vector<size_t> picked = SelectedEntries(d.column, list);
@@ -661,7 +661,7 @@ void OnDragHold(WindowState* state, muxc::ListView const& list) {
         if (!kids.empty() && d.touchPoint) {
             TouchDragPrepare(std::move(paths), cida);  // The drag itself starts at the first move.
         } else {
-            Out(L"touch: nothing on disk to hand to the system's drag, the shell's drag will do");
+            Wh_Log(L"touch: nothing on disk to hand to the system's drag, the shell's drag will do");
         }
     } catch (...) {
         LogHresult(L"starting the system's drag");
@@ -703,13 +703,13 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
     }
     if (d.deviceType != 2) {
         auto point = args.GetCurrentPoint(list);
-        Out(L"touch: a press on a row, device=%d id=%u left=%d inContact=%d pressure=%.2f", d.deviceType,
+        Wh_Log(L"touch: a press on a row, device=%d id=%u left=%d inContact=%d pressure=%.2f", d.deviceType,
             args.Pointer().PointerId(), point.Properties().IsLeftButtonPressed() ? 1 : 0, point.IsInContact() ? 1 : 0,
             point.Properties().Pressure());
     }
     static int logged = 0;
     if (logged++ < 6) {
-        Out(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
+        Wh_Log(L"drag may start: pressed on row %d (entry %d) of column %d", rowIndex, entry, at + 1);
     }
 }
 
@@ -1039,7 +1039,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     auto at = point.Position();
     if (d.deviceType != 2 && d.movesLogged < 8) {
         d.movesLogged++;
-        Out(L"touch: move %d at %.0f,%.0f, left=%d inContact=%d, pending=%d active=%d", d.movesLogged, at.X, at.Y,
+        Wh_Log(L"touch: move %d at %.0f,%.0f, left=%d inContact=%d, pending=%d active=%d", d.movesLogged, at.X, at.Y,
             point.Properties().IsLeftButtonPressed() ? 1 : 0, point.IsInContact() ? 1 : 0, d.pending ? 1 : 0, d.active ? 1 : 0);
     }
     if (d.pending) {
@@ -1055,7 +1055,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
             if (!g_touchPrep.ready || !d.pressedRow) {
                 return false;
             }
-            Out(L"touch: moved after the hold, starting the system's drag");
+            Wh_Log(L"touch: moved after the hold, starting the system's drag");
             decltype(DragState::touchPoint) now = args.GetCurrentPoint(d.pressedRow);
             TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture);
             return true;
@@ -1068,13 +1068,13 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
         d.pending = false;
         d.active = true;
         state->slowRenameAt = 0;
-        Out(L"drag: moved far enough, taking the pointer");
+        Wh_Log(L"drag: moved far enough, taking the pointer");
         if (!d.armed) {
             list.CapturePointer(args.Pointer());
         }
-        Out(L"drag: pointer taken, making the label");
+        Wh_Log(L"drag: pointer taken, making the label");
         ShowGhost(state, SpecOf(column, d.entries));
-        Out(L"drag started from column %d with %d item(s)", ColumnIndexOfList(state, list) + 1,
+        Wh_Log(L"drag started from column %d with %d item(s)", ColumnIndexOfList(state, list) + 1,
             (int)d.entries.size());
         if (d.deviceType == 0) {
             // A finger is taken from the panel's own drag at once, so the shell's drag loop
@@ -1139,7 +1139,7 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         target->Release();
     }
     if (FAILED(hr) || !drop || !data) {
-        Out(L"drop: no data object or drop target, hr=0x%08lX", hr);
+        Wh_Log(L"drop: no data object or drop target, hr=0x%08lX", hr);
         if (drop) {
             drop->Release();
         }
@@ -1158,11 +1158,11 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         drop->DragOver(keyState, where, &offered);
         DWORD result = offered;
         hr = drop->Drop(data, keyState, where, &result);
-        Out(L"dropped %d item(s) on \"%s\": effect %lu, hr=0x%08lX", (int)children.size(),
+        Wh_Log(L"dropped %d item(s) on \"%s\": effect %lu, hr=0x%08lX", (int)children.size(),
             PathOf(targetFolder.get()).c_str(), (unsigned long)result, hr);
     } else {
         drop->DragLeave();
-        Out(L"the folder takes no drop, hr=0x%08lX effect=%lu", hr, (unsigned long)effect);
+        Wh_Log(L"the folder takes no drop, hr=0x%08lX effect=%lu", hr, (unsigned long)effect);
     }
     data->Release();
     drop->Release();
@@ -1224,7 +1224,7 @@ struct OutDropSource : IDropSource {
             g_dropSourceLogs++;
             POINT where;
             GetCursorPos(&where);
-            Out(L"touch: the drag loop asks, keys=0x%lX escape=%d, cursor %ld,%ld, left button %s", (unsigned long)keys,
+            Wh_Log(L"touch: the drag loop asks, keys=0x%lX escape=%d, cursor %ld,%ld, left button %s", (unsigned long)keys,
                 escape ? 1 : 0, where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
         }
         if (g_outPointerId) {
@@ -1268,7 +1268,7 @@ struct OutDropSource : IDropSource {
                                                     : 0;
             if (wanted != DROPEFFECT_NONE && data) {
                 SetPreferredEffect(data, wanted);
-                Out(L"drag out: the keys of a moment ago ask for effect %lu", (unsigned long)wanted);
+                Wh_Log(L"drag out: the keys of a moment ago ask for effect %lu", (unsigned long)wanted);
             }
             POINT cursor;
             GetCursorPos(&cursor);
@@ -1279,47 +1279,10 @@ struct OutDropSource : IDropSource {
         }
         return S_OK;
     }
-    HWND probeWindow = nullptr;
-    DWORD probeEffect = 0xFFFFFFFF;
-    // Probe (0.13.7): logs when the window under the pointer or the effect it
-    // offers changes, and the tree item under the pointer over a tree view.
     int feedbackCalls = 0;
-    void Probe(DWORD effect) {
-        POINT cursor;
-        GetCursorPos(&cursor);
-        HWND under = WindowFromPoint(cursor);
-        if (under == probeWindow && effect == probeEffect) {
-            return;
-        }
-        probeWindow = under;
-        probeEffect = effect;
-        std::wstring cls = under ? ClassNameOf(under) : L"?";
-        std::wstring item;
-        if (under && cls == L"SysTreeView32") {
-            TVHITTESTINFO hit = {};
-            hit.pt = cursor;
-            ScreenToClient(under, &hit.pt);
-            HTREEITEM node = (HTREEITEM)SendMessageW(under, TVM_HITTEST, 0, (LPARAM)&hit);
-            if (node) {
-                wchar_t text[128] = L"";
-                TVITEMW info = {};
-                info.mask = TVIF_TEXT;
-                info.hItem = node;
-                info.pszText = text;
-                info.cchTextMax = ARRAYSIZE(text);
-                SendMessageW(under, TVM_GETITEMW, 0, (LPARAM)&info);
-                item = text;
-            } else {
-                item = L"(no item)";
-            }
-        }
-        Out(L"drag probe: over \"%s\" %p%s%s, effect offered %lu", cls.c_str(), under,
-            item.empty() ? L"" : L" item ", item.c_str(), (unsigned long)effect);
-    }
     STDMETHODIMP GiveFeedback(DWORD effect) override {
         lastEffect = effect;
         feedbackCalls++;
-        Probe(effect);
         return DRAGDROP_S_USEDEFAULTCURSORS;
     }
 };
@@ -1432,7 +1395,7 @@ Pidl FolderOfNavItem(HWND tree, HTREEITEM node) {
         if (FAILED(SHCreateItemFromParsingName(L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}", nullptr,
                                                IID_PPV_ARGS(&current))) ||
             !current) {
-            Out(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
+            Wh_Log(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
             return Pidl();
         }
         if (IShellItem* pinned = FindChildByName(current, names[0])) {
@@ -1440,7 +1403,7 @@ Pidl FolderOfNavItem(HWND tree, HTREEITEM node) {
             current = pinned;
         } else if (names.size() < 2) {
             current->Release();
-            Out(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
+            Wh_Log(L"drag out: no folder found for the navigation pane item \"%s\"", names.back().c_str());
             return Pidl();
         }
         index = 1;
@@ -1453,7 +1416,7 @@ Pidl FolderOfNavItem(HWND tree, HTREEITEM node) {
         current->Release();
         current = next;
         if (!current) {
-            Out(L"drag out: no folder found for the navigation pane item \"%s\" (stopped at \"%s\", chain of %d, first \"%s\")",
+            Wh_Log(L"drag out: no folder found for the navigation pane item \"%s\" (stopped at \"%s\", chain of %d, first \"%s\")",
                 names.back().c_str(), names[index].c_str(), (int)names.size(), names[0].c_str());
             return Pidl();
         }
@@ -1546,7 +1509,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         source->Release();
     }
     if (FAILED(hr) || !data) {
-        Out(L"drag out: no data object, hr=0x%08lX", hr);
+        Wh_Log(L"drag out: no data object, hr=0x%08lX", hr);
         return;
     }
     DWORD effect = DROPEFFECT_NONE;
@@ -1559,7 +1522,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     if (preferred != DROPEFFECT_NONE) {
         SetPreferredEffect(data, preferred);
     }
-    Out(L"drag out: %d item(s) leave the panel, starting the shell's drag, default effect %lu",
+    Wh_Log(L"drag out: %d item(s) leave the panel, starting the shell's drag, default effect %lu",
         (int)children.size(), (unsigned long)preferred);
     // 0.13.9: the panel's pointer capture (XAML or Win32) may still hold the mouse,
     // so the drag loop would see no moves until the release.
@@ -1575,7 +1538,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
                       &effect);
     state->outDragActive = false;
     if (g_outDevice != 2) {
-        Out(L"touch: the shell's drag ran for %d ms, hr=0x%08lX, effect %lu", (int)(GetTickCount64() - outStarted), hr,
+        Wh_Log(L"touch: the shell's drag ran for %d ms, hr=0x%08lX, effect %lu", (int)(GetTickCount64() - outStarted), hr,
             (unsigned long)effect);
     }
     g_outDevice = 2;
@@ -1594,7 +1557,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
     RemoveTouchHook();
     RemoveGhost(state);
     nudger.Stop();
-    Out(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
+    Wh_Log(L"drag out: the drag loop asked for feedback %d time(s), %d pointer move(s) posted to it",
         dropSource->feedbackCalls, nudger.sent.load());
     {
         wchar_t title[80] = L"";
@@ -1603,7 +1566,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
             GetWindowTextW(dropSource->dropWindow, title, ARRAYSIZE(title));
             GetWindowThreadProcessId(dropSource->dropWindow, &processId);
         }
-        Out(L"drag out ended: effect %lu, hr=0x%08lX; keys at the drop 0x%lX; the target last offered effect %lu; dropped over a \"%s\" window \"%s\" of process %lu",
+        Wh_Log(L"drag out ended: effect %lu, hr=0x%08lX; keys at the drop 0x%lX; the target last offered effect %lu; dropped over a \"%s\" window \"%s\" of process %lu",
             (unsigned long)effect, hr, (unsigned long)dropSource->dropKeys,
             (unsigned long)dropSource->lastEffect,
             dropSource->dropWindow ? ClassNameOf(dropSource->dropWindow).c_str() : L"?", title,
@@ -1617,7 +1580,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
             GetWindowRect(root, &rect);
             GetWindowTextW(root, rootTitle, ARRAYSIZE(rootTitle));
         }
-        Out(L"drag out: released at %ld,%ld over top-level \"%s\" \"%s\" at %ld,%ld to %ld,%ld",
+        Wh_Log(L"drag out: released at %ld,%ld over top-level \"%s\" \"%s\" at %ld,%ld to %ld,%ld",
             dropSource->dropPoint.x, dropSource->dropPoint.y,
             root ? ClassNameOf(root).c_str() : L"?", rootTitle, rect.left, rect.top, rect.right,
             rect.bottom);
@@ -1674,7 +1637,7 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
                         if (SUCCEEDED(sourceFolderObject->GetAttributesOf(1, &one, &attributes)) &&
                             (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM)) {
                             Pidl folder(ILCombine(sourceFolder.get(), child.get()));
-                            Out(L"drag out: a folder dropped on the tab strip opens in a new tab");
+                            Wh_Log(L"drag out: a folder dropped on the tab strip opens in a new tab");
                             OpenFolderInNewTab(state, folder.get());
                             break;  // One tab per drop.
                         }
@@ -1685,14 +1648,14 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         }
     }
     if (treeProcess == GetCurrentProcessId() && !children.empty() && !unanswered) {
-        Out(L"drag out: the navigation pane answered the drag itself, nothing to finish");
+        Wh_Log(L"drag out: the navigation pane answered the drag itself, nothing to finish");
     } else if (treeProcess == GetCurrentProcessId() && !children.empty()) {
         TVHITTESTINFO hit = {};
         hit.pt = treePoint;
         ScreenToClient(treeWindow, &hit.pt);
         HTREEITEM node = (HTREEITEM)SendMessageW(treeWindow, TVM_HITTEST, 0, (LPARAM)&hit);
         if (!node) {
-            Out(L"drag out: released on the navigation pane, but not on an item");
+            Wh_Log(L"drag out: released on the navigation pane, but not on an item");
         } else {
             Pidl target = FolderOfNavItem(treeWindow, node);
             if (target) {
@@ -1711,11 +1674,11 @@ void DoOutDrag(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
                 }
                 std::wstring targetPath = PathOf(target.get());
                 if (!stillThere) {
-                    Out(L"drag out: the items are gone from their folder, nothing left to drop on the navigation pane item");
+                    Wh_Log(L"drag out: the items are gone from their folder, nothing left to drop on the navigation pane item");
                 } else if (_wcsicmp(targetPath.c_str(), PathOf(sourceFolder.get()).c_str()) == 0) {
-                    Out(L"drag out: the navigation pane item is the folder the items came from, nothing to do");
+                    Wh_Log(L"drag out: the navigation pane item is the folder the items came from, nothing to do");
                 } else {
-                    Out(L"drag out: finishing the drop on the navigation pane item, folder \"%s\", keys 0x%lX",
+                    Wh_Log(L"drag out: finishing the drop on the navigation pane item, folder \"%s\", keys 0x%lX",
                         targetPath.c_str(), (unsigned long)treeKeys);
                     DropItems(state, std::move(sourceFolder), std::move(children), std::move(target),
                               treeKeys);
@@ -1738,7 +1701,7 @@ void StartOutDrag(WindowState* state) {
             children.emplace_back(ILClone(d.column->entries[index].child.get()));
         }
     }
-    Out(L"drag out: the pointer left the panel, ending the panel's own drag");
+    Wh_Log(L"drag out: the pointer left the panel, ending the panel's own drag");
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
@@ -1752,7 +1715,7 @@ void StartOutDrag(WindowState* state) {
     if (g_outDevice != 2) {
         POINT where;
         GetCursorPos(&where);
-        Out(L"touch: the drag leaves the panel, device=%d, the cursor is at %ld,%ld, the left button is %s", g_outDevice,
+        Wh_Log(L"touch: the drag leaves the panel, device=%d, the cursor is at %ld,%ld, the left button is %s", g_outDevice,
             where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
     }
     g_keepCapture = g_outPointerId != 0;
@@ -1799,7 +1762,7 @@ bool OnDragReleased(WindowState* state) {
     bool fromArchive = d.fromArchive;
     DragEnd(state);
     if (!ok || !targetColumn || !sourceColumn) {
-        Out(L"drag ended outside a folder that takes it");
+        Wh_Log(L"drag ended outside a folder that takes it");
         return true;
     }
     Pidl sourceFolder(ILClone(sourceColumn->folder.get()));

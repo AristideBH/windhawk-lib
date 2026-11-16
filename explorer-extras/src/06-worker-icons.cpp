@@ -273,7 +273,7 @@ Worker* CreateWorker() {
     worker->thread = CreateThread(nullptr, 0, WorkerProc, worker.get(), 0, nullptr);
     Worker* raw = worker.get();
     g_workers.push_back(std::move(worker));
-    Out(L"a reader thread was started for a window, %d running", (int)g_workers.size());
+    Wh_Log(L"a reader thread was started for a window, %d running", (int)g_workers.size());
     return raw;
 }
 

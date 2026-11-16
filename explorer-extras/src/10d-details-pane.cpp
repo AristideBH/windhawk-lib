@@ -132,7 +132,6 @@ struct DetailsPane {
     muxc::IconElement movedIcon{nullptr};  // The icon Explorer gave its Details entry, now on ours.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     bool altPDown = false;
-    ULONGLONG listAt = 0;
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
     bool dragging = false;       // The height handle is being dragged: the preview waits.
     bool previewFocused = false;  // The mouse is over the preview, which has the keyboard focus.
@@ -523,7 +522,7 @@ void PaneReadSeveral(PaneData* data, std::vector<Pidl> const& items) {
                 }
                 data->imageKeys.push_back(hash);
                 data->images.push_back(std::move(one.image));
-                Out(L"details pane: thumbnail %d for the stack", (int)data->images.size());
+                Wh_Log(L"details pane: thumbnail %d for the stack", (int)data->images.size());
             }
         }
         item->Release();
@@ -786,7 +785,7 @@ void PaneTween(WindowState* state, DetailsPane* pane, mux::UIElement const& elem
 // Several items: their thumbnails, stacked and fanned a little. The cards are returned so
 // that they can come in one after the other.
 muxc::Grid PaneStack(PaneData const& data, std::vector<uint64_t> const& before, std::vector<muxc::Border>* cards) {
-    Out(L"details pane: stack of %d", (int)data.images.size());
+    Wh_Log(L"details pane: stack of %d", (int)data.images.size());
     muxc::Grid stack;
     stack.HorizontalAlignment(mux::HorizontalAlignment::Center);
     stack.VerticalAlignment(mux::VerticalAlignment::Center);
@@ -2275,7 +2274,7 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
                 current->pendingImage = nullptr;
                 try {
                     PaneRevealLayer(now, current, current->previewLayer);
-                    Out(L"preview: an image, %dx%d", (int)opened.PixelWidth(), (int)opened.PixelHeight());
+                    Wh_Log(L"preview: an image, %dx%d", (int)opened.PixelWidth(), (int)opened.PixelHeight());
                 } catch (...) {
                     LogHresult(L"showing the image");
                     PaneCornerUpdate(current);
@@ -2297,12 +2296,12 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
                     current->previewLayer = nullptr;
                 }
                 PaneCornerUpdate(current);
-                Out(L"preview: the image could not be opened, the thumbnail stays");
+                Wh_Log(L"preview: the image could not be opened, the thumbnail stays");
             });
             bitmap.UriSource(winrt::Windows::Foundation::Uri(PaneFileUri(data->previewPath)));
         } else {
             PaneInstallLayer(state, pane, PaneMediaView(*data, pane, data->previewKind == 6, thread, state->queue));
-            Out(L"preview: a %s", data->previewKind == 6 ? L"sound" : L"video");
+            Wh_Log(L"preview: a %s", data->previewKind == 6 ? L"sound" : L"video");
         }
     } catch (...) {
         LogHresult(L"starting the media preview");
@@ -2323,7 +2322,7 @@ void PaneXamlArrived(DWORD thread, std::wstring const& key, std::shared_ptr<Pane
     pane->loading = false;
     if (pane->shownKey != key || !pane->visible || !pane->layered || !result || !result->ok) {
         PaneCornerUpdate(pane);
-        Out(L"preview: nothing to show for this page");
+        Wh_Log(L"preview: nothing to show for this page");
         return;
     }
     try {
@@ -2361,7 +2360,7 @@ void PaneXamlArrived(DWORD thread, std::wstring const& key, std::shared_ptr<Pane
             view.Content(block);
         }
         PaneInstallLayer(state, pane, view);
-        Out(L"preview: drawn by the pane, %d pages", (int)result->pages.size());
+        Wh_Log(L"preview: drawn by the pane, %d pages", (int)result->pages.size());
     } catch (...) {
         LogHresult(L"drawing the preview");
         PaneCornerUpdate(pane);
@@ -2432,9 +2431,9 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
         return;
     }
     IPreviewHandler* handler = nullptr;
-    HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&handler));
+    HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&handler));
     if (FAILED(hr) || !handler) {
-        Out(L"preview: no handler could be made for %s (0x%08lx)", data.previewPath.c_str(), (unsigned long)hr);
+        Wh_Log(L"preview: no handler could be made for %s (0x%08lx)", data.previewPath.c_str(), (unsigned long)hr);
         return;
     }
     // The handler is given the file, the way it asks for it.
@@ -2465,13 +2464,13 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
         }
     }
     if (!ready) {
-        Out(L"preview: the handler of %s did not take the file", data.previewPath.c_str());
+        Wh_Log(L"preview: the handler of %s did not take the file", data.previewPath.c_str());
         handler->Release();
         return;
     }
     if (!pane->host || !IsWindow(pane->host)) {
         pane->host = CreateWindowExW(0, L"Static", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10, state->topLevel, nullptr,
-                                     GetModuleHandleW(nullptr), nullptr);
+                                     ModHandle(), nullptr);
     }
     if (!pane->host) {
         handler->Release();
@@ -2486,7 +2485,7 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
         hr = handler->DoPreview();
     }
     if (FAILED(hr)) {
-        Out(L"preview: %s failed (0x%08lx)", data.previewPath.c_str(), (unsigned long)hr);
+        Wh_Log(L"preview: %s failed (0x%08lx)", data.previewPath.c_str(), (unsigned long)hr);
         handler->Unload();
         handler->Release();
         ShowWindow(pane->host, SW_HIDE);
@@ -2495,9 +2494,9 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
     pane->handler = handler;
     g_wheelHost = pane->host;
     if (!g_wheelHook) {
-        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, GetModuleHandleW(nullptr), 0);
+        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
     }
-    Out(L"preview: %s loading, started in %llu ms", data.previewPath.c_str(), GetTickCount64() - started);
+    Wh_Log(L"preview: %s loading, started in %llu ms", data.previewPath.c_str(), GetTickCount64() - started);
     static const wchar_t* const heavy[] = {L".pdf", L".doc", L".docx", L".xls", L".xlsx", L".ppt", L".pptx", L".odt", L".htm", L".html"};
     const wchar_t* dot = wcsrchr(data.previewPath.c_str(), L'.');
     int wait = 250;
@@ -2518,7 +2517,7 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
                 PaneLayoutPreview(now, pane);
             }
             PaneCornerUpdate(pane);
-            Out(L"preview: ready, %s", g_autoPreview ? L"shown" : L"waiting for the button");
+            Wh_Log(L"preview: ready, %s", g_autoPreview ? L"shown" : L"waiting for the button");
         }
     });
 }
@@ -2529,7 +2528,7 @@ void PaneAnimateIn(WindowState* state, DetailsPane* pane, float dx, float dy, mu
     if (!body || !inner) {
         return;
     }
-    Out(L"details pane: content in, dx=%.0f dy=%.0f", dx, dy);
+    Wh_Log(L"details pane: content in, dx=%.0f dy=%.0f", dx, dy);
     if (!g_paneAnim) {
         for (mux::UIElement e : {mux::UIElement(body), mux::UIElement(inner)}) {
             e.TranslationTransition(nullptr);
@@ -2579,44 +2578,6 @@ void PaneSyncPanel(WindowState* state) {
 
 // ---- The View menu: one entry for the pane, in place of Explorer's two ----
 
-void PaneDumpMenu(ItemsVector const& items) {
-    auto describe = [](mux::DependencyObject const& obj, int depth, uint32_t index) {
-        std::wstring cls = L"?", text, name;
-        try {
-            cls = winrt::get_class_name(obj).c_str();
-            if (auto item = obj.try_as<muxc::MenuFlyoutItem>()) {
-                text = item.Text().c_str();
-            }
-            if (auto sub = obj.try_as<muxc::MenuFlyoutSubItem>()) {
-                text = sub.Text().c_str();
-            }
-            if (auto element = obj.try_as<mux::FrameworkElement>()) {
-                name = element.Name().c_str();
-            }
-        } catch (...) {
-        }
-        bool checkable = false, checked = false;
-        if (auto toggle = obj.try_as<muxc::ToggleMenuFlyoutItem>()) {
-            checkable = true;
-            checked = toggle.IsChecked();
-        } else if (auto radio = obj.try_as<muxc::RadioMenuFlyoutItem>()) {
-            checkable = true;
-            checked = radio.IsChecked();
-        }
-        Out(L"view menu: %*s[%u] %s \"%s\" name \"%s\"%s", depth * 3, L"", index, cls.c_str(), text.c_str(), name.c_str(),
-            checkable ? (checked ? L" (checked)" : L" (unchecked)") : L"");
-    };
-    for (uint32_t i = 0; i < items.Size(); i++) {
-        auto base = items.GetAt(i);
-        describe(base, 0, i);
-        if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
-            for (uint32_t j = 0; j < sub.Items().Size(); j++) {
-                describe(sub.Items().GetAt(j), 1, j);
-            }
-        }
-    }
-}
-
 // Alt+Shift+P: Explorer's Details pane shortcut, which shows (or hides) our pane.
 bool PaneSendShortcut(WindowState* state) {
     HWND front = GetForegroundWindow();
@@ -2658,10 +2619,6 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
         if (pane->menuToggle && pane->menuItems == items && items.IndexOf(pane->menuToggle, at)) {
             return;
         }
-        static int dumped = 0;
-        if (dumped++ < 2) {
-            PaneDumpMenu(items);
-        }
         int radios = 0;
         bool separated = false;
         std::vector<muxc::RadioMenuFlyoutItem> natives;
@@ -2687,7 +2644,7 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
             }
         }
         if (natives.size() < 2) {
-            Out(L"view menu: the Details and Preview entries were not found");
+            Wh_Log(L"view menu: the Details and Preview entries were not found");
             return;
         }
         muxc::ToggleMenuFlyoutItem item;
@@ -2695,7 +2652,7 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
         item.Name(L"WindhawkPaneItem");
         // Explorer's own icon (its duotone art) is moved to our entry, and given back at the end.
         if (auto icon = natives[0].Icon()) {
-            Out(L"view menu: the Details entry's icon is a %s", winrt::get_class_name(icon).c_str());
+            Wh_Log(L"view menu: the Details entry's icon is a %s", winrt::get_class_name(icon).c_str());
             natives[0].Icon(nullptr);
             item.Icon(icon);
             pane->movedIcon = icon;
@@ -2755,7 +2712,7 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
         pane->menuToggle = item;
         pane->menuItems = items;
         pane->hiddenRadios = natives;
-        Out(L"view menu: our pane entry replaces the Details and Preview entries");
+        Wh_Log(L"view menu: our pane entry replaces the Details and Preview entries");
     } catch (...) {
         LogHresult(L"PaneMenuSetup");
     }
@@ -2873,7 +2830,7 @@ muxc::IconElement PaneMonoIcon(muxc::ImageIcon const& original, std::wstring con
     HANDLE file = CreateFileW(decoded.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        Out(L"details pane: the icon file could not be read, gle=%lu", GetLastError());
+        Wh_Log(L"details pane: the icon file could not be read, gle=%lu", GetLastError());
         return nullptr;
     }
     std::string svg(200 * 1024, '\0');
@@ -2882,26 +2839,22 @@ muxc::IconElement PaneMonoIcon(muxc::ImageIcon const& original, std::wstring con
     CloseHandle(file);
     svg.resize(got);
     std::string mono = PaneRecolorSvg(svg, color);
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(ARRAYSIZE(temp), temp);
-    std::wstring target = std::wstring(temp) + L"explorer-extras-" + name + L".svg";
-    HANDLE out = CreateFileW(target.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (out == INVALID_HANDLE_VALUE) {
-        return nullptr;
+    // The recoloured picture stays in memory: the mod writes no file for it.
+    winrt::Windows::Storage::Streams::InMemoryRandomAccessStream stream;
+    {
+        winrt::Windows::Storage::Streams::DataWriter writer{stream};
+        writer.WriteBytes(winrt::array_view<const uint8_t>((const uint8_t*)mono.data(), (uint32_t)mono.size()));
+        writer.StoreAsync().get();
+        writer.DetachStream();
     }
-    DWORD written = 0;
-    WriteFile(out, mono.data(), (DWORD)mono.size(), &written, nullptr);
-    CloseHandle(out);
-    std::wstring fileUri = L"file:///";
-    for (wchar_t c : target) {
-        fileUri += c == L'\\' ? L'/' : c;
-    }
-    mux::Media::Imaging::SvgImageSource source{winrt::Windows::Foundation::Uri(fileUri)};
+    stream.Seek(0);
+    mux::Media::Imaging::SvgImageSource source;
+    source.SetSourceAsync(stream);
     muxc::ImageIcon icon;
     icon.Source(source);
     icon.Width(original.Width());
     icon.Height(original.Height());
-    Out(L"details pane: a one-colour icon (%S) was written to %s", color, target.c_str());
+    Wh_Log(L"details pane: a one-colour icon (%S, %s) was made", color, name);
     return icon;
 }
 
@@ -2984,7 +2937,7 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
                         tag = L"BitmapImage";
                         uri = bitmap.UriSource() ? bitmap.UriSource().AbsoluteUri().c_str() : L"";
                     }
-                    Out(L"details pane: the toolbar icon is an ImageIcon with a %s, uri %s", tag.empty() ? L"source of another kind" : tag.c_str(),
+                    Wh_Log(L"details pane: the toolbar icon is an ImageIcon with a %s, uri %s", tag.empty() ? L"source of another kind" : tag.c_str(),
                         uri.c_str());
                     if (!tag.empty() && !uri.empty()) {
                         pane->toolMono = PaneMonoIcon(image, uri, "#000000", L"dark");
@@ -3001,7 +2954,7 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
             if (now && now->details && !g_unloading) {
                 now->details->shortcutAt = GetTickCount64() + 60;
                 now->details->toggleHoldUntil = GetTickCount64() + 1500;  // The tick leaves the tick alone meanwhile.
-                Out(L"details pane: the toolbar toggle was chosen");
+                Wh_Log(L"details pane: the toolbar toggle was chosen");
             }
         });
         bar.PrimaryCommands().InsertAt(index, button);
@@ -3009,7 +2962,7 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
         pane->toolToggle = button;
         pane->toolBar = bar;
         pane->toolNative = native;
-        Out(L"details pane: the toolbar toggle replaces Explorer's");
+        Wh_Log(L"details pane: the toolbar toggle replaces Explorer's");
     } catch (...) {
         LogHresult(L"PaneToolbarSetup");
     }
@@ -3082,30 +3035,12 @@ void PaneMenuRestore(DetailsPane* pane) {
     pane->menuItems = nullptr;
 }
 
-// What windows the frame holds, to find Explorer's Preview pane.
-void PaneListWindows(WindowState* state) {
-    EnumChildWindows(
-        state->topLevel,
-        [](HWND window, LPARAM) -> BOOL {
-            RECT r;
-            GetWindowRect(window, &r);
-            if (IsWindowVisible(window) && r.right - r.left > 40 && r.bottom - r.top > 40) {
-                wchar_t text[80] = L"", name[80] = L"";
-                GetWindowTextW(window, text, ARRAYSIZE(text));
-                GetClassNameW(window, name, ARRAYSIZE(name));
-                Out(L"details pane: a window of the frame: class \"%s\" title \"%s\" %ldx%ld", name, text, r.right - r.left, r.bottom - r.top);
-            }
-            return TRUE;
-        },
-        0);
-}
-
 // The native pane went away: ours slides out before it is hidden.
 void PaneLeave(WindowState* state, DetailsPane* pane) {
     pane->leaving = true;
     pane->leaveAt = GetTickCount64();
     g_paneLeaveUntil = pane->leaveAt + 320;
-    Out(L"details pane: leaving");
+    Wh_Log(L"details pane: leaving");
     PaneClosePreview(pane);
     PaneSyncPanel(state);
     HWND bridgeWindow = (HWND)pane->bridge.WindowId().Value;
@@ -3255,7 +3190,7 @@ void PaneStartJob(WindowState* state, DetailsPane* pane, std::wstring const& key
                 ULONGLONG began = GetTickCount64();
                 data = PaneRead(job->items, job->folder);
                 if (GetTickCount64() - began > 250) {
-                    Out(L"details pane: reading the details took %llu ms", GetTickCount64() - began);
+                    Wh_Log(L"details pane: reading the details took %llu ms", GetTickCount64() - began);
                 }
             } catch (...) {
             }
@@ -3309,7 +3244,7 @@ void PaneCreateIsland(WindowState* state, DetailsPane* pane, RECT const& r) {
     pane->bridge = pane->source.SiteBridge();
     pane->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
     pane->rect = r;
-    Out(L"details pane: island made over the native pane, %ldx%ld at %ld,%ld", r.right - r.left, r.bottom - r.top, r.left, r.top);
+    Wh_Log(L"details pane: island made over the native pane, %ldx%ld at %ld,%ld", r.right - r.left, r.bottom - r.top, r.left, r.top);
 }
 
 // Explorer's own Preview pane was switched on: the merged pane is asked for instead, with the
@@ -3367,7 +3302,7 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     UINT sent = SendInput(n, inputs, sizeof(INPUT));
     pane->redirectTries++;
     pane->redirectAt = now + 1500;
-    Out(L"details pane: the Preview pane was switched on, Alt+Shift+P sent (%u of %d), try %d", sent, n, pane->redirectTries);
+    Wh_Log(L"details pane: the Preview pane was switched on, Alt+Shift+P sent (%u of %d), try %d", sent, n, pane->redirectTries);
 }
 
 // What is selected in Explorer's own view, as absolute ids and a key that changes with it.
@@ -3467,7 +3402,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                 toggle.Toggle();
                 done = true;
             }
-            Out(L"navigation pane: the entry was %s, Explorer's is now %s", done ? L"used" : L"not usable",
+            Wh_Log(L"navigation pane: the entry was %s, Explorer's is now %s", done ? L"used" : L"not usable",
                 original.IsChecked() ? L"checked" : L"unchecked");
             PaneAfter(state, pane, 200, [original]() { original.Visibility(mux::Visibility::Collapsed); });
         } catch (...) {
@@ -3520,17 +3455,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
     // Alt+P was pressed: a moment after it is let go, say what windows the frame holds (the
     // Preview pane's window is what the redirect looks for).
     bool altP = (GetAsyncKeyState(VK_MENU) & 0x8000) && (GetAsyncKeyState('P') & 0x8000) && !(GetAsyncKeyState(VK_SHIFT) & 0x8000);
-    if (pane->altPDown && !altP) {
-        pane->listAt = GetTickCount64() + 800;
-    }
     pane->altPDown = altP;
-    if (pane->listAt && GetTickCount64() >= pane->listAt) {
-        pane->listAt = 0;
-        static int listed = 0;
-        if (listed++ < 4) {
-            PaneListWindows(state);
-        }
-    }
     HWND host = g_detailsPane ? FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
     RECT r = {};
     bool gone = !host;
@@ -3598,7 +3523,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         pane->shownKey.clear();
         pane->requestedKey.clear();
         pane->enter = true;
-        Out(L"details pane: shown");
+        Wh_Log(L"details pane: shown");
     }
     // The mouse over the preview gives it the keyboard focus (so that the wheel and the keys
     // scroll it); leaving takes the focus back to the file list.
@@ -3626,7 +3551,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                         AttachThreadInput(GetCurrentThreadId(), other, FALSE);
                     }
                 }
-                Out(L"preview: focus asked, handler 0x%08lx, under the mouse %s (%s)", (unsigned long)focus, className,
+                Wh_Log(L"preview: focus asked, handler 0x%08lx, under the mouse %s (%s)", (unsigned long)focus, className,
                     inside ? L"in the preview" : L"not in the preview");
                 pane->previewFocused = true;
             }
@@ -3676,7 +3601,7 @@ LRESULT CALLBACK PaneKeyProc(int code, WPARAM wParam, LPARAM lParam) {
                         inputs[i].ki.dwFlags = (i >= 2) ? KEYEVENTF_KEYUP : 0;
                     }
                     SendInput(4, inputs, sizeof(INPUT));
-                    Out(L"details pane: Alt+P turned into Alt+Shift+P");
+                    Wh_Log(L"details pane: Alt+P turned into Alt+Shift+P");
                 } else if (!down) {
                     state->details->altPHeld = false;
                 }
@@ -3716,13 +3641,13 @@ void StartDetails(WindowState* state) {
     try {
         auto* pane = new DetailsPane();
         state->details = pane;
-        pane->keyHook = SetWindowsHookExW(WH_KEYBOARD_LL, PaneKeyProc, GetModuleHandleW(nullptr), 0);
+        pane->keyHook = SetWindowsHookExW(WH_KEYBOARD_LL, PaneKeyProc, ModHandle(), 0);
         auto timer = state->queue.CreateTimer();
         timer.Interval(std::chrono::milliseconds(60));
         pane->token = timer.Tick([](mud::DispatcherQueueTimer const&, Inspectable const&) { DetailsTick(); });
         timer.Start();
         pane->timer = timer;
-        Out(L"details pane: watching window %p", state->topLevel);
+        Wh_Log(L"details pane: watching window %p", state->topLevel);
     } catch (...) {
         LogHresult(L"StartDetails");
     }
@@ -3839,7 +3764,7 @@ void AbandonDetails(WindowState* state) {
     (void)winrt::detach_abi(pane->previewLayer);
     (void)winrt::detach_abi(pane->thumb);
     (void)winrt::detach_abi(pane->scroller);
-    Out(L"window closed, the details pane's objects are let go");
+    Wh_Log(L"window closed, the details pane's objects are let go");
     // The pane itself is not deleted: it still holds what the XAML objects held.
 }
 

@@ -15,7 +15,7 @@ Questions go in an issue too (label `type: question`). Reports about the other m
 
 1. **The version** of the mod (Home page of the settings window) and the **Windows build** (also on the Home page).
 2. **Steps.** What you did, and whether by mouse, keyboard or touch.
-3. **The diagnostics.** Turn on "Write a debug log" (Home page), repeat the problem, then use "Copy diagnostics" and paste the text. For a crash, say what you were doing; a crash leaves nothing in the log, so the Windows Reliability History entry or the crash dump helps.
+3. **The diagnostics.** Use "Copy diagnostics" (Home page) and paste the text. For a crash, say what you were doing; the Windows Reliability History entry or the crash dump helps.
 4. **Whether it is only one Explorer window, one folder, or one kind of file.**
 
 ## What happens to a report

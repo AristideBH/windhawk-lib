@@ -1,7 +1,17 @@
 namespace {
 
 std::atomic<bool> g_unloading{false};
-std::atomic<bool> g_debugLog{false};
+
+// The handle of the mod's own image. GetModuleHandleW(nullptr) is explorer.exe, which outlives the mod.
+HINSTANCE ModHandle() {
+    static HINSTANCE module = [] {
+        HMODULE found = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&ModHandle, &found);
+        return (HINSTANCE)found;
+    }();
+    return module;
+}
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
@@ -43,90 +53,6 @@ std::atomic<int> g_minWidth{160};
 std::atomic<int> g_maxWidth{420};
 std::atomic<int> g_maxItems{5000};
 thread_local ULONGLONG g_lastWalk = 0;
-
-// Every log line also goes to a file in the repo, so the log can be read from
-// disk: %USERPROFILE%\Code\windhawk-lib\probes\logs\explorer-extras.log
-std::mutex g_outMutex;
-wchar_t g_outPath[MAX_PATH] = L"";
-
-void OutInit() {
-    wchar_t profile[MAX_PATH];
-    DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
-    if (!len || len >= MAX_PATH) {
-        return;
-    }
-    std::wstring dir = std::wstring(profile) + L"\\Code\\windhawk-lib\\probes\\logs";
-    std::wstring path = dir + L"\\explorer-extras.log";
-    if (path.size() >= MAX_PATH ||
-        GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        return;
-    }
-    wcscpy_s(g_outPath, path.c_str());
-
-    // The log is kept across restarts, so the lines before a crash survive.
-    // Past 400 KB, only the last 200 KB are kept.
-    HANDLE file = CreateFileW(g_outPath, GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    LARGE_INTEGER size{};
-    if (GetFileSizeEx(file, &size) && size.QuadPart > 400 * 1024) {
-        const DWORD keep = 200 * 1024;
-        std::vector<char> tail(keep);
-        LARGE_INTEGER from;
-        from.QuadPart = size.QuadPart - keep;
-        DWORD read = 0;
-        if (SetFilePointerEx(file, from, nullptr, FILE_BEGIN) &&
-            ReadFile(file, tail.data(), keep, &read, nullptr)) {
-            SetFilePointer(file, 0, nullptr, FILE_BEGIN);
-            SetEndOfFile(file);
-            DWORD written = 0;
-            WriteFile(file, tail.data(), read, &written, nullptr);
-        }
-    }
-    CloseHandle(file);
-}
-
-void Out(const wchar_t* format, ...) {
-    wchar_t text[1200];
-    va_list args;
-    va_start(args, format);
-    _vsnwprintf_s(text, ARRAYSIZE(text), _TRUNCATE, format, args);
-    va_end(args);
-    Wh_Log(L"%s", text);
-
-    if (!g_debugLog || !g_outPath[0]) {
-        return;
-    }
-    SYSTEMTIME now;
-    GetLocalTime(&now);
-    wchar_t line[1300];
-    int chars = _snwprintf_s(line, ARRAYSIZE(line), _TRUNCATE,
-                             L"%02d:%02d:%02d.%03d [%lu] %s\r\n", now.wHour,
-                             now.wMinute, now.wSecond, now.wMilliseconds,
-                             GetCurrentThreadId(), text);
-    if (chars < 0) {
-        chars = (int)wcslen(line);
-    }
-    char utf8[4000];
-    int bytes = WideCharToMultiByte(CP_UTF8, 0, line, chars, utf8,
-                                    sizeof(utf8), nullptr, nullptr);
-    if (bytes <= 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_outMutex);
-    HANDLE file = CreateFileW(g_outPath, FILE_APPEND_DATA,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(file, utf8, (DWORD)bytes, &written, nullptr);
-        CloseHandle(file);
-    }
-}
-
 
 // ---------------------------------------------------------------------------
 // Windows and settings

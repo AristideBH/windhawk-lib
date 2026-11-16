@@ -4,29 +4,15 @@
 const UINT kNotifyMessage = WM_APP + 71;
 const wchar_t kNotifyClass[] = L"ExplorerExtrasNotify";
 std::atomic<bool> g_notifyClassRegistered{false};
+std::mutex g_notifyClassMutex;
 
 LRESULT CALLBACK NotifyProc(HWND hwnd, UINT message, WPARAM wParam,
                             LPARAM lParam) {
     if (message == kNotifyMessage) {
         // The window's user data points at the time the columns should be
         // read again. Several changes in a row push it back.
-        PIDLIST_ABSOLUTE* pidls = nullptr;
-        LONG event = 0;
-        bool ownLog = false;
-        HANDLE lock = SHChangeNotification_Lock((HANDLE)wParam, (DWORD)lParam,
-                                                &pidls, &event);
-        if (lock) {
-            // The mod's own log file changes each time the mod logs. Reacting
-            // to it would reload, log, and reload again without end.
-            wchar_t path[MAX_PATH] = L"";
-            if (pidls && pidls[0] && SHGetPathFromIDListW(pidls[0], path) &&
-                g_outPath[0] && lstrcmpiW(path, g_outPath) == 0) {
-                ownLog = true;
-            }
-            SHChangeNotification_Unlock(lock);
-        }
         auto* due = (ULONGLONG*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        if (due && !ownLog) {
+        if (due) {
             *due = GetTickCount64() + 200;
         }
         return 0;
@@ -35,13 +21,22 @@ LRESULT CALLBACK NotifyProc(HWND hwnd, UINT message, WPARAM wParam,
 }
 
 HWND CreateNotifyWindow(ULONGLONG* due) {
-    HINSTANCE instance = GetModuleHandleW(nullptr);
-    if (!g_notifyClassRegistered.exchange(true)) {
-        WNDCLASSW windowClass = {};
-        windowClass.lpfnWndProc = NotifyProc;
-        windowClass.hInstance = instance;
-        windowClass.lpszClassName = kNotifyClass;
-        RegisterClassW(&windowClass);
+    HINSTANCE instance = ModHandle();
+    {
+        // Two windows opening together must not create one before the class exists.
+        std::lock_guard<std::mutex> lock(g_notifyClassMutex);
+        if (!g_notifyClassRegistered) {
+            WNDCLASSW windowClass = {};
+            windowClass.lpfnWndProc = NotifyProc;
+            windowClass.hInstance = instance;
+            windowClass.lpszClassName = kNotifyClass;
+            if (RegisterClassW(&windowClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+                g_notifyClassRegistered = true;
+            } else {
+                Wh_Log(L"notify window: the class could not be registered, gle=%lu", GetLastError());
+                return nullptr;
+            }
+        }
     }
     HWND hwnd = CreateWindowExW(0, kNotifyClass, L"", 0, 0, 0, 0, 0,
                                 HWND_MESSAGE, nullptr, instance, nullptr);
@@ -52,8 +47,13 @@ HWND CreateNotifyWindow(ULONGLONG* due) {
 }
 
 void UnregisterNotifyClass() {
-    if (g_notifyClassRegistered.exchange(false)) {
-        UnregisterClassW(kNotifyClass, GetModuleHandleW(nullptr));
+    std::lock_guard<std::mutex> lock(g_notifyClassMutex);
+    if (g_notifyClassRegistered) {
+        if (UnregisterClassW(kNotifyClass, ModHandle())) {
+            g_notifyClassRegistered = false;
+        } else {
+            Wh_Log(L"notify window: the class is still in use, gle=%lu", GetLastError());
+        }
     }
 }
 
@@ -99,7 +99,7 @@ void OpenItem(HWND owner, PCIDLIST_ABSOLUTE pidl) {
         info.lpIDList = (void*)pidl;
     }
     bool ok = ShellExecuteExW(&info);
-    Out(L"OpenItem %s: %s, gle=%lu, hInstApp=%llu", byPath ? L"by path" : L"by pidl",
+    Wh_Log(L"OpenItem %s: %s, gle=%lu, hInstApp=%llu", byPath ? L"by path" : L"by pidl",
         ok ? L"ok" : L"failed", ok ? 0 : GetLastError(), (unsigned long long)(ULONG_PTR)info.hInstApp);
 }
 

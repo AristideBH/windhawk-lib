@@ -141,7 +141,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 state->band.column->list.ReleasePointerCaptures();
             }
             EndBand(state, false);
-            Out(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
+            Wh_Log(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
             return;
         }
         // The middle button on a folder opens it in a new tab.
@@ -203,7 +203,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                     source = winrt::get_class_name(args.OriginalSource()).c_str();
                 } catch (...) {
                 }
-                Out(L"press on empty space of column %d: x=%.0f of %.0f, y=%.0f, source=%s",
+                Wh_Log(L"press on empty space of column %d: x=%.0f of %.0f, y=%.0f, source=%s",
                     index + 1, (double)at.X, list.ActualWidth(), (double)at.Y,
                     source.c_str());
             }
@@ -246,7 +246,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 }
             }
             list.CapturePointer(args.Pointer());
-            Out(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
+            Wh_Log(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
                 (int)band.locked.size());
         }
     } catch (...) {
@@ -302,7 +302,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
             band.panLastAt = GetTickCount64();
             band.panVelocity = 0;
             list.CapturePointer(args.Pointer());
-            Out(L"touch: a sideways drag on the empty space, the columns scroll");
+            Wh_Log(L"touch: a sideways drag on the empty space, the columns scroll");
             return true;
         }
         // A drag: take the pointer, remember the rows, start from the selection
@@ -310,7 +310,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
         band.pending = false;
         band.active = true;
         if (band.touch) {
-            Out(L"touch: the finger moved, the rectangle starts");
+            Wh_Log(L"touch: the finger moved, the rectangle starts");
         }
         list.CapturePointer(args.Pointer());
         auto scroller = FindListScroller(list);
@@ -331,7 +331,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
         }
         LiftStale(state, ColumnIndexOfList(state, list));
         SetActiveColumn(state, ColumnIndexOfList(state, list));
-        Out(L"selection rectangle started in column %d", ColumnIndexOfList(state, list) + 1);
+        Wh_Log(L"selection rectangle started in column %d", ColumnIndexOfList(state, list) + 1);
     }
 
     auto scroller = FindListScroller(list);
@@ -466,7 +466,7 @@ void OnEmptyDoubleTapped(muxc::ListView const& list,
             // The active column goes to the middle of the view.
             CenterColumn(state, from - 1);
             state->cursorFixUntil = GetTickCount64() + 2500;
-            Out(L"double-click on empty space: back to column %d", from);
+            Wh_Log(L"double-click on empty space: back to column %d", from);
             return;
         }
         column = state->columns[0].get();
@@ -479,7 +479,7 @@ void OnEmptyDoubleTapped(muxc::ListView const& list,
             return;
         }
         NavigateExplorer(state, parent.get());
-        Out(L"double-click on empty space: up from the first column");
+        Wh_Log(L"double-click on empty space: up from the first column");
     } catch (...) {
         LogHresult(L"OnEmptyDoubleTapped");
     }
@@ -640,7 +640,7 @@ void ToggleGroup(WindowState* state, Column* column, int headerRow) {
             LogHresult(L"turning a group chevron");
         }
     }
-    Out(L"group \"%s\" %s", title.c_str(), collapse ? L"collapsed" : L"opened");
+    Wh_Log(L"group \"%s\" %s", title.c_str(), collapse ? L"collapsed" : L"opened");
 }
 
 void OnColumnBackgroundTapped(muxc::ListView const& list,
@@ -724,7 +724,7 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
         if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
             ClearExplorerSelection(browser);
         }
-        Out(L"column %d chosen by a click on its empty space", index + 1);
+        Wh_Log(L"column %d chosen by a click on its empty space", index + 1);
     } catch (...) {
         state->building = false;
         LogHresult(L"OnColumnBackgroundTapped");
@@ -905,7 +905,7 @@ void OnColumnKey(muxc::ListView const& list,
         }
         if (key == VirtualKey::F5 && !ctrl && !alt) {
             ReloadAll(state);
-            Out(L"F5: the columns are read again");
+            Wh_Log(L"F5: the columns are read again");
             keep();
             return;
         }
@@ -976,7 +976,7 @@ void OnColumnKey(muxc::ListView const& list,
                             }
                         }
                         CloseClipboard();
-                        Out(L"copied the column's folder path as text");
+                        Wh_Log(L"copied the column's folder path as text");
                     }
                 }
             } else {
@@ -1009,7 +1009,7 @@ void OnColumnKey(muxc::ListView const& list,
                                  : ILCombine(column->folder.get(), into.child.get()));
             }
             HRESULT hr = target ? PasteIntoFolder(state, target.get()) : E_FAIL;
-            Out(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
+            Wh_Log(L"Ctrl+V into %s: hr=0x%08lX", PathOf(target.get()).c_str(), hr);
             keep();
             return;
         }
@@ -1021,7 +1021,7 @@ void OnColumnKey(muxc::ListView const& list,
             }
             bool permanent = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             HRESULT hr = InvokeVerbOnItems(state, column, picked, "delete");
-            Out(L"Delete %d item(s): hr=0x%08lX", (int)picked.size(), hr);
+            Wh_Log(L"Delete %d item(s): hr=0x%08lX", (int)picked.size(), hr);
             if (SUCCEEDED(hr) && !permanent) {
                 RememberDeletion(state, before);
             }
@@ -1055,7 +1055,7 @@ void OnColumnKey(muxc::ListView const& list,
                     msg.wParam = (WPARAM)(key == VirtualKey::Z ? 'Z' : 'Y');
                     msg.lParam = 1;
                     HRESULT hr = view->TranslateAccelerator(&msg);
-                    Out(L"%s passed to Explorer's view: hr=0x%08lX",
+                    Wh_Log(L"%s passed to Explorer's view: hr=0x%08lX",
                         key == VirtualKey::Z ? L"Undo" : L"Redo", hr);
                     view->Release();
                 }
@@ -1134,7 +1134,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
         state->on = false;
         return;
     }
-    Out(L"panel off: %s", why);
+    Wh_Log(L"panel off: %s", why);
     state->on = false;
     RestoreViewButtonIcon(state);
     HoverOn(state);
@@ -1212,7 +1212,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
 void CloseSettingsWindowOfThread();
 
 void AbandonWindow(WindowState* state) {
-    Out(L"window closed with the panel on, letting its objects go");
+    Wh_Log(L"window closed with the panel on, letting its objects go");
     AbandonDetails(state);
     CloseSettingsWindowOfThread();
     state->on = false;
@@ -1309,7 +1309,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
     // Already a column: only the active column moves.
     for (size_t i = 0; i < state->columns.size(); i++) {
         if (ILIsEqual(current.get(), state->columns[i]->folder.get())) {
-            Out(L"Explorer moved to column %d", (int)i + 1);
+            Wh_Log(L"Explorer moved to column %d", (int)i + 1);
             LiftStale(state, (int)i);
             // One scroll only, to the middle: a second one started by
             // SetActiveColumn would cut the first short and make it stutter.
@@ -1358,7 +1358,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
                 parent++;
                 rest = ILGetNext(rest);
             }
-            Out(L"Explorer moved below the first column, %d columns now",
+            Wh_Log(L"Explorer moved below the first column, %d columns now",
                 (int)state->columns.size());
             SetActiveColumn(state, (int)state->columns.size() - 1);
             return;
@@ -1370,7 +1370,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
             Pidl childId(ILClone(ILFindLastID(root)));
             AddColumn(state, Pidl(ILClone(current.get())), true);
             state->columns[0]->selectedChild = std::move(childId);
-            Out(L"Explorer moved up, parent added as first column");
+            Wh_Log(L"Explorer moved up, parent added as first column");
             SetActiveColumn(state, 0);
             MirrorColumnSelection(state, state->columns[0].get());
             try {
@@ -1381,11 +1381,11 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
         }
     }
     if (RememberedColumns(PathOf(current.get())) == 0) {
-        Out(L"Explorer went to a folder that was left in its own layout, Columns off for the tab");
+        Wh_Log(L"Explorer went to a folder that was left in its own layout, Columns off for the tab");
         LeaveColumns(state);
         return;
     }
-    Out(L"Explorer navigated elsewhere (\"%s\"), rebuilding",
+    Wh_Log(L"Explorer navigated elsewhere (\"%s\"), rebuilding",
         PathOf(current.get()).c_str());
     RebuildFromExplorer(state);
     SetActiveColumn(state, 0);
@@ -1404,11 +1404,11 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
         CoTaskMemFree(g_panePidl);
         g_panePidl = nullptr;
         if (arrived && g_sidebarRoot && IsFlatSidebarTarget(current.get())) {
-            Out(L"sidebar click: \"%s\" becomes the first column",
+            Wh_Log(L"sidebar click: \"%s\" becomes the first column",
                 PathOf(current.get()).c_str());
             state->expected.reset();
             if (RememberedColumns(PathOf(current.get())) == 0) {
-                Out(L"this folder was left in Explorer's own layout, Columns off for the tab");
+                Wh_Log(L"this folder was left in Explorer's own layout, Columns off for the tab");
                 LeaveColumns(state);
                 return;
             }
@@ -1472,7 +1472,7 @@ void SoftHidePanel(WindowState* state) {
         Pidl where = browser ? CurrentFolder(browser) : Pidl();
         state->hiddenFolder = where ? PathOf(where.get()) : std::wstring();
     }
-    Out(L"panel hidden: this tab is not in Columns");
+    Wh_Log(L"panel hidden: this tab is not in Columns");
 }
 
 void SoftShowPanel(WindowState* state) {
@@ -1493,7 +1493,7 @@ void SoftShowPanel(WindowState* state) {
     }
     state->softHidden = false;
     state->lastRect = {};  // The tick places it again.
-    Out(L"panel shown again: this tab is in Columns");
+    Wh_Log(L"panel shown again: this tab is in Columns");
 }
 
 // The columns of the tab that is leaving are kept, so they come back with it.
@@ -1526,7 +1526,7 @@ void SaveTabSnapshot(WindowState* state, HWND tab) {
         }
         snapshot.columns.push_back(std::move(saved));
     }
-    Out(L"tab left: %d column(s) kept", (int)snapshot.columns.size());
+    Wh_Log(L"tab left: %d column(s) kept", (int)snapshot.columns.size());
     state->tabSnapshots.push_back(std::move(snapshot));
 }
 
@@ -1549,7 +1549,7 @@ bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
         auto& activeFolder = snapshot.columns[snapshot.active].folder;
         if (!ILIsEqual(activeFolder.get(), current.get()) &&
             _wcsicmp(PathOf(activeFolder.get()).c_str(), PathOf(current.get()).c_str()) != 0) {
-            Out(L"tab shown again, but its folder changed: the columns start over");
+            Wh_Log(L"tab shown again, but its folder changed: the columns start over");
             return false;
         }
         state->lastSeen.reset(ILClone(current.get()));
@@ -1582,7 +1582,7 @@ bool RestoreTabSnapshot(WindowState* state, HWND tab, IShellBrowser* browser,
             }
         }
         SetActiveColumn(state, snapshot.active);
-        Out(L"tab shown again: %d column(s) put back", (int)state->columns.size());
+        Wh_Log(L"tab shown again: %d column(s) put back", (int)state->columns.size());
         return true;
     }
     return false;
@@ -1611,7 +1611,7 @@ bool HandleTabSwitch(WindowState* state, HWND tab, HWND fileList) {
         }
     }
     bool newIsColumns = TabListHas(state->columnsTabs, tab);
-    Out(L"tab switch: %p to %p (%s)", old, tab, newIsColumns ? L"columns" : L"not columns");
+    Wh_Log(L"tab switch: %p to %p (%s)", old, tab, newIsColumns ? L"columns" : L"not columns");
     if (old && TabListHas(state->columnsTabs, old) && !state->softHidden) {
         SaveTabSnapshot(state, old);
     }
@@ -1700,7 +1700,7 @@ void SyncSelectionFromExplorer(WindowState* state) {
             }
         }
         state->building = false;
-        Out(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
+        Wh_Log(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
             state->active + 1);
         OnRowSelected(column->list);
     } catch (...) {
@@ -1716,7 +1716,7 @@ bool TryShowNewTab(WindowState* state) {
         return true;
     }
     if (GetTickCount64() >= state->openTabUntil) {
-        Out(L"the new tab did not open in time");
+        Wh_Log(L"the new tab did not open in time");
         state->openTabFolder.reset();
         state->newTab = nullptr;
         return true;
@@ -1731,7 +1731,7 @@ bool TryShowNewTab(WindowState* state) {
             HRESULT hr = tabBrowser->BrowseObject(state->openTabFolder.get(),
                                                   SBSP_ABSOLUTE | SBSP_SAMEBROWSER | SBSP_ACTIVATE_NOFOCUS);
             g_ourBrowse = false;
-            Out(L"the new tab shows its folder: hr=0x%08lX", hr);
+            Wh_Log(L"the new tab shows its folder: hr=0x%08lX", hr);
             if (SUCCEEDED(hr)) {
                 state->openTabFolder.reset();
                 state->newTab = nullptr;
@@ -1786,7 +1786,7 @@ void OnTick() {
                     if (_wcsicmp(path.c_str(), state->hiddenFolder.c_str()) != 0) {
                         state->hiddenFolder = path;
                         if (RememberedColumns(path) == 1) {
-                            Out(L"this folder was shown in Columns last time, Columns on for the tab");
+                            Wh_Log(L"this folder was shown in Columns last time, Columns on for the tab");
                             ChooseColumns(state);
                         }
                     }
@@ -1804,7 +1804,7 @@ void OnTick() {
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;
                 if (logged++ < 8) {
-                    Out(L"the panel was covered by a sibling window, raised again");
+                    Wh_Log(L"the panel was covered by a sibling window, raised again");
                 }
             }
         }
@@ -1838,7 +1838,7 @@ void OnTick() {
             now - state->lastReload >= gap) {
             state->reloadDue = 0;
             state->lastReload = now;
-            Out(L"a column's folder changed, reloading");
+            Wh_Log(L"a column's folder changed, reloading");
             ReloadAll(state);
         }
 
@@ -1908,7 +1908,7 @@ void OnTick() {
             bool hidden = ShowHiddenFiles(), compact = IsCompactMode();
             if (hidden != state->shownHidden ||
                 compact != state->shownCompact) {
-                Out(L"Explorer setting changed: hidden=%d compact=%d",
+                Wh_Log(L"Explorer setting changed: hidden=%d compact=%d",
                     hidden ? 1 : 0, compact ? 1 : 0);
                 state->shownHidden = hidden;
                 state->shownCompact = compact;
@@ -1923,7 +1923,7 @@ void OnTick() {
                 activeColumn && activeColumn->hasSpec ? activeColumn->spec : state->spec;
             if (browser && ReadSortSpec(browser, &after) &&
                 !SameSpec(after, state->specBeforeMenu) && !SameSpec(after, effective)) {
-                Out(L"sort or group changed in the Sort menu: %d sort columns, grouped=%d",
+                Wh_Log(L"sort or group changed in the Sort menu: %d sort columns, grouped=%d",
                     (int)after.columns.size(), after.grouped ? 1 : 0);
                 if (activeColumn && g_rememberSort) {
                     // Only the column the user is in changes, and it is remembered.
@@ -1955,7 +1955,7 @@ void OnTick() {
                     SortSpec const& effective =
                         activeColumn->hasSpec ? activeColumn->spec : state->spec;
                     if (!SameSpec(read, effective)) {
-                        Out(L"column \"%s\" takes the sort Explorer has for it", path.c_str());
+                        Wh_Log(L"column \"%s\" takes the sort Explorer has for it", path.c_str());
                         activeColumn->spec = read;
                         activeColumn->hasSpec = true;
                         RequestLoad(state, activeColumn);
@@ -1966,7 +1966,7 @@ void OnTick() {
         }
 
         if (state->swapOld && now >= state->swapDeadline) {
-            Out(L"the new first column didn't load in time, swapping anyway");
+            Wh_Log(L"the new first column didn't load in time, swapping anyway");
             CompleteSwap(state);
         }
 
@@ -2091,7 +2091,7 @@ void OnTick() {
             state->rootGrid.RequestedTheme(nowDark ? mux::ElementTheme::Dark
                                                    : mux::ElementTheme::Light);
             state->rootGrid.Background(PanelBackground(fileList, nowDark));
-            Out(L"theme changed, panel background taken again");
+            Wh_Log(L"theme changed, panel background taken again");
         }
 
         // The system accent or the theme changed: the pill and the selection
@@ -2111,7 +2111,7 @@ void OnTick() {
                 if (!state->colorsSet || !same(pillShade, state->pillColor) ||
                     !same(accent, state->accentColor)) {
                     if (state->colorsSet) {
-                        Out(L"accent or theme changed, the pill and the selection rectangle follow");
+                        Wh_Log(L"accent or theme changed, the pill and the selection rectangle follow");
                     }
                     state->colorsSet = true;
                     state->pillColor = pillShade;
@@ -2177,7 +2177,7 @@ void OnTick() {
                     !state->rename) {
                     Column* column = state->columns[state->active].get();
                     std::vector<size_t> picked = SelectedEntries(column, column->list);
-                    Out(L"Explorer's own rename box found, renaming in the column instead (%d selected)",
+                    Wh_Log(L"Explorer's own rename box found, renaming in the column instead (%d selected)",
                         (int)picked.size());
                     if (!picked.empty()) {
                         BeginMultiRename(state, column, picked);
@@ -2204,7 +2204,7 @@ void OnTick() {
             // brings it into view, which cut the centring short.
             if (known && panel && !inside && now >= state->scrollQuietUntil) {
                 state->focusColumn->list.Focus(mux::FocusState::Programmatic);
-                Out(L"focus taken back from Explorer's view");
+                Wh_Log(L"focus taken back from Explorer's view");
             }
         } else {
             state->focusColumn = nullptr;
@@ -2238,7 +2238,7 @@ void OnTick() {
             }
         } else if (listReplaced && !state->expected) {
             // Same folder, new file list window: taken as a Refresh.
-            Out(L"file list replaced in the same folder, reloading");
+            Wh_Log(L"file list replaced in the same folder, reloading");
             ReloadAll(state);
         }
 
@@ -2255,7 +2255,7 @@ void OnTick() {
                 state->selectFolder.reset();
                 state->selectChild.reset();
             } else if (++state->selectTries > 40) {
-                Out(L"selection could not be mirrored into Explorer's view");
+                Wh_Log(L"selection could not be mirrored into Explorer's view");
                 state->selectFolder.reset();
                 state->selectChild.reset();
                 state->selectExtra.clear();
@@ -2274,7 +2274,7 @@ void ShowPanel(WindowState* state) {
     HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
     RECT rect;
     if (!fileList || !FileListRect(state->topLevel, fileList, &rect)) {
-        Out(L"panel: no visible file list in this window");
+        Wh_Log(L"panel: no visible file list in this window");
         return;
     }
     const wchar_t* step = L"start";
@@ -2284,7 +2284,7 @@ void ShowPanel(WindowState* state) {
         if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
             ReadSortSpec(browser, &state->spec);
         }
-        Out(L"spec: %d sort columns, first direction %d, grouped=%d",
+        Wh_Log(L"spec: %d sort columns, first direction %d, grouped=%d",
             (int)state->spec.columns.size(),
             state->spec.columns.empty() ? 0
                                         : (int)state->spec.columns[0].direction,
@@ -2292,7 +2292,7 @@ void ShowPanel(WindowState* state) {
 
         state->shownHidden = ShowHiddenFiles();
         state->shownCompact = IsCompactMode();
-        Out(L"Explorer settings read: hidden=%d compact=%d, raw UseCompactMode=%lu",
+        Wh_Log(L"Explorer settings read: hidden=%d compact=%d, raw UseCompactMode=%lu",
             state->shownHidden ? 1 : 0, state->shownCompact ? 1 : 0,
             ReadExplorerDword(
                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
@@ -2487,9 +2487,9 @@ void ShowPanel(WindowState* state) {
             });
         timer.Start();
         state->timer = timer;
-        Out(L"panel on, window=%p", state->topLevel);
+        Wh_Log(L"panel on, window=%p", state->topLevel);
     } catch (...) {
-        Out(L"panel failed at step: %s", step);
+        Wh_Log(L"panel failed at step: %s", step);
         LogHresult(L"ShowPanel");
         HidePanel(state, L"creation failed");
     }

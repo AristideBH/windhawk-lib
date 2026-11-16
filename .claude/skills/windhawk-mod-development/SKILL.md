@@ -315,7 +315,7 @@ Run Windhawk's own clang over the file before every handover, and prove the chec
 - The compiler is `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`. It is not on PATH in the Bash tool. A call to `clang++` fails with "command not found", and a pipe into `grep error` then prints nothing, which looks like a clean result. Call the full path, and count matches (`grep -cE "error|warning"`) or read the exit code.
 - The flags are in `explorer-extras/HANDOFF.md`, "Compile check without the Windhawk editor". The check does not link, so a missing `-l` flag shows only in Windhawk.
 - When a patch is applied with a Python script inside a Bash heredoc, backslashes in the replacement text get halved: a char literal for a backslash ends up in the file with one backslash and does not compile. Build such strings with `chr(92)`, or use the Edit tool. After a patch, grep the lines you touched.
-- Every handover bumps `@version` and the version in the start log line, copies the file to `C:/ProgramData/Windhawk/EditorWorkspace/mod.wh.cpp` and compares the two with `cmp`. The editor sometimes shows an old version, so check `grep @version` there too.
+- Every handover bumps `@version` and the version in the start log line, copies the file to `C:/ProgramData/Windhawk/EditorWorkspaces/1/mod.wh.cpp` and compares the two with `cmp`. The editor sometimes shows an old version, so check `grep @version` there too.
 - Read the mod's own log before guessing. It tells which path ran: a restricted menu that still showed ten entries, and an archive column the mod did not recognise, were both found by reading one log line.
 
 1. Hand over the full file, never a fragment to merge by hand.

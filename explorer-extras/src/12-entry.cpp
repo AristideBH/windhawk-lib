@@ -14,30 +14,16 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
     if (module && !(flags & dataOnly) && !g_extensionsHooked && !g_unloading) {
         HMODULE extensions = GetModuleHandleW(L"FileExplorerExtensions.dll");
         if (extensions && !g_extensionsHooked.exchange(true)) {
-            Out(L"FileExplorerExtensions.dll has loaded, hooking it now");
+            Wh_Log(L"FileExplorerExtensions.dll has loaded, hooking it now");
             HookExtensions(extensions);
             Wh_ApplyHookOperations();
             if (g_hooked) {
                 StartWorker();
-                Out(L"ready. Open the View menu of a File Explorer window.");
+                Wh_Log(L"ready. Open the View menu of a File Explorer window.");
             }
         }
     }
     return module;
-}
-
-// The status bar switch of 0.54 is gone (Explorer has the option itself). If a test of it left
-// Explorer's own "Show status bar" option off, it is given back, once.
-void GiveBackStatusBar() {
-    if (Wh_GetIntValue(L"ui.statusChanged", 0) == 0) {
-        return;
-    }
-    DWORD original = (DWORD)Wh_GetIntValue(L"ui.statusOriginal", 1);
-    Wh_SetIntValue(L"ui.statusChanged", 0);
-    RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", L"ShowStatusBar", REG_DWORD,
-                    &original, sizeof(original));
-    DWORD_PTR result = 0;
-    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"ShellState", SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1500, &result);
 }
 
 void LoadSettings() {
@@ -88,15 +74,12 @@ void LoadSettings() {
         int height = Wh_GetIntValue(L"ui.paneHeight", 250);
         g_panePreviewHeight = height < 90 ? 90 : height > 520 ? 520 : height;
     }
-    g_debugLog = SettingBool(L"debugLog");
-    GiveBackStatusBar();
 }
 
 }  // namespace
 
 BOOL Wh_ModInit() {
     LoadSettings();
-    OutInit();
 #if defined(_M_ARM64) || defined(__aarch64__)
     const wchar_t* arch = L"arm64";
 #elif defined(_M_X64) || defined(__x86_64__)
@@ -104,7 +87,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.55.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.56.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -117,7 +100,7 @@ BOOL Wh_ModInit() {
         BOOL waiting = loadLibrary &&
             Wh_SetFunctionHook(loadLibrary, (void*)LoadLibraryExW_Hook,
                                (void**)&LoadLibraryExW_Original);
-        Out(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
+        Wh_Log(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
             waiting ? 1 : 0);
         return TRUE;
     }
@@ -125,16 +108,16 @@ BOOL Wh_ModInit() {
     HookExtensions(module);
     if (g_hooked) {
         StartWorker();
-        Out(L"ready. Open the View menu of a File Explorer window.");
+        Wh_Log(L"ready. Open the View menu of a File Explorer window.");
     } else {
-        Out(L"no hook could be installed. The mod does nothing.");
+        Wh_Log(L"no hook could be installed. The mod does nothing.");
     }
     return TRUE;
 }
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
-    Out(L"settings changed: columns=%d width=%d..%d follow=%d maxItems=%d",
+    Wh_Log(L"settings changed: columns=%d width=%d..%d follow=%d maxItems=%d",
         g_enabled ? 1 : 0, g_minWidth.load(), g_maxWidth.load(),
         g_follow ? 1 : 0, g_maxItems.load());
     if (!g_enabled) {
@@ -156,5 +139,5 @@ void Wh_ModBeforeUninit() {
 void Wh_ModUninit() {
     CloseSettingsWindowAtUnload();
     UnregisterNotifyClass();
-    Out(L"explorer-extras end");
+    Wh_Log(L"explorer-extras end");
 }

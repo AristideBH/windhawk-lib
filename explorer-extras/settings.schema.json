@@ -374,15 +374,6 @@
       "page": "details",
       "card": "pane",
       "needs": "now"
-    },
-    {
-      "id": "debugLog",
-      "group": null,
-      "type": "bool",
-      "default": false,
-      "name": "Write a debug log",
-      "description": "Writes Code\\windhawk-lib\\probes\\logs\\explorer-extras.log in your user folder, if it exists.",
-      "windhawkOnly": true
     }
   ],
   "whatsNew": [
@@ -415,10 +406,6 @@
     "status.hooks.detail": "The Explorer extension the mod hooks into.",
     "status.found": "Found",
     "status.notfound": "Not found",
-    "action.log": "Open the log",
-    "action.log.detail": "The file the mod writes while it works, if its folder exists.",
-    "action.log.done": "Opened",
-    "action.log.none": "No log file",
     "action.copy": "Copy diagnostics",
     "action.copy.detail": "Version, settings and state, as text, to paste in a message.",
     "action.copy.done": "Copied",
@@ -478,10 +465,6 @@
       "status.hooks.detail": "L’extension de l’Explorateur sur laquelle le mod s’accroche.",
       "status.found": "Trouvée",
       "status.notfound": "Introuvable",
-      "action.log": "Ouvrir le journal",
-      "action.log.detail": "Le fichier que le mod écrit pendant son travail, si son dossier existe.",
-      "action.log.done": "Ouvert",
-      "action.log.none": "Aucun fichier journal",
       "action.copy": "Copier les diagnostics",
       "action.copy.detail": "Version, réglages et état, en texte, à coller dans un message.",
       "action.copy.done": "Copié",
@@ -649,10 +632,6 @@
       "livePreview": {
         "name": "Aperçu des documents et du code",
         "description": "Affiche les PDF, le texte, le Markdown et les fichiers Office dans le volet."
-      },
-      "debugLog": {
-        "name": "Écrire un journal de débogage",
-        "description": "Écrit Code\\windhawk-lib\\probes\\logs\\explorer-extras.log dans votre dossier utilisateur, s’il existe."
       }
     }
   }

@@ -49,7 +49,7 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Turn on "Write a debug log" (Home page), repeat the problem, then use "Copy diagnostics" and paste it here. For a crash, say so.
+      description: Use "Copy diagnostics" (Home page) and paste it here. For a crash, say so.
       render: text
   - type: textarea
     id: extra

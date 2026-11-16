@@ -173,7 +173,7 @@ void TurnColumnsOffEverywhere() {
 
 void ApplySettingChanged(const SettingInfo& info) {
     LoadSettings();
-    Out(L"setting \"%s\" changed in the settings window, now \"%s\"", info.id, EffectiveText(&info).c_str());
+    Wh_Log(L"setting \"%s\" changed in the settings window, now \"%s\"", info.id, EffectiveText(&info).c_str());
     if (!g_enabled) {
         TurnColumnsOffEverywhere();
     } else if (info.rebuild) {
@@ -198,7 +198,7 @@ void ShowSettingsPage(SettingsUi* ui, int page);
 void ResetSettingsToWindhawk() {
     ClearAllOverrides();
     LoadSettings();
-    Out(L"settings reset to Windhawk's page");
+    Wh_Log(L"settings reset to Windhawk's page");
     if (!g_enabled) {
         TurnColumnsOffEverywhere();
     } else {
@@ -344,7 +344,6 @@ std::wstring DiagnosticsText() {
         text += info.id;
         text += L" = " + EffectiveText(&info) + L"\r\n";
     }
-    text += g_outPath[0] ? std::wstring(L"Log: ") + g_outPath + L"\r\n" : L"Log: none (the log folder does not exist)\r\n";
     return text;
 }
 
@@ -374,7 +373,7 @@ bool TipDismissed() {
     return Wh_GetIntValue(L"ui.tipDismissed", 0) != 0;
 }
 
-enum class QuickAction { Log, Copy, Reset };
+enum class QuickAction { Copy, Reset };
 
 mux::UIElement BuildHomePage() {
     muxc::StackPanel page;
@@ -460,24 +459,14 @@ mux::UIElement BuildHomePage() {
         page.Children().Append(title);
         auto card = MakeCard();
         muxc::StackPanel rows;
-        for (QuickAction action : {QuickAction::Log, QuickAction::Copy, QuickAction::Reset}) {
+        for (QuickAction action : {QuickAction::Copy, QuickAction::Reset}) {
             muxc::Button button;
-            const wchar_t* label = action == QuickAction::Log ? Str(L"action.log")
-                                   : action == QuickAction::Copy ? Str(L"action.copy") : Str(L"action.reset");
-            const wchar_t* detail = action == QuickAction::Log ? Str(L"action.log.detail")
-                                    : action == QuickAction::Copy ? Str(L"action.copy.detail") : Str(L"action.reset.detail");
+            const wchar_t* label = action == QuickAction::Copy ? Str(L"action.copy") : Str(L"action.reset");
+            const wchar_t* detail = action == QuickAction::Copy ? Str(L"action.copy.detail") : Str(L"action.reset.detail");
             button.Content(winrt::box_value(winrt::hstring{label}));
             button.MinWidth(180);
             if (action == QuickAction::Reset) {
                 button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
-            } else if (action == QuickAction::Log) {
-                button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
-                    bool opened = g_outPath[0] && GetFileAttributesW(g_outPath) != INVALID_FILE_ATTRIBUTES &&
-                                  (INT_PTR)ShellExecuteW(nullptr, L"open", g_outPath, nullptr, nullptr, SW_SHOWNORMAL) > 32;
-                    if (auto clicked = sender.try_as<muxc::Button>()) {
-                        clicked.Content(winrt::box_value(winrt::hstring{opened ? Str(L"action.log.done") : Str(L"action.log.none")}));
-                    }
-                });
             } else {
                 button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
                     bool copied = CopyTextToClipboard(g_settingsWindow, DiagnosticsText());
@@ -903,11 +892,11 @@ void OpenSettingsWindow(WindowState* state) {
             WNDCLASSEXW cls = {};
             cls.cbSize = sizeof(cls);
             cls.lpfnWndProc = SettingsWindowProc;
-            cls.hInstance = GetModuleHandleW(nullptr);
+            cls.hInstance = ModHandle();
             cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
             cls.lpszClassName = kSettingsClass;
             if (!RegisterClassExW(&cls)) {
-                Out(L"settings window: the class could not be registered, gle=%lu", GetLastError());
+                Wh_Log(L"settings window: the class could not be registered, gle=%lu", GetLastError());
                 return;
             }
             g_settingsClassMade = true;
@@ -935,9 +924,9 @@ void OpenSettingsWindow(WindowState* state) {
             }
         }
         HWND window = CreateWindowExW(0, kSettingsClass, Str(L"window.title"), WS_OVERLAPPEDWINDOW, x, y, width, height,
-                                      nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                                      nullptr, nullptr, ModHandle(), nullptr);
         if (!window) {
-            Out(L"settings window: could not be created, gle=%lu", GetLastError());
+            Wh_Log(L"settings window: could not be created, gle=%lu", GetLastError());
             return;
         }
         g_settingsWindow = window;
@@ -1083,7 +1072,7 @@ void OpenSettingsWindow(WindowState* state) {
         ShowWindow(window, SW_SHOW);
         SetForegroundWindow(window);
         RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-        Out(L"settings window opened, window=%p, dpi=%u, client %ldx%ld", window, GetDpiForWindow(window),
+        Wh_Log(L"settings window opened, window=%p, dpi=%u, client %ldx%ld", window, GetDpiForWindow(window),
             client.right, client.bottom);
     } catch (...) {
         LogHresult(L"OpenSettingsWindow");
@@ -1097,7 +1086,7 @@ void OpenSettingsWindow(WindowState* state) {
 // its XAML objects let go.
 void CloseSettingsWindowOfThread() {
     if (g_settingsWindow && g_settingsThread == GetCurrentThreadId() && IsWindow(g_settingsWindow)) {
-        Out(L"the settings window goes with its Explorer window");
+        Wh_Log(L"the settings window goes with its Explorer window");
         g_settingsAbandon = true;
         DestroyWindow(g_settingsWindow);
         g_settingsAbandon = false;
@@ -1112,7 +1101,7 @@ void CloseSettingsWindowAtUnload() {
         SendMessageTimeoutW(g_settingsWindow, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 3000, &result);
     }
     if (g_settingsClassMade) {
-        UnregisterClassW(kSettingsClass, GetModuleHandleW(nullptr));
+        UnregisterClassW(kSettingsClass, ModHandle());
         g_settingsClassMade = false;
     }
 }

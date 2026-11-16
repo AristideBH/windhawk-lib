@@ -100,18 +100,56 @@ bool SpecFromText(std::wstring const& text, SortSpec* spec) {
     return true;
 }
 
+// One value per folder ("folderMemory.0", "folderMemory.1", ...) and a count: a single long value
+// would be cut at 32,767 characters, and Windhawk's portable mode loses line breaks.
+std::vector<std::wstring> g_memoryWritten;  // What each numbered value holds now.
+
+std::wstring MemoryLine(std::wstring const& key, FolderMemory const& memory) {
+    return key + L"|" + (memory.hasSpec ? SpecToText(memory.spec) : L"") + L"|" +
+           std::to_wstring((int)memory.width) + L"|" + std::to_wstring(memory.columns);
+}
+
+bool ParseMemoryLine(std::wstring const& line, wchar_t separator, std::wstring* key, FolderMemory* memory) {
+    size_t a = line.find(separator);
+    size_t b = a == std::wstring::npos ? a : line.find(separator, a + 1);
+    size_t c = b == std::wstring::npos ? b : line.find(separator, b + 1);
+    if (c == std::wstring::npos) {
+        return false;
+    }
+    *key = line.substr(0, a);
+    *memory = FolderMemory();
+    std::wstring spec = line.substr(a + 1, b - a - 1);
+    if (!spec.empty() && SpecFromText(spec, &memory->spec)) {
+        memory->hasSpec = true;
+    }
+    memory->width = wcstod(line.substr(b + 1, c - b - 1).c_str(), nullptr);
+    memory->columns = (int)wcstol(line.substr(c + 1).c_str(), nullptr, 10);
+    return !key->empty();
+}
+
+std::wstring MemoryValueName(size_t index) {
+    return L"folderMemory." + std::to_wstring(index);
+}
+
 void SaveFolderMemoryLocked() {
-    std::wstring text;
+    std::vector<std::wstring> lines;
     for (auto& key : g_memoryOrder) {
         auto found = g_memory.find(key);
-        if (found == g_memory.end()) {
-            continue;
+        if (found != g_memory.end()) {
+            lines.push_back(MemoryLine(key, found->second));
         }
-        auto& memory = found->second;
-        text += key + L"\t" + (memory.hasSpec ? SpecToText(memory.spec) : L"") + L"\t" +
-                std::to_wstring((int)memory.width) + L"\t" + std::to_wstring(memory.columns) + L"\n";
     }
-    Wh_SetStringValue(L"folderMemory", text.c_str());
+    // Only the values that changed are written.
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (i >= g_memoryWritten.size() || g_memoryWritten[i] != lines[i]) {
+            Wh_SetStringValue(MemoryValueName(i).c_str(), lines[i].c_str());
+        }
+    }
+    for (size_t i = lines.size(); i < g_memoryWritten.size(); i++) {
+        Wh_DeleteValue(MemoryValueName(i).c_str());
+    }
+    Wh_SetIntValue(L"folderMemory.count", (int)lines.size());
+    g_memoryWritten = std::move(lines);
 }
 
 void LoadFolderMemoryLocked() {
@@ -119,36 +157,46 @@ void LoadFolderMemoryLocked() {
         return;
     }
     g_memoryLoaded = true;
-    std::vector<wchar_t> buffer(120000);
-    size_t length = Wh_GetStringValue(L"folderMemory", buffer.data(), buffer.size());
-    if (!length) {
+    int count = Wh_GetIntValue(L"folderMemory.count", -1);
+    if (count < 0) {
+        // The single value of the first builds: read once, and written as numbered values.
+        std::vector<wchar_t> buffer(120000);
+        size_t length = Wh_GetStringValue(L"folderMemory", buffer.data(), buffer.size());
+        if (!length) {
+            return;
+        }
+        std::wstring text(buffer.data(), length);
+        size_t start = 0;
+        while (start < text.size()) {
+            size_t end = text.find(L'\n', start);
+            if (end == std::wstring::npos) {
+                end = text.size();
+            }
+            std::wstring key;
+            FolderMemory memory;
+            if (ParseMemoryLine(text.substr(start, end - start), L'\t', &key, &memory)) {
+                g_memory[key] = memory;
+                g_memoryOrder.push_back(key);
+            }
+            start = end + 1;
+        }
+        SaveFolderMemoryLocked();
+        Wh_DeleteValue(L"folderMemory");
         return;
     }
-    std::wstring text(buffer.data(), length);
-    size_t start = 0;
-    while (start < text.size()) {
-        size_t end = text.find(L'\n', start);
-        if (end == std::wstring::npos) {
-            end = text.size();
-        }
-        std::wstring line = text.substr(start, end - start);
-        start = end + 1;
-        size_t a = line.find(L'\t');
-        size_t b = a == std::wstring::npos ? a : line.find(L'\t', a + 1);
-        size_t c = b == std::wstring::npos ? b : line.find(L'\t', b + 1);
-        if (c == std::wstring::npos) {
-            continue;
-        }
-        std::wstring key = line.substr(0, a);
+    std::vector<wchar_t> buffer(4096);
+    for (int i = 0; i < count && i < (int)kMemoryLimit; i++) {
+        size_t length = Wh_GetStringValue(MemoryValueName(i).c_str(), buffer.data(), buffer.size());
+        std::wstring line(buffer.data(), length);
+        std::wstring key;
         FolderMemory memory;
-        std::wstring spec = line.substr(a + 1, b - a - 1);
-        if (!spec.empty() && SpecFromText(spec, &memory.spec)) {
-            memory.hasSpec = true;
+        if (length && ParseMemoryLine(line, L'|', &key, &memory)) {
+            g_memory[key] = memory;
+            g_memoryOrder.push_back(key);
+            g_memoryWritten.push_back(line);
+        } else {
+            g_memoryWritten.push_back(L"");
         }
-        memory.width = wcstod(line.substr(b + 1, c - b - 1).c_str(), nullptr);
-        memory.columns = (int)wcstol(line.substr(c + 1).c_str(), nullptr, 10);
-        g_memory[key] = memory;
-        g_memoryOrder.push_back(key);
     }
 }
 
