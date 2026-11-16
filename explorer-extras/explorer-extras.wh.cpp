@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.54.5
+// @description     Beta, vibe-coded. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
+// @version         0.54.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -19,7 +19,7 @@
 
 Additions for File Explorer. The mod has several areas, each with its own page and switch in a settings window, so you use only what you like. Open the settings window from **Extras** at the bottom of the toolbar's ... menu.
 
-> This mod is vibe-coded: built largely with AI assistance and tested by hand by its author, without an independent code audit. Use it at your own judgment, and please report anything odd.
+> **Beta, and vibe-coded.** This mod is in public beta. It is built largely with AI assistance and tested by hand by its author, without an independent code audit. Use it at your own judgment, and please report anything odd.
 
 ## Columns
 
@@ -20508,7 +20508,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.54.5 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.54.6 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -2,7 +2,9 @@
 
 A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11. It is one mod with several areas, each with its own page and switch in a settings window. Switch on what you want; the rest stays out of the way.
 
-Status: public beta, in daily use by its author, not yet in the Windhawk catalog. Tested on Windows 11 build 26100 (24H2), ARM64, in French and English. The x86-64 build compiles and links but has not been run.
+> **Beta, and vibe-coded.** Explorer Extras is in public beta, in daily use by its author, not yet in the Windhawk catalog. It is built largely with AI assistance and tested by hand, without an independent code audit. Use it at your own judgment, and please report anything odd.
+
+Tested on Windows 11 build 26100 (24H2), ARM64, in French and English. The x86-64 build compiles and links but has not been run.
 
 ## Areas
 
