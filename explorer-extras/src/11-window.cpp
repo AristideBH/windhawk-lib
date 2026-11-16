@@ -436,13 +436,11 @@ void HookExtensions(HMODULE module) {
          InvokeMenuItem_Hook,
          true},
     };
-    if (!Wh_SetFunctionHook((void*)TranslateAcceleratorW,
-                            (void*)TranslateAcceleratorW_Hook,
-                            (void**)&TranslateAcceleratorW_Original)) {
+    if (!WindhawkUtils::SetFunctionHook(TranslateAcceleratorW, TranslateAcceleratorW_Hook,
+                                        &TranslateAcceleratorW_Original)) {
         Wh_Log(L"could not hook TranslateAcceleratorW, Backspace in the rename box may not work");
     }
-    if (!Wh_SetFunctionHook((void*)CreateWindowExW, (void*)CreateWindowExW_Hook,
-                            (void**)&CreateWindowExW_Original)) {
+    if (!WindhawkUtils::SetFunctionHook(CreateWindowExW, CreateWindowExW_Hook, &CreateWindowExW_Original)) {
         Wh_Log(L"could not hook CreateWindowExW, new tabs won't open in Columns");
     }
     bool ok = WindhawkUtils::HookSymbols(module, hooks, ARRAYSIZE(hooks));
@@ -573,6 +571,5 @@ bool g_hooked = false;
 void HookExtensions(HMODULE) {}
 void CloseEverything() {}
 void CloseSettingsWindowAtUnload() {}
-void StartWorker() {}
 void StopWorker() {}
 

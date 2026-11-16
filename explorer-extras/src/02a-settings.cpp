@@ -132,9 +132,9 @@ std::wstring WindhawkValueText(const SettingInfo* info) {
         return std::to_wstring(Wh_GetIntSetting(info->key));
     }
     std::wstring result = info->defaultText;
-    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
-        result = value;
-        Wh_FreeStringSetting(value);
+    auto value = WindhawkUtils::StringSetting::make(info->key);
+    if (value.get()) {
+        result = value.get();
     }
     return result;
 }

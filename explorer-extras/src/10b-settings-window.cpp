@@ -728,7 +728,7 @@ void UpdateSettingsWindowIcon(HWND window, bool dark) {
 
 // The window's backdrop and caption follow the theme of its content.
 void ApplySettingsWindowTheme(HWND window, SettingsUi* ui) {
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!dwm) {
         return;
     }
@@ -946,7 +946,7 @@ void OpenSettingsWindow(WindowState* state) {
         g_settingsThread = GetCurrentThreadId();
         {
             // No icon and no title drawn in the title bar (the window keeps its name for the taskbar).
-            if (HMODULE theme = LoadLibraryW(L"uxtheme.dll")) {
+            if (HMODULE theme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
                 struct Options {
                     DWORD flags;
                     DWORD mask;

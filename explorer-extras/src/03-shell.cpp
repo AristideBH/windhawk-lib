@@ -191,9 +191,6 @@ Pidl CurrentFolder(IShellBrowser* browser) {
 // A file the shell can open as a folder, that is small enough and on a local
 // fixed drive: such archives are read in the next column.
 bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::wstring& name) {
-    if (!g_archives) {
-        return false;
-    }
     SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
     if (FAILED(folder->GetAttributesOf(1, &child, &attributes)) ||
         !(attributes & SFGAO_FOLDER) || !(attributes & SFGAO_STREAM)) {
@@ -307,7 +304,7 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
             FindClose(find);
             DWORD attributes = found.dwFileAttributes;
             bool cloud = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-                         (found.dwReserved0 & 0xF000FFFF) == 0x9000001A;
+                         (found.dwReserved0 & 0xFFFF0FFF) == 0x9000001A;  // IO_REPARSE_TAG_CLOUD and its _1 to _F
             bool placeholder = cloud || (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS |
                                                        FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE));
             if (placeholder && IsSyncing(folder, child)) {
@@ -895,6 +892,9 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         auto at = last.find(key);
         if ((at == last.end() ? marked != 0 || syncing != 0 : at->second != summary)) {
             Wh_Log(L"marks in \"%s\": %d cloud, network or device, %d syncing", key.c_str(), marked, syncing);
+        }
+        if (last.size() > 500) {
+            last.clear();  // A log helper: it must not grow with every folder ever read.
         }
         last[key] = summary;
     }

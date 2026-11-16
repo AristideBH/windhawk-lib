@@ -13,8 +13,8 @@ struct FolderMemory {
 };
 
 std::mutex g_memoryMutex;
-[[clang::no_destroy]] std::map<std::wstring, FolderMemory> g_memory;
-[[clang::no_destroy]] std::vector<std::wstring> g_memoryOrder;  // Oldest first.
+std::map<std::wstring, FolderMemory> g_memory;
+std::vector<std::wstring> g_memoryOrder;  // Oldest first.
 bool g_memoryLoaded = false;
 constexpr size_t kMemoryLimit = 150;
 

@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.62.0
+// @version         0.63.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -334,12 +334,9 @@ std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
 std::atomic<bool> g_focusRect{true};
-std::atomic<bool> g_compactScroll{true};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_lastEdge{false};
 std::atomic<bool> g_headerKeyboard{false};
-std::atomic<bool> g_archives{true};
-std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};
 std::atomic<bool> g_oddRows{false};
@@ -982,9 +979,9 @@ std::wstring WindhawkValueText(const SettingInfo* info) {
         return std::to_wstring(Wh_GetIntSetting(info->key));
     }
     std::wstring result = info->defaultText;
-    if (const wchar_t* value = Wh_GetStringSetting(info->key)) {
-        result = value;
-        Wh_FreeStringSetting(value);
+    auto value = WindhawkUtils::StringSetting::make(info->key);
+    if (value.get()) {
+        result = value.get();
     }
     return result;
 }
@@ -1254,9 +1251,6 @@ Pidl CurrentFolder(IShellBrowser* browser) {
 // A file the shell can open as a folder, that is small enough and on a local
 // fixed drive: such archives are read in the next column.
 bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::wstring& name) {
-    if (!g_archives) {
-        return false;
-    }
     SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
     if (FAILED(folder->GetAttributesOf(1, &child, &attributes)) ||
         !(attributes & SFGAO_FOLDER) || !(attributes & SFGAO_STREAM)) {
@@ -1370,7 +1364,7 @@ int RemoteKind(IShellFolder* folder, PCUITEMID_CHILD child) {
             FindClose(find);
             DWORD attributes = found.dwFileAttributes;
             bool cloud = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-                         (found.dwReserved0 & 0xF000FFFF) == 0x9000001A;
+                         (found.dwReserved0 & 0xFFFF0FFF) == 0x9000001A;  // IO_REPARSE_TAG_CLOUD and its _1 to _F
             bool placeholder = cloud || (attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS |
                                                        FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE));
             if (placeholder && IsSyncing(folder, child)) {
@@ -1959,6 +1953,9 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         if ((at == last.end() ? marked != 0 || syncing != 0 : at->second != summary)) {
             Wh_Log(L"marks in \"%s\": %d cloud, network or device, %d syncing", key.c_str(), marked, syncing);
         }
+        if (last.size() > 500) {
+            last.clear();  // A log helper: it must not grow with every folder ever read.
+        }
         last[key] = summary;
     }
 
@@ -2237,8 +2234,8 @@ struct FolderMemory {
 };
 
 std::mutex g_memoryMutex;
-[[clang::no_destroy]] std::map<std::wstring, FolderMemory> g_memory;
-[[clang::no_destroy]] std::vector<std::wstring> g_memoryOrder;  // Oldest first.
+std::map<std::wstring, FolderMemory> g_memory;
+std::vector<std::wstring> g_memoryOrder;  // Oldest first.
 bool g_memoryLoaded = false;
 constexpr size_t kMemoryLimit = 150;
 
@@ -3345,8 +3342,6 @@ void ReleaseWorker(Worker* worker) {
     }
 }
 
-void StartWorker() {}  // Workers start with the first load of a window.
-
 // At unload: every worker ends, and is waited for.
 void StopWorker() {
     std::vector<std::unique_ptr<Worker>> all;
@@ -3384,11 +3379,7 @@ void QueueJob(Worker* worker, std::unique_ptr<Job> job) {
     while (at != worker->jobs.end() && !(*at)->iconsOnly) {
         ++at;
     }
-    if (job->iconsOnly) {
-        worker->jobs.insert(at, std::move(job));
-    } else {
-        worker->jobs.insert(at, std::move(job));
-    }
+    worker->jobs.insert(at, std::move(job));
 }
 
 void RequestLoad(WindowState* state, Column* column) {
@@ -5184,7 +5175,8 @@ void HarmonizeWidths(WindowState* state) {
         return;
     }
     double target = std::round(total / counted);
-    target = std::clamp(target, (double)g_minWidth, (double)g_maxWidth);
+    double lowest = g_minWidth, highest = g_maxWidth;  // Read apart: a change may be half made.
+    target = std::clamp(target, lowest, highest < lowest ? lowest : highest);
     namespace anim = mux::Media::Animation;
     anim::CubicEase ease;
     ease.EasingMode(anim::EasingMode::EaseInOut);
@@ -11630,7 +11622,7 @@ void OnTick() {
         // when the setting changes. The compact style is a transform, so it
         // costs nothing to keep.
         for (auto& c : state->columns) {
-            int wanted = g_compactScroll ? 1 : 0;
+            int wanted = 1;
             // A column that never had the compact style is left exactly as
             // Explorer's template made it.
             if (c->scrollStyle == -1 && wanted == 0) {
@@ -11676,7 +11668,7 @@ void OnTick() {
         // A compact scrollbar floats over the right edge. While it shows, the
         // free strip for the selection rectangle is 7 px wider, so 10 px stay
         // free beside it. With no bar there is no extra gap.
-        if (g_compactScroll) {
+        {
             for (auto& c : state->columns) {
                 if (!c->list || !c->filled) {
                     continue;
@@ -13276,7 +13268,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     DragRefreshTarget(state, state->autoPoint);
     DragUpdateLabel(state);
     // Past the edge of the panel the drag goes on as a real one.
-    if (g_dragOut && state->rootGrid) {
+    if (state->rootGrid) {
         auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
         if (inRoot.X < 0 || inRoot.Y < 0 || inRoot.X > state->rootGrid.ActualWidth() ||
             inRoot.Y > state->rootGrid.ActualHeight()) {
@@ -15789,7 +15781,7 @@ void UpdateSettingsWindowIcon(HWND window, bool dark) {
 
 // The window's backdrop and caption follow the theme of its content.
 void ApplySettingsWindowTheme(HWND window, SettingsUi* ui) {
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!dwm) {
         return;
     }
@@ -16007,7 +15999,7 @@ void OpenSettingsWindow(WindowState* state) {
         g_settingsThread = GetCurrentThreadId();
         {
             // No icon and no title drawn in the title bar (the window keeps its name for the taskbar).
-            if (HMODULE theme = LoadLibraryW(L"uxtheme.dll")) {
+            if (HMODULE theme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
                 struct Options {
                     DWORD flags;
                     DWORD mask;
@@ -16221,7 +16213,7 @@ struct PaneData {
     int canProperties = 0;
 };
 
-static double g_panePreviewHeight = 250;  // Dragged by the handle under the preview.
+static std::atomic<double> g_panePreviewHeight{250};  // Dragged by the handle under the preview.
 
 struct PaneCacheEntry {
     std::wstring key;
@@ -16422,6 +16414,21 @@ std::wstring PaneDate(FILETIME const& time) {
     return text;
 }
 
+// ".ts" is video (MPEG transport stream) or TypeScript: a transport stream has a sync byte 0x47 at
+// the start of every 188-byte packet.
+bool LooksLikeTransportStream(const wchar_t* path) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return true;
+    }
+    uint8_t bytes[189] = {};
+    DWORD got = 0;
+    ReadFile(file, bytes, sizeof(bytes), &got, nullptr);
+    CloseHandle(file);
+    return got >= 189 && bytes[0] == 0x47 && bytes[188] == 0x47;
+}
+
 // The preview handler of a file, found from its extension (the shell's way), for a file of a size
 // that can be previewed.
 void PaneFindHandler(PaneData* data, const wchar_t* path) {
@@ -16442,7 +16449,8 @@ void PaneFindHandler(PaneData* data, const wchar_t* path) {
         }
     }
     for (const wchar_t* extension : videoTypes) {
-        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0 &&
+            !(_wcsicmp(extension, L".ts") == 0 && !LooksLikeTransportStream(path))) {
             data->previewKind = 5;
             data->previewPath = path;
             return;
@@ -16508,7 +16516,7 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
     }
     wchar_t path[MAX_PATH] = L"";
     data->canProperties = SHGetPathFromIDListW(pidl, path) && path[0] ? 1 : 0;
-    if (folder && data->canProperties) {
+    if (folder && data->canProperties && !(isCurrentFolder && (PathIsRootW(path) || PathIsUNCServerShareW(path)))) {
         data->sizeRoots.push_back(path);
     }
 
@@ -20398,13 +20406,11 @@ void HookExtensions(HMODULE module) {
          InvokeMenuItem_Hook,
          true},
     };
-    if (!Wh_SetFunctionHook((void*)TranslateAcceleratorW,
-                            (void*)TranslateAcceleratorW_Hook,
-                            (void**)&TranslateAcceleratorW_Original)) {
+    if (!WindhawkUtils::SetFunctionHook(TranslateAcceleratorW, TranslateAcceleratorW_Hook,
+                                        &TranslateAcceleratorW_Original)) {
         Wh_Log(L"could not hook TranslateAcceleratorW, Backspace in the rename box may not work");
     }
-    if (!Wh_SetFunctionHook((void*)CreateWindowExW, (void*)CreateWindowExW_Hook,
-                            (void**)&CreateWindowExW_Original)) {
+    if (!WindhawkUtils::SetFunctionHook(CreateWindowExW, CreateWindowExW_Hook, &CreateWindowExW_Original)) {
         Wh_Log(L"could not hook CreateWindowExW, new tabs won't open in Columns");
     }
     bool ok = WindhawkUtils::HookSymbols(module, hooks, ARRAYSIZE(hooks));
@@ -20548,7 +20554,6 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
             HookExtensions(extensions);
             Wh_ApplyHookOperations();
             if (g_hooked) {
-                StartWorker();
                 Wh_Log(L"ready. Open the View menu of a File Explorer window.");
             }
         }
@@ -20561,12 +20566,9 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_focusRect = SettingBool(L"focusRect");
-    g_compactScroll = true;
     g_doubleClickUp = SettingBool(L"doubleClickUp");
     g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
-    g_archives = true;
-    g_dragOut = true;
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_foldersFirst = SettingBool(L"foldersFirst");
@@ -20618,19 +20620,18 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.62.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.63.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
     if (!module) {
         HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
-        void* loadLibrary = kernelBase
-            ? (void*)GetProcAddress(kernelBase, "LoadLibraryExW")
+        auto loadLibrary = kernelBase
+            ? (decltype(&LoadLibraryExW))GetProcAddress(kernelBase, "LoadLibraryExW")
             : nullptr;
         BOOL waiting = loadLibrary &&
-            Wh_SetFunctionHook(loadLibrary, (void*)LoadLibraryExW_Hook,
-                               (void**)&LoadLibraryExW_Original);
+            WindhawkUtils::SetFunctionHook(loadLibrary, LoadLibraryExW_Hook, &LoadLibraryExW_Original);
         Wh_Log(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
             waiting ? 1 : 0);
         return TRUE;
@@ -20638,7 +20639,6 @@ BOOL Wh_ModInit() {
     g_extensionsHooked = true;
     HookExtensions(module);
     if (g_hooked) {
-        StartWorker();
         Wh_Log(L"ready. Open the View menu of a File Explorer window.");
     } else {
         Wh_Log(L"no hook could be installed. The mod does nothing.");

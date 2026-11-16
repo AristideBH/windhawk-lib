@@ -2010,7 +2010,7 @@ void OnTick() {
         // when the setting changes. The compact style is a transform, so it
         // costs nothing to keep.
         for (auto& c : state->columns) {
-            int wanted = g_compactScroll ? 1 : 0;
+            int wanted = 1;
             // A column that never had the compact style is left exactly as
             // Explorer's template made it.
             if (c->scrollStyle == -1 && wanted == 0) {
@@ -2056,7 +2056,7 @@ void OnTick() {
         // A compact scrollbar floats over the right edge. While it shows, the
         // free strip for the selection rectangle is 7 px wider, so 10 px stay
         // free beside it. With no bar there is no extra gap.
-        if (g_compactScroll) {
+        {
             for (auto& c : state->columns) {
                 if (!c->list || !c->filled) {
                     continue;

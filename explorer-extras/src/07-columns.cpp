@@ -1740,7 +1740,8 @@ void HarmonizeWidths(WindowState* state) {
         return;
     }
     double target = std::round(total / counted);
-    target = std::clamp(target, (double)g_minWidth, (double)g_maxWidth);
+    double lowest = g_minWidth, highest = g_maxWidth;  // Read apart: a change may be half made.
+    target = std::clamp(target, lowest, highest < lowest ? lowest : highest);
     namespace anim = mux::Media::Animation;
     anim::CubicEase ease;
     ease.EasingMode(anim::EasingMode::EaseInOut);

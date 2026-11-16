@@ -2,6 +2,17 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.63 (2026-11-16)
+
+Smaller fixes, from the Windhawk catalog review.
+
+### Changed
+- OneDrive files of every sync state get their mark (the reparse tag mask kept only one of sixteen).
+- A `.ts` file is a video only if it is an MPEG transport stream; TypeScript files are shown as text.
+- The folder size is not counted for a drive's root or a network share, where the count ran for its whole time limit.
+- The columns' width limits are read together, so a change made at the wrong moment cannot reverse them. The pane's preview height is shared safely between windows.
+- System libraries are loaded from System32 only. Windhawk's own helpers replace hand-made hook and string-setting code. Settings that were always on are gone, and so are a few unused functions and a log helper that grew without end.
+
 ## 0.62 (2026-11-16)
 
 ### Changed

@@ -292,8 +292,6 @@ void ReleaseWorker(Worker* worker) {
     }
 }
 
-void StartWorker() {}  // Workers start with the first load of a window.
-
 // At unload: every worker ends, and is waited for.
 void StopWorker() {
     std::vector<std::unique_ptr<Worker>> all;
@@ -331,11 +329,7 @@ void QueueJob(Worker* worker, std::unique_ptr<Job> job) {
     while (at != worker->jobs.end() && !(*at)->iconsOnly) {
         ++at;
     }
-    if (job->iconsOnly) {
-        worker->jobs.insert(at, std::move(job));
-    } else {
-        worker->jobs.insert(at, std::move(job));
-    }
+    worker->jobs.insert(at, std::move(job));
 }
 
 void RequestLoad(WindowState* state, Column* column) {

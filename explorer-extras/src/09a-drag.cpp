@@ -1098,7 +1098,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
     DragRefreshTarget(state, state->autoPoint);
     DragUpdateLabel(state);
     // Past the edge of the panel the drag goes on as a real one.
-    if (g_dragOut && state->rootGrid) {
+    if (state->rootGrid) {
         auto inRoot = args.GetCurrentPoint(state->rootGrid).Position();
         if (inRoot.X < 0 || inRoot.Y < 0 || inRoot.X > state->rootGrid.ActualWidth() ||
             inRoot.Y > state->rootGrid.ActualHeight()) {

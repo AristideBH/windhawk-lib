@@ -18,7 +18,6 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
             HookExtensions(extensions);
             Wh_ApplyHookOperations();
             if (g_hooked) {
-                StartWorker();
                 Wh_Log(L"ready. Open the View menu of a File Explorer window.");
             }
         }
@@ -31,12 +30,9 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_focusRect = SettingBool(L"focusRect");
-    g_compactScroll = true;
     g_doubleClickUp = SettingBool(L"doubleClickUp");
     g_lastEdge = SettingBool(L"lastEdge");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
-    g_archives = true;
-    g_dragOut = true;
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_foldersFirst = SettingBool(L"foldersFirst");
@@ -88,19 +84,18 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.62.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.63.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
     if (!module) {
         HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
-        void* loadLibrary = kernelBase
-            ? (void*)GetProcAddress(kernelBase, "LoadLibraryExW")
+        auto loadLibrary = kernelBase
+            ? (decltype(&LoadLibraryExW))GetProcAddress(kernelBase, "LoadLibraryExW")
             : nullptr;
         BOOL waiting = loadLibrary &&
-            Wh_SetFunctionHook(loadLibrary, (void*)LoadLibraryExW_Hook,
-                               (void**)&LoadLibraryExW_Original);
+            WindhawkUtils::SetFunctionHook(loadLibrary, LoadLibraryExW_Hook, &LoadLibraryExW_Original);
         Wh_Log(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
             waiting ? 1 : 0);
         return TRUE;
@@ -108,7 +103,6 @@ BOOL Wh_ModInit() {
     g_extensionsHooked = true;
     HookExtensions(module);
     if (g_hooked) {
-        StartWorker();
         Wh_Log(L"ready. Open the View menu of a File Explorer window.");
     } else {
         Wh_Log(L"no hook could be installed. The mod does nothing.");

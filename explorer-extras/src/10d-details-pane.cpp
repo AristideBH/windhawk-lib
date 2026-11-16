@@ -37,7 +37,7 @@ struct PaneData {
     int canProperties = 0;
 };
 
-static double g_panePreviewHeight = 250;  // Dragged by the handle under the preview.
+static std::atomic<double> g_panePreviewHeight{250};  // Dragged by the handle under the preview.
 
 struct PaneCacheEntry {
     std::wstring key;
@@ -238,6 +238,21 @@ std::wstring PaneDate(FILETIME const& time) {
     return text;
 }
 
+// ".ts" is video (MPEG transport stream) or TypeScript: a transport stream has a sync byte 0x47 at
+// the start of every 188-byte packet.
+bool LooksLikeTransportStream(const wchar_t* path) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return true;
+    }
+    uint8_t bytes[189] = {};
+    DWORD got = 0;
+    ReadFile(file, bytes, sizeof(bytes), &got, nullptr);
+    CloseHandle(file);
+    return got >= 189 && bytes[0] == 0x47 && bytes[188] == 0x47;
+}
+
 // The preview handler of a file, found from its extension (the shell's way), for a file of a size
 // that can be previewed.
 void PaneFindHandler(PaneData* data, const wchar_t* path) {
@@ -258,7 +273,8 @@ void PaneFindHandler(PaneData* data, const wchar_t* path) {
         }
     }
     for (const wchar_t* extension : videoTypes) {
-        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0 &&
+            !(_wcsicmp(extension, L".ts") == 0 && !LooksLikeTransportStream(path))) {
             data->previewKind = 5;
             data->previewPath = path;
             return;
@@ -324,7 +340,7 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
     }
     wchar_t path[MAX_PATH] = L"";
     data->canProperties = SHGetPathFromIDListW(pidl, path) && path[0] ? 1 : 0;
-    if (folder && data->canProperties) {
+    if (folder && data->canProperties && !(isCurrentFolder && (PathIsRootW(path) || PathIsUNCServerShareW(path)))) {
         data->sizeRoots.push_back(path);
     }
 
