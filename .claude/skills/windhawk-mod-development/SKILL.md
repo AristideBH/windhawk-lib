@@ -394,3 +394,13 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - Windhawk wiki: https://github.com/ramensoftware/windhawk/wiki
 - This repo's PLAN.md files, read on 2026-11-12
 - Windows 11 Taskbar Styler source, for the array-setting convention
+
+## Lessons from Explorer Extras 0.36 to 0.54
+
+- **A native crash leaves nothing in the log.** Log before a risky call, and keep calls into other components out of event handlers that are about to close something (a menu click, a flyout). Defer them to a timer tick on the window's own thread.
+- **Scripted edits on Windows.** A Python script that rewrites a file in text mode writes CRLF, and a generator that looks for `\n` markers then fails. Normalise line endings after scripted edits, write the script with the file-writing tool rather than a shell heredoc (backslashes and quotes get mangled), and check each edit with an assertion that its anchor occurs once. A script that stops half way leaves earlier files changed: make each step safe to run again.
+- **One-shot timers and threads at unload.** Hold every one-shot timer in a list that the teardown stops, and count background threads so `Wh_ModBeforeUninit` can wait for them. A callback that fires after the DLL is unloaded crashes the host.
+- **Hooks.** A low-level hook belongs to the thread that installed it and runs in its message loop. Install it from each window's UI thread, check the foreground window inside it, keep it fast, and remove it at teardown.
+- **Settings table in two languages.** `settings.schema.json` holds the English texts and an `fr` block; `build.py` writes both into the mod, and a `Str()` lookup picks the French table when Windows' display language is French. Windhawk's own settings page stays English.
+- **Check Windows first.** A switch that edits a Windows setting persistently (the status bar) is a reason to look in Folder Options before building it.
+- **Release hygiene.** `python explorer-extras/build.py --check` before every commit, Windhawk's clang for syntax, a link check with the real library flags (`-lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys`), and a copy to the editor workspace.

@@ -1,73 +1,38 @@
 # Explorer Extras
 
-A [Windhawk](https://windhawk.net) mod for File Explorer on Windows 11. It adds a **Columns** layout to the View menu: Miller columns, one column per folder level, drawn with Explorer's own WinUI 3 controls.
+A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11. It is one mod with several areas, each with its own page and switch in a settings window. Switch on what you want; the rest stays out of the way.
 
-Status: version 0.52, release candidate, in daily use by its author, not yet published to the Windhawk catalog. Tested on Windows 11 build 26100 (24H2), ARM64, French. The x86-64 build compiles and links (checked with Windhawk's own compiler) but has not been run.
+Status: public beta, in daily use by its author, not yet in the Windhawk catalog. Tested on Windows 11 build 26100 (24H2), ARM64, in French and English. The x86-64 build compiles and links but has not been run.
+
+## Areas
+
+| Area | What it does |
+| --- | --- |
+| **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
+| **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. [More](docs/details-pane.md) |
+| **Settings window** | Every option in one place, applied at once, in English or French. Open it from **Extras** in the toolbar's ... menu. |
+
+More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
 
 ![The Columns layout](assets/captures/columns.svg)
-
-## What it does
-
-- **Columns layout.** Choose Columns in Explorer's View menu. Each folder opens in the next column, with a chevron on folders. Explorer's own view follows the active column, so the address bar, tab title, toolbar, details pane and status bar act on the selection.
-- **Native feel.** Sort and group come from Explorer's view. File icons, thumbnails and the context menu come from the shell. Right-click opens a restyled menu: a row of quick actions on top, the usual commands below, and "Show more options" for everything else. Submenus open on hover.
-- **Keyboard.** Arrow keys, type to jump, Enter, Backspace, F2 (also for several items at once), Delete, Ctrl+C, X, V, Z, Y, Ctrl+Shift+N for a new folder, Ctrl+Alt+N for a new folder holding the selection.
-- **Selection.** Drag a rectangle, Ctrl and Shift click, collapsible group headers.
-- **Tabs.** Each tab keeps its own columns. A tab in another layout is left alone. Middle click on a folder, or "Open in new tab" in the menu, opens it in a new tab.
-- **Per folder memory.** Each column remembers its sort and group, its width, and whether the folder is shown in Columns. All three can be switched off.
-- **Drag and drop.** Drag rows onto a folder or into another column, out to the navigation pane, another Explorer window (any view), the desktop or another application, or drop files in from them. Ctrl copies, Shift moves, Alt makes a shortcut, Escape cancels. The shell does the work, so conflict and progress dialogs are Explorer's. A label with the icons, the name or count, and what a drop would do follows the pointer, the target row or column gets an accent frame, and columns scroll near their edges while dragging.
-- **Widths.** Drag a border to resize a column, double-click it to fit the names, Shift and double-click to give every column the average fitted width. A small handle follows the pointer along the border.
-- **Touch.** Tap, press and hold, drag and drop and a rubber band work by touch.
-- **Look.** Selected neighbouring rows share one background, the chevron of the folder that leads to dimmed columns sits on a small badge, and the View button wears a Columns icon while Columns is on.
-- **Details pane.** One pane that replaces Explorer's Details and Preview panes, in Columns and in every view. It shows a preview on top and the details below: PDF, text and code, Markdown, images at full size (wheel, pinch and double-tap zoom, drag to pan), video and sound with small controls, a stack of thumbnails for several items, a folder's count. Actions (Open, Copy path, Properties), click a value to copy it, "More details" for the rest. Alt+P, the View menu and the toolbar toggle all show and hide it.
-- **Archives.** Zip, 7z, rar and tar files open as folders in the next column, with Extract here and Extract selected here.
-- **Undo.** Ctrl+Z takes back a delete, a rename, a new folder, or a group of renames.
-- **Marks.** Cloud files that are not downloaded, always-kept and downloaded cloud files, network items and phones get a small glyph.
-
-Not done yet: translations. See [`../ROADMAP.md`](../ROADMAP.md). `SHOWCASE-TESTS.md` describes a rich test folder built by `make-columns-showcase.ps1`.
 
 ## Install
 
 1. Install [Windhawk](https://windhawk.net).
 2. In Windhawk choose **Create a new mod**, replace the code with the contents of `explorer-extras.wh.cpp`, and compile it (Ctrl+B).
-3. Enable the mod. Open the View menu of a File Explorer window and choose **Columns**.
+3. Enable the mod. For Columns, open the View menu of a File Explorer window and choose **Columns**. The details pane is on by default: it shows in place of Explorer's Details pane (Alt+Shift+P, or the toolbar button).
 
 The mod hooks `FileExplorerExtensions.dll`. Windhawk must be able to download Microsoft's symbols for it, which has worked on every build tested. If symbols are missing right after a Windows update, the mod waits and logs it.
 
 ## Settings
 
-Open the settings window from **Extras** at the bottom of the toolbar's ... menu, or from the View menu. Settings apply at once. The same settings are on the mod's page in Windhawk.
+Each area has its own page, and every area has an off switch, so you can use only the part you like. The full list is in [`docs/settings.md`](docs/settings.md). Settings apply at once, and the same ones are on the mod's page in Windhawk.
 
 ![The settings window](assets/captures/settings.svg)
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| Enable Columns | on | Adds Columns to the View menu. |
-| Open new windows in Columns | on | New windows open in Columns if it was your last layout. |
-| Keep columns after choosing a file | on | Columns to the right stay, dimmed. Off closes them. |
-| Sidebar sets the first column | off | A click on Home, Gallery, OneDrive or a pinned folder starts the columns there. |
-| Keyboard on group headers | off | Arrow keys reach group headers. |
-| Double-click empty space to go up | off | Goes up one folder. |
-| Remember sort and grouping, column widths, Columns per folder | on | The per folder memory. |
-| Open folders while dragging | on | Hold dragged items on a folder for about 0.7 s to open it. |
-| Folders first | on | Folders are listed before files in each column. |
-| Alternate row shading | off | Every other row is a shade apart. |
-| Accent badge on the path chevron | on | The chevron of the folder you came from sits in an accent badge. |
-| Details pane | on | The merged details and preview pane. |
-| Preview pane opens this pane | on | Alt+P and the View menu's Preview entry show the pane. |
-| Animate the pane | on | The content slides and fades in. |
-| Preview documents and code | on | The real preview of documents, text, images, video and audio. |
-| Open previews by themselves | on | Off: a button on the card opens the preview. |
-| Border after the last column | off | Draws a separator on the right of the last column. |
-| Shift + double-click to even widths | on | Gives all columns the same width. |
-| Show the focus outline | on | Outline around the item under the keyboard cursor. |
-| Panel background | Explorer colour | Explorer's file list colour, or the theme colour. |
-| Minimum / maximum column width | 160 / 420 | Column width range, in pixels. |
-| Maximum items per column | 5000 | Most rows shown per folder. |
-| Desktop column shows real items only | off | Hides This PC, Recycle Bin and other virtual items. |
-| Mark remote items | on | Icons for cloud-only, network and phone items. |
-| Write a debug log | off | Writes a log file for debugging. |
+## Feedback
 
-Following the active column, dragging items out of the panel and browsing archives are always on.
+Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (turn on "Write a debug log", then use **Copy diagnostics** on the Home page). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
 
 ## Build from source
 
@@ -82,6 +47,8 @@ Edit the parts, never the generated file. A syntax-only check with Windhawk's ow
 
 ## More
 
+- [`CHANGELOG.md`](CHANGELOG.md): what changed in each release.
+- [`FEEDBACK.md`](FEEDBACK.md): how issues and suggestions are handled.
 - [`HANDOFF.md`](HANDOFF.md): how the work is run, the architecture, and what costs time.
 - [`PLAN.md`](PLAN.md): findings from the probes and the decisions behind the design.
 - [`../ROADMAP.md`](../ROADMAP.md): what is done, tested and open.

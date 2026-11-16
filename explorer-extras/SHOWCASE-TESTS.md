@@ -43,6 +43,7 @@ A path that reads well, deepest first:
 | `Type to jump` | `ap`, `bl`, `cr`: jumping by typing, then Enter. |
 | `Rename these` | Select the six, F2 or Rename: one name, numbered. Then Ctrl+Z. |
 | `Conflicts` | Same names as in `Drop zones\Shared with team`, different sizes and dates: the replace dialog. |
+| `Pane previews` | The details pane: `Rich.md` (headings, lists, quote, code, table, links), a C++ and a JSON file, a PDF, a sound, a normal picture and a 42 megapixel one (over the 40 megapixel limit: the thumbnail stays and the corner button opens it), and `Folder to size` (the size, contents and types fill in). |
 | `Huge folder (1500 files)` | Rows built as they come into view, scrolling, icons arriving. With `-Stress`: 6 000 files, over the limit of 5 000, the "N more items not shown" row. |
 
 ## Drag and drop scenarios

@@ -1,6 +1,6 @@
 # Builds "Columns Showcase" on the Desktop: a believable working folder of a
 # freelance designer and developer, for a video of Explorer Extras and for the
-# tests. About 900 items, real pictures, real PDFs, Word and Excel files, playable
+# tests (Columns, and the details pane in "Edge cases\Pane previews"). About 900 items, real pictures, real PDFs, Word and Excel files, playable
 # tones, real zip archives, shortcuts, a junction, dated over five years, and every
 # edge case the mod meets, in the folder "Edge cases" (see SHOWCASE-TESTS.md).
 #
@@ -603,6 +603,62 @@ foreach ($n in 1..6) { Put "$edge\Rename these\holiday photo $n.txt" -days 3 | O
 Put "$edge\Conflicts\Invoice 2025-014.pdf" -bytes 14000 -days 2 | Out-Null
 Put "$edge\Conflicts\Team calendar.xlsx" -bytes 11000 -days 2 | Out-Null
 Put "$edge\Conflicts\Do not overwrite.txt" "A newer copy.`n" -days 1 | Out-Null
+
+# The details pane: a Markdown file with everything the pane draws, code and data files, a PDF,
+# a picture over the 40 megapixels that open by themselves, a sound, and a folder to size.
+$pane = "$edge\Pane previews"
+$markdown = @'
+# Details pane, Markdown
+
+A paragraph with **bold**, *italic*, `inline code` and a [link](https://github.com/AristideBH/windhawk-lib).
+
+## A list
+
+- one
+- two
+  - nested
+- three
+
+1. first
+2. second
+
+> A quote, set apart with a bar.
+
+---
+
+```
+code block
+  kept as it is
+```
+
+| a | b |
+| - | - |
+| 1 | 2 |
+'@
+Put "$pane\Rich.md" $markdown -days 3 | Out-Null
+Put "$pane\sample.cpp" "#include <cstdio>`n`n// A small file to see the text preview.`nint main() {`n    std::puts(`"hello`");`n    return 0;`n}`n" -days 4 | Out-Null
+Put "$pane\sample.json" "{`n  `"name`": `"Explorer Extras`",`n  `"areas`": [`"Columns`", `"Details pane`"],`n  `"beta`": true`n}`n" -days 4 | Out-Null
+Pdf "$pane\Two pages of nothing.pdf" 'Pane preview' @('The PDF is drawn by the pane.', 'It scrolls with the wheel.') -days 6
+Wav "$pane\Tone for the player.wav" 330 4 7
+Photo "$pane\Normal picture.jpg" 2400 1600 11 8
+$bigPath = Full "$pane\Huge picture 42 megapixels.jpg"
+[IO.Directory]::CreateDirectory((Split-Path $bigPath)) | Out-Null
+$bitmap = New-Object Drawing.Bitmap 7000, 6000
+$graphics = [Drawing.Graphics]::FromImage($bitmap)
+$rectangle = New-Object Drawing.Rectangle 0, 0, 7000, 6000
+$gradient = New-Object Drawing.Drawing2D.LinearGradientBrush $rectangle, ([Drawing.Color]::FromArgb(255, 20, 60, 140)), ([Drawing.Color]::FromArgb(255, 250, 170, 80)), 35.0
+$graphics.FillRectangle($gradient, $rectangle)
+foreach ($i in 1..60) {
+    $spot = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(70, $rng.Next(255), $rng.Next(255), $rng.Next(255)))
+    $graphics.FillEllipse($spot, $rng.Next(0, 6000), $rng.Next(0, 5000), $rng.Next(300, 1500), $rng.Next(300, 1500))
+    $spot.Dispose()
+}
+$bitmap.Save($bigPath, [Drawing.Imaging.ImageFormat]::Jpeg)
+$gradient.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
+Stamp $bigPath 9
+$script:Count++
+Put "$pane\Folder to size\a.txt" "a`n" -days 10 | Out-Null
+foreach ($n in 1..40) { Put ("$pane\Folder to size\{0}\file-{1:D2}.{2}" -f (('docs', 'images', 'code')[$n % 3]), $n, (('pdf', 'jpg', 'cpp', 'txt')[$n % 4])) -bytes ($n * 7KB) -days ($n + 10) | Out-Null }
 
 # A big folder, and with -Stress one over the limit of the mod.
 foreach ($n in 1..$Huge) { Put ("$edge\Huge folder ($Huge files)\photo-{0:D4}.jpg" -f $n) -bytes 1KB -days ($n % 600 + 1) | Out-Null }

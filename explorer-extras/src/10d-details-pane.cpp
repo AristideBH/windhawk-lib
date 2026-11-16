@@ -20,6 +20,9 @@ struct PaneData {
     std::wstring previewClsid;  // The preview handler of the file, when it has one.
     std::wstring previewPath;
     int previewKind = 0;  // 0 none, 1 a shell preview handler, 2 a PDF, 3 text, 4 image, 5 video, 6 audio (2 to 6 are drawn by the pane).
+    std::vector<std::wstring> sizeRoots;  // Folders whose size is worked out in the background.
+    ULONGLONG sizeBase = 0;               // What the files among them already weigh.
+    bool largeImage = false;              // A picture over the size that opens by itself.
     std::wstring mediaTitle;   // Of a sound file.
     std::wstring mediaArtist;
     int kind = 0;  // 0 the folder shown, 1 a file, 2 a folder, 3 several items.
@@ -96,6 +99,9 @@ struct DetailsPane {
     std::vector<muxc::Border> cards;  // The new thumbnails of a stack, to bring in one by one.
     std::vector<uint64_t> stackKeys;  // The thumbnails the stack shows now.
     int previewSeen = 0;
+    std::shared_ptr<PaneData> deferred;                       // A big picture that waits for the corner button.
+    std::shared_ptr<std::atomic<bool>> sizeCancel;            // Stops the size of folders being worked out.
+    std::vector<muxc::TextBlock> sizeBlocks;                  // Where the size, the contents and the types go.
     winrt::Windows::Media::Playback::MediaPlayer mediaPlayer{nullptr};  // The player of the video or sound on show.
     winrt::Windows::Foundation::IInspectable pendingImage{nullptr};      // An image that is still opening.
     muxc::MediaPlayerElement mediaElement{nullptr};                      // The element that shows the player.
@@ -246,29 +252,32 @@ void PaneFindHandler(PaneData* data, const wchar_t* path) {
     static const wchar_t* const videoTypes[] = {L".mp4", L".m4v", L".mov", L".mkv", L".avi", L".wmv", L".webm", L".mpg", L".mpeg", L".3gp", L".ts", L".m2ts"};
     static const wchar_t* const audioTypes[] = {L".mp3", L".wav", L".flac", L".m4a", L".aac", L".ogg", L".opus", L".wma", L".aiff", L".aif"};
     for (const wchar_t* extension : imageTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewImages && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 4;
             data->previewPath = path;
             return;
         }
     }
     for (const wchar_t* extension : videoTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 5;
             data->previewPath = path;
             return;
         }
     }
     for (const wchar_t* extension : audioTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 6;
             data->previewPath = path;
             return;
         }
     }
+    if (!g_panePreview) {
+        return;  // The documents are off.
+    }
     WIN32_FILE_ATTRIBUTE_DATA info = {};
     if (!GetFileAttributesExW(path, GetFileExInfoStandard, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-        info.nFileSizeHigh != 0 || info.nFileSizeLow > 60u * 1024 * 1024) {
+        info.nFileSizeHigh != 0 || info.nFileSizeLow > (DWORD)g_previewMaxMb * 1024u * 1024u) {
         return;
     }
     // A PDF and plain text are drawn by the pane itself (they scroll, they take no native window).
@@ -316,6 +325,9 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
     }
     wchar_t path[MAX_PATH] = L"";
     data->canProperties = SHGetPathFromIDListW(pidl, path) && path[0] ? 1 : 0;
+    if (folder && data->canProperties) {
+        data->sizeRoots.push_back(path);
+    }
 
     std::set<std::wstring> have;
     auto addTo = [&](std::vector<PaneRow>& rows, IPropertyStore* store, const wchar_t* name) {
@@ -434,16 +446,15 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
             data->rows.push_back({PaneLabelFor(L"System.ItemFolderPathDisplay"), whole.substr(0, slash)});
         }
     }
-    if (!folder && data->canProperties && g_panePreview) {
+    if (!folder && data->canProperties) {
         PaneFindHandler(data, path);
         if (data->previewKind == 4) {
             // Over 40 megapixels the thumbnail stays (decoding it all in Explorer would be heavy).
             ULONG width = 0, height = 0;
             item->GetUInt32(PKEY_Image_HorizontalSize, &width);
             item->GetUInt32(PKEY_Image_VerticalSize, &height);
-            if ((unsigned long long)width * height > 40000000ULL) {
-                data->previewKind = 0;
-                data->previewPath.clear();
+            if ((unsigned long long)width * height > (unsigned long long)g_previewMaxMp * 1000000ULL) {
+                data->largeImage = true;  // The thumbnail stays until the corner button is used.
             }
         }
         if (data->previewKind == 6) {
@@ -485,6 +496,10 @@ void PaneReadSeveral(PaneData* data, std::vector<Pidl> const& items) {
         bool folder = (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
         if (folder) {
             folders++;
+            wchar_t folderPath[MAX_PATH] = L"";
+            if (data->sizeRoots.size() < 60 && SHGetPathFromIDListW(pidl.get(), folderPath) && folderPath[0]) {
+                data->sizeRoots.push_back(folderPath);
+            }
         } else {
             files++;
             ULONGLONG size = 0;
@@ -513,6 +528,7 @@ void PaneReadSeveral(PaneData* data, std::vector<Pidl> const& items) {
         }
         item->Release();
     }
+    data->sizeBase = total;
     wchar_t number[32];
     swprintf(number, ARRAYSIZE(number), L"%d", files);
     data->rows.push_back({Str(L"pane.files"), number});
@@ -733,6 +749,8 @@ muxc::StackPanel PaneRows(std::vector<PaneRow> const& rows) {
 
 void PaneLayoutPreview(WindowState* state, DetailsPane* pane);
 void PaneSetMode(WindowState* state, DetailsPane* pane, bool preview);
+void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data, bool force = false);
+void PaneCornerUpdate(DetailsPane* pane);
 
 // ---- Animations ----
 // Only the Translation and Opacity transitions of an element show in the island (storyboards
@@ -818,6 +836,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     details.Spacing(12);
     details.Margin(mux::Thickness{16, 4, 16, 20});
     pane->cards.clear();
+    pane->sizeBlocks.clear();
     auto keysBefore = pane->stackKeys;
     pane->preview = nullptr;
     pane->spinner = nullptr;
@@ -892,7 +911,14 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             button.Tapped([](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (now && now->details && !g_unloading) {
-                    PaneSetMode(now, now->details, !now->details->previewShown);
+                    if (now->details->deferred && !now->details->previewReady) {
+                        auto big = now->details->deferred;
+                        now->details->deferred = nullptr;
+                        PaneStartMediaPreview(now, now->details, now->details->shownKey, big, true);
+                        PaneCornerUpdate(now->details);
+                    } else {
+                        PaneSetMode(now, now->details, !now->details->previewShown);
+                    }
                     PaneGiveFocusBack(now);
                 }
             });
@@ -1084,6 +1110,18 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
 
     // The details, then the rest of them behind a toggle.
     details.Children().Append(PaneRows(data.rows));
+    if (!data.sizeRoots.empty()) {
+        // What the folders hold, filled in when the background count has run.
+        auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
+        for (auto child : sizeList.Children()) {
+            if (auto grid = child.try_as<muxc::Grid>()) {
+                if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+                    pane->sizeBlocks.push_back(block);
+                }
+            }
+        }
+        details.Children().Append(sizeList);
+    }
     if (!data.more.empty()) {
         auto more = PaneRows(data.more);
         more.Visibility(pane->expanded ? mux::Visibility::Visible : mux::Visibility::Collapsed);
@@ -1217,6 +1255,11 @@ void PaneWheelOff(HWND host) {
 }
 
 void PaneClosePreview(DetailsPane* pane) {
+    pane->deferred = nullptr;
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+        pane->sizeCancel = nullptr;
+    }
     PaneStopMedia(pane);
     PaneWheelOff(pane->host);
     if (pane->handler) {
@@ -1284,11 +1327,12 @@ void PaneCornerUpdate(DetailsPane* pane) {
         pane->spinner.Visibility((pane->loading || pane->handler) && !pane->previewReady ? mux::Visibility::Visible : mux::Visibility::Collapsed);
     }
     if (auto button = pane->toggle.try_as<muxc::Border>()) {
-        button.Visibility(pane->previewReady ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        bool waiting = pane->deferred && !pane->previewReady;  // A big picture: the button opens it.
+        button.Visibility(pane->previewReady || waiting ? mux::Visibility::Visible : mux::Visibility::Collapsed);
         // On the preview (often a white page) the chip is dark with a white icon.
         button.Background(pane->previewShown ? Brush(220, 32, 32, 32) : Brush(40, 128, 128, 128));
         if (auto icon = button.Child().try_as<muxc::FontIcon>()) {
-            icon.Glyph(pane->previewShown ? L"\xED1A" : L"\xE890");
+            icon.Glyph(waiting ? L"\xE8A3" : pane->previewShown ? L"\xED1A" : L"\xE890");
             if (pane->previewShown) {
                 icon.Foreground(Brush(255, 255, 255, 255));
             } else {
@@ -1296,7 +1340,7 @@ void PaneCornerUpdate(DetailsPane* pane) {
             }
         }
         muxc::ToolTipService::SetToolTip(
-            button, winrt::box_value(winrt::hstring{pane->previewShown ? Str(L"pane.showthumb") : Str(L"pane.showpreview")}));
+            button, winrt::box_value(winrt::hstring{waiting ? Str(L"pane.fullsize") : pane->previewShown ? Str(L"pane.showthumb") : Str(L"pane.showpreview")}));
     }
 }
 
@@ -2063,7 +2107,148 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
     return root;
 }
 
-void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data) {
+// ---- What the folders hold (size, count, types), worked out on a thread and cancelled with the selection ----
+
+struct PaneSizeState {
+    ULONGLONG bytes = 0;
+    ULONGLONG files = 0;
+    ULONGLONG folders = 0;
+    std::map<std::wstring, ULONGLONG> types;
+    bool done = false;
+    bool partial = false;
+};
+
+void PaneSizeArrived(DWORD thread, std::wstring const& key, std::shared_ptr<PaneSizeState> const& result) {
+    if (g_unloading || !result) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || state->thread != thread || !state->details) {
+        return;
+    }
+    DetailsPane* pane = state->details;
+    if (pane->shownKey != key || pane->sizeBlocks.size() != 3) {
+        return;
+    }
+    try {
+        wchar_t size[64] = L"";
+        StrFormatByteSizeW((LONGLONG)result->bytes, size, ARRAYSIZE(size));
+        std::wstring text = size;
+        text += result->partial ? L"+" : result->done ? L"" : L"\u2026";
+        pane->sizeBlocks[0].Text(text);
+        wchar_t counts[96];
+        swprintf(counts, ARRAYSIZE(counts), Str(L"pane.filesfolders"), result->files, result->folders);
+        pane->sizeBlocks[1].Text(counts);
+        std::vector<std::pair<ULONGLONG, std::wstring>> ordered;
+        for (auto const& entry : result->types) {
+            ordered.push_back({entry.second, entry.first});
+        }
+        std::sort(ordered.begin(), ordered.end(), [](auto const& x, auto const& y) { return x.first > y.first; });
+        std::wstring list;
+        for (size_t i = 0; i < ordered.size() && i < 4; i++) {
+            if (i) {
+                list += L"\n";
+            }
+            list += ordered[i].second + L" (" + std::to_wstring(ordered[i].first) + L")";
+        }
+        pane->sizeBlocks[2].Text(list.empty() ? std::wstring(L"-") : list);
+    } catch (...) {
+        LogHresult(L"showing the folder size");
+    }
+}
+
+void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data) {
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+    }
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    pane->sizeCancel = cancel;
+    DWORD thread = GetCurrentThreadId();
+    auto queue = state->queue;
+    auto roots = data->sizeRoots;
+    ULONGLONG base = data->sizeBase;
+    g_paneJobs++;
+    try {
+        std::thread([queue, thread, key, roots, base, cancel]() mutable {
+            auto result = std::make_shared<PaneSizeState>();
+            result->bytes = base;
+            ULONGLONG began = GetTickCount64(), lastPost = began, entries = 0;
+            std::vector<std::wstring> stack(roots.begin(), roots.end());
+            auto post = [&](bool done) {
+                auto copy = std::make_shared<PaneSizeState>(*result);
+                copy->done = done;
+                try {
+                    queue.TryEnqueue([thread, key, copy]() { PaneSizeArrived(thread, key, copy); });
+                } catch (...) {
+                }
+            };
+            bool stopped = false;
+            while (!stack.empty() && !stopped) {
+                std::wstring dir = stack.back();
+                stack.pop_back();
+                WIN32_FIND_DATAW found;
+                HANDLE handle = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr,
+                                                 FIND_FIRST_EX_LARGE_FETCH);
+                if (handle == INVALID_HANDLE_VALUE) {
+                    continue;
+                }
+                do {
+                    if (found.cFileName[0] == L'.' && (found.cFileName[1] == 0 || (found.cFileName[1] == L'.' && found.cFileName[2] == 0))) {
+                        continue;
+                    }
+                    if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                        result->folders++;
+                        if (!(found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                            stack.push_back(dir + L"\\" + found.cFileName);  // Links are not followed.
+                        }
+                    } else {
+                        result->files++;
+                        result->bytes += ((ULONGLONG)found.nFileSizeHigh << 32) | found.nFileSizeLow;
+                        const wchar_t* dot = wcsrchr(found.cFileName, L'.');
+                        std::wstring type = dot ? std::wstring(dot + 1) : std::wstring();
+                        for (auto& c : type) {
+                            c = (wchar_t)towupper(c);
+                        }
+                        result->types[type.empty() ? std::wstring(L"-") : type]++;
+                    }
+                    if ((++entries & 255) == 0) {
+                        ULONGLONG now = GetTickCount64();
+                        if (*cancel || g_unloading) {
+                            stopped = true;
+                            break;
+                        }
+                        if (now - began > 40000 || entries > 3000000) {
+                            result->partial = true;  // A very big folder: the count so far, marked with a +.
+                            stopped = true;
+                            break;
+                        }
+                        if (now - lastPost > 400) {
+                            lastPost = now;
+                            post(false);
+                        }
+                    }
+                } while (FindNextFileW(handle, &found));
+                FindClose(handle);
+                if (*cancel || g_unloading) {
+                    stopped = true;
+                }
+            }
+            if (!*cancel && !g_unloading) {
+                post(true);
+            }
+            queue = nullptr;
+            g_paneJobs--;
+        }).detach();
+    } catch (...) {
+        g_paneJobs--;
+        LogHresult(L"starting the folder size");
+    }
+}
+
+void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data, bool force) {
+    if (data->largeImage && !force) {
+        return;
+    }
     DWORD thread = GetCurrentThreadId();
     try {
         if (data->previewKind == 4) {
@@ -2970,6 +3155,9 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
         }
         inner.Children().Append(layer);
         PaneAnimateIn(state, pane, dx, dy, layer);
+        if (!data->sizeRoots.empty()) {
+            PaneStartSizeJob(state, pane, key, data);
+        }
         if (g_panePreview && (data->previewKind == 2 || data->previewKind == 3) && pane->preview) {
             PaneAfter(state, pane, dx != 0 ? 600 : 300, [pane, key, data]() {
                 WindowState* now = StateForThisThread(false);
@@ -2977,7 +3165,10 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
                     PaneStartXamlPreview(now, pane, key, data);
                 }
             });
-        } else if (g_panePreview && data->previewKind >= 4 && data->previewKind <= 6 && pane->preview) {
+        } else if (data->previewKind >= 4 && data->previewKind <= 6 && data->largeImage && pane->preview) {
+            pane->deferred = data;  // Over the size that opens by itself: the corner button opens it.
+            PaneCornerUpdate(pane);
+        } else if (data->previewKind >= 4 && data->previewKind <= 6 && pane->preview) {
             PaneAfter(state, pane, dx != 0 ? 600 : 300, [pane, key, data]() {
                 WindowState* now = StateForThisThread(false);
                 if (now && pane->visible && !pane->leaving && pane->shownKey == key) {
@@ -3061,7 +3252,11 @@ void PaneStartJob(WindowState* state, DetailsPane* pane, std::wstring const& key
             CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             std::shared_ptr<PaneData> data;
             try {
+                ULONGLONG began = GetTickCount64();
                 data = PaneRead(job->items, job->folder);
+                if (GetTickCount64() - began > 250) {
+                    Out(L"details pane: reading the details took %llu ms", GetTickCount64() - began);
+                }
             } catch (...) {
             }
             job.reset();
@@ -3626,6 +3821,13 @@ void AbandonDetails(WindowState* state) {
     (void)winrt::detach_abi(pane->mediaTime);
     (void)winrt::detach_abi(pane->mediaPlay);
     (void)winrt::detach_abi(pane->mediaVolume);
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+    }
+    for (auto& block : pane->sizeBlocks) {
+        (void)winrt::detach_abi(block);
+    }
+    pane->sizeBlocks.clear();
     (void)winrt::detach_abi(pane->navSeparator);
     (void)winrt::detach_abi(pane->movedIcon);
     (void)winrt::detach_abi(pane->menuItems);

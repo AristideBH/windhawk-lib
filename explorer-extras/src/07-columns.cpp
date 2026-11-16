@@ -1932,7 +1932,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     auto& drag = lostState->drag;
                     {
                         auto& band = lostState->band;
-                        if (band.touch && (band.pending || band.active)) {
+                        if (band.touch && (band.pending || band.active || band.panning)) {
                             bool contact = false;
                             try {
                                 contact = lostArgs.GetCurrentPoint(list).IsInContact();

@@ -326,6 +326,11 @@ struct WindowState {
         int first = -1, last = -1;                  // The rows the rectangle covers.
         bool touch = false;                         // A finger started it, on the empty space below the rows.
         int recaptures = 0;
+        // A finger that moves mostly sideways from the empty space scrolls the columns instead of
+        // drawing a rectangle.
+        bool panning = false;
+        double panStartX = 0, panStartOffset = 0, panLastX = 0, panVelocity = 0;  // Pixels, and pixels per millisecond.
+        ULONGLONG panLastAt = 0;
         std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};

@@ -82,7 +82,8 @@ void EndBand(WindowState* state, bool apply) {
     band.pending = false;
     band.active = false;
     band.column = nullptr;
-    for (auto& lock : band.locked) {
+    for (size_t i = band.locked.size(); i-- > 0;) {  // Backwards: the first note is the original.
+        auto& lock = band.locked[i];
         try {
             lock.viewer.VerticalScrollMode(lock.v);
             lock.viewer.HorizontalScrollMode(lock.h);
@@ -92,6 +93,18 @@ void EndBand(WindowState* state, bool apply) {
     band.locked.clear();
     band.touch = false;
     band.recaptures = 0;
+    if (band.panning) {
+        // The finger lifts: the columns carry on a little, by the speed it had.
+        band.panning = false;
+        if (state->scroller && std::abs(band.panVelocity) > 0.3) {
+            try {
+                double target = std::clamp(state->scroller.HorizontalOffset() - band.panVelocity * 320.0, 0.0, state->scroller.ScrollableWidth());
+                state->scroller.ChangeView(target, nullptr, nullptr, false);
+            } catch (...) {
+            }
+        }
+        band.panVelocity = 0;
+    }
     band.top.clear();
     band.bottom.clear();
     band.base.clear();
@@ -118,6 +131,19 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
     }
     try {
         auto point = args.GetCurrentPoint(list);
+        // A second finger down while a finger is waiting to draw a rectangle (or is panning): this
+        // is a two-finger gesture, for the system. The rectangle is given up and the scrolling that
+        // was switched off is given back. (A second press used to lock the scrollers again, in their
+        // locked state, and they stayed off afterwards.)
+        if (args.Pointer().PointerDeviceType() == winrt::Microsoft::UI::Input::PointerDeviceType::Touch && state->band.touch &&
+            (state->band.pending || state->band.active || state->band.panning)) {
+            if (state->band.column) {
+                state->band.column->list.ReleasePointerCaptures();
+            }
+            EndBand(state, false);
+            Out(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
+            return;
+        }
         // The middle button on a folder opens it in a new tab.
         if (point.Properties().IsMiddleButtonPressed()) {
             mux::DependencyObject node =
@@ -196,6 +222,11 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
             // the scrolling of the list and of what is above it is switched off until it ends.
             band.recaptures = 0;
             auto lockOne = [&band](muxc::ScrollViewer const& viewer) {
+                for (auto const& done : band.locked) {
+                    if (done.viewer == viewer) {
+                        return;  // Already locked: its first note is the one to give back.
+                    }
+                }
                 DragState::LockedScroller lock;
                 lock.viewer = viewer;
                 lock.v = viewer.VerticalScrollMode();
@@ -227,22 +258,52 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
 bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
                  mux::Input::PointerRoutedEventArgs const& args) {
     auto& band = state->band;
-    if (!band.pending && !band.active) {
+    if (!band.pending && !band.active && !band.panning) {
         return false;
     }
     if (band.column != column) {
-        return band.active;
+        return band.active || band.panning;
     }
     auto point = args.GetCurrentPoint(list);
     if (!point.Properties().IsLeftButtonPressed()) {
         EndBand(state, band.active);
         return false;
     }
+    if (band.panning) {
+        // The columns follow the finger sideways.
+        try {
+            double x = args.GetCurrentPoint(state->scroller).Position().X;
+            double target = std::clamp(band.panStartOffset - (x - band.panStartX), 0.0, state->scroller.ScrollableWidth());
+            state->scroller.ChangeView(target, nullptr, nullptr, true);
+            ULONGLONG now = GetTickCount64();
+            if (now > band.panLastAt) {
+                double speed = (x - band.panLastX) / (double)(now - band.panLastAt);
+                band.panVelocity = 0.6 * speed + 0.4 * band.panVelocity;
+                band.panLastX = x;
+                band.panLastAt = now;
+            }
+        } catch (...) {
+        }
+        return true;
+    }
     auto at = point.Position();
     if (band.pending) {
         double moved = std::abs(at.X - band.start.X) + std::abs(at.Y - band.start.Y);
         if (moved < 6) {
             return false;  // Still a click.
+        }
+        // A finger that goes mostly sideways is scrolling the columns, not drawing a rectangle.
+        if (band.touch && state->scroller && moved >= 10 && std::abs(at.X - band.start.X) > 1.8 * std::abs(at.Y - band.start.Y)) {
+            band.pending = false;
+            band.panning = true;
+            band.panStartX = args.GetCurrentPoint(state->scroller).Position().X;
+            band.panStartOffset = state->scroller.HorizontalOffset();
+            band.panLastX = band.panStartX;
+            band.panLastAt = GetTickCount64();
+            band.panVelocity = 0;
+            list.CapturePointer(args.Pointer());
+            Out(L"touch: a sideways drag on the empty space, the columns scroll");
+            return true;
         }
         // A drag: take the pointer, remember the rows, start from the selection
         // the user wants to keep.
@@ -361,7 +422,7 @@ void OnBandReleased(muxc::ListView const& list) {
         if (OnDragReleased(state)) {
             return;
         }
-        if (state->band.pending || state->band.active) {
+        if (state->band.pending || state->band.active || state->band.panning) {
             EndBand(state, state->band.active);
         }
     } catch (...) {

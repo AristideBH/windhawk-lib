@@ -1,0 +1,57 @@
+name: Explorer Extras, bug report
+description: Something in Explorer Extras does not work as it should.
+labels: ["mod: explorer-extras", "type: bug", "status: needs triage"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Columns
+        - Details pane
+        - Settings window
+        - Other or not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      description: On the Home page of the settings window (Extras, in the toolbar's ... menu), or in Windhawk.
+      placeholder: "0.54.4"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows build and language
+      description: For example, Windows 11 24H2 build 26100, English. The Home page of the settings window shows the build.
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Processor
+      options:
+        - x86-64 (Intel or AMD)
+        - ARM64
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Steps to reproduce help most. Say whether you used mouse, keyboard or touch.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Turn on "Write a debug log" (Home page), repeat the problem, then use "Copy diagnostics" and paste it here. For a crash, say so.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or a short video

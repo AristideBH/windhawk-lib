@@ -430,10 +430,10 @@ mux::UIElement BuildHomePage() {
         });
         muxc::StackPanel featureRows;
         featureRows.Spacing(2);
-        featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? enabled->description : L"", toggle));
+        featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? SettingDescription(*enabled) : std::wstring(), toggle));
         const SettingInfo* paneInfo = FindSetting(L"detailsPane");
         if (paneInfo) {
-            featureRows.Children().Append(MakeSettingRow(Str(L"details.title"), paneInfo->description, MakeSettingControl(*paneInfo)));
+            featureRows.Children().Append(MakeSettingRow(Str(L"details.title"), SettingDescription(*paneInfo), MakeSettingControl(*paneInfo)));
         }
         card.Child(featureRows);
         page.Children().Append(card);
@@ -527,7 +527,7 @@ mux::UIElement BuildSettingsPage(const wchar_t* pageId, const wchar_t* title, co
         if (!any) {
             continue;
         }
-        auto title = MakeText(kCards[c].name, 14, true, false);
+        auto title = MakeText(CardName(c), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
@@ -538,7 +538,7 @@ mux::UIElement BuildSettingsPage(const wchar_t* pageId, const wchar_t* title, co
             if (info.windhawkOnly || wcscmp(info.page, pageId) != 0 || wcscmp(info.card, kCards[c].id) != 0) {
                 continue;
             }
-            rows.Children().Append(MakeSettingRow(info.name, info.description, MakeSettingControl(info)));
+            rows.Children().Append(MakeSettingRow(SettingName(info), SettingDescription(info), MakeSettingControl(info)));
         }
         card.Child(rows);
         page.Children().Append(card);

@@ -1,0 +1,33 @@
+name: Explorer Extras, feature suggestion
+description: An idea for Explorer Extras, an existing area or a new one.
+labels: ["mod: explorer-extras", "type: idea", "status: needs triage"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Columns
+        - Details pane
+        - Settings window
+        - A new area
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or the habit comes first, the solution second.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: Another mod, a Windows setting, a workaround. If Windows already has an option for it, say so.

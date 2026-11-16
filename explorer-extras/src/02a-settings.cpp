@@ -37,20 +37,77 @@ struct StringInfo {
     const wchar_t* text;
 };
 
+// The texts of a setting in French (the other languages are not done): its title and its description.
+struct SettingText {
+    const wchar_t* id;
+    const wchar_t* name;
+    const wchar_t* description;
+};
+
 @@SETTINGS_TABLE@@
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
 
+// The language of Windows' display: French has its own table, every other language is English.
+bool FrenchUi() {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_FRENCH ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 // The text for an id. A missing id shows as itself, so a gap is seen at once.
 const wchar_t* Str(const wchar_t* id) {
+    if (FrenchUi()) {
+        for (size_t i = 0; i < sizeof(kStringsFr) / sizeof(kStringsFr[0]); i++) {
+            if (wcscmp(kStringsFr[i].id, id) == 0) {
+                return kStringsFr[i].text;
+            }
+        }
+    }
     for (size_t i = 0; i < kStringCount; i++) {
         if (wcscmp(kStrings[i].id, id) == 0) {
             return kStrings[i].text;
         }
     }
     return id;
+}
+
+// The title and the description of a setting, in the language of the display.
+std::wstring SettingName(SettingInfo const& info) {
+    if (FrenchUi()) {
+        for (auto const& text : kSettingsFr) {
+            if (wcscmp(text.id, info.id) == 0) {
+                return text.name;
+            }
+        }
+    }
+    return info.name;
+}
+
+std::wstring SettingDescription(SettingInfo const& info) {
+    if (FrenchUi()) {
+        for (auto const& text : kSettingsFr) {
+            if (wcscmp(text.id, info.id) == 0) {
+                return text.description;
+            }
+        }
+    }
+    return info.description;
+}
+
+std::wstring CardName(size_t index) {
+    if (FrenchUi()) {
+        for (auto const& card : kCardsFr) {
+            if (wcscmp(card.id, kCards[index].id) == 0) {
+                return card.name;
+            }
+        }
+    }
+    return kCards[index].name;
 }
 
 const SettingInfo* FindSetting(const wchar_t* id) {

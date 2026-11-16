@@ -22,6 +22,10 @@ std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};
 std::atomic<bool> g_oddRows{false};
+std::atomic<bool> g_previewImages{true};
+std::atomic<bool> g_previewMedia{true};
+std::atomic<int> g_previewMaxMb{60};   // The largest document that is previewed.
+std::atomic<int> g_previewMaxMp{40};   // The largest picture that opens by itself.
 std::atomic<int> g_paneVolume{100};    // The volume of the pane's player, in percent, kept between runs.
 std::atomic<bool> g_paneMuted{false};
 std::atomic<bool> g_staleAccent{true};  // The chevron of the folder you came from sits in an accent badge.

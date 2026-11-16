@@ -247,3 +247,11 @@ Give stored keys a stable prefix and never rename one without a migration.
 ## Localization
 
 `$name`, `$description` and `$options` take a language suffix, as in `$name:fr-FR`. The 2.0 annotations can't be localized. Ari is French, so add `fr-FR` for mods meant for publishing, and keep the two languages in step in the same commit.
+
+## Explorer Extras 0.54 additions
+
+- **Pages are areas.** The settings window has one page per area (Home, Columns, Details pane) and every area has an off switch. A new area gets a page when it is built, not before.
+- **Opens on the first page**, whatever was last shown. The Home page has Features, Status, Quick actions and an About card (who made it, a link to the repository). No "what's new" card: the changelog is a file.
+- **No icon or title in the title bar** (`SetWindowThemeAttribute` with no caption and no icon); the window keeps its name for the taskbar.
+- **French.** The window's texts, the setting titles and descriptions, and the card names have a French table. A string with a format keeps the same placeholders in both.
+- **Settings that tune a feature** sit on its page in a card of their own (for example "Previews": which kinds, and the size limits).

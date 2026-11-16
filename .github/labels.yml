@@ -1,0 +1,24 @@
+# The labels of the repository. Create or update them with
+#   pwsh .github/apply-labels.ps1
+# Every issue about Explorer Extras carries "mod: explorer-extras", so its issues can be filtered
+# apart from the other mods in the repository.
+- {name: "mod: explorer-extras", color: "0e8a16", description: "Explorer Extras (the released mod)"}
+- {name: "mod: other", color: "bfd4f2", description: "Another mod in this repository (not released)"}
+- {name: "area: columns", color: "1d76db", description: "Explorer Extras, the Columns layout"}
+- {name: "area: details-pane", color: "1d76db", description: "Explorer Extras, the details and preview pane"}
+- {name: "area: settings", color: "1d76db", description: "Explorer Extras, the settings window"}
+- {name: "area: new", color: "1d76db", description: "A new area for Explorer Extras"}
+- {name: "type: bug", color: "d73a4a", description: "Something does not work as it should"}
+- {name: "type: crash", color: "b60205", description: "Explorer crashed or hung"}
+- {name: "type: idea", color: "a2eeef", description: "A suggestion"}
+- {name: "type: question", color: "d876e3", description: "A question about use"}
+- {name: "status: needs triage", color: "fbca04", description: "Not looked at yet"}
+- {name: "status: needs info", color: "fef2c0", description: "Waiting for the reporter (version, log, steps)"}
+- {name: "status: confirmed", color: "5319e7", description: "Reproduced or accepted"}
+- {name: "status: planned", color: "0052cc", description: "On the roadmap"}
+- {name: "status: in progress", color: "006b75", description: "Being worked on, branch open"}
+- {name: "status: fixed in next", color: "c2e0c6", description: "Fixed on main, waiting for the next release"}
+- {name: "status: wontfix", color: "ffffff", description: "Declined, with a reason in the thread"}
+- {name: "needs: windows build", color: "ededed", description: "Only seen on one Windows build"}
+- {name: "needs: arm64", color: "ededed", description: "Only seen on ARM64"}
+- {name: "needs: x64", color: "ededed", description: "Only seen on x86-64 (never run by the author)"}

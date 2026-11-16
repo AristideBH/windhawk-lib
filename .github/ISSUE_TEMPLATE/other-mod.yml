@@ -1,0 +1,21 @@
+name: Another mod in this repository
+description: A taskbar widget, the Start button tinter or another mod here. These mods are not released; reports are welcome but may wait.
+labels: ["mod: other", "status: needs triage"]
+body:
+  - type: input
+    id: mod
+    attributes:
+      label: Which mod?
+      placeholder: taskbar-widget-stack
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, or what do you suggest?
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows build

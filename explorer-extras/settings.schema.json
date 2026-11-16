@@ -13,7 +13,8 @@
     "behaviour": "Behaviour",
     "dragmemory": "Drag and drop and memory",
     "content": "Content and advanced",
-    "pane": "Details pane"
+    "pane": "Details pane",
+    "types": "Previews"
   },
   "settings": [
     {
@@ -316,12 +317,60 @@
       "needs": "now"
     },
     {
+      "id": "previewImages",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview images",
+      "description": "Shows pictures at full size in the pane, with zoom and pan.",
+      "page": "details",
+      "card": "types",
+      "needs": "now"
+    },
+    {
+      "id": "previewMedia",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview video and sound",
+      "description": "Plays video and sound files in the pane.",
+      "page": "details",
+      "card": "types",
+      "needs": "now"
+    },
+    {
+      "id": "previewMaxMb",
+      "group": "details",
+      "type": "int",
+      "default": 60,
+      "min": 1,
+      "max": 1024,
+      "name": "Largest document to preview (MB)",
+      "description": "Bigger PDFs and Office files keep the thumbnail.",
+      "page": "details",
+      "card": "types",
+      "needs": "now"
+    },
+    {
+      "id": "previewMaxMp",
+      "group": "details",
+      "type": "int",
+      "default": 40,
+      "min": 4,
+      "max": 400,
+      "name": "Largest image to open at once (megapixels)",
+      "description": "Bigger pictures wait for a click on the card's button.",
+      "page": "details",
+      "card": "types",
+      "needs": "now"
+    },
+    {
       "id": "livePreview",
       "group": "details",
       "type": "bool",
       "default": true,
       "name": "Preview documents and code",
-      "description": "Shows the real preview of documents, PDFs, text, images, video and audio in the pane.",
+      "description": "Shows PDF, text, Markdown and Office files in the pane.",
       "page": "details",
       "card": "pane",
       "needs": "now"
@@ -399,7 +448,212 @@
     "pane.more": "More details",
     "pane.less": "Fewer details",
     "pane.cantplay": "This file cannot be played.",
+    "pane.fullsize": "Open at full size",
+    "pane.insides": "Contents",
+    "pane.filesfolders": "%llu files, %llu folders",
     "pane.showpreview": "Show the preview",
     "pane.showthumb": "Show the thumbnail"
+  },
+  "fr": {
+    "strings": {
+      "window.title": "Explorer Extras",
+      "menu.extras": "Extras",
+      "menu.columns": "Colonnes",
+      "page.home": "Explorer Extras",
+      "home.title": "Explorer Extras",
+      "home.subtitle": "Ajouts facultatifs à l’Explorateur de fichiers, chacun avec sa page et son interrupteur.",
+      "tip.title": "Astuce",
+      "tip.body": "Choisissez Colonnes dans le menu Affichage d’une fenêtre de l’Explorateur. L’entrée Extras en bas du menu … de la barre d’outils ouvre cette fenêtre.",
+      "tip.gotit": "Compris",
+      "card.features": "Fonctionnalités",
+      "card.status": "État",
+      "card.actions": "Actions rapides",
+      "card.about": "À propos",
+      "about.creator": "Créé par AristideBH",
+      "about.detail": "Explorer Extras est libre et open source. Les rapports de bugs et les idées sont les bienvenus sur GitHub.",
+      "about.link": "Code source sur GitHub",
+      "status.version": "Version",
+      "status.windows": "Windows",
+      "status.hooks": "Crochets",
+      "status.hooks.detail": "L’extension de l’Explorateur sur laquelle le mod s’accroche.",
+      "status.found": "Trouvée",
+      "status.notfound": "Introuvable",
+      "action.log": "Ouvrir le journal",
+      "action.log.detail": "Le fichier que le mod écrit pendant son travail, si son dossier existe.",
+      "action.log.done": "Ouvert",
+      "action.log.none": "Aucun fichier journal",
+      "action.copy": "Copier les diagnostics",
+      "action.copy.detail": "Version, réglages et état, en texte, à coller dans un message.",
+      "action.copy.done": "Copié",
+      "action.copy.fail": "Copie impossible",
+      "action.reset": "Revenir aux réglages de Windhawk",
+      "action.reset.detail": "Chaque réglage reprend la valeur de la page du mod dans Windhawk.",
+      "columns.title": "Colonnes",
+      "columns.subtitle": "Une disposition en colonnes dans le menu Affichage : des colonnes de Miller dessinées avec les contrôles de l’Explorateur.",
+      "columns.note": "Les changements s’appliquent tout de suite. Le mod les garde devant la page de Windhawk, et une modification ultérieure du même réglage sur cette page l’emporte. « Revenir aux réglages de Windhawk » sur la page Explorer Extras rétablit les valeurs de Windhawk.",
+      "details.title": "Volet des détails",
+      "details.subtitle": "Un seul volet pour l’aperçu et les détails de la sélection, à la place des volets Détails et Aperçu de l’Explorateur.",
+      "pane.open": "Ouvrir",
+      "pane.copypath": "Copier le chemin",
+      "pane.copypaths": "Copier les chemins",
+      "pane.properties": "Propriétés",
+      "pane.copied": "Copié",
+      "pane.items": "%d éléments",
+      "pane.item": "1 élément",
+      "pane.nothing": "Aucune sélection",
+      "pane.folders": "Dossiers",
+      "pane.files": "Fichiers",
+      "pane.totalsize": "Taille totale",
+      "pane.contains": "Contient",
+      "pane.location": "Emplacement",
+      "pane.types": "Types",
+      "pane.clicktocopy": "Cliquer pour copier",
+      "pane.more": "Plus de détails",
+      "pane.less": "Moins de détails",
+      "pane.cantplay": "Ce fichier ne peut pas être lu.",
+      "pane.fullsize": "Ouvrir en taille réelle",
+      "pane.insides": "Contenu",
+      "pane.filesfolders": "%llu fichiers, %llu dossiers",
+      "pane.showpreview": "Afficher l’aperçu",
+      "pane.showthumb": "Afficher la miniature"
+    },
+    "cards": {
+      "layout": "Disposition et apparence",
+      "behaviour": "Comportement",
+      "dragmemory": "Glisser-déposer et mémoire",
+      "content": "Contenu et options avancées",
+      "pane": "Volet des détails",
+      "types": "Aperçus"
+    },
+    "settings": {
+      "enabled": {
+        "name": "Activer les colonnes",
+        "description": "Ajoute Colonnes au menu Affichage. Désactivé, l’entrée disparaît."
+      },
+      "restoreOnOpen": {
+        "name": "Ouvrir les nouvelles fenêtres en colonnes",
+        "description": "Les nouvelles fenêtres s’ouvrent en colonnes si c’était votre dernière disposition. Choisir une autre disposition désactive ce réglage."
+      },
+      "desktopRealOnly": {
+        "name": "La colonne Bureau n’affiche que les vrais éléments",
+        "description": "Masque les éléments virtuels (Ce PC, Corbeille, Panneau de configuration…) de la colonne Bureau."
+      },
+      "remoteMarks": {
+        "name": "Marquer les éléments distants",
+        "description": "Affiche une petite icône sur les fichiers cloud non téléchargés et sur les éléments d’un réseau ou d’un téléphone."
+      },
+      "rememberSort": {
+        "name": "Mémoriser le tri et le regroupement",
+        "description": "Chaque dossier garde son tri et son regroupement. Désactivé, toutes les colonnes reprennent ceux du premier dossier."
+      },
+      "rememberWidth": {
+        "name": "Mémoriser les largeurs de colonne",
+        "description": "Une colonne que vous redimensionnez se rouvre à cette largeur."
+      },
+      "rememberLayout": {
+        "name": "Mémoriser les colonnes par dossier",
+        "description": "Chaque dossier retient s’il a été quitté en colonnes. L’ouvrir active ou désactive les colonnes en conséquence."
+      },
+      "springLoad": {
+        "name": "Ouvrir les dossiers pendant un glissement",
+        "description": "Maintenez les éléments glissés sur un dossier environ 0,7 s pour l’ouvrir dans la colonne suivante."
+      },
+      "lastEdge": {
+        "name": "Bordure après la dernière colonne",
+        "description": "Trace un trait de séparation à droite de la dernière colonne."
+      },
+      "staleAccent": {
+        "name": "Pastille d’accent sur le chevron du chemin",
+        "description": "Le chevron du dossier d’où vous venez est dans une pastille ronde de la couleur d’accentuation, au lieu d’une pastille discrète."
+      },
+      "oddRows": {
+        "name": "Lignes alternées",
+        "description": "Une ligne sur deux est légèrement teintée, pour suivre une ligne dans une colonne large."
+      },
+      "autoPreview": {
+        "name": "Ouvrir les aperçus automatiquement",
+        "description": "Désactivé, un bouton sur l’aperçu l’ouvre et permet de revenir à la miniature."
+      },
+      "foldersFirst": {
+        "name": "Dossiers en premier",
+        "description": "Les dossiers sont listés avant les fichiers dans chaque colonne, quel que soit le tri."
+      },
+      "harmonizeWidths": {
+        "name": "Maj + double-clic pour égaliser les largeurs",
+        "description": "Maj + double-clic sur une bordure de colonne donne la même largeur à toutes les colonnes. Elles le restent jusqu’à un double-clic seul sur une bordure."
+      },
+      "keepStale": {
+        "name": "Garder les colonnes après le choix d’un fichier",
+        "description": "Les colonnes de droite restent, estompées, quand vous choisissez un fichier ou plusieurs éléments. Désactivé, elles se ferment."
+      },
+      "headerKeyboard": {
+        "name": "Clavier sur les en-têtes de groupe",
+        "description": "Les flèches atteignent les en-têtes de groupe. Gauche, Droite et Entrée les replient et les déplient."
+      },
+      "doubleClickUp": {
+        "name": "Double-clic sur le vide pour remonter",
+        "description": "Remonte d’un dossier. Dans la première colonne, le dossier parent est ajouté devant."
+      },
+      "focusRect": {
+        "name": "Afficher le contour de focus",
+        "description": "Trace un contour autour de l’élément sous le curseur du clavier. La sélection reste toujours visible."
+      },
+      "background": {
+        "name": "Arrière-plan du panneau",
+        "description": "L’Explorateur utilise la couleur de sa liste de fichiers. Thème utilise la couleur standard sombre ou claire."
+      },
+      "sidebarRoot": {
+        "name": "La barre latérale définit la première colonne",
+        "description": "Cliquer sur Accueil, Galerie, OneDrive ou un dossier épinglé en fait la première colonne. L’arborescence (Ce PC, lecteurs, Réseau) suit toujours les colonnes."
+      },
+      "minWidth": {
+        "name": "Largeur minimale des colonnes",
+        "description": ""
+      },
+      "maxWidth": {
+        "name": "Largeur maximale des colonnes",
+        "description": "Les colonnes s’ajustent à leur nom le plus long jusqu’à cette largeur. Les noms plus longs sont raccourcis."
+      },
+      "maxItems": {
+        "name": "Nombre maximal d’éléments par colonne",
+        "description": ""
+      },
+      "detailsPane": {
+        "name": "Volet des détails",
+        "description": "Remplace le volet Détails de l’Explorateur par un aperçu et les détails de la sélection."
+      },
+      "previewRedirect": {
+        "name": "Le volet Aperçu ouvre ce volet",
+        "description": "Choisir le volet Aperçu de l’Explorateur (Alt+P) affiche ce volet à la place."
+      },
+      "paneAnimation": {
+        "name": "Animer le volet",
+        "description": "Le contenu glisse et s’estompe à chaque changement de sélection."
+      },
+      "previewImages": {
+        "name": "Aperçu des images",
+        "description": "Affiche les images en taille réelle dans le volet, avec zoom et déplacement."
+      },
+      "previewMedia": {
+        "name": "Aperçu des vidéos et des sons",
+        "description": "Lit les fichiers vidéo et audio dans le volet."
+      },
+      "previewMaxMb": {
+        "name": "Document le plus gros à prévisualiser (Mo)",
+        "description": "Les PDF et fichiers Office plus gros gardent la miniature."
+      },
+      "previewMaxMp": {
+        "name": "Image la plus grande à ouvrir d’emblée (mégapixels)",
+        "description": "Les images plus grandes attendent un clic sur le bouton de la carte."
+      },
+      "livePreview": {
+        "name": "Aperçu des documents et du code",
+        "description": "Affiche les PDF, le texte, le Markdown et les fichiers Office dans le volet."
+      },
+      "debugLog": {
+        "name": "Écrire un journal de débogage",
+        "description": "Écrit Code\\windhawk-lib\\probes\\logs\\explorer-extras.log dans votre dossier utilisateur, s’il existe."
+      }
+    }
   }
 }

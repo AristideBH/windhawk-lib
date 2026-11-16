@@ -7,7 +7,7 @@ description: Map of what File Explorer and the desktop are made of, and which Wi
 
 Load `windhawk-mod-development` and `windhawk-recon` first.
 
-`explorer-extras` is the first mod in this repo that targets File Explorer, a Miller columns panel, tested through version 0.7. The section "What explorer-extras confirmed" records what it settled. This skill otherwise combines a reading of four published mods with a day of probe mods run on Ari's ARM64 laptop on 2026-11-12, Windows build 26100, French. Each statement says which of the two it rests on. Replace each "unconfirmed" with a dated fact as later work settles it.
+`explorer-extras` is the first mod in this repo that targets File Explorer, a Miller columns panel, tested through version 0.54. The section "What explorer-extras confirmed" records what it settled. This skill otherwise combines a reading of four published mods with a day of probe mods run on Ari's ARM64 laptop on 2026-11-12, Windows build 26100, French. Each statement says which of the two it rests on. Replace each "unconfirmed" with a dated fact as later work settles it.
 
 The probe mods are worth keeping as starting points: `probe-explorer-recon`, `probe-explorer-viewmenu`, `probe-desktop-listview`, `probe-desktop-groupby` and `probe-symbols`, in the repo's `probes` folder.
 
@@ -286,3 +286,23 @@ Confirmed on 2026-11-12 with `probes/probe-bench.wh.cpp` v0.1, ARM64, build 2630
 - Put related tests in one mod so one compile covers them.
 - Log to a file in the repo as well as through `Wh_Log`.
 - Read a control file once a second for switches, so a test can be turned off without Windhawk's settings.
+
+## What the details pane and the status bar probe confirmed (explorer-extras 0.37 to 0.54, 2026-11-15 and 16)
+
+Windows 11 24H2 build 26100, ARM64, French. First-hand facts, from probes and from running the mod.
+
+**The window tree.** `TITLE_BAR_SCAFFOLDING_WINDOW_CLASS` and a toolbar `DesktopChildSiteBridge` (about 234 px tall) sit at the top. `ShellTabWindowClass` holds `DUIViewWndClassName`, which holds one `DirectUIHWND`. Inside it: a `CtrlNotifySink` with `NamespaceTreeControl` and `SysTreeView32` (the navigation pane), a `CtrlNotifySink` with `SHELLDLL_DefView` and `FileExplorer_FolderViewIsland` (a WinUI island), and `DetailsPaneHwndHostClass` (a window that hosts its own island) in another `CtrlNotifySink`. `Shell Preview Extension Host` is 0x0 and hidden while the Preview pane is off. A window list needs a minimum size of zero, or small windows (a 25 px bar) are missed.
+
+**Details and Preview panes.** They are exclusive and share one slot. Switching the Details pane off hides its `CtrlNotifySink` and the file view grows by the pane's width; nothing is destroyed. Alt+Shift+P toggles Details, Alt+P toggles Preview, and both work as `SendInput`. The Preview pane has no window of its own when the selected file has nothing to preview, so it cannot be detected by a window: the gap between the file view and the right edge of `ShellTabWindowClass` shows it. Catching Alt+P with a low-level keyboard hook (installed per window thread, checked against the foreground window) and sending Alt+Shift+P is the reliable way to make a mod's own pane answer to it.
+
+**Taking over the Details pane.** Leave Explorer's pane on and place a second `DesktopWindowXamlSource` over its rectangle (`HWND_TOP`, followed by a timer). Explorer keeps the space, the splitter and every toggle. The Columns panel and this island both ask for the top of the z-order: if each re-raises itself on a timer they flicker; raise once.
+
+**The View menu.** Eight `RadioMenuFlyoutItem` layouts, a separator, a Details radio, a Preview radio, a separator, and a `MenuFlyoutSubItem` (the Show submenu) whose first child is the navigation pane `ToggleMenuFlyoutItem`, then a separator, compact view, a separator, item check boxes, file name extensions, hidden items. Items can be hidden with `Visibility`, and their `Icon` objects (an `ImageIcon` of an SVG file) can be moved to an item of ours and handed back. Invoking another item through its automation peer from inside the menu's own click crashed Explorer: defer it to a later tick.
+
+**The toolbar.** The Details button is the `AppBarButton` named `PaneToggle` among the primary commands of `FileExplorerSecondaryCommandBar`. It can be hidden and replaced by an `AppBarToggleButton` inserted at its index. Its icon is an `ImageIcon` with an `SvgImageSource` pointing at a file under `C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_...\FileExplorerExtensions\Assets\images\...`; the file can be read, recoloured and loaded from the temp folder (this SDK's `ImageIcon` has no `ShowAsMonochrome`).
+
+**The status bar is not a window.** UI Automation finds one element, "Barre d'état", class `StatusBarModuleInner`, framework DirectUI, no window handle, at the bottom of the `DirectUIHWND`. The `msctls_statusbar32` window that exists is a hidden leftover. Windows has its own option (Folder Options, View, Show status bar; the value `ShowStatusBar`), so no mod feature is needed.
+
+**XAML in an island.** Only `UIElement.TranslationTransition` and `OpacityTransition` animate visibly (set the start state with the transitions off, attach them after the first layout, set the end state). Storyboards on transforms and compositor animations changed values but showed nothing. A `BitmapImage` that is not on screen never opens: put it in the tree, invisible, first. A native child window (a shell preview handler) draws over the island and receives no wheel from another process's renderer; drawing PDF, text, Markdown, images and media in XAML avoids it. `MediaPlayerElement` must let go of its `MediaPlayer` (`SetMediaPlayer(nullptr)`) before the player is released, or Explorer crashes.
+
+**Touch on the columns.** A finger on a column's empty space locks every ancestor scroller to draw a rectangle. A second finger counts as a press again: lock each scroller once, restore in reverse, and give the rectangle up when a second finger arrives, or scrolling stays off.

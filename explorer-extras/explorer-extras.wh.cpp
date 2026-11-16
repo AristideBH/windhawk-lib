@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     A Columns layout for File Explorer: Miller columns in the View menu, with drag and drop, a restyled context menu, touch support and per-folder memory.
-// @version         0.52.2
+// @version         0.54.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -124,9 +124,21 @@ Tested on Windows 11 24H2 on ARM64. The x86-64 build compiles but has not been r
   - paneAnimation: true
     $name: Animate the pane
     $description: The content slides and fades in when the selection changes.
+  - previewImages: true
+    $name: Preview images
+    $description: Shows pictures at full size in the pane, with zoom and pan.
+  - previewMedia: true
+    $name: Preview video and sound
+    $description: Plays video and sound files in the pane.
+  - previewMaxMb: 60
+    $name: Largest document to preview (MB)
+    $description: Bigger PDFs and Office files keep the thumbnail.
+  - previewMaxMp: 40
+    $name: Largest image to open at once (megapixels)
+    $description: Bigger pictures wait for a click on the card's button.
   - livePreview: true
     $name: Preview documents and code
-    $description: Shows the real preview of documents, PDFs, text, images, video and audio in the pane.
+    $description: Shows PDF, text, Markdown and Office files in the pane.
   $name: Details pane
 - debugLog: false
   $name: Write a debug log
@@ -231,6 +243,10 @@ std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};
 std::atomic<bool> g_oddRows{false};
+std::atomic<bool> g_previewImages{true};
+std::atomic<bool> g_previewMedia{true};
+std::atomic<int> g_previewMaxMb{60};   // The largest document that is previewed.
+std::atomic<int> g_previewMaxMp{40};   // The largest picture that opens by itself.
 std::atomic<int> g_paneVolume{100};    // The volume of the pane's player, in percent, kept between runs.
 std::atomic<bool> g_paneMuted{false};
 std::atomic<bool> g_staleAccent{true};  // The chevron of the folder you came from sits in an accent badge.
@@ -552,6 +568,13 @@ struct StringInfo {
     const wchar_t* text;
 };
 
+// The texts of a setting in French (the other languages are not done): its title and its description.
+struct SettingText {
+    const wchar_t* id;
+    const wchar_t* name;
+    const wchar_t* description;
+};
+
 constexpr SettingInfo kSettings[] = {
     {L"enabled", L"columns.enabled", SettingKind::Bool, 1, L"", 0, 0,
      L"Enable Columns",
@@ -657,9 +680,25 @@ constexpr SettingInfo kSettings[] = {
      L"Animate the pane",
      L"The content slides and fades in when the selection changes.",
      L"details", L"pane", false, L"", false},
+    {L"previewImages", L"details.previewImages", SettingKind::Bool, 1, L"", 0, 0,
+     L"Preview images",
+     L"Shows pictures at full size in the pane, with zoom and pan.",
+     L"details", L"types", false, L"", false},
+    {L"previewMedia", L"details.previewMedia", SettingKind::Bool, 1, L"", 0, 0,
+     L"Preview video and sound",
+     L"Plays video and sound files in the pane.",
+     L"details", L"types", false, L"", false},
+    {L"previewMaxMb", L"details.previewMaxMb", SettingKind::Int, 60, L"", 1, 1024,
+     L"Largest document to preview (MB)",
+     L"Bigger PDFs and Office files keep the thumbnail.",
+     L"details", L"types", false, L"", false},
+    {L"previewMaxMp", L"details.previewMaxMp", SettingKind::Int, 40, L"", 4, 400,
+     L"Largest image to open at once (megapixels)",
+     L"Bigger pictures wait for a click on the card's button.",
+     L"details", L"types", false, L"", false},
     {L"livePreview", L"details.livePreview", SettingKind::Bool, 1, L"", 0, 0,
      L"Preview documents and code",
-     L"Shows the real preview of documents, PDFs, text, images, video and audio in the pane.",
+     L"Shows PDF, text, Markdown and Office files in the pane.",
      L"details", L"pane", false, L"", false},
     {L"debugLog", L"debugLog", SettingKind::Bool, 0, L"", 0, 0,
      L"Write a debug log",
@@ -673,6 +712,7 @@ constexpr SettingCard kCards[] = {
     {L"dragmemory", L"Drag and drop and memory"},
     {L"content", L"Content and advanced"},
     {L"pane", L"Details pane"},
+    {L"types", L"Previews"},
 };
 
 constexpr const wchar_t* kWhatsNew[] = {
@@ -739,22 +779,182 @@ constexpr StringInfo kStrings[] = {
     {L"pane.more", L"More details"},
     {L"pane.less", L"Fewer details"},
     {L"pane.cantplay", L"This file cannot be played."},
+    {L"pane.fullsize", L"Open at full size"},
+    {L"pane.insides", L"Contents"},
+    {L"pane.filesfolders", L"%llu files, %llu folders"},
     {L"pane.showpreview", L"Show the preview"},
     {L"pane.showthumb", L"Show the thumbnail"},
+};
+
+constexpr StringInfo kStringsFr[] = {
+    {L"window.title", L"Explorer Extras"},
+    {L"menu.extras", L"Extras"},
+    {L"menu.columns", L"Colonnes"},
+    {L"page.home", L"Explorer Extras"},
+    {L"home.title", L"Explorer Extras"},
+    {L"home.subtitle", L"Ajouts facultatifs \u00E0 l\u2019Explorateur de fichiers, chacun avec sa page et son interrupteur."},
+    {L"tip.title", L"Astuce"},
+    {L"tip.body", L"Choisissez Colonnes dans le menu Affichage d\u2019une fen\u00EAtre de l\u2019Explorateur. L\u2019entr\u00E9e Extras en bas du menu \u2026 de la barre d\u2019outils ouvre cette fen\u00EAtre."},
+    {L"tip.gotit", L"Compris"},
+    {L"card.features", L"Fonctionnalit\u00E9s"},
+    {L"card.status", L"\u00C9tat"},
+    {L"card.actions", L"Actions rapides"},
+    {L"card.about", L"\u00C0 propos"},
+    {L"about.creator", L"Cr\u00E9\u00E9 par AristideBH"},
+    {L"about.detail", L"Explorer Extras est libre et open source. Les rapports de bugs et les id\u00E9es sont les bienvenus sur GitHub."},
+    {L"about.link", L"Code source sur GitHub"},
+    {L"status.version", L"Version"},
+    {L"status.windows", L"Windows"},
+    {L"status.hooks", L"Crochets"},
+    {L"status.hooks.detail", L"L\u2019extension de l\u2019Explorateur sur laquelle le mod s\u2019accroche."},
+    {L"status.found", L"Trouv\u00E9e"},
+    {L"status.notfound", L"Introuvable"},
+    {L"action.log", L"Ouvrir le journal"},
+    {L"action.log.detail", L"Le fichier que le mod \u00E9crit pendant son travail, si son dossier existe."},
+    {L"action.log.done", L"Ouvert"},
+    {L"action.log.none", L"Aucun fichier journal"},
+    {L"action.copy", L"Copier les diagnostics"},
+    {L"action.copy.detail", L"Version, r\u00E9glages et \u00E9tat, en texte, \u00E0 coller dans un message."},
+    {L"action.copy.done", L"Copi\u00E9"},
+    {L"action.copy.fail", L"Copie impossible"},
+    {L"action.reset", L"Revenir aux r\u00E9glages de Windhawk"},
+    {L"action.reset.detail", L"Chaque r\u00E9glage reprend la valeur de la page du mod dans Windhawk."},
+    {L"columns.title", L"Colonnes"},
+    {L"columns.subtitle", L"Une disposition en colonnes dans le menu Affichage : des colonnes de Miller dessin\u00E9es avec les contr\u00F4les de l\u2019Explorateur."},
+    {L"columns.note", L"Les changements s\u2019appliquent tout de suite. Le mod les garde devant la page de Windhawk, et une modification ult\u00E9rieure du m\u00EAme r\u00E9glage sur cette page l\u2019emporte. \u00AB Revenir aux r\u00E9glages de Windhawk \u00BB sur la page Explorer Extras r\u00E9tablit les valeurs de Windhawk."},
+    {L"details.title", L"Volet des d\u00E9tails"},
+    {L"details.subtitle", L"Un seul volet pour l\u2019aper\u00E7u et les d\u00E9tails de la s\u00E9lection, \u00E0 la place des volets D\u00E9tails et Aper\u00E7u de l\u2019Explorateur."},
+    {L"pane.open", L"Ouvrir"},
+    {L"pane.copypath", L"Copier le chemin"},
+    {L"pane.copypaths", L"Copier les chemins"},
+    {L"pane.properties", L"Propri\u00E9t\u00E9s"},
+    {L"pane.copied", L"Copi\u00E9"},
+    {L"pane.items", L"%d \u00E9l\u00E9ments"},
+    {L"pane.item", L"1 \u00E9l\u00E9ment"},
+    {L"pane.nothing", L"Aucune s\u00E9lection"},
+    {L"pane.folders", L"Dossiers"},
+    {L"pane.files", L"Fichiers"},
+    {L"pane.totalsize", L"Taille totale"},
+    {L"pane.contains", L"Contient"},
+    {L"pane.location", L"Emplacement"},
+    {L"pane.types", L"Types"},
+    {L"pane.clicktocopy", L"Cliquer pour copier"},
+    {L"pane.more", L"Plus de d\u00E9tails"},
+    {L"pane.less", L"Moins de d\u00E9tails"},
+    {L"pane.cantplay", L"Ce fichier ne peut pas \u00EAtre lu."},
+    {L"pane.fullsize", L"Ouvrir en taille r\u00E9elle"},
+    {L"pane.insides", L"Contenu"},
+    {L"pane.filesfolders", L"%llu fichiers, %llu dossiers"},
+    {L"pane.showpreview", L"Afficher l\u2019aper\u00E7u"},
+    {L"pane.showthumb", L"Afficher la miniature"},
+};
+
+constexpr SettingCard kCardsFr[] = {
+    {L"layout", L"Disposition et apparence"},
+    {L"behaviour", L"Comportement"},
+    {L"dragmemory", L"Glisser-d\u00E9poser et m\u00E9moire"},
+    {L"content", L"Contenu et options avanc\u00E9es"},
+    {L"pane", L"Volet des d\u00E9tails"},
+    {L"types", L"Aper\u00E7us"},
+};
+
+constexpr SettingText kSettingsFr[] = {
+    {L"enabled", L"Activer les colonnes", L"Ajoute Colonnes au menu Affichage. D\u00E9sactiv\u00E9, l\u2019entr\u00E9e dispara\u00EEt."},
+    {L"restoreOnOpen", L"Ouvrir les nouvelles fen\u00EAtres en colonnes", L"Les nouvelles fen\u00EAtres s\u2019ouvrent en colonnes si c\u2019\u00E9tait votre derni\u00E8re disposition. Choisir une autre disposition d\u00E9sactive ce r\u00E9glage."},
+    {L"desktopRealOnly", L"La colonne Bureau n\u2019affiche que les vrais \u00E9l\u00E9ments", L"Masque les \u00E9l\u00E9ments virtuels (Ce PC, Corbeille, Panneau de configuration\u2026) de la colonne Bureau."},
+    {L"remoteMarks", L"Marquer les \u00E9l\u00E9ments distants", L"Affiche une petite ic\u00F4ne sur les fichiers cloud non t\u00E9l\u00E9charg\u00E9s et sur les \u00E9l\u00E9ments d\u2019un r\u00E9seau ou d\u2019un t\u00E9l\u00E9phone."},
+    {L"rememberSort", L"M\u00E9moriser le tri et le regroupement", L"Chaque dossier garde son tri et son regroupement. D\u00E9sactiv\u00E9, toutes les colonnes reprennent ceux du premier dossier."},
+    {L"rememberWidth", L"M\u00E9moriser les largeurs de colonne", L"Une colonne que vous redimensionnez se rouvre \u00E0 cette largeur."},
+    {L"rememberLayout", L"M\u00E9moriser les colonnes par dossier", L"Chaque dossier retient s\u2019il a \u00E9t\u00E9 quitt\u00E9 en colonnes. L\u2019ouvrir active ou d\u00E9sactive les colonnes en cons\u00E9quence."},
+    {L"springLoad", L"Ouvrir les dossiers pendant un glissement", L"Maintenez les \u00E9l\u00E9ments gliss\u00E9s sur un dossier environ 0,7 s pour l\u2019ouvrir dans la colonne suivante."},
+    {L"lastEdge", L"Bordure apr\u00E8s la derni\u00E8re colonne", L"Trace un trait de s\u00E9paration \u00E0 droite de la derni\u00E8re colonne."},
+    {L"staleAccent", L"Pastille d\u2019accent sur le chevron du chemin", L"Le chevron du dossier d\u2019o\u00F9 vous venez est dans une pastille ronde de la couleur d\u2019accentuation, au lieu d\u2019une pastille discr\u00E8te."},
+    {L"oddRows", L"Lignes altern\u00E9es", L"Une ligne sur deux est l\u00E9g\u00E8rement teint\u00E9e, pour suivre une ligne dans une colonne large."},
+    {L"autoPreview", L"Ouvrir les aper\u00E7us automatiquement", L"D\u00E9sactiv\u00E9, un bouton sur l\u2019aper\u00E7u l\u2019ouvre et permet de revenir \u00E0 la miniature."},
+    {L"foldersFirst", L"Dossiers en premier", L"Les dossiers sont list\u00E9s avant les fichiers dans chaque colonne, quel que soit le tri."},
+    {L"harmonizeWidths", L"Maj + double-clic pour \u00E9galiser les largeurs", L"Maj + double-clic sur une bordure de colonne donne la m\u00EAme largeur \u00E0 toutes les colonnes. Elles le restent jusqu\u2019\u00E0 un double-clic seul sur une bordure."},
+    {L"keepStale", L"Garder les colonnes apr\u00E8s le choix d\u2019un fichier", L"Les colonnes de droite restent, estomp\u00E9es, quand vous choisissez un fichier ou plusieurs \u00E9l\u00E9ments. D\u00E9sactiv\u00E9, elles se ferment."},
+    {L"headerKeyboard", L"Clavier sur les en-t\u00EAtes de groupe", L"Les fl\u00E8ches atteignent les en-t\u00EAtes de groupe. Gauche, Droite et Entr\u00E9e les replient et les d\u00E9plient."},
+    {L"doubleClickUp", L"Double-clic sur le vide pour remonter", L"Remonte d\u2019un dossier. Dans la premi\u00E8re colonne, le dossier parent est ajout\u00E9 devant."},
+    {L"focusRect", L"Afficher le contour de focus", L"Trace un contour autour de l\u2019\u00E9l\u00E9ment sous le curseur du clavier. La s\u00E9lection reste toujours visible."},
+    {L"background", L"Arri\u00E8re-plan du panneau", L"L\u2019Explorateur utilise la couleur de sa liste de fichiers. Th\u00E8me utilise la couleur standard sombre ou claire."},
+    {L"sidebarRoot", L"La barre lat\u00E9rale d\u00E9finit la premi\u00E8re colonne", L"Cliquer sur Accueil, Galerie, OneDrive ou un dossier \u00E9pingl\u00E9 en fait la premi\u00E8re colonne. L\u2019arborescence (Ce PC, lecteurs, R\u00E9seau) suit toujours les colonnes."},
+    {L"minWidth", L"Largeur minimale des colonnes", L""},
+    {L"maxWidth", L"Largeur maximale des colonnes", L"Les colonnes s\u2019ajustent \u00E0 leur nom le plus long jusqu\u2019\u00E0 cette largeur. Les noms plus longs sont raccourcis."},
+    {L"maxItems", L"Nombre maximal d\u2019\u00E9l\u00E9ments par colonne", L""},
+    {L"detailsPane", L"Volet des d\u00E9tails", L"Remplace le volet D\u00E9tails de l\u2019Explorateur par un aper\u00E7u et les d\u00E9tails de la s\u00E9lection."},
+    {L"previewRedirect", L"Le volet Aper\u00E7u ouvre ce volet", L"Choisir le volet Aper\u00E7u de l\u2019Explorateur (Alt+P) affiche ce volet \u00E0 la place."},
+    {L"paneAnimation", L"Animer le volet", L"Le contenu glisse et s\u2019estompe \u00E0 chaque changement de s\u00E9lection."},
+    {L"previewImages", L"Aper\u00E7u des images", L"Affiche les images en taille r\u00E9elle dans le volet, avec zoom et d\u00E9placement."},
+    {L"previewMedia", L"Aper\u00E7u des vid\u00E9os et des sons", L"Lit les fichiers vid\u00E9o et audio dans le volet."},
+    {L"previewMaxMb", L"Document le plus gros \u00E0 pr\u00E9visualiser (Mo)", L"Les PDF et fichiers Office plus gros gardent la miniature."},
+    {L"previewMaxMp", L"Image la plus grande \u00E0 ouvrir d\u2019embl\u00E9e (m\u00E9gapixels)", L"Les images plus grandes attendent un clic sur le bouton de la carte."},
+    {L"livePreview", L"Aper\u00E7u des documents et du code", L"Affiche les PDF, le texte, le Markdown et les fichiers Office dans le volet."},
+    {L"debugLog", L"\u00C9crire un journal de d\u00E9bogage", L"\u00C9crit Code\\windhawk-lib\\probes\\logs\\explorer-extras.log dans votre dossier utilisateur, s\u2019il existe."},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kCardCount = sizeof(kCards) / sizeof(kCards[0]);
 constexpr size_t kWhatsNewCount = sizeof(kWhatsNew) / sizeof(kWhatsNew[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
 
+// The language of Windows' display: French has its own table, every other language is English.
+bool FrenchUi() {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_FRENCH ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 // The text for an id. A missing id shows as itself, so a gap is seen at once.
 const wchar_t* Str(const wchar_t* id) {
+    if (FrenchUi()) {
+        for (size_t i = 0; i < sizeof(kStringsFr) / sizeof(kStringsFr[0]); i++) {
+            if (wcscmp(kStringsFr[i].id, id) == 0) {
+                return kStringsFr[i].text;
+            }
+        }
+    }
     for (size_t i = 0; i < kStringCount; i++) {
         if (wcscmp(kStrings[i].id, id) == 0) {
             return kStrings[i].text;
         }
     }
     return id;
+}
+
+// The title and the description of a setting, in the language of the display.
+std::wstring SettingName(SettingInfo const& info) {
+    if (FrenchUi()) {
+        for (auto const& text : kSettingsFr) {
+            if (wcscmp(text.id, info.id) == 0) {
+                return text.name;
+            }
+        }
+    }
+    return info.name;
+}
+
+std::wstring SettingDescription(SettingInfo const& info) {
+    if (FrenchUi()) {
+        for (auto const& text : kSettingsFr) {
+            if (wcscmp(text.id, info.id) == 0) {
+                return text.description;
+            }
+        }
+    }
+    return info.description;
+}
+
+std::wstring CardName(size_t index) {
+    if (FrenchUi()) {
+        for (auto const& card : kCardsFr) {
+            if (wcscmp(card.id, kCards[index].id) == 0) {
+                return card.name;
+            }
+        }
+    }
+    return kCards[index].name;
 }
 
 const SettingInfo* FindSetting(const wchar_t* id) {
@@ -2615,6 +2815,11 @@ struct WindowState {
         int first = -1, last = -1;                  // The rows the rectangle covers.
         bool touch = false;                         // A finger started it, on the empty space below the rows.
         int recaptures = 0;
+        // A finger that moves mostly sideways from the empty space scrolls the columns instead of
+        // drawing a rectangle.
+        bool panning = false;
+        double panStartX = 0, panStartOffset = 0, panLastX = 0, panVelocity = 0;  // Pixels, and pixels per millisecond.
+        ULONGLONG panLastAt = 0;
         std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};
@@ -5064,7 +5269,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     auto& drag = lostState->drag;
                     {
                         auto& band = lostState->band;
-                        if (band.touch && (band.pending || band.active)) {
+                        if (band.touch && (band.pending || band.active || band.panning)) {
                             bool contact = false;
                             try {
                                 contact = lostArgs.GetCurrentPoint(list).IsInContact();
@@ -9347,7 +9552,8 @@ void EndBand(WindowState* state, bool apply) {
     band.pending = false;
     band.active = false;
     band.column = nullptr;
-    for (auto& lock : band.locked) {
+    for (size_t i = band.locked.size(); i-- > 0;) {  // Backwards: the first note is the original.
+        auto& lock = band.locked[i];
         try {
             lock.viewer.VerticalScrollMode(lock.v);
             lock.viewer.HorizontalScrollMode(lock.h);
@@ -9357,6 +9563,18 @@ void EndBand(WindowState* state, bool apply) {
     band.locked.clear();
     band.touch = false;
     band.recaptures = 0;
+    if (band.panning) {
+        // The finger lifts: the columns carry on a little, by the speed it had.
+        band.panning = false;
+        if (state->scroller && std::abs(band.panVelocity) > 0.3) {
+            try {
+                double target = std::clamp(state->scroller.HorizontalOffset() - band.panVelocity * 320.0, 0.0, state->scroller.ScrollableWidth());
+                state->scroller.ChangeView(target, nullptr, nullptr, false);
+            } catch (...) {
+            }
+        }
+        band.panVelocity = 0;
+    }
     band.top.clear();
     band.bottom.clear();
     band.base.clear();
@@ -9383,6 +9601,19 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
     }
     try {
         auto point = args.GetCurrentPoint(list);
+        // A second finger down while a finger is waiting to draw a rectangle (or is panning): this
+        // is a two-finger gesture, for the system. The rectangle is given up and the scrolling that
+        // was switched off is given back. (A second press used to lock the scrollers again, in their
+        // locked state, and they stayed off afterwards.)
+        if (args.Pointer().PointerDeviceType() == winrt::Microsoft::UI::Input::PointerDeviceType::Touch && state->band.touch &&
+            (state->band.pending || state->band.active || state->band.panning)) {
+            if (state->band.column) {
+                state->band.column->list.ReleasePointerCaptures();
+            }
+            EndBand(state, false);
+            Out(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
+            return;
+        }
         // The middle button on a folder opens it in a new tab.
         if (point.Properties().IsMiddleButtonPressed()) {
             mux::DependencyObject node =
@@ -9461,6 +9692,11 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
             // the scrolling of the list and of what is above it is switched off until it ends.
             band.recaptures = 0;
             auto lockOne = [&band](muxc::ScrollViewer const& viewer) {
+                for (auto const& done : band.locked) {
+                    if (done.viewer == viewer) {
+                        return;  // Already locked: its first note is the one to give back.
+                    }
+                }
                 DragState::LockedScroller lock;
                 lock.viewer = viewer;
                 lock.v = viewer.VerticalScrollMode();
@@ -9492,22 +9728,52 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
 bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
                  mux::Input::PointerRoutedEventArgs const& args) {
     auto& band = state->band;
-    if (!band.pending && !band.active) {
+    if (!band.pending && !band.active && !band.panning) {
         return false;
     }
     if (band.column != column) {
-        return band.active;
+        return band.active || band.panning;
     }
     auto point = args.GetCurrentPoint(list);
     if (!point.Properties().IsLeftButtonPressed()) {
         EndBand(state, band.active);
         return false;
     }
+    if (band.panning) {
+        // The columns follow the finger sideways.
+        try {
+            double x = args.GetCurrentPoint(state->scroller).Position().X;
+            double target = std::clamp(band.panStartOffset - (x - band.panStartX), 0.0, state->scroller.ScrollableWidth());
+            state->scroller.ChangeView(target, nullptr, nullptr, true);
+            ULONGLONG now = GetTickCount64();
+            if (now > band.panLastAt) {
+                double speed = (x - band.panLastX) / (double)(now - band.panLastAt);
+                band.panVelocity = 0.6 * speed + 0.4 * band.panVelocity;
+                band.panLastX = x;
+                band.panLastAt = now;
+            }
+        } catch (...) {
+        }
+        return true;
+    }
     auto at = point.Position();
     if (band.pending) {
         double moved = std::abs(at.X - band.start.X) + std::abs(at.Y - band.start.Y);
         if (moved < 6) {
             return false;  // Still a click.
+        }
+        // A finger that goes mostly sideways is scrolling the columns, not drawing a rectangle.
+        if (band.touch && state->scroller && moved >= 10 && std::abs(at.X - band.start.X) > 1.8 * std::abs(at.Y - band.start.Y)) {
+            band.pending = false;
+            band.panning = true;
+            band.panStartX = args.GetCurrentPoint(state->scroller).Position().X;
+            band.panStartOffset = state->scroller.HorizontalOffset();
+            band.panLastX = band.panStartX;
+            band.panLastAt = GetTickCount64();
+            band.panVelocity = 0;
+            list.CapturePointer(args.Pointer());
+            Out(L"touch: a sideways drag on the empty space, the columns scroll");
+            return true;
         }
         // A drag: take the pointer, remember the rows, start from the selection
         // the user wants to keep.
@@ -9626,7 +9892,7 @@ void OnBandReleased(muxc::ListView const& list) {
         if (OnDragReleased(state)) {
             return;
         }
-        if (state->band.pending || state->band.active) {
+        if (state->band.pending || state->band.active || state->band.panning) {
             EndBand(state, state->band.active);
         }
     } catch (...) {
@@ -15139,10 +15405,10 @@ mux::UIElement BuildHomePage() {
         });
         muxc::StackPanel featureRows;
         featureRows.Spacing(2);
-        featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? enabled->description : L"", toggle));
+        featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? SettingDescription(*enabled) : std::wstring(), toggle));
         const SettingInfo* paneInfo = FindSetting(L"detailsPane");
         if (paneInfo) {
-            featureRows.Children().Append(MakeSettingRow(Str(L"details.title"), paneInfo->description, MakeSettingControl(*paneInfo)));
+            featureRows.Children().Append(MakeSettingRow(Str(L"details.title"), SettingDescription(*paneInfo), MakeSettingControl(*paneInfo)));
         }
         card.Child(featureRows);
         page.Children().Append(card);
@@ -15236,7 +15502,7 @@ mux::UIElement BuildSettingsPage(const wchar_t* pageId, const wchar_t* title, co
         if (!any) {
             continue;
         }
-        auto title = MakeText(kCards[c].name, 14, true, false);
+        auto title = MakeText(CardName(c), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
@@ -15247,7 +15513,7 @@ mux::UIElement BuildSettingsPage(const wchar_t* pageId, const wchar_t* title, co
             if (info.windhawkOnly || wcscmp(info.page, pageId) != 0 || wcscmp(info.card, kCards[c].id) != 0) {
                 continue;
             }
-            rows.Children().Append(MakeSettingRow(info.name, info.description, MakeSettingControl(info)));
+            rows.Children().Append(MakeSettingRow(SettingName(info), SettingDescription(info), MakeSettingControl(info)));
         }
         card.Child(rows);
         page.Children().Append(card);
@@ -15847,6 +16113,9 @@ struct PaneData {
     std::wstring previewClsid;  // The preview handler of the file, when it has one.
     std::wstring previewPath;
     int previewKind = 0;  // 0 none, 1 a shell preview handler, 2 a PDF, 3 text, 4 image, 5 video, 6 audio (2 to 6 are drawn by the pane).
+    std::vector<std::wstring> sizeRoots;  // Folders whose size is worked out in the background.
+    ULONGLONG sizeBase = 0;               // What the files among them already weigh.
+    bool largeImage = false;              // A picture over the size that opens by itself.
     std::wstring mediaTitle;   // Of a sound file.
     std::wstring mediaArtist;
     int kind = 0;  // 0 the folder shown, 1 a file, 2 a folder, 3 several items.
@@ -15923,6 +16192,9 @@ struct DetailsPane {
     std::vector<muxc::Border> cards;  // The new thumbnails of a stack, to bring in one by one.
     std::vector<uint64_t> stackKeys;  // The thumbnails the stack shows now.
     int previewSeen = 0;
+    std::shared_ptr<PaneData> deferred;                       // A big picture that waits for the corner button.
+    std::shared_ptr<std::atomic<bool>> sizeCancel;            // Stops the size of folders being worked out.
+    std::vector<muxc::TextBlock> sizeBlocks;                  // Where the size, the contents and the types go.
     winrt::Windows::Media::Playback::MediaPlayer mediaPlayer{nullptr};  // The player of the video or sound on show.
     winrt::Windows::Foundation::IInspectable pendingImage{nullptr};      // An image that is still opening.
     muxc::MediaPlayerElement mediaElement{nullptr};                      // The element that shows the player.
@@ -16073,29 +16345,32 @@ void PaneFindHandler(PaneData* data, const wchar_t* path) {
     static const wchar_t* const videoTypes[] = {L".mp4", L".m4v", L".mov", L".mkv", L".avi", L".wmv", L".webm", L".mpg", L".mpeg", L".3gp", L".ts", L".m2ts"};
     static const wchar_t* const audioTypes[] = {L".mp3", L".wav", L".flac", L".m4a", L".aac", L".ogg", L".opus", L".wma", L".aiff", L".aif"};
     for (const wchar_t* extension : imageTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewImages && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 4;
             data->previewPath = path;
             return;
         }
     }
     for (const wchar_t* extension : videoTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 5;
             data->previewPath = path;
             return;
         }
     }
     for (const wchar_t* extension : audioTypes) {
-        if (_wcsicmp(dot, extension) == 0) {
+        if (g_previewMedia && _wcsicmp(dot, extension) == 0) {
             data->previewKind = 6;
             data->previewPath = path;
             return;
         }
     }
+    if (!g_panePreview) {
+        return;  // The documents are off.
+    }
     WIN32_FILE_ATTRIBUTE_DATA info = {};
     if (!GetFileAttributesExW(path, GetFileExInfoStandard, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-        info.nFileSizeHigh != 0 || info.nFileSizeLow > 60u * 1024 * 1024) {
+        info.nFileSizeHigh != 0 || info.nFileSizeLow > (DWORD)g_previewMaxMb * 1024u * 1024u) {
         return;
     }
     // A PDF and plain text are drawn by the pane itself (they scroll, they take no native window).
@@ -16143,6 +16418,9 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
     }
     wchar_t path[MAX_PATH] = L"";
     data->canProperties = SHGetPathFromIDListW(pidl, path) && path[0] ? 1 : 0;
+    if (folder && data->canProperties) {
+        data->sizeRoots.push_back(path);
+    }
 
     std::set<std::wstring> have;
     auto addTo = [&](std::vector<PaneRow>& rows, IPropertyStore* store, const wchar_t* name) {
@@ -16261,16 +16539,15 @@ void PaneReadOne(PaneData* data, PCIDLIST_ABSOLUTE pidl, bool isCurrentFolder) {
             data->rows.push_back({PaneLabelFor(L"System.ItemFolderPathDisplay"), whole.substr(0, slash)});
         }
     }
-    if (!folder && data->canProperties && g_panePreview) {
+    if (!folder && data->canProperties) {
         PaneFindHandler(data, path);
         if (data->previewKind == 4) {
             // Over 40 megapixels the thumbnail stays (decoding it all in Explorer would be heavy).
             ULONG width = 0, height = 0;
             item->GetUInt32(PKEY_Image_HorizontalSize, &width);
             item->GetUInt32(PKEY_Image_VerticalSize, &height);
-            if ((unsigned long long)width * height > 40000000ULL) {
-                data->previewKind = 0;
-                data->previewPath.clear();
+            if ((unsigned long long)width * height > (unsigned long long)g_previewMaxMp * 1000000ULL) {
+                data->largeImage = true;  // The thumbnail stays until the corner button is used.
             }
         }
         if (data->previewKind == 6) {
@@ -16312,6 +16589,10 @@ void PaneReadSeveral(PaneData* data, std::vector<Pidl> const& items) {
         bool folder = (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
         if (folder) {
             folders++;
+            wchar_t folderPath[MAX_PATH] = L"";
+            if (data->sizeRoots.size() < 60 && SHGetPathFromIDListW(pidl.get(), folderPath) && folderPath[0]) {
+                data->sizeRoots.push_back(folderPath);
+            }
         } else {
             files++;
             ULONGLONG size = 0;
@@ -16340,6 +16621,7 @@ void PaneReadSeveral(PaneData* data, std::vector<Pidl> const& items) {
         }
         item->Release();
     }
+    data->sizeBase = total;
     wchar_t number[32];
     swprintf(number, ARRAYSIZE(number), L"%d", files);
     data->rows.push_back({Str(L"pane.files"), number});
@@ -16560,6 +16842,8 @@ muxc::StackPanel PaneRows(std::vector<PaneRow> const& rows) {
 
 void PaneLayoutPreview(WindowState* state, DetailsPane* pane);
 void PaneSetMode(WindowState* state, DetailsPane* pane, bool preview);
+void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data, bool force = false);
+void PaneCornerUpdate(DetailsPane* pane);
 
 // ---- Animations ----
 // Only the Translation and Opacity transitions of an element show in the island (storyboards
@@ -16645,6 +16929,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     details.Spacing(12);
     details.Margin(mux::Thickness{16, 4, 16, 20});
     pane->cards.clear();
+    pane->sizeBlocks.clear();
     auto keysBefore = pane->stackKeys;
     pane->preview = nullptr;
     pane->spinner = nullptr;
@@ -16719,7 +17004,14 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             button.Tapped([](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (now && now->details && !g_unloading) {
-                    PaneSetMode(now, now->details, !now->details->previewShown);
+                    if (now->details->deferred && !now->details->previewReady) {
+                        auto big = now->details->deferred;
+                        now->details->deferred = nullptr;
+                        PaneStartMediaPreview(now, now->details, now->details->shownKey, big, true);
+                        PaneCornerUpdate(now->details);
+                    } else {
+                        PaneSetMode(now, now->details, !now->details->previewShown);
+                    }
                     PaneGiveFocusBack(now);
                 }
             });
@@ -16911,6 +17203,18 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
 
     // The details, then the rest of them behind a toggle.
     details.Children().Append(PaneRows(data.rows));
+    if (!data.sizeRoots.empty()) {
+        // What the folders hold, filled in when the background count has run.
+        auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
+        for (auto child : sizeList.Children()) {
+            if (auto grid = child.try_as<muxc::Grid>()) {
+                if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+                    pane->sizeBlocks.push_back(block);
+                }
+            }
+        }
+        details.Children().Append(sizeList);
+    }
     if (!data.more.empty()) {
         auto more = PaneRows(data.more);
         more.Visibility(pane->expanded ? mux::Visibility::Visible : mux::Visibility::Collapsed);
@@ -17044,6 +17348,11 @@ void PaneWheelOff(HWND host) {
 }
 
 void PaneClosePreview(DetailsPane* pane) {
+    pane->deferred = nullptr;
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+        pane->sizeCancel = nullptr;
+    }
     PaneStopMedia(pane);
     PaneWheelOff(pane->host);
     if (pane->handler) {
@@ -17111,11 +17420,12 @@ void PaneCornerUpdate(DetailsPane* pane) {
         pane->spinner.Visibility((pane->loading || pane->handler) && !pane->previewReady ? mux::Visibility::Visible : mux::Visibility::Collapsed);
     }
     if (auto button = pane->toggle.try_as<muxc::Border>()) {
-        button.Visibility(pane->previewReady ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        bool waiting = pane->deferred && !pane->previewReady;  // A big picture: the button opens it.
+        button.Visibility(pane->previewReady || waiting ? mux::Visibility::Visible : mux::Visibility::Collapsed);
         // On the preview (often a white page) the chip is dark with a white icon.
         button.Background(pane->previewShown ? Brush(220, 32, 32, 32) : Brush(40, 128, 128, 128));
         if (auto icon = button.Child().try_as<muxc::FontIcon>()) {
-            icon.Glyph(pane->previewShown ? L"\xED1A" : L"\xE890");
+            icon.Glyph(waiting ? L"\xE8A3" : pane->previewShown ? L"\xED1A" : L"\xE890");
             if (pane->previewShown) {
                 icon.Foreground(Brush(255, 255, 255, 255));
             } else {
@@ -17123,7 +17433,7 @@ void PaneCornerUpdate(DetailsPane* pane) {
             }
         }
         muxc::ToolTipService::SetToolTip(
-            button, winrt::box_value(winrt::hstring{pane->previewShown ? Str(L"pane.showthumb") : Str(L"pane.showpreview")}));
+            button, winrt::box_value(winrt::hstring{waiting ? Str(L"pane.fullsize") : pane->previewShown ? Str(L"pane.showthumb") : Str(L"pane.showpreview")}));
     }
 }
 
@@ -17890,7 +18200,148 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
     return root;
 }
 
-void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data) {
+// ---- What the folders hold (size, count, types), worked out on a thread and cancelled with the selection ----
+
+struct PaneSizeState {
+    ULONGLONG bytes = 0;
+    ULONGLONG files = 0;
+    ULONGLONG folders = 0;
+    std::map<std::wstring, ULONGLONG> types;
+    bool done = false;
+    bool partial = false;
+};
+
+void PaneSizeArrived(DWORD thread, std::wstring const& key, std::shared_ptr<PaneSizeState> const& result) {
+    if (g_unloading || !result) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || state->thread != thread || !state->details) {
+        return;
+    }
+    DetailsPane* pane = state->details;
+    if (pane->shownKey != key || pane->sizeBlocks.size() != 3) {
+        return;
+    }
+    try {
+        wchar_t size[64] = L"";
+        StrFormatByteSizeW((LONGLONG)result->bytes, size, ARRAYSIZE(size));
+        std::wstring text = size;
+        text += result->partial ? L"+" : result->done ? L"" : L"\u2026";
+        pane->sizeBlocks[0].Text(text);
+        wchar_t counts[96];
+        swprintf(counts, ARRAYSIZE(counts), Str(L"pane.filesfolders"), result->files, result->folders);
+        pane->sizeBlocks[1].Text(counts);
+        std::vector<std::pair<ULONGLONG, std::wstring>> ordered;
+        for (auto const& entry : result->types) {
+            ordered.push_back({entry.second, entry.first});
+        }
+        std::sort(ordered.begin(), ordered.end(), [](auto const& x, auto const& y) { return x.first > y.first; });
+        std::wstring list;
+        for (size_t i = 0; i < ordered.size() && i < 4; i++) {
+            if (i) {
+                list += L"\n";
+            }
+            list += ordered[i].second + L" (" + std::to_wstring(ordered[i].first) + L")";
+        }
+        pane->sizeBlocks[2].Text(list.empty() ? std::wstring(L"-") : list);
+    } catch (...) {
+        LogHresult(L"showing the folder size");
+    }
+}
+
+void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data) {
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+    }
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    pane->sizeCancel = cancel;
+    DWORD thread = GetCurrentThreadId();
+    auto queue = state->queue;
+    auto roots = data->sizeRoots;
+    ULONGLONG base = data->sizeBase;
+    g_paneJobs++;
+    try {
+        std::thread([queue, thread, key, roots, base, cancel]() mutable {
+            auto result = std::make_shared<PaneSizeState>();
+            result->bytes = base;
+            ULONGLONG began = GetTickCount64(), lastPost = began, entries = 0;
+            std::vector<std::wstring> stack(roots.begin(), roots.end());
+            auto post = [&](bool done) {
+                auto copy = std::make_shared<PaneSizeState>(*result);
+                copy->done = done;
+                try {
+                    queue.TryEnqueue([thread, key, copy]() { PaneSizeArrived(thread, key, copy); });
+                } catch (...) {
+                }
+            };
+            bool stopped = false;
+            while (!stack.empty() && !stopped) {
+                std::wstring dir = stack.back();
+                stack.pop_back();
+                WIN32_FIND_DATAW found;
+                HANDLE handle = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr,
+                                                 FIND_FIRST_EX_LARGE_FETCH);
+                if (handle == INVALID_HANDLE_VALUE) {
+                    continue;
+                }
+                do {
+                    if (found.cFileName[0] == L'.' && (found.cFileName[1] == 0 || (found.cFileName[1] == L'.' && found.cFileName[2] == 0))) {
+                        continue;
+                    }
+                    if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                        result->folders++;
+                        if (!(found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                            stack.push_back(dir + L"\\" + found.cFileName);  // Links are not followed.
+                        }
+                    } else {
+                        result->files++;
+                        result->bytes += ((ULONGLONG)found.nFileSizeHigh << 32) | found.nFileSizeLow;
+                        const wchar_t* dot = wcsrchr(found.cFileName, L'.');
+                        std::wstring type = dot ? std::wstring(dot + 1) : std::wstring();
+                        for (auto& c : type) {
+                            c = (wchar_t)towupper(c);
+                        }
+                        result->types[type.empty() ? std::wstring(L"-") : type]++;
+                    }
+                    if ((++entries & 255) == 0) {
+                        ULONGLONG now = GetTickCount64();
+                        if (*cancel || g_unloading) {
+                            stopped = true;
+                            break;
+                        }
+                        if (now - began > 40000 || entries > 3000000) {
+                            result->partial = true;  // A very big folder: the count so far, marked with a +.
+                            stopped = true;
+                            break;
+                        }
+                        if (now - lastPost > 400) {
+                            lastPost = now;
+                            post(false);
+                        }
+                    }
+                } while (FindNextFileW(handle, &found));
+                FindClose(handle);
+                if (*cancel || g_unloading) {
+                    stopped = true;
+                }
+            }
+            if (!*cancel && !g_unloading) {
+                post(true);
+            }
+            queue = nullptr;
+            g_paneJobs--;
+        }).detach();
+    } catch (...) {
+        g_paneJobs--;
+        LogHresult(L"starting the folder size");
+    }
+}
+
+void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data, bool force) {
+    if (data->largeImage && !force) {
+        return;
+    }
     DWORD thread = GetCurrentThreadId();
     try {
         if (data->previewKind == 4) {
@@ -18797,6 +19248,9 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
         }
         inner.Children().Append(layer);
         PaneAnimateIn(state, pane, dx, dy, layer);
+        if (!data->sizeRoots.empty()) {
+            PaneStartSizeJob(state, pane, key, data);
+        }
         if (g_panePreview && (data->previewKind == 2 || data->previewKind == 3) && pane->preview) {
             PaneAfter(state, pane, dx != 0 ? 600 : 300, [pane, key, data]() {
                 WindowState* now = StateForThisThread(false);
@@ -18804,7 +19258,10 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
                     PaneStartXamlPreview(now, pane, key, data);
                 }
             });
-        } else if (g_panePreview && data->previewKind >= 4 && data->previewKind <= 6 && pane->preview) {
+        } else if (data->previewKind >= 4 && data->previewKind <= 6 && data->largeImage && pane->preview) {
+            pane->deferred = data;  // Over the size that opens by itself: the corner button opens it.
+            PaneCornerUpdate(pane);
+        } else if (data->previewKind >= 4 && data->previewKind <= 6 && pane->preview) {
             PaneAfter(state, pane, dx != 0 ? 600 : 300, [pane, key, data]() {
                 WindowState* now = StateForThisThread(false);
                 if (now && pane->visible && !pane->leaving && pane->shownKey == key) {
@@ -18888,7 +19345,11 @@ void PaneStartJob(WindowState* state, DetailsPane* pane, std::wstring const& key
             CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             std::shared_ptr<PaneData> data;
             try {
+                ULONGLONG began = GetTickCount64();
                 data = PaneRead(job->items, job->folder);
+                if (GetTickCount64() - began > 250) {
+                    Out(L"details pane: reading the details took %llu ms", GetTickCount64() - began);
+                }
             } catch (...) {
             }
             job.reset();
@@ -19453,6 +19914,13 @@ void AbandonDetails(WindowState* state) {
     (void)winrt::detach_abi(pane->mediaTime);
     (void)winrt::detach_abi(pane->mediaPlay);
     (void)winrt::detach_abi(pane->mediaVolume);
+    if (pane->sizeCancel) {
+        *pane->sizeCancel = true;
+    }
+    for (auto& block : pane->sizeBlocks) {
+        (void)winrt::detach_abi(block);
+    }
+    pane->sizeBlocks.clear();
     (void)winrt::detach_abi(pane->navSeparator);
     (void)winrt::detach_abi(pane->movedIcon);
     (void)winrt::detach_abi(pane->menuItems);
@@ -19955,6 +20423,20 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
     return module;
 }
 
+// The status bar switch of 0.54 is gone (Explorer has the option itself). If a test of it left
+// Explorer's own "Show status bar" option off, it is given back, once.
+void GiveBackStatusBar() {
+    if (Wh_GetIntValue(L"ui.statusChanged", 0) == 0) {
+        return;
+    }
+    DWORD original = (DWORD)Wh_GetIntValue(L"ui.statusOriginal", 1);
+    Wh_SetIntValue(L"ui.statusChanged", 0);
+    RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", L"ShowStatusBar", REG_DWORD,
+                    &original, sizeof(original));
+    DWORD_PTR result = 0;
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"ShellState", SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1500, &result);
+}
+
 void LoadSettings() {
     g_enabled = SettingBool(L"enabled");
     g_restore = SettingBool(L"restoreOnOpen");
@@ -19970,6 +20452,10 @@ void LoadSettings() {
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_foldersFirst = SettingBool(L"foldersFirst");
     g_oddRows = SettingBool(L"oddRows");
+    g_previewImages = SettingBool(L"previewImages");
+    g_previewMedia = SettingBool(L"previewMedia");
+    g_previewMaxMb = SettingInt(L"previewMaxMb");
+    g_previewMaxMp = SettingInt(L"previewMaxMp");
     g_paneVolume = Wh_GetIntValue(L"ui.paneVolume", 100);
     g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
     g_staleAccent = SettingBool(L"staleAccent");
@@ -20000,6 +20486,7 @@ void LoadSettings() {
         g_panePreviewHeight = height < 90 ? 90 : height > 520 ? 520 : height;
     }
     g_debugLog = SettingBool(L"debugLog");
+    GiveBackStatusBar();
 }
 
 }  // namespace
@@ -20014,7 +20501,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.52.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.54.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

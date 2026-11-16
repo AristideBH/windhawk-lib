@@ -26,6 +26,20 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
     return module;
 }
 
+// The status bar switch of 0.54 is gone (Explorer has the option itself). If a test of it left
+// Explorer's own "Show status bar" option off, it is given back, once.
+void GiveBackStatusBar() {
+    if (Wh_GetIntValue(L"ui.statusChanged", 0) == 0) {
+        return;
+    }
+    DWORD original = (DWORD)Wh_GetIntValue(L"ui.statusOriginal", 1);
+    Wh_SetIntValue(L"ui.statusChanged", 0);
+    RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", L"ShowStatusBar", REG_DWORD,
+                    &original, sizeof(original));
+    DWORD_PTR result = 0;
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"ShellState", SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1500, &result);
+}
+
 void LoadSettings() {
     g_enabled = SettingBool(L"enabled");
     g_restore = SettingBool(L"restoreOnOpen");
@@ -41,6 +55,10 @@ void LoadSettings() {
     g_harmonize = SettingBool(L"harmonizeWidths");
     g_foldersFirst = SettingBool(L"foldersFirst");
     g_oddRows = SettingBool(L"oddRows");
+    g_previewImages = SettingBool(L"previewImages");
+    g_previewMedia = SettingBool(L"previewMedia");
+    g_previewMaxMb = SettingInt(L"previewMaxMb");
+    g_previewMaxMp = SettingInt(L"previewMaxMp");
     g_paneVolume = Wh_GetIntValue(L"ui.paneVolume", 100);
     g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
     g_staleAccent = SettingBool(L"staleAccent");
@@ -71,6 +89,7 @@ void LoadSettings() {
         g_panePreviewHeight = height < 90 ? 90 : height > 520 ? 520 : height;
     }
     g_debugLog = SettingBool(L"debugLog");
+    GiveBackStatusBar();
 }
 
 }  // namespace
@@ -85,7 +104,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.52.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.54.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

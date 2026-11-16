@@ -116,10 +116,18 @@ def cpp_table(schema):
     cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema['cards'].items())
     news = ',\n'.join('    %s' % cpp_string(item) for item in schema.get('whatsNew', []))
     strings = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in schema.get('strings', {}).items())
+    fr = schema.get('fr', {})
+    fr_strings = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in fr.get('strings', {}).items())
+    fr_cards = ',\n'.join('    {%s, %s}' % (cpp_string(k), cpp_string(v)) for k, v in fr.get('cards', {}).items())
+    fr_settings = ',\n'.join('    {%s, %s, %s}' % (cpp_string(k), cpp_string(v['name']), cpp_string(v['description']))
+                             for k, v in fr.get('settings', {}).items())
     return ('constexpr SettingInfo kSettings[] = {\n%s,\n};\n\n'
             'constexpr SettingCard kCards[] = {\n%s,\n};\n\n'
             'constexpr const wchar_t* kWhatsNew[] = {\n%s,\n};\n\n'
-            'constexpr StringInfo kStrings[] = {\n%s,\n};\n') % (',\n'.join(rows), cards, news, strings)
+            'constexpr StringInfo kStrings[] = {\n%s,\n};\n\n'
+            'constexpr StringInfo kStringsFr[] = {\n%s,\n};\n\n'
+            'constexpr SettingCard kCardsFr[] = {\n%s,\n};\n\n'
+            'constexpr SettingText kSettingsFr[] = {\n%s,\n};\n') % (',\n'.join(rows), cards, news, strings, fr_strings, fr_cards, fr_settings)
 
 
 schema = load_schema()
