@@ -16,9 +16,14 @@ thread_local bool g_renaming = false;
 // to Explorer's own Back accelerator, when the keyboard is in it.
 thread_local HWND g_panelWindow = nullptr;
 
+bool PaneHandleAltP(HWND hwnd, LPMSG msg);  // 10d: Alt+P shows or hides the details pane.
+
 using TranslateAcceleratorW_t = int(WINAPI*)(HWND, HACCEL, LPMSG);
 TranslateAcceleratorW_t TranslateAcceleratorW_Original;
 int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
+    if (PaneHandleAltP(hwnd, msg)) {
+        return 1;  // Taken: Explorer's Preview pane never opens.
+    }
     if (g_renaming && msg &&
         (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP ||
          msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
@@ -801,6 +806,10 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             // The folder is read whole, up to a safety cap, and cut to the
             // limit after it is sorted, so the items kept are the first ones
             // in sort order, not whichever the shell listed first.
+            if (g_unloading) {
+                CoTaskMemFree(child);
+                break;  // The mod is unloading: the folder is not read to its end.
+            }
             if ((int)result->entries.size() >= kReadCap) {
                 result->truncated = true;
                 CoTaskMemFree(child);

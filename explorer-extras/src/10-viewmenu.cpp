@@ -279,6 +279,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
         WindowState* state = StateForThisThread(true);
         if (!state->topLevel || !IsWindow(state->topLevel)) {
             state->topLevel = FindTopLevel();
+            WatchWindowClose(state->topLevel);  // A window open before the mod loaded is watched too.
         }
         if (!state->queue) {
             state->queue = mud::DispatcherQueue::GetForCurrentThread();

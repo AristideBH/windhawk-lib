@@ -173,6 +173,16 @@ def strip_no_winrt(data):
 joined = strip_no_winrt(joined)
 target = os.path.join(here, 'explorer-extras.wh.cpp')
 
+# A test build (build.py --debug <file>) also appends every log line to that file, so a crash can be
+# read afterwards. It is written beside the mod, never to the catalog file.
+if '--debug' in sys.argv:
+    log_path = sys.argv[sys.argv.index('--debug') + 1].replace(chr(92), '/')
+    shim = open(os.path.join(here, 'debug-shim.txt'), 'rb').read().replace(bytes([13, 10]), bytes([10]))
+    shim = shim.replace(b'@@LOG_PATH@@', log_path.encode('utf8'))
+    at = joined.index(b'namespace {')
+    joined = joined[:at] + shim + joined[at:]
+    target = os.path.join(here, 'explorer-extras.debug.wh.cpp')
+
 if '--check' in sys.argv:
     current = open(target, 'rb').read() if os.path.exists(target) else b''
     sys.exit(0 if current == joined else 1)

@@ -39,7 +39,9 @@ HWND g_settingsWindow = nullptr;
 DWORD g_settingsThread = 0;
 SettingsUi* g_settingsUi = nullptr;
 bool g_settingsClassMade = false;
-std::atomic<bool> g_settingsAbandon{false};  // The mod is unloading.
+std::atomic<bool> g_settingsAbandon{false};  // The window or the mod is going.
+void DrainUi(mud::DispatcherQueue const& queue);  // 11-window
+std::atomic<bool> g_settingsUnload{false};   // The mod is unloading: the XAML objects are released, not left.
 bool g_settingsBuilding = false;  // A page is being built: its controls change nothing.
 
 constexpr wchar_t kXamlNs[] = L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'";
@@ -168,7 +170,7 @@ void RebuildEverywhere() {
 // Switched off from the window: every window is cleaned up from another thread, since
 // the cleanup waits for this one to run its part.
 void TurnColumnsOffEverywhere() {
-    std::thread([]() { CloseEverything(); }).detach();
+    StartModThread([]() { CloseEverything(); });
 }
 
 void ApplySettingChanged(const SettingInfo& info) {
@@ -219,11 +221,11 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             toggle.MinWidth(0);
             toggle.IsOn(SettingBool(info.id));
             std::wstring id = info.id;
-            toggle.Toggled([id](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            Keep(toggle, toggle.Toggled(winrt::auto_revoke, [id](Inspectable const& sender, mux::RoutedEventArgs const&) {
                 if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
                     CommitSetting(id, changed.IsOn() ? L"1" : L"0");
                 }
-            });
+            }));
             return toggle;
         }
         case SettingKind::Int: {
@@ -235,12 +237,12 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             box.SpinButtonPlacementMode(muxc::NumberBoxSpinButtonPlacementMode::Compact);
             box.ValidationMode(muxc::NumberBoxValidationMode::InvalidInputOverwritten);
             std::wstring id = info.id;
-            box.ValueChanged([id](muxc::NumberBox const&, muxc::NumberBoxValueChangedEventArgs const& args) {
+            Keep(box, box.ValueChanged(winrt::auto_revoke, [id](muxc::NumberBox const&, muxc::NumberBoxValueChangedEventArgs const& args) {
                 double value = args.NewValue();
                 if (value == value) {  // Not a number while the box is cleared.
                     CommitSetting(id, std::to_wstring((int)value));
                 }
-            });
+            }));
             return box;
         }
         case SettingKind::Enum: {
@@ -269,7 +271,7 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
             combo.MinWidth(220);
             std::wstring id = info.id;
             std::wstring choices = info.options;
-            combo.SelectionChanged([id, choices](Inspectable const& sender, muxc::SelectionChangedEventArgs const&) {
+            Keep(combo, combo.SelectionChanged(winrt::auto_revoke, [id, choices](Inspectable const& sender, muxc::SelectionChangedEventArgs const&) {
                 auto box = sender.try_as<muxc::ComboBox>();
                 int index = box ? box.SelectedIndex() : -1;
                 if (index < 0) {
@@ -291,7 +293,7 @@ mux::UIElement MakeSettingControl(SettingInfo const& info) {
                     }
                     at = end + 1;
                 }
-            });
+            }));
             return combo;
         }
         default:
@@ -400,10 +402,10 @@ mux::UIElement BuildHomePage() {
         muxc::Button gotIt;
         gotIt.Content(winrt::box_value(winrt::hstring{Str(L"tip.gotit")}));
         gotIt.VerticalAlignment(mux::VerticalAlignment::Center);
-        gotIt.Click([card](Inspectable const&, mux::RoutedEventArgs const&) {
+        Keep(gotIt, gotIt.Click(winrt::auto_revoke, [card](Inspectable const&, mux::RoutedEventArgs const&) {
             Wh_SetIntValue(L"ui.tipDismissed", 1);
             card.Visibility(mux::Visibility::Collapsed);
-        });
+        }));
         muxc::Grid::SetColumn(gotIt, 1);
         line.Children().Append(gotIt);
         card.Child(line);
@@ -422,11 +424,11 @@ mux::UIElement BuildHomePage() {
         toggle.OffContent(winrt::box_value(L""));
         toggle.MinWidth(0);
         toggle.IsOn(SettingBool(L"enabled"));
-        toggle.Toggled([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+        Keep(toggle, toggle.Toggled(winrt::auto_revoke, [](Inspectable const& sender, mux::RoutedEventArgs const&) {
             if (auto changed = sender.try_as<muxc::ToggleSwitch>()) {
                 CommitSetting(L"enabled", changed.IsOn() ? L"1" : L"0");
             }
-        });
+        }));
         muxc::StackPanel featureRows;
         featureRows.Spacing(2);
         featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? SettingDescription(*enabled) : std::wstring(), toggle));
@@ -466,14 +468,14 @@ mux::UIElement BuildHomePage() {
             button.Content(winrt::box_value(winrt::hstring{label}));
             button.MinWidth(180);
             if (action == QuickAction::Reset) {
-                button.Click([](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); });
+                Keep(button, button.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) { ResetSettingsToWindhawk(); }));
             } else {
-                button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+                Keep(button, button.Click(winrt::auto_revoke, [](Inspectable const& sender, mux::RoutedEventArgs const&) {
                     bool copied = CopyTextToClipboard(g_settingsWindow, DiagnosticsText());
                     if (auto clicked = sender.try_as<muxc::Button>()) {
                         clicked.Content(winrt::box_value(winrt::hstring{copied ? Str(L"action.copy.done") : Str(L"action.copy.fail")}));
                     }
-                });
+                }));
             }
             rows.Children().Append(MakeSettingRow(label, detail, button));
         }
@@ -489,9 +491,9 @@ mux::UIElement BuildHomePage() {
         muxc::HyperlinkButton link;
         link.Content(winrt::box_value(winrt::hstring{Str(L"about.link")}));
         link.Padding(mux::Thickness{0, 0, 0, 0});
-        link.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+        Keep(link, link.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) {
             ShellExecuteW(nullptr, L"open", L"https://github.com/AristideBH/windhawk-lib", nullptr, nullptr, SW_SHOWNORMAL);
-        });
+        }));
         card.Child(MakeSettingRow(Str(L"about.creator"), Str(L"about.detail"), link));
         page.Children().Append(card);
     }
@@ -841,8 +843,19 @@ LRESULT CALLBACK SettingsWindowProc(HWND window, UINT message, WPARAM wparam, LP
                 ShowWindow(window, SW_HIDE);
                 return 0;
             }
-            DestroySettingsUi(true);
+            // At unload the objects are released while the window still exists, as the pane's are.
+            if (g_settingsUnload) {
+                RevokeAllHandlers();
+            }
+            DestroySettingsUi(!g_settingsUnload);
             DestroyWindow(window);
+            if (g_settingsUnload) {
+                // XAML frees the window's objects on later turns, and their delegates are the mod's code.
+                try {
+                    DrainUi(winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread());
+                } catch (...) {
+                }
+            }
             return 0;
         case WM_DESTROY:
             if (g_settingsWindow == window) {
@@ -1003,13 +1016,13 @@ void OpenSettingsWindow(WindowState* state) {
         root.Children().Append(host);
         ui->navHost = host;
         ui->navToggle = toggle;
-        toggle.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+        Keep(toggle, toggle.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) {
             SettingsUi* now = g_settingsUi;
             if (now) {
                 now->expanded = !now->expanded;
                 ApplyNavMode(now);
             }
-        });
+        }));
 
         muxc::ScrollViewer content;
         content.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
@@ -1018,7 +1031,7 @@ void OpenSettingsWindow(WindowState* state) {
         root.Children().Append(content);
         ui->content = content;
         // A press on the page closes the sidebar that was opened over it.
-        content.AddHandler(mux::UIElement::PointerPressedEvent(),
+        AddRouted(content, mux::UIElement::PointerPressedEvent(),
                            winrt::box_value(mux::Input::PointerEventHandler(
                                [](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
                                    SettingsUi* now = g_settingsUi;
@@ -1026,10 +1039,9 @@ void OpenSettingsWindow(WindowState* state) {
                                        now->expanded = false;
                                        ApplyNavMode(now);
                                    }
-                               })),
-                           true);
+                               })));
         // The width decides: below 760 px the sidebar is a rail.
-        root.SizeChanged([](Inspectable const&, mux::SizeChangedEventArgs const& sizeArgs) {
+        Keep(root, root.SizeChanged(winrt::auto_revoke, [](Inspectable const&, mux::SizeChangedEventArgs const& sizeArgs) {
             SettingsUi* now = g_settingsUi;
             if (!now) {
                 return;
@@ -1040,9 +1052,9 @@ void OpenSettingsWindow(WindowState* state) {
                 now->expanded = false;
                 ApplyNavMode(now);
             }
-        });
+        }));
 
-        nav.SelectionChanged([](Inspectable const&, muxc::SelectionChangedEventArgs const&) {
+        Keep(nav, nav.SelectionChanged(winrt::auto_revoke, [](Inspectable const&, muxc::SelectionChangedEventArgs const&) {
             SettingsUi* now = g_settingsUi;
             if (now && now->nav) {
                 int selected = now->nav.SelectedIndex();
@@ -1054,11 +1066,11 @@ void OpenSettingsWindow(WindowState* state) {
                     ApplyNavMode(now);
                 }
             }
-        });
-        root.ActualThemeChanged([window](mux::FrameworkElement const&, Inspectable const&) {
+        }));
+        Keep(root, root.ActualThemeChanged(winrt::auto_revoke, [window](mux::FrameworkElement const&, Inspectable const&) {
             ApplySettingsWindowTheme(window, g_settingsUi);
             RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-        });
+        }));
         ui->source.Content(root);
 
         ui->page = page;
@@ -1096,12 +1108,16 @@ void CloseSettingsWindowOfThread() {
 // The mod is unloading: ask the window to close, on its own thread, and let the class go.
 void CloseSettingsWindowAtUnload() {
     g_settingsAbandon = true;
+    g_settingsUnload = true;
     if (g_settingsWindow && IsWindow(g_settingsWindow)) {
-        DWORD_PTR result = 0;
-        SendMessageTimeoutW(g_settingsWindow, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 3000, &result);
+        // Sent, not posted: the window is gone and its objects released when this returns.
+        SendMessageW(g_settingsWindow, WM_CLOSE, 0, 0);
     }
     if (g_settingsClassMade) {
-        UnregisterClassW(kSettingsClass, ModHandle());
-        g_settingsClassMade = false;
+        if (UnregisterClassW(kSettingsClass, ModHandle())) {
+            g_settingsClassMade = false;
+        } else {
+            Wh_Log(L"settings window: the class is still in use, gle=%lu", GetLastError());
+        }
     }
 }

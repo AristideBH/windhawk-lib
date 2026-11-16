@@ -6,6 +6,63 @@
 // ---------------------------------------------------------------------------
 
 using Inspectable = winrt::Windows::Foundation::IInspectable;
+
+// Every handler the mod gives to an element is kept here as a revoker, one list per UI thread. XAML
+// frees an element's delegates late, on turns of its own, and their code is in the mod: so at unload
+// every handler is taken off first, while the mod is still mapped (Explorer Command Bar does the same).
+struct KeptHandler {
+    winrt::weak_ref<Inspectable> element;
+    std::shared_ptr<void> revoker;
+};
+// No destructor at thread exit: it would run after the mod is gone.
+[[clang::no_destroy]] thread_local std::vector<KeptHandler> t_handlers;
+thread_local unsigned t_handlersSince = 0;
+
+template <typename Element, typename Revoker>
+void Keep(Element const& element, Revoker&& revoker) {
+    // The handlers of elements that are gone are dropped now and then, so the list stays short.
+    if (++t_handlersSince >= 256) {
+        t_handlersSince = 0;
+        t_handlers.erase(std::remove_if(t_handlers.begin(), t_handlers.end(),
+                                        [](KeptHandler const& kept) { return !kept.element.get(); }),
+                         t_handlers.end());
+    }
+    KeptHandler kept;
+    kept.element = winrt::make_weak(element.template as<Inspectable>());
+    kept.revoker = std::make_shared<std::decay_t<Revoker>>(std::move(revoker));
+    t_handlers.push_back(std::move(kept));
+}
+
+// A routed-event handler that also hears what was handled already, kept the same way.
+template <typename Element>
+void AddRouted(Element const& element, mux::RoutedEvent const& routed, Inspectable const& handler) {
+    element.AddHandler(routed, handler, true);
+    auto weak = winrt::make_weak(element);
+    KeptHandler kept;
+    kept.element = winrt::make_weak(element.template as<Inspectable>());
+    kept.revoker = std::shared_ptr<void>(new int(0), [weak, routed, handler](int* unused) {
+        delete unused;
+        if (auto alive = weak.get()) {
+            try {
+                alive.RemoveHandler(routed, handler);
+            } catch (...) {
+            }
+        }
+    });
+    t_handlers.push_back(std::move(kept));
+}
+
+// Takes every handler of this thread off its element.
+void RevokeAllHandlers() {
+    auto all = std::move(t_handlers);
+    t_handlers.clear();
+    for (size_t i = all.size(); i-- > 0;) {
+        try {
+            all[i].revoker.reset();
+        } catch (...) {
+        }
+    }
+}
 using ItemsVector =
     winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase>;
 
@@ -422,6 +479,7 @@ bool OnDragReleased(WindowState* state);
 void CancelDrag(WindowState* state);
 void StartDetails(WindowState* state);
 void AbandonDetails(WindowState* state);
+void WatchWindowClose(HWND top);  // 11-window: the window releases its objects when it is closed.
 void ReleaseDetails(WindowState* state);
 
 std::mutex g_statesMutex;

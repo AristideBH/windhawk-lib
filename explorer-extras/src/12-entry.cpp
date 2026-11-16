@@ -79,6 +79,7 @@ void LoadSettings() {
 }  // namespace
 
 BOOL Wh_ModInit() {
+    g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     LoadSettings();
 #if defined(_M_ARM64) || defined(__aarch64__)
     const wchar_t* arch = L"arm64";
@@ -87,7 +88,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.56.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.60.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -128,10 +129,8 @@ void Wh_ModSettingsChanged() {
 
 void Wh_ModBeforeUninit() {
     g_unloading = true;
-    for (int i = 0; i < 60 && (g_compressJobs > 0 || g_paneJobs > 0); i++) {
-        Sleep(50);  // An archive being made by tar.exe, or details being read: the thread ends in this code.
-    }
-    // The worker first, so no result is queued after the windows are cleaned.
+    // Every thread of the mod ends first, so no result is queued after the windows are cleaned.
+    JoinModThreads();
     StopWorker();
     CloseEverything();
 }
@@ -139,5 +138,9 @@ void Wh_ModBeforeUninit() {
 void Wh_ModUninit() {
     CloseSettingsWindowAtUnload();
     UnregisterNotifyClass();
+    if (g_stopEvent) {
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+    }
     Wh_Log(L"explorer-extras end");
 }

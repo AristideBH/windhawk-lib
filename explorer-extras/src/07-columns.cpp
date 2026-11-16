@@ -1207,7 +1207,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                 state->fadeTimer = timer;
                 timer.Interval(std::chrono::milliseconds(110));
                 timer.IsRepeating(false);
-                timer.Tick([column, generation, loaded](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                Keep(timer, timer.Tick(winrt::auto_revoke, [column, generation, loaded](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                     sender.Stop();
                     WindowState* now = StateForThisThread(false);
                     if (!now || !now->on || g_unloading) {
@@ -1231,7 +1231,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                         LogHresult(L"the patch after the fade");
                     }
                     now->building = wasBuilding;
-                });
+                }));
                 timer.Start();
                 return true;
             } catch (...) {
@@ -1621,11 +1621,11 @@ void PillGoTo(muxc::Border const& pill, double scaleTo, double offsetTo, int mil
         add(L"(UIElement.RenderTransform).(CompositeTransform.ScaleY)", motion.ScaleY(), scaleTo);
         add(L"(UIElement.RenderTransform).(CompositeTransform.TranslateY)", motion.TranslateY(), offsetTo);
         if (hideAtEnd) {
-            board.Completed([pill](Inspectable const&, Inspectable const&) {
+            Keep(board, board.Completed(winrt::auto_revoke, [pill](Inspectable const&, Inspectable const&) {
                 if (!winrt::unbox_value_or<bool>(pill.Tag(), false)) {
                     pill.Opacity(0);
                 }
-            });
+            }));
         }
         board.Begin();
     } catch (...) {
@@ -1729,7 +1729,7 @@ void HarmonizeWidths(WindowState* state) {
     auto timer = state->queue.CreateTimer();
     timer.Interval(std::chrono::milliseconds(16));
     auto frames = std::make_shared<int>(0);
-    timer.Tick([frames](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+    Keep(timer, timer.Tick(winrt::auto_revoke, [frames](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
         WindowState* state = StateForThisThread(false);
         if (!state || !state->on) {
             sender.Stop();
@@ -1748,7 +1748,7 @@ void HarmonizeWidths(WindowState* state) {
             }
             UpdatePill(state, false);
         }
-    });
+    }));
     timer.Start();
     Wh_Log(L"widths harmonized to %d across %d columns", (int)target, (int)state->columns.size());
 }
@@ -1905,8 +1905,8 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             } catch (...) {
             }
         });
-    list.AddHandler(mux::UIElement::PointerPressedEvent(),
-                    winrt::box_value(column->stopScrollHandler), true);
+    AddRouted(list, mux::UIElement::PointerPressedEvent(),
+                    winrt::box_value(column->stopScrollHandler));
     column->releaseToken = list.PointerReleased(
         [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& relArgs) {
             if (relArgs.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
@@ -1980,7 +1980,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             }
         });
     // Touch, for the log: a hold, and a pointer that the system takes away (a pan).
-    list.Holding([](Inspectable const& sender, mux::Input::HoldingRoutedEventArgs const& args) {
+    Keep(list, list.Holding(winrt::auto_revoke, [](Inspectable const& sender, mux::Input::HoldingRoutedEventArgs const& args) {
         Wh_Log(L"touch: holding state=%d device=%d", (int)args.HoldingState(), (int)args.PointerDeviceType());
         if ((int)args.HoldingState() == 0 && (int)args.PointerDeviceType() == 0) {
             WindowState* holdState = StateForThisThread(false);
@@ -1988,17 +1988,17 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 OnDragHold(holdState, list);
             }
         }
-    });
-    list.PointerCanceled([](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+    }));
+    Keep(list, list.PointerCanceled(winrt::auto_revoke, [](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
         Wh_Log(L"touch: the pointer was cancelled, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
             args.Pointer().PointerId());
-    });
-    list.PointerCaptureLost([](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+    }));
+    Keep(list, list.PointerCaptureLost(winrt::auto_revoke, [](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
         if (args.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
             Wh_Log(L"touch: the pointer capture was lost, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
                 args.Pointer().PointerId());
         }
-    });
+    }));
     column->rightTapToken = list.RightTapped(
         [](Inspectable const& sender,
            mux::Input::RightTappedRoutedEventArgs const& args) {

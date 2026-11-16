@@ -111,8 +111,6 @@ struct DetailsPane {
     muxc::FontIcon mediaVolume{nullptr};  // and sound on or off.
     bool mediaIgnore = false;
     bool mediaDragging = false;
-    HHOOK keyHook = nullptr;  // Alt+P is taken here and turned into Alt+Shift+P.
-    bool altPHeld = false;
     ItemsVector menuItems{nullptr};     // The View menu's items, when our entry is in them.
     muxc::MenuFlyoutItemBase menuToggle{nullptr};  // Our entry in the View menu: the one that shows the pane.
     std::vector<muxc::RadioMenuFlyoutItem> hiddenRadios;  // Explorer's own Details and Preview entries.
@@ -120,6 +118,7 @@ struct DetailsPane {
     muxc::ToggleMenuFlyoutItem navOriginal{nullptr};  // Explorer's, in the Show submenu (hidden).
     muxc::IconElement navIcon{nullptr};   // The duotone icon of Explorer's navigation entry, moved to ours.
     ULONGLONG navInvokeAt = 0;
+    winrt::event_token toolClickToken{}, menuClickToken{}, navClickToken{};  // Revoked at the end: Explorer keeps these elements.
     muxc::AppBarToggleButton toolToggle{nullptr};  // Our toggle, in the place of Explorer's at the end of the toolbar.
     mux::FrameworkElement toolNative{nullptr};     // Explorer's own Details toggle (hidden).
     muxc::CommandBar toolBar{nullptr};
@@ -130,8 +129,8 @@ struct DetailsPane {
     ULONGLONG toggleHoldUntil = 0;
     muxc::MenuFlyoutItemBase navSeparator{nullptr};  // The line that followed it in the Show submenu (hidden).
     muxc::IconElement movedIcon{nullptr};  // The icon Explorer gave its Details entry, now on ours.
+    ULONGLONG ownToggleUntil = 0;       // The mod is toggling Explorer's own control: it is not a command of the user.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
-    bool altPDown = false;
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
     bool dragging = false;       // The height handle is being dragged: the preview waits.
     bool previewFocused = false;  // The mouse is over the preview, which has the keyboard focus.
@@ -674,7 +673,7 @@ muxc::Button PaneActionButton(const wchar_t* glyph, const wchar_t* label, const 
     button.Padding(mux::Thickness{8, 7, 8, 7});
     button.IsEnabled(enabled);
     muxc::ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{tip}));
-    button.Click([action](Inspectable const&, mux::RoutedEventArgs const&) {
+    Keep(button, button.Click(winrt::auto_revoke, [action](Inspectable const&, mux::RoutedEventArgs const&) {
         WindowState* state = StateForThisThread(false);
         if (!state || !state->details || g_unloading) {
             return;
@@ -685,7 +684,7 @@ muxc::Button PaneActionButton(const wchar_t* glyph, const wchar_t* label, const 
         } catch (...) {
             LogHresult(L"a pane action");
         }
-    });
+    }));
     return button;
 }
 
@@ -730,7 +729,7 @@ muxc::StackPanel PaneRows(std::vector<PaneRow> const& rows) {
         muxc::Grid::SetColumn(value, 1);
         std::wstring text = row.value;
         muxc::ToolTipService::SetToolTip(value, winrt::box_value(winrt::hstring{Str(L"pane.clicktocopy")}));
-        value.Tapped([text](Inspectable const& sender, mux::Input::TappedRoutedEventArgs const&) {
+        Keep(value, value.Tapped(winrt::auto_revoke, [text](Inspectable const& sender, mux::Input::TappedRoutedEventArgs const&) {
             WindowState* state = StateForThisThread(false);
             if (!state || g_unloading) {
                 return;
@@ -739,7 +738,7 @@ muxc::StackPanel PaneRows(std::vector<PaneRow> const& rows) {
             if (auto block = sender.try_as<muxc::TextBlock>()) {
                 muxc::ToolTipService::SetToolTip(block, winrt::box_value(winrt::hstring{Str(L"pane.copied")}));
             }
-        });
+        }));
         entry.Children().Append(value);
         list.Children().Append(entry);
     }
@@ -907,7 +906,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             icon.HorizontalAlignment(mux::HorizontalAlignment::Center);
             icon.VerticalAlignment(mux::VerticalAlignment::Center);
             button.Child(icon);
-            button.Tapped([](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) {
+            Keep(button, button.Tapped(winrt::auto_revoke, [](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (now && now->details && !g_unloading) {
                     if (now->details->deferred && !now->details->previewReady) {
@@ -920,7 +919,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                     }
                     PaneGiveFocusBack(now);
                 }
-            });
+            }));
             layered.Children().Append(button);
             frame.Child(layered);
             pane->spinner = ring;
@@ -959,7 +958,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                 PaneAfter(now, pane, 60, [now, pane]() { PaneLayoutPreview(now, pane); });
             }
         };
-        handle.PointerPressed([drag, pill](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+        Keep(handle, handle.PointerPressed(winrt::auto_revoke, [drag, pill](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
             if (WindowState* now = StateForThisThread(false)) {
                 if (now->details && !g_unloading) {
                     now->details->dragging = true;
@@ -974,25 +973,25 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             element.CapturePointer(args.Pointer());
             pill.Opacity(0.9);
             args.Handled(true);
-        });
-        handle.PointerMoved([drag, frame](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+        }));
+        Keep(handle, handle.PointerMoved(winrt::auto_revoke, [drag, frame](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
             if (drag->first) {
                 double height = args.GetCurrentPoint(nullptr).Position().Y - drag->second;
                 g_panePreviewHeight = height < 90 ? 90 : height > 520 ? 520 : height;
                 frame.Height(g_panePreviewHeight);
             }
-        });
-        handle.PointerReleased([drag, finish](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+        }));
+        Keep(handle, handle.PointerReleased(winrt::auto_revoke, [drag, finish](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
             if (drag->first) {
                 sender.as<mux::UIElement>().ReleasePointerCapture(args.Pointer());
                 finish();
             }
-        });
-        handle.PointerCanceled([drag, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        }));
+        Keep(handle, handle.PointerCanceled(winrt::auto_revoke, [drag, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
             if (drag->first) {
                 finish();
             }
-        });
+        }));
         page.Children().Append(handle);
     }
 
@@ -1087,7 +1086,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             actions.Children().Append(button);
         }
         // Narrow pane: only the icons stay (the names are in the tooltips).
-        actions.SizeChanged([](Inspectable const& sender, mux::SizeChangedEventArgs const& args) {
+        Keep(actions, actions.SizeChanged(winrt::auto_revoke, [](Inspectable const& sender, mux::SizeChangedEventArgs const& args) {
             auto grid = sender.try_as<muxc::Grid>();
             if (!grid || grid.Children().Size() == 0) {
                 return;
@@ -1103,7 +1102,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                     }
                 }
             }
-        });
+        }));
         page.Children().Append(actions);
     }
 
@@ -1137,7 +1136,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
         line.Children().Append(chevron);
         toggle.Content(line);
         toggle.Padding(mux::Thickness{0, 4, 0, 4});
-        toggle.Click([more, label, chevron](Inspectable const&, mux::RoutedEventArgs const&) {
+        Keep(toggle, toggle.Click(winrt::auto_revoke, [more, label, chevron](Inspectable const&, mux::RoutedEventArgs const&) {
             WindowState* state = StateForThisThread(false);
             if (!state || !state->details || g_unloading) {
                 return;
@@ -1164,7 +1163,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
             label.Text(now->expanded ? Str(L"pane.less") : Str(L"pane.more"));
             chevron.Glyph(now->expanded ? L"" : L"");
             PaneGiveFocusBack(state);
-        });
+        }));
         details.Children().Append(toggle);
         details.Children().Append(more);
     }
@@ -1772,10 +1771,10 @@ muxc::ScrollViewer PaneImageView(mux::Media::Imaging::BitmapImage const& bitmap)
     muxc::Grid holder;
     holder.Children().Append(image);
     view.Content(holder);
-    view.SizeChanged([holder](Inspectable const&, mux::SizeChangedEventArgs const& args) {
+    Keep(view, view.SizeChanged(winrt::auto_revoke, [holder](Inspectable const&, mux::SizeChangedEventArgs const& args) {
         holder.Width(args.NewSize().Width);
         holder.Height(args.NewSize().Height);
-    });
+    }));
     // The zoom keeps the point under the pointer where it is.
     auto zoomAt = [](muxc::ScrollViewer const& v, winrt::Windows::Foundation::Point point, float next) {
         float old = v.ZoomFactor();
@@ -1787,7 +1786,7 @@ muxc::ScrollViewer PaneImageView(mux::Media::Imaging::BitmapImage const& bitmap)
         double w = (v.VerticalOffset() + point.Y) * next / old - point.Y;
         v.ChangeView(h, w, next, true);
     };
-    view.PointerWheelChanged([zoomAt](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+    Keep(view, view.PointerWheelChanged(winrt::auto_revoke, [zoomAt](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
         auto v = sender.as<muxc::ScrollViewer>();
         auto properties = args.GetCurrentPoint(v).Properties();
         if (properties.IsHorizontalMouseWheel()) {
@@ -1795,8 +1794,8 @@ muxc::ScrollViewer PaneImageView(mux::Media::Imaging::BitmapImage const& bitmap)
         }
         zoomAt(v, args.GetCurrentPoint(v).Position(), v.ZoomFactor() * (properties.MouseWheelDelta() > 0 ? 1.25f : 0.8f));
         args.Handled(true);
-    });
-    view.DoubleTapped([zoomAt](Inspectable const& sender, mux::Input::DoubleTappedRoutedEventArgs const& args) {
+    }));
+    Keep(view, view.DoubleTapped(winrt::auto_revoke, [zoomAt](Inspectable const& sender, mux::Input::DoubleTappedRoutedEventArgs const& args) {
         auto v = sender.as<muxc::ScrollViewer>();
         if (v.ZoomFactor() > 1.05f) {
             v.ChangeView(0.0, 0.0, 1.0f);
@@ -1804,14 +1803,14 @@ muxc::ScrollViewer PaneImageView(mux::Media::Imaging::BitmapImage const& bitmap)
             zoomAt(v, args.GetPosition(v), 3.0f);
         }
         args.Handled(true);
-    });
+    }));
     struct Drag {
         bool on = false;
         winrt::Windows::Foundation::Point start{};
         double h = 0, v = 0;
     };
     auto drag = std::make_shared<Drag>();
-    view.PointerPressed([drag](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+    Keep(view, view.PointerPressed(winrt::auto_revoke, [drag](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
         auto v = sender.as<muxc::ScrollViewer>();
         auto point = args.GetCurrentPoint(v);
         if (args.Pointer().PointerDeviceType() == winrt::Microsoft::UI::Input::PointerDeviceType::Mouse && point.Properties().IsLeftButtonPressed() &&
@@ -1822,22 +1821,22 @@ muxc::ScrollViewer PaneImageView(mux::Media::Imaging::BitmapImage const& bitmap)
             drag->v = v.VerticalOffset();
             v.CapturePointer(args.Pointer());
         }
-    });
-    view.PointerMoved([drag](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+    }));
+    Keep(view, view.PointerMoved(winrt::auto_revoke, [drag](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
         if (drag->on) {
             auto v = sender.as<muxc::ScrollViewer>();
             auto point = args.GetCurrentPoint(v).Position();
             v.ChangeView(drag->h - (point.X - drag->start.X), drag->v - (point.Y - drag->start.Y), nullptr, true);
         }
-    });
+    }));
     auto release = [drag](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
         if (drag->on) {
             drag->on = false;
             sender.as<muxc::ScrollViewer>().ReleasePointerCapture(args.Pointer());
         }
     };
-    view.PointerReleased(release);
-    view.PointerCanceled([drag](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { drag->on = false; });
+    Keep(view, view.PointerReleased(winrt::auto_revoke, release));
+    Keep(view, view.PointerCanceled(winrt::auto_revoke, [drag](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { drag->on = false; }));
     return view;
 }
 
@@ -1985,7 +1984,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
     };
     auto playIcon = makeIcon(L"\uE768");
     auto playButton = makeButton(playIcon);
-    playButton.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+    Keep(playButton, playButton.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) {
         WindowState* now = StateForThisThread(false);
         if (!now || !now->details || !now->details->mediaPlayer || g_unloading) {
             return;
@@ -1999,7 +1998,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
             }
         } catch (...) {
         }
-    });
+    }));
     muxc::Grid::SetColumn(playButton, 0);
     bar.Children().Append(playButton);
 
@@ -2010,7 +2009,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
     slider.IsThumbToolTipEnabled(false);
     slider.VerticalAlignment(mux::VerticalAlignment::Center);
     slider.Margin(mux::Thickness{6, 0, 8, 0});
-    slider.ValueChanged([](Inspectable const&, muxc::Primitives::RangeBaseValueChangedEventArgs const& args) {
+    Keep(slider, slider.ValueChanged(winrt::auto_revoke, [](Inspectable const&, muxc::Primitives::RangeBaseValueChangedEventArgs const& args) {
         WindowState* now = StateForThisThread(false);
         if (!now || !now->details || !now->details->mediaPlayer || now->details->mediaIgnore || g_unloading) {
             return;
@@ -2020,7 +2019,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
                 winrt::Windows::Foundation::TimeSpan(static_cast<int64_t>(args.NewValue() * 10000000.0)));
         } catch (...) {
         }
-    });
+    }));
     auto pressed = [](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
         WindowState* now = StateForThisThread(false);
         if (now && now->details) {
@@ -2033,9 +2032,9 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
             now->details->mediaDragging = false;
         }
     };
-    slider.AddHandler(mux::UIElement::PointerPressedEvent(), winrt::box_value(mux::Input::PointerEventHandler(pressed)), true);
-    slider.AddHandler(mux::UIElement::PointerReleasedEvent(), winrt::box_value(mux::Input::PointerEventHandler(released)), true);
-    slider.AddHandler(mux::UIElement::PointerCaptureLostEvent(), winrt::box_value(mux::Input::PointerEventHandler(released)), true);
+    AddRouted(slider, mux::UIElement::PointerPressedEvent(), winrt::box_value(mux::Input::PointerEventHandler(pressed)));
+    AddRouted(slider, mux::UIElement::PointerReleasedEvent(), winrt::box_value(mux::Input::PointerEventHandler(released)));
+    AddRouted(slider, mux::UIElement::PointerCaptureLostEvent(), winrt::box_value(mux::Input::PointerEventHandler(released)));
     muxc::Grid::SetColumn(slider, 1);
     bar.Children().Append(slider);
 
@@ -2050,7 +2049,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
 
     auto volumeIcon = makeIcon(g_paneMuted ? L"\uE74F" : L"\uE767");
     auto volumeButton = makeButton(volumeIcon);
-    volumeButton.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+    Keep(volumeButton, volumeButton.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) {
         WindowState* now = StateForThisThread(false);
         if (now && now->details && now->details->mediaPlayer && !g_unloading) {
             try {
@@ -2058,7 +2057,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
             } catch (...) {
             }
         }
-    });
+    }));
     muxc::Grid::SetColumn(volumeButton, 3);
     bar.Children().Append(volumeButton);
 
@@ -2074,18 +2073,18 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
         fade.Duration(std::chrono::milliseconds(150));
         bar.OpacityTransition(fade);
         bar.Opacity(0.0);
-        root.PointerEntered([bar](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { bar.Opacity(1.0); });
-        root.PointerExited([bar](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        Keep(root, root.PointerEntered(winrt::auto_revoke, [bar](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { bar.Opacity(1.0); }));
+        Keep(root, root.PointerExited(winrt::auto_revoke, [bar](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
             WindowState* now = StateForThisThread(false);
             if (!(now && now->details && now->details->mediaDragging)) {
                 bar.Opacity(0.0);
             }
-        });
-        root.Tapped([bar](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) { bar.Opacity(bar.Opacity() > 0.5 ? 0.0 : 1.0); });
+        }));
+        Keep(root, root.Tapped(winrt::auto_revoke, [bar](Inspectable const&, mux::Input::TappedRoutedEventArgs const&) { bar.Opacity(bar.Opacity() > 0.5 ? 0.0 : 1.0); }));
     }
 
     // A file that cannot be played says so (the event comes from another thread).
-    player.MediaFailed([root, queue, thread](media::Playback::MediaPlayer const&, media::Playback::MediaPlayerFailedEventArgs const&) {
+    Keep(player, player.MediaFailed(winrt::auto_revoke, [root, queue, thread](media::Playback::MediaPlayer const&, media::Playback::MediaPlayerFailedEventArgs const&) {
         try {
             queue.TryEnqueue([root, thread]() {
                 if (g_unloading) {
@@ -2102,7 +2101,7 @@ mux::UIElement PaneMediaView(PaneData const& data, DetailsPane* pane, bool audio
             });
         } catch (...) {
         }
-    });
+    }));
     return root;
 }
 
@@ -2166,9 +2165,8 @@ void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const&
     auto queue = state->queue;
     auto roots = data->sizeRoots;
     ULONGLONG base = data->sizeBase;
-    g_paneJobs++;
     try {
-        std::thread([queue, thread, key, roots, base, cancel]() mutable {
+        StartModThread([queue, thread, key, roots, base, cancel]() mutable {
             auto result = std::make_shared<PaneSizeState>();
             result->bytes = base;
             ULONGLONG began = GetTickCount64(), lastPost = began, entries = 0;
@@ -2236,10 +2234,8 @@ void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const&
                 post(true);
             }
             queue = nullptr;
-            g_paneJobs--;
-        }).detach();
+        });
     } catch (...) {
-        g_paneJobs--;
         LogHresult(L"starting the folder size");
     }
 }
@@ -2259,7 +2255,7 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
             pane->layered.Children().InsertAt(at, view);
             pane->previewLayer = view;
             pane->pendingImage = bitmap;
-            bitmap.ImageOpened([thread, key](Inspectable const&, mux::RoutedEventArgs const&) {
+            Keep(bitmap, bitmap.ImageOpened(winrt::auto_revoke, [thread, key](Inspectable const&, mux::RoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (g_unloading || !now || now->thread != thread || !now->details) {
                     return;
@@ -2279,8 +2275,8 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
                     LogHresult(L"showing the image");
                     PaneCornerUpdate(current);
                 }
-            });
-            bitmap.ImageFailed([thread, key](Inspectable const&, mux::ExceptionRoutedEventArgs const&) {
+            }));
+            Keep(bitmap, bitmap.ImageFailed(winrt::auto_revoke, [thread, key](Inspectable const&, mux::ExceptionRoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (g_unloading || !now || now->thread != thread || !now->details) {
                     return;
@@ -2297,7 +2293,7 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
                 }
                 PaneCornerUpdate(current);
                 Wh_Log(L"preview: the image could not be opened, the thumbnail stays");
-            });
+            }));
             bitmap.UriSource(winrt::Windows::Foundation::Uri(PaneFileUri(data->previewPath)));
         } else {
             PaneInstallLayer(state, pane, PaneMediaView(*data, pane, data->previewKind == 6, thread, state->queue));
@@ -2373,9 +2369,8 @@ void PaneStartXamlPreview(WindowState* state, DetailsPane* pane, std::wstring co
     std::wstring path = data->previewPath;
     DWORD thread = GetCurrentThreadId();
     auto queue = state->queue;
-    g_paneJobs++;
     try {
-        std::thread([queue, thread, key, kind, path]() mutable {
+        StartModThread([queue, thread, key, kind, path]() mutable {
             CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             auto result = std::make_shared<PaneXamlResult>();
             try {
@@ -2410,10 +2405,8 @@ void PaneStartXamlPreview(WindowState* state, DetailsPane* pane, std::wstring co
             queue = nullptr;
             result.reset();
             CoUninitialize();
-            g_paneJobs--;
-        }).detach();
+        });
     } catch (...) {
-        g_paneJobs--;
         pane->loading = false;
         LogHresult(L"starting the preview reader");
     }
@@ -2578,30 +2571,86 @@ void PaneSyncPanel(WindowState* state) {
 
 // ---- The View menu: one entry for the pane, in place of Explorer's two ----
 
-// Alt+Shift+P: Explorer's Details pane shortcut, which shows (or hides) our pane.
-bool PaneSendShortcut(WindowState* state) {
-    HWND front = GetForegroundWindow();
-    if (!front || GetAncestor(front, GA_ROOT) != state->topLevel) {
+// Explorer's own Details control is used, as a person would: its toggle on the toolbar, or its
+// entry of the View menu. Our pane follows it. No keys are sent.
+bool PaneToggleNative(WindowState* state, bool useMenuEntry = false) {
+    DetailsPane* pane = state->details;
+    if (!pane) {
+        return true;
+    }
+    mux::FrameworkElement native{nullptr};
+    if (pane->toolNative && !useMenuEntry) {
+        native = pane->toolNative;
+    } else if (!pane->hiddenRadios.empty()) {
+        native = pane->hiddenRadios[0];
+    }
+    if (!native) {
+        Wh_Log(L"details pane: there is no Explorer control to toggle");
+        return true;  // Nothing to wait for.
+    }
+    try {
+        auto before = native.Visibility();
+        double opacity = native.Opacity();
+        bool hit = native.IsHitTestVisible();
+        double width = native.Width(), minWidth = native.MinWidth();
+        auto margin = native.Margin();
+        native.Opacity(0.0);
+        native.IsHitTestVisible(false);
+        // No width, so it takes no room in the toolbar while it is made visible: our toggle, in its
+        // place, must not move.
+        native.MinWidth(0.0);
+        native.Width(0.0);
+        native.Margin(mux::Thickness{0, 0, 0, 0});
+        native.Visibility(mux::Visibility::Visible);
+        pane->ownToggleUntil = GetTickCount64() + 1200;
+        auto peer = mux::Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(native);
+        bool done = false;
+        if (auto toggle = peer.GetPattern(mux::Automation::Peers::PatternInterface::Toggle)
+                              .try_as<mux::Automation::Provider::IToggleProvider>()) {
+            toggle.Toggle();
+            done = true;
+        } else if (auto invoke = peer.GetPattern(mux::Automation::Peers::PatternInterface::Invoke)
+                                     .try_as<mux::Automation::Provider::IInvokeProvider>()) {
+            invoke.Invoke();
+            done = true;
+        }
+        Wh_Log(L"details pane: Explorer's own control was %s", done ? L"toggled" : L"not usable");
+        PaneAfter(state, pane, 200, [native, before, opacity, hit, width, minWidth, margin]() {
+            native.Visibility(before);
+            native.Width(width);
+            native.MinWidth(minWidth);
+            native.Margin(margin);
+            native.Opacity(opacity);
+            native.IsHitTestVisible(hit);
+        });
+    } catch (...) {
+        LogHresult(L"toggling Explorer's details control");
+    }
+    return true;
+}
+
+// Alt+P is Explorer's Preview pane shortcut. It is taken before Explorer sees it, in the accelerator
+// hook of the window's thread, and shows or hides this pane instead, so that Explorer's Preview
+// pane never opens. Alt+P is dealt with here only while the window is one of ours.
+bool PaneHandleAltP(HWND hwnd, LPMSG msg) {
+    (void)hwnd;
+    if (!msg || (msg->message != WM_SYSKEYDOWN && msg->message != WM_SYSKEYUP) || msg->wParam != 'P' ||
+        !(msg->lParam & (1 << 29)) || !g_detailsPane || !g_previewRedirect || g_unloading) {
         return false;
     }
-    if ((GetAsyncKeyState(VK_MENU) | GetAsyncKeyState(VK_SHIFT) | GetAsyncKeyState(VK_CONTROL) | GetAsyncKeyState('P')) & 0x8000) {
+    if ((GetKeyState(VK_SHIFT) | GetKeyState(VK_CONTROL)) & 0x8000) {
         return false;
     }
-    INPUT inputs[6] = {};
-    int n = 0;
-    auto key = [&](WORD vk, bool up) {
-        inputs[n].type = INPUT_KEYBOARD;
-        inputs[n].ki.wVk = vk;
-        inputs[n].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-        n++;
-    };
-    key(VK_MENU, false);
-    key(VK_SHIFT, false);
-    key('P', false);
-    key('P', true);
-    key(VK_SHIFT, true);
-    key(VK_MENU, true);
-    return SendInput(n, inputs, sizeof(INPUT)) == (UINT)n;
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->details || !state->topLevel || GetAncestor(msg->hwnd, GA_ROOT) != state->topLevel) {
+        return false;
+    }
+    if (msg->message == WM_SYSKEYDOWN && !(msg->lParam & (1 << 30))) {  // Not an auto-repeat.
+        // No hold on the buttons: nothing flips them here (a click does), so they follow the pane at once.
+        state->details->shortcutAt = GetTickCount64();
+        Wh_Log(L"details pane: Alt+P");
+    }
+    return true;
 }
 
 // Explorer's "Details pane" and "Preview pane" entries are hidden and one entry, ours, takes
@@ -2658,7 +2707,7 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
             pane->movedIcon = icon;
         }
         item.IsChecked(pane->visible && !pane->leaving);
-        item.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+        pane->menuClickToken = item.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
             WindowState* now = StateForThisThread(false);
             if (now && now->details && !g_unloading) {
                 now->details->shortcutAt = GetTickCount64() + 150;  // After the menu has closed.
@@ -2683,7 +2732,7 @@ void PaneMenuSetup(WindowState* state, ItemsVector const& items) {
                 nav.Icon(glyph);
             }
             nav.IsChecked(original.IsChecked());
-            nav.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+            pane->navClickToken = nav.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
                 // Not now: the menu is closing. The entry of the Show submenu is used a moment
                 // later, from the pane's tick.
                 WindowState* now = StateForThisThread(false);
@@ -2949,7 +2998,7 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
             }
         }
         button.IsChecked(pane->visible && !pane->leaving);
-        button.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+        pane->toolClickToken = button.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
             WindowState* now = StateForThisThread(false);
             if (now && now->details && !g_unloading) {
                 now->details->shortcutAt = GetTickCount64() + 60;
@@ -2969,6 +3018,31 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
 }
 
 void PaneMenuRestore(DetailsPane* pane) {
+    // Explorer keeps these elements (its toolbar and menu) after the mod is gone: a click that
+    // reaches a handler whose code is unmapped would crash it. They are revoked first, each alone.
+    try {
+        if (pane->toolToggle && pane->toolClickToken.value) {
+            pane->toolToggle.Click(pane->toolClickToken);
+        }
+    } catch (...) {
+    }
+    try {
+        if (pane->menuToggle && pane->menuClickToken.value) {
+            if (auto ours = pane->menuToggle.try_as<muxc::MenuFlyoutItem>()) {
+                ours.Click(pane->menuClickToken);
+            }
+        }
+    } catch (...) {
+    }
+    try {
+        if (pane->navEntry && pane->navClickToken.value) {
+            pane->navEntry.Click(pane->navClickToken);
+        }
+    } catch (...) {
+    }
+    pane->toolClickToken = {};
+    pane->menuClickToken = {};
+    pane->navClickToken = {};
     try {
         if (pane->toolToggle && pane->toolBar) {
             uint32_t at = 0;
@@ -3181,9 +3255,8 @@ void PaneStartJob(WindowState* state, DetailsPane* pane, std::wstring const& key
     unsigned generation = ++pane->generation;
     DWORD thread = GetCurrentThreadId();
     auto queue = state->queue;
-    g_paneJobs++;
     try {
-        std::thread([queue, thread, generation, key, job]() mutable {
+        StartModThread([queue, thread, generation, key, job]() mutable {
             CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             std::shared_ptr<PaneData> data;
             try {
@@ -3202,10 +3275,8 @@ void PaneStartJob(WindowState* state, DetailsPane* pane, std::wstring const& key
             }
             queue = nullptr;
             data.reset();
-            g_paneJobs--;
-        }).detach();
+        });
     } catch (...) {
-        g_paneJobs--;
         LogHresult(L"starting the pane's reader");
     }
 }
@@ -3285,24 +3356,11 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     if ((GetAsyncKeyState(VK_MENU) | GetAsyncKeyState(VK_SHIFT) | GetAsyncKeyState(VK_CONTROL) | GetAsyncKeyState('P')) & 0x8000) {
         return;  // A key of the shortcut is still down.
     }
-    INPUT inputs[6] = {};
-    int n = 0;
-    auto key = [&](WORD vk, bool up) {
-        inputs[n].type = INPUT_KEYBOARD;
-        inputs[n].ki.wVk = vk;
-        inputs[n].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-        n++;
-    };
-    key(VK_MENU, false);
-    key(VK_SHIFT, false);
-    key('P', false);
-    key('P', true);
-    key(VK_SHIFT, true);
-    key(VK_MENU, true);
-    UINT sent = SendInput(n, inputs, sizeof(INPUT));
+    // Explorer's Preview pane came on: its own Details entry is chosen, which swaps it for ours.
+    PaneToggleNative(state, true);
     pane->redirectTries++;
     pane->redirectAt = now + 1500;
-    Wh_Log(L"details pane: the Preview pane was switched on, Alt+Shift+P sent (%u of %d), try %d", sent, n, pane->redirectTries);
+    Wh_Log(L"details pane: the Preview pane was switched on, Explorer's Details entry chosen, try %d", pane->redirectTries);
 }
 
 // What is selected in Explorer's own view, as absolute ids and a key that changes with it.
@@ -3328,6 +3386,7 @@ bool PaneReadSelection(WindowState* state, DetailsPane* pane, std::wstring* key)
     swprintf(tail, ARRAYSIZE(tail), L"|%d|%llx", (int)children.size(), hash);
     std::wstring next = PathOf(folder.get()) + tail;
     if (next != pane->wantedKey) {
+        Wh_Log(L"details pane: Explorer's selection is now %d item(s) in \"%s\"", (int)children.size(), PathOf(folder.get()).c_str());
         pane->wantedKey = next;
         PaneClosePreview(pane);
         pane->wantedSince = GetTickCount64();
@@ -3381,9 +3440,8 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
     PaneSyncPanel(state);
     PaneMediaTick(pane);
     if (pane->shortcutAt && GetTickCount64() >= pane->shortcutAt) {
-        if (PaneSendShortcut(state) || GetTickCount64() > pane->shortcutAt + 1500) {
-            pane->shortcutAt = 0;
-        }
+        pane->shortcutAt = 0;
+        PaneToggleNative(state);
     }
     if (pane->navInvokeAt && GetTickCount64() >= pane->navInvokeAt && pane->navOriginal) {
         pane->navInvokeAt = 0;
@@ -3452,10 +3510,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             }
         }
     }
-    // Alt+P was pressed: a moment after it is let go, say what windows the frame holds (the
-    // Preview pane's window is what the redirect looks for).
-    bool altP = (GetAsyncKeyState(VK_MENU) & 0x8000) && (GetAsyncKeyState('P') & 0x8000) && !(GetAsyncKeyState(VK_SHIFT) & 0x8000);
-    pane->altPDown = altP;
     HWND host = g_detailsPane ? FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
     RECT r = {};
     bool gone = !host;
@@ -3536,23 +3590,10 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         if (over) {
             pane->overTicks++;
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+                // The handler is asked to take the focus itself: its window may be in another process,
+                // and Explorer's input must not be attached to that process's.
                 HRESULT focus = pane->handler->SetFocus();
-                // The window under the mouse may be in the handler's own process: its input
-                // is attached to ours for a moment so that it can be given the focus.
-                HWND target = WindowFromPoint(cursor);
-                wchar_t className[64] = L"";
-                bool inside = false;
-                if (target) {
-                    GetClassNameW(target, className, ARRAYSIZE(className));
-                    inside = target == pane->host || IsChild(pane->host, target);
-                    DWORD other = GetWindowThreadProcessId(target, nullptr);
-                    if (inside && other && other != GetCurrentThreadId() && AttachThreadInput(GetCurrentThreadId(), other, TRUE)) {
-                        SetFocus(target);
-                        AttachThreadInput(GetCurrentThreadId(), other, FALSE);
-                    }
-                }
-                Wh_Log(L"preview: focus asked, handler 0x%08lx, under the mouse %s (%s)", (unsigned long)focus, className,
-                    inside ? L"in the preview" : L"not in the preview");
+                Wh_Log(L"preview: focus asked, handler 0x%08lx", (unsigned long)focus);
                 pane->previewFocused = true;
             }
         } else {
@@ -3577,39 +3618,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         }
         PaneStartJob(state, pane, key);
     }
-}
-
-// Alt+P is Explorer's Preview pane shortcut. While a window of this process is in front, it is
-// swallowed and Alt+Shift+P (the Details pane's, which is our pane) is sent in its place, so that
-// Explorer's Preview pane never opens. The keys are sent with the Alt that is already down.
-LRESULT CALLBACK PaneKeyProc(int code, WPARAM wParam, LPARAM lParam) {
-    if (code == HC_ACTION && g_detailsPane && g_previewRedirect && !g_unloading) {
-        auto* key = (KBDLLHOOKSTRUCT*)lParam;
-        if (key->vkCode == 'P' && !(key->flags & LLKHF_INJECTED) && (key->flags & LLKHF_ALTDOWN) &&
-            !(GetAsyncKeyState(VK_SHIFT) & 0x8000) && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
-            WindowState* state = StateForThisThread(false);
-            HWND front = GetForegroundWindow();
-            if (state && state->details && state->topLevel && front && GetAncestor(front, GA_ROOT) == state->topLevel) {
-                bool down = wParam == WM_SYSKEYDOWN || wParam == WM_KEYDOWN;
-                if (down && !state->details->altPHeld) {
-                    state->details->altPHeld = true;
-                    INPUT inputs[4] = {};
-                    WORD keys[4] = {VK_SHIFT, 'P', 'P', VK_SHIFT};
-                    for (int i = 0; i < 4; i++) {
-                        inputs[i].type = INPUT_KEYBOARD;
-                        inputs[i].ki.wVk = keys[i];
-                        inputs[i].ki.dwFlags = (i >= 2) ? KEYEVENTF_KEYUP : 0;
-                    }
-                    SendInput(4, inputs, sizeof(INPUT));
-                    Wh_Log(L"details pane: Alt+P turned into Alt+Shift+P");
-                } else if (!down) {
-                    state->details->altPHeld = false;
-                }
-                return 1;
-            }
-        }
-    }
-    return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
 void DetailsTick() {
@@ -3641,7 +3649,6 @@ void StartDetails(WindowState* state) {
     try {
         auto* pane = new DetailsPane();
         state->details = pane;
-        pane->keyHook = SetWindowsHookExW(WH_KEYBOARD_LL, PaneKeyProc, ModHandle(), 0);
         auto timer = state->queue.CreateTimer();
         timer.Interval(std::chrono::milliseconds(60));
         pane->token = timer.Tick([](mud::DispatcherQueueTimer const&, Inspectable const&) { DetailsTick(); });
@@ -3677,10 +3684,6 @@ void ReleaseDetails(WindowState* state) {
     state->details = nullptr;
     PaneStopTimers(pane);
     PaneMenuRestore(pane);
-    if (pane->keyHook) {
-        UnhookWindowsHookEx(pane->keyHook);
-        pane->keyHook = nullptr;
-    }
     pane->shots.clear();
     pane->timer = nullptr;
     PaneClosePreview(pane);
@@ -3709,11 +3712,11 @@ void AbandonDetails(WindowState* state) {
         return;
     }
     state->details = nullptr;
-    PaneWheelOff(pane->host);
-    if (pane->keyHook) {
-        UnhookWindowsHookEx(pane->keyHook);
-        pane->keyHook = nullptr;
+    try {
+        PaneStopMedia(pane);  // A song or video must not go on playing with no window to stop it.
+    } catch (...) {
     }
+    PaneWheelOff(pane->host);
     pane->handler = nullptr;  // Let go: the window it lived in is gone.
     pane->host = nullptr;
     PaneStopTimers(pane);

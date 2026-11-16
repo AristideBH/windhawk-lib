@@ -247,6 +247,58 @@ HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, LPCWSTR className,
     return hwnd;
 }
 
+// A window that is closed releases its objects while it is still a window: Windows sends WM_DESTROY
+// to the frame first and to its children (the islands) after. Windows closed without it are found
+// by the ticks and let go, as before.
+constexpr UINT_PTR kCloseSubclassId = 0x7A12;
+
+void ReleaseClosedWindow(WindowState* state) {
+    Wh_Log(L"window closing, releasing its objects, window=%p", state->topLevel);
+    RevokeAllHandlers();
+    HidePanel(state, L"window closed");
+    RemoveMenuEntry(state);
+    ReleaseDetails(state);
+    ReleaseEntry(state);
+    state->queue = nullptr;
+    // The state goes with its window; a later window of the thread gets a new one.
+    std::unique_ptr<WindowState> owned;
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto at = g_states.begin(); at != g_states.end(); ++at) {
+            if (at->get() == state) {
+                owned = std::move(*at);
+                g_states.erase(at);
+                break;
+            }
+        }
+    }
+    owned.reset();
+    Wh_Log(L"window closed, its objects are released");
+}
+
+LRESULT CALLBACK CloseSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+    if (message == WM_DESTROY && !g_unloading) {
+        try {
+            WindowState* state = StateForThisThread(false);
+            if (state && state->topLevel == hwnd) {
+                ReleaseClosedWindow(state);
+            }
+        } catch (...) {
+            LogHresult(L"releasing a closed window");
+        }
+    }
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, CloseSubclassProc, id);
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+void WatchWindowClose(HWND top) {
+    if (top) {
+        SetWindowSubclass(top, CloseSubclassProc, kCloseSubclassId, 0);
+    }
+}
+
 void OnWindowCreated(Inspectable const& rootObject) {
     if (g_unloading || (!g_enabled && !g_detailsPane)) {
         return;
@@ -269,6 +321,7 @@ void OnWindowCreated(Inspectable const& rootObject) {
         return;  // Already handled, this is a later resize or DPI change.
     }
     state->topLevel = top;
+    WatchWindowClose(top);
     state->queue = mud::DispatcherQueue::GetForCurrentThread();
     state->xamlRoot = xamlRoot;
     state->entryTries = 0;
@@ -348,7 +401,9 @@ void WINAPI InvokeMenuItem_Hook(void* pThis, void* menuItem) {
         }
     }
     InvokeMenuItem_Original(pThis, menuItem);
-    if (state && state->on) {
+    // The mod's own toggle of Explorer's Details control goes through here too: not a command to follow.
+    bool ownToggle = state && state->details && GetTickCount64() < state->details->ownToggleUntil;
+    if (state && state->on && !ownToggle) {
         ULONGLONG now = GetTickCount64();
         state->specCheckAt = now + 300;
         state->postActionAt = now + 150;
@@ -401,6 +456,53 @@ void HookExtensions(HMODULE module) {
 
 // Takes the panel and the menu entry out of every window, each on its own UI
 // thread, and waits for it.
+// XAML frees the objects of a closed island on later turns of the thread's queue, and the delegates
+// it frees have their code in the mod. The mod is unmapped right after the cleanup, so those turns
+// are run here: a marker is queued behind them, and the thread's messages are handled until it ran.
+void DrainUi(mud::DispatcherQueue const& queue) {
+    for (int round = 0; round < 2; round++) {
+        auto ran = std::make_shared<std::atomic<bool>>(false);
+        bool queued = false;
+        try {
+            queued = queue.TryEnqueue([ran]() { *ran = true; });
+        } catch (...) {
+        }
+        if (!queued) {
+            return;
+        }
+        // Not only until the marker ran: XAML also frees things on timers and animation ticks.
+        ULONGLONG began = GetTickCount64();
+        while (GetTickCount64() - began < 400 && (!*ran || GetTickCount64() - began < 60)) {
+            MSG msg;
+            // A thread that keeps producing messages must not keep this loop from ending.
+            while (GetTickCount64() - began < 400 && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+        Wh_Log(L"window cleanup: the queue was run, round %d, %s after %llu ms", round + 1,
+            *ran ? L"marker reached" : L"timed out", GetTickCount64() - began);
+    }
+}
+
+// The touch-drag coroutines resume on the thread that started them. Until they have ended, their
+// thread's messages are handled, so they can run to their end while the mod is still mapped.
+void WaitForCoroutines() {
+    ULONGLONG began = GetTickCount64();
+    while (g_coroutines > 0 && GetTickCount64() - began < 3000) {
+        MSG msg;
+        while (GetTickCount64() - began < 3000 && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+    }
+    if (g_coroutines > 0) {
+        Wh_Log(L"%d coroutine(s) of the mod were still waiting after 3 s", g_coroutines.load());
+    }
+}
+
 void CloseEverything() {
     std::vector<std::unique_ptr<WindowState>> states;
     {
@@ -414,6 +516,14 @@ void CloseEverything() {
         try {
             if (state->queue) {
                 queued = state->queue.TryEnqueue([state, done]() {
+                    mud::DispatcherQueue queue = state->queue;
+                    if (state->topLevel && IsWindow(state->topLevel)) {
+                        RemoveWindowSubclass(state->topLevel, CloseSubclassProc, kCloseSubclassId);
+                    }
+                    RevokeAllHandlers();  // First: no delegate of the mod stays on an element.
+                    g_rowTemplate = nullptr;
+                    g_quickTemplate = nullptr;
+                    g_presenterStyle = nullptr;
                     if (state->topLevel && !IsWindow(state->topLevel)) {
                         AbandonWindow(state);
                     }
@@ -423,6 +533,9 @@ void CloseEverything() {
                     ReleaseEntry(state);
                     state->queue = nullptr;
                     delete state;
+                    WaitForCoroutines();
+                    DrainUi(queue);
+                    queue = nullptr;
                     if (done) {
                         SetEvent(done);
                     }
@@ -432,12 +545,17 @@ void CloseEverything() {
             LogHresult(L"CloseEverything");
         }
         if (queued && done) {
-            DWORD wait = WaitForSingleObject(done, 4000);
-            Wh_Log(L"window cleanup %s",
-                wait == WAIT_OBJECT_0 ? L"done" : L"TIMED OUT");
-            if (wait == WAIT_OBJECT_0) {
-                CloseHandle(done);
+            // The cleanup runs on the window's own thread. Stopping the wait early would leave it queued
+            // for after the mod is unmapped, so it is waited for as long as it takes.
+            DWORD wait = WAIT_TIMEOUT;
+            for (int tries = 0; wait == WAIT_TIMEOUT; tries++) {
+                wait = WaitForSingleObject(done, 1000);
+                if (wait == WAIT_TIMEOUT && tries == 10) {
+                    Wh_Log(L"window cleanup is still waiting for the window's thread");
+                }
             }
+            Wh_Log(L"window cleanup %s", wait == WAIT_OBJECT_0 ? L"done" : L"failed");
+            CloseHandle(done);
         } else {
             // The window's thread is gone. Its objects can't be released from
             // here, so the state is left alone on purpose.

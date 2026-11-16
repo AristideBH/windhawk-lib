@@ -2408,8 +2408,7 @@ void ShowPanel(WindowState* state) {
                 }
             });
         Inspectable wheelBoxed = winrt::box_value(wheel);
-        root.AddHandler(mux::UIElement::PointerWheelChangedEvent(), wheelBoxed,
-                        true);
+        AddRouted(root, mux::UIElement::PointerWheelChangedEvent(), wheelBoxed);
         state->rootGrid = root;
         state->wheelHandler = wheelBoxed;
 
@@ -2436,8 +2435,8 @@ void ShowPanel(WindowState* state) {
                 }
             });
         Inspectable verticalBoxed = winrt::box_value(verticalWheel);
-        strip.AddHandler(mux::UIElement::PointerWheelChangedEvent(),
-                         verticalBoxed, true);
+        AddRouted(strip, mux::UIElement::PointerWheelChangedEvent(),
+                         verticalBoxed);
         state->stripWheelHandler = verticalBoxed;
 
         step = L"creating the XAML source";

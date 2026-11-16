@@ -20,6 +20,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <set>

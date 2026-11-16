@@ -12,12 +12,92 @@ HINSTANCE ModHandle() {
     }();
     return module;
 }
+
+// Every thread the mod starts is kept here and joined at unload: Windhawk frees the image right after
+// the mod's uninit, so no thread may still be in mod code by then.
+struct ModThread {
+    std::thread thread;
+    std::atomic<bool> done{false};
+    std::atomic<DWORD> id{0};
+};
+std::mutex g_modThreadsMutex;
+[[clang::no_destroy]] std::list<std::unique_ptr<ModThread>> g_modThreads;
+bool g_modThreadsClosed = false;
+// Signalled at unload: a long wait (an archive being made) ends and its job gives up.
+HANDLE g_stopEvent = nullptr;
+
+// False when the mod is already unloading: the job is not started.
+template <typename Job>
+bool StartModThread(Job job) {
+    std::lock_guard<std::mutex> lock(g_modThreadsMutex);
+    if (g_modThreadsClosed) {
+        return false;
+    }
+    for (auto at = g_modThreads.begin(); at != g_modThreads.end();) {
+        if ((*at)->done) {
+            (*at)->thread.join();
+            at = g_modThreads.erase(at);
+        } else {
+            ++at;
+        }
+    }
+    auto entry = std::make_unique<ModThread>();
+    ModThread* raw = entry.get();
+    try {
+        entry->thread = std::thread([raw, job = std::move(job)]() mutable {
+            raw->id = GetCurrentThreadId();
+            job();
+            raw->done = true;
+        });
+    } catch (...) {
+        return false;
+    }
+    g_modThreads.push_back(std::move(entry));
+    return true;
+}
+
+// Waits for every thread of the mod. A thread stuck in a network call is told to give it up.
+void JoinModThreads() {
+    std::list<std::unique_ptr<ModThread>> all;
+    {
+        std::lock_guard<std::mutex> lock(g_modThreadsMutex);
+        g_modThreadsClosed = true;
+        all.swap(g_modThreads);
+    }
+    if (g_stopEvent) {
+        SetEvent(g_stopEvent);
+    }
+    for (auto& entry : all) {
+        for (int waited = 0; !entry->done; waited++) {
+            DWORD id = entry->id;
+            if (id && waited > 5) {
+                if (HANDLE thread = OpenThread(THREAD_TERMINATE, FALSE, id)) {
+                    CancelSynchronousIo(thread);
+                    CloseHandle(thread);
+                }
+            }
+            if (waited == 200) {
+                Wh_Log(L"a thread of the mod is still running after 10 s, waiting for it");
+            }
+            Sleep(50);
+        }
+        entry->thread.join();
+    }
+}
+
+// A coroutine that is waiting for a WinRT call resumes later, in mod code. Each one counts itself,
+// and the unload waits for the count to reach zero.
+std::atomic<int> g_coroutines{0};
+struct CoroutineGuard {
+    CoroutineGuard() { g_coroutines++; }
+    ~CoroutineGuard() { g_coroutines--; }
+};
+
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.
 std::atomic<bool> g_paneAnim{true};         // The content of the pane slides and fades.
-std::atomic<int> g_paneJobs{0};             // Readers of file details that are running.
 ULONGLONG g_paneLeaveUntil = 0;  // While the details pane slides out, the Columns panel stays behind it.
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};

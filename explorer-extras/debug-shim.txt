@@ -1,0 +1,29 @@
+#include <cstdarg>
+// Test build only: every log line is also appended to @@LOG_PATH@@
+static void ExtrasDebugLog(const wchar_t* format, ...) {
+    wchar_t text[1200];
+    va_list args;
+    va_start(args, format);
+    _vsnwprintf_s(text, 1200, _TRUNCATE, format, args);
+    va_end(args);
+    Wh_Log(L"%s", text);
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t line[1300];
+    int chars = _snwprintf_s(line, 1300, _TRUNCATE, L"%02d:%02d:%02d.%03d [%lu] %s\r\n", now.wHour, now.wMinute,
+                             now.wSecond, now.wMilliseconds, GetCurrentThreadId(), text);
+    char utf8[4000];
+    int bytes = chars > 0 ? WideCharToMultiByte(CP_UTF8, 0, line, chars, utf8, sizeof(utf8), nullptr, nullptr) : 0;
+    HANDLE file = CreateFileW(L"@@LOG_PATH@@", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        if (bytes > 0) {
+            WriteFile(file, utf8, (DWORD)bytes, &written, nullptr);
+        }
+        CloseHandle(file);
+    }
+}
+#undef Wh_Log
+#define Wh_Log(...) ExtrasDebugLog(__VA_ARGS__)
+

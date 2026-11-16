@@ -165,10 +165,10 @@ void FadeOutGhost(muxc::Canvas const& overlay, mux::FrameworkElement const& ghos
         auto timer = overlay.DispatcherQueue().CreateTimer();
         timer.Interval(std::chrono::milliseconds(130));
         timer.IsRepeating(false);
-        timer.Tick([remove](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        Keep(timer, timer.Tick(winrt::auto_revoke, [remove](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
             sender.Stop();
             remove();
-        });
+        }));
         timer.Start();
     } catch (...) {
         remove();
@@ -273,7 +273,7 @@ void TouchTrack(WindowState* state, mux::Input::PointerRoutedEventArgs const& ar
 // The finger as Windows itself sees it. XAML takes the finger away from a row ~40 ms into a drag
 // (a pan, the pointer is replaced), so the drag runs in the shell's loop and this follows the
 // finger in the window messages: WM_POINTER on the panel's windows, where GetPointerInfo works.
-thread_local std::vector<HWND> g_touchHooked;
+[[clang::no_destroy]] thread_local std::vector<HWND> g_touchHooked;
 std::atomic<int> g_touchLogs{0};
 
 LRESULT CALLBACK TouchSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
@@ -371,6 +371,7 @@ struct TouchPrep {
 [[clang::no_destroy]] thread_local TouchPrep g_touchPrep;
 
 winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::shared_ptr<std::vector<uint8_t>> cida) {
+    CoroutineGuard counted;
     namespace st = winrt::Windows::Storage;
     uint64_t serial = ++g_touchPrep.serial;
     g_touchPrep.ready = false;
@@ -437,6 +438,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                                     std::vector<winrt::Windows::Storage::IStorageItem> items,
                                     std::shared_ptr<std::vector<uint8_t>> cida,
                                     winrt::Windows::Graphics::Imaging::SoftwareBitmap picture) {
+    CoroutineGuard counted;
     namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
     winrt::event_token token{};
     bool hooked = false;

@@ -978,7 +978,7 @@ void NewFolderWithSelection(WindowState* state, Column* column,
     RequestLoad(state, column);
 }
 
-// Opens a folder in a new tab of this window: Ctrl+T makes the tab, and once
+// Opens a folder in a new tab of this window: the folder's "opennewtab" verb makes the tab, and once
 // Explorer has built it, the folder is shown in it.
 void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     if (!folder || FolderGone(folder)) {
@@ -987,23 +987,20 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     state->openTabFolder.reset(ILClone(folder));
     state->openTabUntil = GetTickCount64() + 4000;
     state->newTab = nullptr;
-    INPUT keys[4] = {};
-    keys[0].type = INPUT_KEYBOARD;
-    keys[0].ki.wVk = VK_CONTROL;
-    keys[1].type = INPUT_KEYBOARD;
-    keys[1].ki.wVk = 'T';
-    keys[2] = keys[1];
-    keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    keys[3] = keys[0];
-    keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(4, keys, sizeof(INPUT));
+    // The folder's own "Open in new tab" verb makes the tab. No key is sent: a key goes to whichever
+    // window has the focus at that moment.
+    HRESULT verb = InvokeVerbOnFolder(state, folder, "opennewtab");
+    if (FAILED(verb)) {
+        Wh_Log(L"open in a new tab: the folder has no such verb, hr=0x%08lX", (unsigned long)verb);
+        return;
+    }
     Wh_Log(L"open in a new tab: \"%s\"", PathOf(folder).c_str());
     // Watched every 10 ms, not at the tick's pace: the folder is shown in the tab
     // and the columns follow the moment it exists.
     try {
         auto timer = state->queue.CreateTimer();
         timer.Interval(std::chrono::milliseconds(10));
-        timer.Tick([](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+        Keep(timer, timer.Tick(winrt::auto_revoke, [](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
             WindowState* now = StateForThisThread(false);
             if (!now || g_unloading || TryShowNewTab(now)) {
                 sender.Stop();
@@ -1011,7 +1008,7 @@ void OpenFolderInNewTab(WindowState* state, PCIDLIST_ABSOLUTE folder) {
                     OnTick();  // Notices the new folder at once.
                 }
             }
-        });
+        }));
         timer.Start();
     } catch (...) {
         LogHresult(L"watching for the new tab");
@@ -1462,7 +1459,6 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
 // for the format. The archive is made next to the items, named after the item (or Archive
 // for several), on a thread of its own; when it is done the column loads again and the
 // new archive is selected.
-std::atomic<int> g_compressJobs{0};
 
 void CompressItems(WindowState* state, Column* column, std::vector<size_t> const& picked, int kind) {
     std::wstring dir = PathOf(column->folder.get());
@@ -1507,16 +1503,22 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
         command += L" \"" + name + L"\"";
     }
     auto queue = state->queue;
-    g_compressJobs++;
     Wh_Log(L"compress: %s", command.c_str());
-    std::thread([command, destination, dir, queue]() mutable {
+    StartModThread([command, destination, dir, queue]() mutable {
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
         PROCESS_INFORMATION process{};
         DWORD code = 1;
         if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
                            &startup, &process)) {
-            WaitForSingleObject(process.hProcess, 10 * 60 * 1000);
+            HANDLE waitFor[2] = {process.hProcess, g_stopEvent};
+            DWORD waited = WaitForMultipleObjects(g_stopEvent ? 2 : 1, waitFor, FALSE, 10 * 60 * 1000);
+            if (waited != WAIT_OBJECT_0) {
+                // The mod is unloading, or tar ran too long: it ends here, and the partial archive goes.
+                TerminateProcess(process.hProcess, 1);
+                WaitForSingleObject(process.hProcess, 5000);
+                DeleteFileW(destination.c_str());
+            }
             GetExitCodeProcess(process.hProcess, &code);
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
@@ -1540,8 +1542,7 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
             });
         } catch (...) {
         }
-        g_compressJobs--;
-    }).detach();
+    });
 }
 
 // The icon of the app that opens a file: the program the file type's "open" verb runs, its
@@ -1989,13 +1990,13 @@ struct MenuBuilder {
             // Like a cascading menu: beside the row, top aligned with it.
             spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
             auto sub = spec.submenu;
-            spec.submenu.Opened([sub](Inspectable const&, Inspectable const&) {
+            Keep(spec.submenu, spec.submenu.Opened(winrt::auto_revoke, [sub](Inspectable const&, Inspectable const&) {
                 WindowState* open = StateForThisThread(false);
                 if (open && open->context) {
                     open->context->openSub = sub;
                 }
-            });
-            spec.submenu.Closed([](Inspectable const&, Inspectable const&) {
+            }));
+            Keep(spec.submenu, spec.submenu.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
                 // A choice made in the submenu closes the whole menu. A submenu replaced by
                 // another, as the pointer moves down the rows, does not.
                 WindowState* open = StateForThisThread(false);
@@ -2005,9 +2006,9 @@ struct MenuBuilder {
                     }
                     open->context->flyout.Hide();
                 }
-            });
+            }));
             // Right arrow opens it from the keyboard.
-            button.KeyDown([sub, button](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
+            Keep(button, button.KeyDown(winrt::auto_revoke, [sub, button](Inspectable const&, mux::Input::KeyRoutedEventArgs const& keyArgs) {
                 if (keyArgs.Key() == winrt::Windows::System::VirtualKey::Right) {
                     try {
                         sub.ShowAt(button);
@@ -2015,14 +2016,14 @@ struct MenuBuilder {
                     }
                     keyArgs.Handled(true);
                 }
-            });
+            }));
         }
         // The pointer on a row: the submenu of another row goes away, and this row's own opens
         // after a short moment if the pointer stays.
         {
             auto hovering = std::make_shared<bool>(false);
             auto sub = spec.submenu;
-            button.PointerEntered([hovering, sub, button](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            Keep(button, button.PointerEntered(winrt::auto_revoke, [hovering, sub, button](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
                 *hovering = true;
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->queue || g_unloading) {
@@ -2045,7 +2046,7 @@ struct MenuBuilder {
                     ctx.hover = timer;
                     timer.Interval(std::chrono::milliseconds(200));
                     timer.IsRepeating(false);
-                    timer.Tick([hovering, sub, button](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                    Keep(timer, timer.Tick(winrt::auto_revoke, [hovering, sub, button](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                         sender.Stop();
                         WindowState* now = StateForThisThread(false);
                         if (!*hovering || !now || !now->context || g_unloading || now->context->openSub == sub) {
@@ -2065,13 +2066,13 @@ struct MenuBuilder {
                         } catch (...) {
                             LogHresult(L"opening a submenu on hover");
                         }
-                    });
+                    }));
                     timer.Start();
                 }
-            });
-            button.PointerExited([hovering](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            }));
+            Keep(button, button.PointerExited(winrt::auto_revoke, [hovering](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
                 *hovering = false;
-            });
+            }));
         }
         button.Content(content);
         list.Children().Append(button);
@@ -2103,7 +2104,7 @@ struct MenuBuilder {
             auto rootCopy = root;
             auto header = quickHeader;
             auto line = quickLine;
-            flyout.Opened([rootCopy, header, line, anchor, position](Inspectable const&, Inspectable const&) {
+            Keep(flyout, flyout.Opened(winrt::auto_revoke, [rootCopy, header, line, anchor, position](Inspectable const&, Inspectable const&) {
                 if (!header) {
                     return;
                 }
@@ -2126,7 +2127,7 @@ struct MenuBuilder {
                 } catch (...) {
                     LogHresult(L"placing the quick row");
                 }
-            });
+            }));
         }
         // A click outside the menu closes it, also outside this window's panel, where the
         // flyout's own light dismiss does not see it.
@@ -2134,7 +2135,7 @@ struct MenuBuilder {
             auto rootCopy = root;
             auto timer = state->queue.CreateTimer();
             timer.Interval(std::chrono::milliseconds(40));
-            timer.Tick([rootCopy](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            Keep(timer, timer.Tick(winrt::auto_revoke, [rootCopy](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->context->flyout || g_unloading) {
                     sender.Stop();
@@ -2158,7 +2159,7 @@ struct MenuBuilder {
                     }
                 }
                 ctx.wasDown = down;
-            });
+            }));
             state->context->watch = timer;
             timer.Start();
         } catch (...) {
@@ -2348,12 +2349,12 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
         auto addSubItem = [](muxc::MenuFlyout const& menu, std::wstring const& text, std::function<void()> action) {
             muxc::MenuFlyoutItem item;
             item.Text(text);
-            item.Click([action](Inspectable const&, mux::RoutedEventArgs const&) {
+            Keep(item, item.Click(winrt::auto_revoke, [action](Inspectable const&, mux::RoutedEventArgs const&) {
                 WindowState* now = StateForThisThread(false);
                 if (now && !g_unloading) {
                     action();
                 }
-            });
+            }));
             menu.Items().Append(item);
         };
         // A row of the shell's own, by verb: its name, its icon and its shortcut.

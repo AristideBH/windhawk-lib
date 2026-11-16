@@ -2,6 +2,37 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.60 (2026-11-16)
+
+Hooks and input, from the Windhawk catalog review.
+
+### Changed
+- Alt+P is taken in Explorer's accelerator hook, on the window's own thread. The mod no longer installs a system-wide keyboard hook for each window, which every keystroke on the computer waited on.
+- The mod sends no keys. The details pane is shown and hidden through Explorer's own Details control, as a click would. "Open in new tab" uses the folder's own verb instead of Ctrl+T, which went to whatever window had the focus.
+- The preview handler is asked to take the focus itself. The mod no longer attaches Explorer's input to another process's.
+
+## 0.59 (2026-11-16)
+
+### Changed
+- A closed Explorer window now releases what the mod put in it: the panel, the details pane (its player and preview handler included), the menu entries and the window's state. It was left behind before, a little more with each window closed. The mod watches the window's own destruction for this. 0.59.1 also stops a song or video playing in a window that was open before the mod loaded and then closed, and makes the unload wait for a touch drag that is still getting its files ready.
+
+## 0.58 (2026-11-16)
+
+### Changed
+- Every handler the mod gives to a XAML element is now kept as a revoker and taken off at unload, before anything is closed. XAML freed those handlers late, after the mod was gone, which crashed Explorer just after a disable. The handlers of removed elements are dropped from the list as it grows. 0.58.1 and 0.58.2 cover the routed handlers (the settings page, the slider, the list) and the last few events.
+- Thread-local objects no longer run code when a thread ends after the mod is unloaded.
+
+## 0.57 (2026-11-16)
+
+Unload safety, from the Windhawk catalog review. 0.57.1 also revokes the click handlers left on Explorer's own toolbar and View menu. 0.57.2 runs the window's queue before the mod is unloaded, so XAML finishes freeing what the mod closed (it crashed Explorer just after a disable). 0.57.3 also does it after the settings window is released, and waits a set time, not only for the marker. 0.57.4 bounds the loop, which could spin while a window kept posting messages.
+
+### Changed
+- Every thread the mod starts is kept and waited for when the mod unloads: the folder size, the preview reader, the details reader, compress and the "switch off" cleanup. None is left running.
+- An archive being made stops when the mod unloads, and the partial file is removed.
+- Reading a folder stops when the mod unloads, and a slow network folder is told to give up.
+- Unloading waits for each window's cleanup as long as it takes, instead of giving up after 4 seconds.
+- The settings window is released properly at unload, instead of being left behind.
+
 ## 0.56 (2026-11-16)
 
 Fixes from the Windhawk catalog review.

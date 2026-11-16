@@ -305,8 +305,17 @@ void StopWorker() {
         worker->stop = true;
         SetEvent(worker->event);
     }
+    // Each is waited for as long as it takes: a thread left running would be in an unmapped image.
+    // One stuck in a slow network folder is told to give up its call.
     for (auto& worker : all) {
-        WaitForSingleObject(worker->thread, 10000);
+        for (int waited = 0; WaitForSingleObject(worker->thread, 50) == WAIT_TIMEOUT; waited++) {
+            if (waited > 5) {
+                CancelSynchronousIo(worker->thread);
+            }
+            if (waited == 200) {
+                Wh_Log(L"a reader thread is still running after 10 s, waiting for it");
+            }
+        }
         CloseHandle(worker->thread);
         CloseHandle(worker->event);
     }
