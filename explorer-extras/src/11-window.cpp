@@ -527,7 +527,7 @@ void DrainUi(mud::DispatcherQueue const& queue) {
             }
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
         }
-        Wh_LogV(L"window cleanup: the queue was run, round %d, %s after %llu ms", round + 1,
+        LogVerbose(L"window cleanup: the queue was run, round %d, %s after %llu ms", round + 1,
             *ran ? L"marker reached" : L"timed out", GetTickCount64() - began);
     }
 }

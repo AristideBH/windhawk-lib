@@ -141,7 +141,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 state->band.column->list.ReleasePointerCaptures();
             }
             EndBand(state, false);
-            Wh_LogV(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
+            LogVerbose(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
             return;
         }
         // The middle button on a folder opens it in a new tab.
@@ -246,7 +246,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 }
             }
             list.CapturePointer(args.Pointer());
-            Wh_LogV(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
+            LogVerbose(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
                 (int)band.locked.size());
         }
     } catch (...) {
@@ -302,7 +302,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
             band.panLastAt = GetTickCount64();
             band.panVelocity = 0;
             list.CapturePointer(args.Pointer());
-            Wh_LogV(L"touch: a sideways drag on the empty space, the columns scroll");
+            LogVerbose(L"touch: a sideways drag on the empty space, the columns scroll");
             return true;
         }
         // A drag: take the pointer, remember the rows, start from the selection
@@ -310,7 +310,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
         band.pending = false;
         band.active = true;
         if (band.touch) {
-            Wh_LogV(L"touch: the finger moved, the rectangle starts");
+            LogVerbose(L"touch: the finger moved, the rectangle starts");
         }
         list.CapturePointer(args.Pointer());
         auto scroller = FindListScroller(list);
@@ -1707,7 +1707,7 @@ void SyncSelectionFromExplorer(WindowState* state) {
             }
         }
         state->building = false;
-        Wh_LogV(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
+        LogVerbose(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
             state->active + 1);
         OnRowSelected(column->list);
     } catch (...) {
@@ -1815,7 +1815,7 @@ void OnTick() {
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;
                 if (logged++ < 8) {
-                    Wh_LogV(L"the panel was covered by a sibling window, raised again");
+                    LogVerbose(L"the panel was covered by a sibling window, raised again");
                 }
             }
         }
@@ -2224,7 +2224,7 @@ void OnTick() {
             // brings it into view, which cut the centring short.
             if (known && panel && !inside && now >= state->scrollQuietUntil) {
                 state->focusColumn->list.Focus(mux::FocusState::Programmatic);
-                Wh_LogV(L"focus taken back from Explorer's view");
+                LogVerbose(L"focus taken back from Explorer's view");
             }
         } else {
             state->focusColumn = nullptr;

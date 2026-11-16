@@ -538,7 +538,7 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
     IShellFolder2* folder2 = nullptr;
     folder->QueryInterface(IID_PPV_ARGS(&folder2));
     if (!folder2) {
-        Wh_LogV(L"group fallback: no IShellFolder2");
+        LogVerbose(L"group fallback: no IShellFolder2");
         return;
     }
     size_t count = result->entries.size();
@@ -650,7 +650,7 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
     for (auto& value : values) {
         VariantClear(&value);
     }
-    Wh_LogV(L"group fallback: key pid=%lu, first value type=%d", key.pid, firstType);
+    LogVerbose(L"group fallback: key pid=%lu, first value type=%d", key.pid, firstType);
     folder2->Release();
 
     // The groups that occur, in display order.
@@ -683,11 +683,11 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         names.push_back(id >= 0 && id < (int)texts.size() ? texts[id] : L"");
     }
     if (names.size() == 1 && names[0] == L"Unspecified") {
-        Wh_LogV(L"group fallback: the key gives no values here, not grouping");
+        LogVerbose(L"group fallback: the key gives no values here, not grouping");
         return;
     }
     ApplyGroups(result, ids, order, names);
-    Wh_LogV(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
+    LogVerbose(L"group fallback: %d groups, date=%d size=%d name=%d column=%d",
         (int)order.size(), isDate ? 1 : 0, isSize ? 1 : 0, isName ? 1 : 0,
         column);
 }
@@ -714,7 +714,7 @@ void GroupEntries(IShellFolder* folder, const SortSpec& spec,
         }
         static std::atomic<int> logged{0};
         if (logged++ < 6) {
-            Wh_LogV(L"group: key pid=%lu, CanCategorizeOnSCID=0x%08lX GetCategoryForSCID=0x%08lX CreateCategory=0x%08lX",
+            LogVerbose(L"group: key pid=%lu, CanCategorizeOnSCID=0x%08lX GetCategoryForSCID=0x%08lX CreateCategory=0x%08lX",
                 spec.groupKey.pid, can, forScid, create);
         }
         provider->Release();
@@ -917,7 +917,7 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             int column = ColumnForKey(folder2, sortColumn.propkey);
             static std::atomic<int> logged{0};
             if (logged++ < 8) {
-                Wh_LogV(L"sort: key pid=%lu maps to column %d, direction %d",
+                LogVerbose(L"sort: key pid=%lu maps to column %d, direction %d",
                     sortColumn.propkey.pid, column, (int)sortColumn.direction);
             }
             if (column >= 0) {

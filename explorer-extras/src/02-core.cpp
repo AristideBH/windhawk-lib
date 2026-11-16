@@ -5,9 +5,9 @@ std::atomic<bool> g_unloading{false};
 // A log line that is only for a test build (build.py --debug defines EXTRAS_VERBOSE): lines that
 // come with every click, selection or drag would bury the ones that matter.
 #ifdef EXTRAS_VERBOSE
-#define Wh_LogV(...) Wh_Log(__VA_ARGS__)
+#define LogVerbose(...) Wh_Log(__VA_ARGS__)
 #else
-#define Wh_LogV(...) ((void)0)
+#define LogVerbose(...) ((void)0)
 #endif
 
 // The handle of the mod's own image. GetModuleHandleW(nullptr) is explorer.exe, which outlives the mod.

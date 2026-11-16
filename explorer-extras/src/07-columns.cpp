@@ -1943,7 +1943,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                         scroller.VerticalScrollMode(mode);
                         static int logged = 0;
                         if (logged++ < 6) {
-                            Wh_LogV(L"a press stops the scroll of a list, offset %.1f", offset);
+                            LogVerbose(L"a press stops the scroll of a list, offset %.1f", offset);
                         }
                     }
                 }
@@ -1955,7 +1955,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
     column->releaseToken = list.PointerReleased(
         [](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& relArgs) {
             if (relArgs.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
-                Wh_LogV(L"touch: pointer released, device=%d id=%u", (int)relArgs.Pointer().PointerDeviceType(),
+                LogVerbose(L"touch: pointer released, device=%d id=%u", (int)relArgs.Pointer().PointerDeviceType(),
                     relArgs.Pointer().PointerId());
                 if (WindowState* releaseState = StateForThisThread(false)) {
                     TouchTrack(releaseState, relArgs, true);
@@ -1982,7 +1982,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                                 contact = lostArgs.GetCurrentPoint(list).IsInContact();
                             } catch (...) {
                             }
-                            Wh_LogV(L"touch: capture lost in a rectangle, xaml contact=%d", contact ? 1 : 0);
+                            LogVerbose(L"touch: capture lost in a rectangle, xaml contact=%d", contact ? 1 : 0);
                             if (contact && band.recaptures++ < 5) {
                                 try {
                                     list.CapturePointer(lostArgs.Pointer());
@@ -2000,7 +2000,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                     POINTER_INFO win32Info{};
                     bool win32Ok = GetPointerInfo(drag.pointerId, &win32Info) != 0;
                     if (drag.active || drag.armed) {
-                        Wh_LogV(L"touch: capture lost in a drag, xaml contact=%d, GetPointerInfo=%d (err %lu, flags 0x%lX)",
+                        LogVerbose(L"touch: capture lost in a drag, xaml contact=%d, GetPointerInfo=%d (err %lu, flags 0x%lX)",
                             xamlContact ? 1 : 0, win32Ok ? 1 : 0, win32Ok ? 0ul : GetLastError(),
                             (unsigned long)win32Info.pointerFlags);
                     }
@@ -2026,7 +2026,7 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         });
     // Touch, for the log: a hold, and a pointer that the system takes away (a pan).
     Keep(list, list.Holding(winrt::auto_revoke, [](Inspectable const& sender, mux::Input::HoldingRoutedEventArgs const& args) {
-        Wh_LogV(L"touch: holding state=%d device=%d", (int)args.HoldingState(), (int)args.PointerDeviceType());
+        LogVerbose(L"touch: holding state=%d device=%d", (int)args.HoldingState(), (int)args.PointerDeviceType());
         if ((int)args.HoldingState() == 0 && (int)args.PointerDeviceType() == 0) {
             WindowState* holdState = StateForThisThread(false);
             if (auto list = sender.try_as<muxc::ListView>(); list && holdState && holdState->on && !g_unloading) {
@@ -2035,12 +2035,12 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
         }
     }));
     Keep(list, list.PointerCanceled(winrt::auto_revoke, [](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
-        Wh_LogV(L"touch: the pointer was cancelled, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
+        LogVerbose(L"touch: the pointer was cancelled, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
             args.Pointer().PointerId());
     }));
     Keep(list, list.PointerCaptureLost(winrt::auto_revoke, [](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
         if (args.Pointer().PointerDeviceType() != winrt::Microsoft::UI::Input::PointerDeviceType::Mouse) {
-            Wh_LogV(L"touch: the pointer capture was lost, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
+            LogVerbose(L"touch: the pointer capture was lost, device=%d id=%u", (int)args.Pointer().PointerDeviceType(),
                 args.Pointer().PointerId());
         }
     }));
@@ -2487,7 +2487,7 @@ void RebuildFromExplorer(WindowState* state) {
         if (ReadSortSpec(browser, &fresh)) {
             state->spec = fresh;
             RememberFolderSpec(PathOf(current.get()), fresh);
-            Wh_LogV(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
+            LogVerbose(L"rebuild: spec %d sort columns, grouped=%d", (int)fresh.columns.size(),
                 fresh.grouped ? 1 : 0);
         }
     }
