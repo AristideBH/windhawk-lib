@@ -9,7 +9,7 @@ Status: public beta, in daily use by its author, not yet in the Windhawk catalog
 | Area | What it does |
 | --- | --- |
 | **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
-| **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. [More](docs/details-pane.md) |
+| **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
 | **Settings window** | Every option in one place, applied at once, in English or French. Open it from **Extras** in the toolbar's ... menu. |
 
 More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
