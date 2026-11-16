@@ -14,6 +14,9 @@ The first public beta. Explorer Extras is now more than the Columns layout: it h
 - Columns: folders first, alternate row shading, an accent badge on the path chevron (with an animated entrance and exit).
 - Touch: a sideways drag from a column's empty space scrolls the columns.
 
+### Works with
+- QuickLook (the Space-bar previewer) in Columns, since Explorer's own view follows the selection.
+
 ### Changed
 - A slow second click renames only in the active column, and a rename is cancelled by a click anywhere else.
 - A click in the navigation pane gives the keyboard to the first column, and Down then selects its first row.

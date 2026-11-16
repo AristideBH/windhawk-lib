@@ -12,6 +12,8 @@ Status: public beta, in daily use by its author, not yet in the Windhawk catalog
 | **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
 | **Settings window** | Every option in one place, applied at once, in English or French. Open it from **Extras** in the toolbar's ... menu. |
 
+**Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does in any other view.
+
 More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
 
 ![Columns, the View menu and the details pane in File Explorer](assets/captures/hero.png)
