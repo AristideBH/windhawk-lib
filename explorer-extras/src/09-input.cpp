@@ -1763,6 +1763,10 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
+        bool busy = state->building || state->pendingNav || state->selectChild || state->rename || state->drag.column ||
+                    state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
+                    state->specCheckAt || state->swapDeadline || now < state->watchEditUntil || now < state->openTabUntil;
+        RetimeTick(state->timer, &state->tickMs, TickIntervalMs(state->topLevel, busy));
         HoverTick(state);
         SpringLoadTick(state);
         SyncViewButtonIcon(state);

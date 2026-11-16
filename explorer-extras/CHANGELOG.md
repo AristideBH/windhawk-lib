@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.61 (2026-11-16)
+
+### Changed
+- The timers of the panel and of the details pane no longer tick every 60 ms in every window. A window you are working in keeps the quick tick; a window left alone ticks every 120 to 250 ms, and one in the background every 400 ms. Anything pending, a drag, a load, an animation or a playing sound, keeps the quick tick.
+
 ## 0.60 (2026-11-16)
 
 Hooks and input, from the Windhawk catalog review.

@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.60.4
+// @version         0.61.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -2786,6 +2786,7 @@ struct WindowState {
     // Open in a new tab: the folder to show, until when to wait, and the tab
     // Explorer made for it.
     Pidl openTabFolder;
+    int tickMs = 60;  // The interval of the panel's timer now (see TickIntervalMs).
     ULONGLONG openTabUntil = 0;
     HWND newTab = nullptr;
     int styleVersion = -1;  // The row style the rows were last given.
@@ -3004,6 +3005,32 @@ WindowState* StateForThisThread(bool create) {
     state->thread = thread;
     g_states.push_back(std::move(state));
     return g_states.back().get();
+}
+
+// How often a window's timer ticks. The window the person is working in gets the quick tick; a
+// window left alone, or in the background, is looked at less often: every tick scans the frame.
+int TickIntervalMs(HWND top, bool busy) {
+    if (busy) {
+        return 60;
+    }
+    LASTINPUTINFO input = {sizeof(input)};
+    DWORD idle = GetLastInputInfo(&input) ? GetTickCount() - input.dwTime : 0;
+    HWND front = GetForegroundWindow();
+    bool ours = front && top && GetAncestor(front, GA_ROOT) == top;
+    if (ours) {
+        return idle < 2000 ? 60 : (idle < 8000 ? 120 : 250);
+    }
+    return idle < 2000 ? 120 : 400;
+}
+
+void RetimeTick(mud::DispatcherQueueTimer const& timer, int* current, int wanted) {
+    if (timer && *current != wanted) {
+        try {
+            timer.Interval(std::chrono::milliseconds(wanted));
+            *current = wanted;
+        } catch (...) {
+        }
+    }
 }
 
 mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
@@ -11312,6 +11339,10 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
+        bool busy = state->building || state->pendingNav || state->selectChild || state->rename || state->drag.column ||
+                    state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
+                    state->specCheckAt || state->swapDeadline || now < state->watchEditUntil || now < state->openTabUntil;
+        RetimeTick(state->timer, &state->tickMs, TickIntervalMs(state->topLevel, busy));
         HoverTick(state);
         SpringLoadTick(state);
         SyncViewButtonIcon(state);
@@ -16238,6 +16269,7 @@ struct DetailsPane {
     ULONGLONG toggleHoldUntil = 0;
     muxc::MenuFlyoutItemBase navSeparator{nullptr};  // The line that followed it in the Show submenu (hidden).
     muxc::IconElement movedIcon{nullptr};  // The icon Explorer gave its Details entry, now on ours.
+    int tickMs = 60;
     ULONGLONG ownToggleUntil = 0;       // The mod is toggling Explorer's own control: it is not a command of the user.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
@@ -19742,6 +19774,10 @@ void DetailsTick() {
         return;
     }
     try {
+        DetailsPane* pane = state->details;
+        bool busy = pane->leaving || pane->enter || pane->loading || pane->shortcutAt || pane->navInvokeAt ||
+                    pane->ticks < 15 || pane->mediaPlayer || pane->dragging;
+        RetimeTick(pane->timer, &pane->tickMs, TickIntervalMs(state->topLevel, busy));
         PaneStep(state, state->details);
     } catch (...) {
         static int logged = 0;
@@ -20538,7 +20574,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.60.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.61.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

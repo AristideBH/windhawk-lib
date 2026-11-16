@@ -283,6 +283,7 @@ struct WindowState {
     // Open in a new tab: the folder to show, until when to wait, and the tab
     // Explorer made for it.
     Pidl openTabFolder;
+    int tickMs = 60;  // The interval of the panel's timer now (see TickIntervalMs).
     ULONGLONG openTabUntil = 0;
     HWND newTab = nullptr;
     int styleVersion = -1;  // The row style the rows were last given.
@@ -501,6 +502,32 @@ WindowState* StateForThisThread(bool create) {
     state->thread = thread;
     g_states.push_back(std::move(state));
     return g_states.back().get();
+}
+
+// How often a window's timer ticks. The window the person is working in gets the quick tick; a
+// window left alone, or in the background, is looked at less often: every tick scans the frame.
+int TickIntervalMs(HWND top, bool busy) {
+    if (busy) {
+        return 60;
+    }
+    LASTINPUTINFO input = {sizeof(input)};
+    DWORD idle = GetLastInputInfo(&input) ? GetTickCount() - input.dwTime : 0;
+    HWND front = GetForegroundWindow();
+    bool ours = front && top && GetAncestor(front, GA_ROOT) == top;
+    if (ours) {
+        return idle < 2000 ? 60 : (idle < 8000 ? 120 : 250);
+    }
+    return idle < 2000 ? 120 : 400;
+}
+
+void RetimeTick(mud::DispatcherQueueTimer const& timer, int* current, int wanted) {
+    if (timer && *current != wanted) {
+        try {
+            timer.Interval(std::chrono::milliseconds(wanted));
+            *current = wanted;
+        } catch (...) {
+        }
+    }
 }
 
 mux::Media::SolidColorBrush Brush(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {

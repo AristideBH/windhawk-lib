@@ -129,6 +129,7 @@ struct DetailsPane {
     ULONGLONG toggleHoldUntil = 0;
     muxc::MenuFlyoutItemBase navSeparator{nullptr};  // The line that followed it in the Show submenu (hidden).
     muxc::IconElement movedIcon{nullptr};  // The icon Explorer gave its Details entry, now on ours.
+    int tickMs = 60;
     ULONGLONG ownToggleUntil = 0;       // The mod is toggling Explorer's own control: it is not a command of the user.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
@@ -3633,6 +3634,10 @@ void DetailsTick() {
         return;
     }
     try {
+        DetailsPane* pane = state->details;
+        bool busy = pane->leaving || pane->enter || pane->loading || pane->shortcutAt || pane->navInvokeAt ||
+                    pane->ticks < 15 || pane->mediaPlayer || pane->dragging;
+        RetimeTick(pane->timer, &pane->tickMs, TickIntervalMs(state->topLevel, busy));
         PaneStep(state, state->details);
     } catch (...) {
         static int logged = 0;
