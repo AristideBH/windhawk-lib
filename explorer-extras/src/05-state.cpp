@@ -25,6 +25,7 @@ struct Column {
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
     int hintEntry = -1;  // The entry whose chevron wears the badge.
     muxc::Border hintBadge{nullptr};  // The small rounded background behind that chevron.
+    muxc::Border goneBadge{nullptr};  // One that has faded out and is taken off at the next change.
     std::vector<uint32_t> shapedRows;  // Rows whose corners and gaps were changed for a run of selected rows.
     int hoverHeader = -1;  // The group header under the pointer.
     int focusHeader = -1;  // The group header the keyboard is on.
@@ -245,6 +246,7 @@ struct WindowState {
     ULONGLONG watchEditUntil = 0;
     DWORD clipSeen = 0;
     ULONGLONG slowRenameAt = 0;
+    int activeAtPress = -1;  // The active column when the last click on a row began.
     ULONGLONG slowRenameBlockUntil = 0;
     Column* slowRenameColumn = nullptr;
     size_t slowRenameEntry = 0;
@@ -327,7 +329,8 @@ struct WindowState {
         std::vector<DragState::LockedScroller> locked;  // Scrolling is off while a finger may draw a rectangle.
     } band;
     muxc::Border bandBox{nullptr};
-    mud::DispatcherQueueTimer fadeTimer{nullptr};  // The pause between a fade out and the removal of rows.
+    mud::DispatcherQueueTimer fadeTimer{nullptr};
+    struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
     // Drops coming in from other windows and applications, and the scroll that
@@ -413,6 +416,9 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
                    mux::Input::PointerRoutedEventArgs const& args);
 bool OnDragReleased(WindowState* state);
 void CancelDrag(WindowState* state);
+void StartDetails(WindowState* state);
+void AbandonDetails(WindowState* state);
+void ReleaseDetails(WindowState* state);
 
 std::mutex g_statesMutex;
 [[clang::no_destroy]] std::vector<std::unique_ptr<WindowState>> g_states;

@@ -622,7 +622,10 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
                         auto hitText = args.OriginalSource().try_as<muxc::TextBlock>();
                         onName = hitText && hitText == column->texts[entry];
                     }
-                    if (entry >= 0 && onName && !state->rename &&
+                    // A rename by click needs the column to have been the active one before this
+                    // click: the first click on a selected item in another column only focuses
+                    // the column, the second one (after the pause) renames.
+                    if (entry >= 0 && onName && !state->rename && state->activeAtPress == at &&
                         now >= state->slowRenameBlockUntil &&
                         now - column->selectionChangedAt > 350 &&
                         !(GetKeyState(VK_CONTROL) & 0x8000) &&
@@ -657,6 +660,9 @@ void OnColumnBackgroundTapped(muxc::ListView const& list,
         state->focusColumn = column;
         state->focusUntil = GetTickCount64() + 1500;
         list.Focus(mux::FocusState::Pointer);
+        if (IShellBrowser* browser = BrowserOf(state->topLevel)) {
+            ClearExplorerSelection(browser);
+        }
         Out(L"column %d chosen by a click on its empty space", index + 1);
     } catch (...) {
         state->building = false;
@@ -818,6 +824,23 @@ void OnColumnKey(muxc::ListView const& list,
             CancelDrag(state);
             args.Handled(true);
             return;
+        }
+        // Down in a column where nothing is selected (a column just given the keyboard from the
+        // sidebar, or cleared with Escape) selects the first item, not the second.
+        if (key == VirtualKey::Down && !ctrl && !alt && !shift && picked.empty()) {
+            for (size_t r = 0; r < column->rowToEntry.size() && r < list.Items().Size(); r++) {
+                if (column->rowToEntry[r] < 0) {
+                    continue;
+                }
+                auto item = list.Items().GetAt((uint32_t)r).try_as<muxc::ListViewItem>();
+                if (item && item.Visibility() == mux::Visibility::Collapsed) {
+                    continue;
+                }
+                list.SelectedIndex((int)r);
+                list.ScrollIntoView(list.Items().GetAt((uint32_t)r));
+                keep();
+                return;
+            }
         }
         if (key == VirtualKey::F5 && !ctrl && !alt) {
             ReloadAll(state);
@@ -1129,6 +1152,7 @@ void CloseSettingsWindowOfThread();
 
 void AbandonWindow(WindowState* state) {
     Out(L"window closed with the panel on, letting its objects go");
+    AbandonDetails(state);
     CloseSettingsWindowOfThread();
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
@@ -1304,6 +1328,7 @@ void SyncToFolder(WindowState* state, Pidl const& current) {
         PathOf(current.get()).c_str());
     RebuildFromExplorer(state);
     SetActiveColumn(state, 0);
+    FocusColumnsAfterSidebar(state);
 }
 
 // What Explorer's own view shows changed.
@@ -1328,6 +1353,7 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
             }
             RebuildFromExplorer(state);
             SetActiveColumn(state, 0);
+            FocusColumnsAfterSidebar(state);
             return;
         }
     }
@@ -1712,7 +1738,7 @@ void OnTick() {
         // panel would show but get no mouse. Keep it on top.
         {
             HWND panelWindow = (HWND)state->bridge.WindowId().Value;
-            if (panelWindow && GetWindow(panelWindow, GW_HWNDPREV)) {
+            if (panelWindow && GetTickCount64() > g_paneLeaveUntil && GetWindow(panelWindow, GW_HWNDPREV)) {
                 SetWindowPos(panelWindow, HWND_TOP, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;
@@ -1881,6 +1907,22 @@ void OnTick() {
         if (state->swapOld && now >= state->swapDeadline) {
             Out(L"the new first column didn't load in time, swapping anyway");
             CompleteSwap(state);
+        }
+
+        // A rename ends, without applying, as soon as the keyboard focus leaves the panel: a click
+        // in the sidebar, the toolbar, the details pane or another app.
+        if (state->rename && now - state->rename->startedAt > 400) {
+            HWND focus = GetFocus();
+            HWND panelWindow = (HWND)state->bridge.WindowId().Value;
+            bool inside = focus && (focus == panelWindow || IsChild(panelWindow, focus));
+            if (focus && !inside) {
+                wchar_t name[80] = L"";
+                GetClassNameW(focus, name, ARRAYSIZE(name));
+                inside = wcsstr(name, L"PopupWindowSiteBridge") != nullptr;  // The text box's own menu.
+            }
+            if (!inside) {
+                CancelRename(state);
+            }
         }
 
         // The slow second click on a selected name: time to rename.

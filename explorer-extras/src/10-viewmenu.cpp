@@ -52,6 +52,8 @@ void RemoveMenuEntry(WindowState* state) {
     state->menuItems = nullptr;
 }
 
+void PaneMenuSetup(WindowState* state, ItemsVector const& items);  // 10d: the details pane's entry.
+
 void AddMenuEntry(WindowState* state, ItemsVector const& items) {
     try {
         bool columnsOn = g_enabled;
@@ -160,6 +162,7 @@ bool CheckViewButton(WindowState* state, muxc::Button const& button) {
         if (!hasOurs) {
             AddMenuEntry(state, items);
         }
+        PaneMenuSetup(state, items);
         if (state->viewButton != button) {
             RestoreViewButtonIcon(state);
             state->viewButton = button;
@@ -261,6 +264,8 @@ void AddOverflowEntry(WindowState* state, mux::DependencyObject const& root) {
     }
 }
 
+void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node);  // 10d
+
 void OnCommandBarPointer(Inspectable const& sender) {
     if (g_unloading) {
         return;
@@ -281,6 +286,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
         if (!state->topLevel || !state->queue) {
             return;
         }
+        StartDetails(state);  // A window that was open before the mod loaded has no pane yet.
         auto node = sender.try_as<mux::DependencyObject>();
         if (!node) {
             return;
@@ -297,7 +303,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
             }
             root = parent;
         }
-        if (g_enabled) {
+        if (g_enabled || g_detailsPane) {
             int visited = 0;
             WalkForViewFlyout(state, root, 0, visited);
             if (!state->menuItem) {
@@ -332,6 +338,7 @@ void OnCommandBarPointer(Inspectable const& sender) {
             }
         }
         AddOverflowEntry(state, root);
+        PaneToolbarSetup(state, node);
     } catch (...) {
         LogHresult(L"OnCommandBarPointer");
     }

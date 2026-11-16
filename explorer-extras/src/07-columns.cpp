@@ -244,6 +244,20 @@ void CenterColumn(WindowState* state, int index) {
     }
 }
 
+// After a click in the navigation pane the keyboard goes to the first column, so that the arrow
+// keys work at once (Explorer's own view would take it otherwise).
+void FocusColumnsAfterSidebar(WindowState* state) {
+    HWND focused = GetFocus();
+    wchar_t name[64] = L"";
+    if (focused) {
+        GetClassNameW(focused, name, ARRAYSIZE(name));
+    }
+    if ((wcscmp(name, L"SysTreeView32") == 0 || wcscmp(name, L"NamespaceTreeControl") == 0) && !state->columns.empty()) {
+        state->focusColumn = state->columns[0].get();
+        state->focusUntil = GetTickCount64() + 2500;
+    }
+}
+
 void SetActiveColumn(WindowState* state, int index, bool ensureVisible = true) {
     state->active = index;
     if (ensureVisible) {
@@ -424,8 +438,12 @@ void ApplyFocusStyle(muxc::ListViewItem const& row) {
 
 // A row without content: only the item, sized. Its content is built when the
 // row comes near the screen, so a long folder opens at once.
-muxc::ListViewItem MakeRowShell(double rowHeight) {
+muxc::ListViewItem MakeRowShell(double rowHeight, bool stripe = false) {
     muxc::ListViewItem row;
+    if (stripe) {
+        // The odd rows are a shade apart: a faint gray that reads on light and dark.
+        row.Background(Brush(13, 128, 128, 128));
+    }
     row.MinHeight(rowHeight);
     row.Height(rowHeight);
     row.Padding(mux::Thickness{10, 0, 8, 0});
@@ -929,7 +947,7 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
                       column->selectedChild.get())) {
             selectRow = (int)column->rowToEntry.size();
         }
-        auto row = MakeRowShell(rowHeight);
+        auto row = MakeRowShell(rowHeight, g_oddRows && i % 2 == 1);
         if (isCollapsed(group)) {
             row.Visibility(mux::Visibility::Collapsed);
         }
@@ -1269,7 +1287,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
             more.IsEnabled(false);
             items.InsertAt((uint32_t)p, more);
         } else {
-            auto shell = MakeRowShell(column->rowHeight);
+            auto shell = MakeRowShell(column->rowHeight, g_oddRows && (size_t)p % 2 == 1);
             if (isCollapsed(row.group)) {
                 shell.Visibility(mux::Visibility::Collapsed);
             }
@@ -2535,11 +2553,30 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
     }
     Column* column = state->columns[columnIndex].get();
     try {
-        if (column->hintBadge) {
-            if (auto parent = mux::Media::VisualTreeHelper::GetParent(column->hintBadge).try_as<muxc::Panel>()) {
+        auto takeOff = [](muxc::Border const& badge) {
+            if (auto parent = mux::Media::VisualTreeHelper::GetParent(badge).try_as<muxc::Panel>()) {
                 uint32_t index = 0;
-                if (parent.Children().IndexOf(column->hintBadge, index)) {
+                if (parent.Children().IndexOf(badge, index)) {
                     parent.Children().RemoveAt(index);
+                }
+            }
+        };
+        if (column->goneBadge) {
+            takeOff(column->goneBadge);
+            column->goneBadge = nullptr;
+        }
+        if (column->hintBadge) {
+            if (on) {
+                takeOff(column->hintBadge);  // Another folder takes it: no fade between the two.
+            } else {
+                // It shrinks and fades out (the transitions are the ones it came in with), and is
+                // taken off at the next change.
+                try {
+                    column->hintBadge.Opacity(0.0);
+                    column->hintBadge.Scale(winrt::Windows::Foundation::Numerics::float3{0.35f, 0.35f, 1.0f});
+                    column->goneBadge = column->hintBadge;
+                } catch (...) {
+                    takeOff(column->hintBadge);
                 }
             }
             column->hintBadge = nullptr;
@@ -2548,6 +2585,7 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
             column->hintEntry < (int)column->chevrons.size() &&
             column->chevrons[column->hintEntry]) {
             column->chevrons[column->hintEntry].Opacity(0.6);
+            column->chevrons[column->hintEntry].ClearValue(muxc::IconElement::ForegroundProperty());
         }
         column->hintEntry = -1;
         if (!on || columnIndex + 1 >= (int)state->columns.size()) {
@@ -2575,13 +2613,60 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
                         badge.Height(15);
                         badge.CornerRadius(mux::CornerRadius{7.5, 7.5, 7.5, 7.5});
                         badge.Margin(mux::Thickness{0, 0, glyph / 2 - 7.5, 0});
-                        badge.Background(dark ? Brush(13, 255, 255, 255) : Brush(10, 0, 0, 0));
+                        if (g_staleAccent) {
+                            // A round badge in the accent colour, the chevron white on it.
+                            try {
+                                // The deeper shade of the accent, so that the white chevron reads.
+                                auto color = winrt::unbox_value<winrt::Windows::UI::Color>(
+                                    mux::Application::Current().Resources().Lookup(winrt::box_value(L"SystemAccentColorDark1")));
+                                badge.Background(mux::Media::SolidColorBrush(color));
+                            } catch (...) {
+                                badge.Background(Brush(255, 0, 120, 212));
+                            }
+                            chevron.Foreground(Brush(255, 255, 255, 255));
+                        } else {
+                            badge.Background(dark ? Brush(13, 255, 255, 255) : Brush(10, 0, 0, 0));
+                        }
                         badge.HorizontalAlignment(mux::HorizontalAlignment::Right);
                         badge.VerticalAlignment(mux::VerticalAlignment::Center);
                         badge.IsHitTestVisible(false);
                         muxc::Grid::SetColumn(badge, 3);
+                        // It comes in: from a small, faint disc to its size (transitions are attached,
+                        // and the end values set once the badge has been laid out).
+                        bool animated = false;
+                        try {
+                            badge.CenterPoint(winrt::Windows::Foundation::Numerics::float3{7.5f, 7.5f, 0.0f});
+                            badge.Opacity(0.0);
+                            badge.Scale(winrt::Windows::Foundation::Numerics::float3{0.35f, 0.35f, 1.0f});
+                            mux::ScalarTransition fade;
+                            fade.Duration(std::chrono::milliseconds(220));
+                            badge.OpacityTransition(fade);
+                            mux::Vector3Transition grow;
+                            grow.Duration(std::chrono::milliseconds(260));
+                            badge.ScaleTransition(grow);
+                            animated = true;
+                        } catch (...) {
+                            badge.Opacity(1.0);
+                        }
                         grid.Children().InsertAt(at, badge);  // Under the chevron.
                         column->hintBadge = badge;
+                        if (animated) {
+                            bool queued = false;
+                            try {
+                                queued = state->queue && state->queue.TryEnqueue([badge]() {
+                                    try {
+                                        badge.Opacity(1.0);
+                                        badge.Scale(winrt::Windows::Foundation::Numerics::float3{1.0f, 1.0f, 1.0f});
+                                    } catch (...) {
+                                    }
+                                });
+                            } catch (...) {
+                            }
+                            if (!queued) {
+                                badge.Opacity(1.0);
+                                badge.Scale(winrt::Windows::Foundation::Numerics::float3{1.0f, 1.0f, 1.0f});
+                            }
+                        }
                     }
                 }
                 chevron.Opacity(0.9);

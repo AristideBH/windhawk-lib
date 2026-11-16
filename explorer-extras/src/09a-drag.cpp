@@ -679,6 +679,7 @@ void OnDragPressed(WindowState* state, muxc::ListView const& list, muxc::ListVie
         return;
     }
     Column* column = state->columns[at].get();
+    state->activeAtPress = state->active;  // Which column was the active one before this click.
     int rowIndex = list.IndexFromContainer(row);
     int entry = rowIndex >= 0 && rowIndex < (int)column->rowToEntry.size() ? column->rowToEntry[rowIndex] : -1;
     if (entry < 0) {

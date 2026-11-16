@@ -3,13 +3,17 @@
   "groups": {
     "columns": {
       "name": "Columns"
+    },
+    "details": {
+      "name": "Details pane"
     }
   },
   "cards": {
     "layout": "Layout and look",
     "behaviour": "Behaviour",
     "dragmemory": "Drag and drop and memory",
-    "content": "Content and advanced"
+    "content": "Content and advanced",
+    "pane": "Details pane"
   },
   "settings": [
     {
@@ -108,6 +112,50 @@
       "description": "Draws a separator line on the right of the last column.",
       "page": "columns",
       "card": "layout",
+      "needs": "rebuild"
+    },
+    {
+      "id": "staleAccent",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Accent badge on the path chevron",
+      "description": "The chevron of the folder you came from sits in a round accent badge, instead of a muted one.",
+      "page": "columns",
+      "card": "layout",
+      "needs": "rebuild"
+    },
+    {
+      "id": "oddRows",
+      "group": "columns",
+      "type": "bool",
+      "default": false,
+      "name": "Alternate row shading",
+      "description": "Every other row is a shade apart, to follow a line across a wide column.",
+      "page": "columns",
+      "card": "layout",
+      "needs": "rebuild"
+    },
+    {
+      "id": "autoPreview",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Open previews by themselves",
+      "description": "When off, a button on the preview opens it, and switches back to the thumbnail.",
+      "page": "details",
+      "card": "pane",
+      "needs": "now"
+    },
+    {
+      "id": "foldersFirst",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Folders first",
+      "description": "Folders are listed before files in each column, whatever the sort.",
+      "page": "columns",
+      "card": "content",
       "needs": "rebuild"
     },
     {
@@ -235,6 +283,50 @@
       "needs": "rebuild"
     },
     {
+      "id": "detailsPane",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Details pane",
+      "description": "Replaces Explorer’s Details pane with a preview and the details of what is selected.",
+      "page": "home",
+      "card": "feature",
+      "needs": "now"
+    },
+    {
+      "id": "previewRedirect",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview pane opens this pane",
+      "description": "Choosing Explorer’s Preview pane (Alt+P) shows this pane instead.",
+      "page": "details",
+      "card": "pane",
+      "needs": "now"
+    },
+    {
+      "id": "paneAnimation",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Animate the pane",
+      "description": "The content slides and fades in when the selection changes.",
+      "page": "details",
+      "card": "pane",
+      "needs": "now"
+    },
+    {
+      "id": "livePreview",
+      "group": "details",
+      "type": "bool",
+      "default": true,
+      "name": "Preview documents and code",
+      "description": "Shows the real preview of documents, PDFs, text, images, video and audio in the pane.",
+      "page": "details",
+      "card": "pane",
+      "needs": "now"
+    },
+    {
       "id": "debugLog",
       "group": null,
       "type": "bool",
@@ -264,7 +356,10 @@
     "card.features": "Features",
     "card.status": "Status",
     "card.actions": "Quick actions",
-    "card.whatsnew": "What’s new",
+    "card.about": "About",
+    "about.creator": "Made by AristideBH",
+    "about.detail": "Explorer Extras is free and open source. Bug reports and ideas are welcome on GitHub.",
+    "about.link": "Source code on GitHub",
     "status.version": "Version",
     "status.windows": "Windows",
     "status.hooks": "Hooks",
@@ -283,6 +378,28 @@
     "action.reset.detail": "Every setting goes back to what Windhawk’s page for the mod says.",
     "columns.title": "Columns",
     "columns.subtitle": "A Columns layout in the View menu: Miller columns drawn with Explorer’s own controls.",
-    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values."
+    "columns.note": "Changes apply at once. The mod keeps them in front of Windhawk’s page, and a later edit on that page for the same setting wins. Reset on the Explorer Extras page goes back to Windhawk’s values.",
+    "details.title": "Details pane",
+    "details.subtitle": "One pane for the preview and the details of what is selected, in place of Explorer’s Details and Preview panes.",
+    "pane.open": "Open",
+    "pane.copypath": "Copy path",
+    "pane.copypaths": "Copy paths",
+    "pane.properties": "Properties",
+    "pane.copied": "Copied",
+    "pane.items": "%d items",
+    "pane.item": "1 item",
+    "pane.nothing": "Nothing selected",
+    "pane.folders": "Folders",
+    "pane.files": "Files",
+    "pane.totalsize": "Total size",
+    "pane.contains": "Contains",
+    "pane.location": "Location",
+    "pane.types": "Types",
+    "pane.clicktocopy": "Click to copy",
+    "pane.more": "More details",
+    "pane.less": "Fewer details",
+    "pane.cantplay": "This file cannot be played.",
+    "pane.showpreview": "Show the preview",
+    "pane.showthumb": "Show the thumbnail"
   }
 }

@@ -39,6 +39,12 @@ void LoadSettings() {
     g_dragOut = true;
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");
+    g_foldersFirst = SettingBool(L"foldersFirst");
+    g_oddRows = SettingBool(L"oddRows");
+    g_paneVolume = Wh_GetIntValue(L"ui.paneVolume", 100);
+    g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
+    g_staleAccent = SettingBool(L"staleAccent");
+    g_autoPreview = SettingBool(L"autoPreview");
     g_springLoad = SettingBool(L"springLoad");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
@@ -56,6 +62,14 @@ void LoadSettings() {
     g_maxWidth = maxWidth;
     g_follow = true;
     g_maxItems = SettingInt(L"maxItems");
+    g_detailsPane = SettingBool(L"detailsPane");
+    g_previewRedirect = SettingBool(L"previewRedirect");
+    g_paneAnim = SettingBool(L"paneAnimation");
+    g_panePreview = SettingBool(L"livePreview");
+    {
+        int height = Wh_GetIntValue(L"ui.paneHeight", 250);
+        g_panePreviewHeight = height < 90 ? 90 : height > 520 ? 520 : height;
+    }
     g_debugLog = SettingBool(L"debugLog");
 }
 
@@ -71,7 +85,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.36.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.52.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -112,8 +126,8 @@ void Wh_ModSettingsChanged() {
 
 void Wh_ModBeforeUninit() {
     g_unloading = true;
-    for (int i = 0; i < 60 && g_compressJobs > 0; i++) {
-        Sleep(50);  // An archive being made by tar.exe: its thread ends in this code.
+    for (int i = 0; i < 60 && (g_compressJobs > 0 || g_paneJobs > 0); i++) {
+        Sleep(50);  // An archive being made by tar.exe, or details being read: the thread ends in this code.
     }
     // The worker first, so no result is queued after the windows are cleaned.
     StopWorker();

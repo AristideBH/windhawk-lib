@@ -116,6 +116,29 @@ void RebuildForSettings() {
                 FitWidth(column.get());
                 RefreshNames(column.get());
             }
+            // The shading of every other row, on the rows that are already there.
+            if (column->list) {
+                auto items = column->list.Items();
+                for (uint32_t i = 0; i < items.Size() && i < column->rowToEntry.size(); i++) {
+                    int entry = column->rowToEntry[i];
+                    if (entry < 0) {
+                        continue;
+                    }
+                    if (auto item = items.GetAt(i).try_as<muxc::ListViewItem>()) {
+                        if (g_oddRows && entry % 2 == 1) {
+                            item.Background(Brush(13, 128, 128, 128));
+                        } else {
+                            item.Background(mux::Media::Brush{nullptr});
+                        }
+                        if (!item.IsSelected()) {
+                            // The row repaints its own background only when its visual state is
+                            // entered again (it showed only once the mouse went over it).
+                            mux::VisualStateManager::GoToState(item, L"PointerOver", false);
+                            mux::VisualStateManager::GoToState(item, L"Normal", false);
+                        }
+                    }
+                }
+            }
         }
         ReloadAll(state);
         UpdatePill(state, false);
@@ -405,7 +428,14 @@ mux::UIElement BuildHomePage() {
                 CommitSetting(L"enabled", changed.IsOn() ? L"1" : L"0");
             }
         });
-        card.Child(MakeSettingRow(Str(L"columns.title"), enabled ? enabled->description : L"", toggle));
+        muxc::StackPanel featureRows;
+        featureRows.Spacing(2);
+        featureRows.Children().Append(MakeSettingRow(Str(L"columns.title"), enabled ? enabled->description : L"", toggle));
+        const SettingInfo* paneInfo = FindSetting(L"detailsPane");
+        if (paneInfo) {
+            featureRows.Children().Append(MakeSettingRow(Str(L"details.title"), paneInfo->description, MakeSettingControl(*paneInfo)));
+        }
+        card.Child(featureRows);
         page.Children().Append(card);
     }
     // Status and version.
@@ -461,28 +491,29 @@ mux::UIElement BuildHomePage() {
         card.Child(rows);
         page.Children().Append(card);
     }
-    // What's new.
-    if (kWhatsNewCount) {
-        auto title = MakeText(Str(L"card.whatsnew"), 14, true, false);
+    // About: who made it, and where the code is.
+    {
+        auto title = MakeText(Str(L"card.about"), 14, true, false);
         title.Margin(mux::Thickness{0, 12, 0, 0});
         page.Children().Append(title);
         auto card = MakeCard();
-        muxc::StackPanel items;
-        items.Spacing(8);
-        for (size_t i = 0; i < kWhatsNewCount; i++) {
-            items.Children().Append(MakeText(kWhatsNew[i], 13, false, i > 0 ? true : false));
-        }
-        card.Child(items);
+        muxc::HyperlinkButton link;
+        link.Content(winrt::box_value(winrt::hstring{Str(L"about.link")}));
+        link.Padding(mux::Thickness{0, 0, 0, 0});
+        link.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+            ShellExecuteW(nullptr, L"open", L"https://github.com/AristideBH/windhawk-lib", nullptr, nullptr, SW_SHOWNORMAL);
+        });
+        card.Child(MakeSettingRow(Str(L"about.creator"), Str(L"about.detail"), link));
         page.Children().Append(card);
     }
     return page;
 }
 
-mux::UIElement BuildColumnsPage() {
+mux::UIElement BuildSettingsPage(const wchar_t* pageId, const wchar_t* title, const wchar_t* subtitle, bool withNote) {
     muxc::StackPanel page;
     page.Spacing(8);
-    page.Children().Append(MakePageHeader(Str(L"columns.title"), Str(L"columns.subtitle")));
-    {
+    page.Children().Append(MakePageHeader(title, subtitle));
+    if (withNote) {
         auto note = MakeCard();
         note.Child(MakeText(Str(L"columns.note"), 12, false, true));
         page.Children().Append(note);
@@ -490,7 +521,7 @@ mux::UIElement BuildColumnsPage() {
     for (size_t c = 0; c < kCardCount; c++) {
         bool any = false;
         for (size_t i = 0; i < kSettingCount; i++) {
-            any = any || (!kSettings[i].windhawkOnly && wcscmp(kSettings[i].page, L"columns") == 0 &&
+            any = any || (!kSettings[i].windhawkOnly && wcscmp(kSettings[i].page, pageId) == 0 &&
                           wcscmp(kSettings[i].card, kCards[c].id) == 0);
         }
         if (!any) {
@@ -504,7 +535,7 @@ mux::UIElement BuildColumnsPage() {
         rows.Spacing(2);
         for (size_t i = 0; i < kSettingCount; i++) {
             auto const& info = kSettings[i];
-            if (info.windhawkOnly || wcscmp(info.page, L"columns") != 0 || wcscmp(info.card, kCards[c].id) != 0) {
+            if (info.windhawkOnly || wcscmp(info.page, pageId) != 0 || wcscmp(info.card, kCards[c].id) != 0) {
                 continue;
             }
             rows.Children().Append(MakeSettingRow(info.name, info.description, MakeSettingControl(info)));
@@ -515,9 +546,9 @@ mux::UIElement BuildColumnsPage() {
     return page;
 }
 
-// Explorer Extras (the overview) and Columns. A feature gets its page when it is built.
+// Explorer Extras (the overview), Columns and the details pane.
 int SettingsPageCount() {
-    return 2;
+    return 3;
 }
 
 void ShowSettingsPage(SettingsUi* ui, int page) {
@@ -525,7 +556,9 @@ void ShowSettingsPage(SettingsUi* ui, int page) {
     g_settingsBuilding = true;
     mux::UIElement content{nullptr};
     try {
-        content = page == 1 ? BuildColumnsPage() : BuildHomePage();
+        content = page == 1   ? BuildSettingsPage(L"columns", Str(L"columns.title"), Str(L"columns.subtitle"), true)
+                  : page == 2 ? BuildSettingsPage(L"details", Str(L"details.title"), Str(L"details.subtitle"), false)
+                              : BuildHomePage();
     } catch (...) {
         g_settingsBuilding = false;
         throw;
@@ -555,6 +588,13 @@ void FillNav(SettingsUi* ui) {
             icon.as<mux::FrameworkElement>().VerticalAlignment(mux::VerticalAlignment::Center);
             line.Children().Append(icon);
             name = Str(L"columns.title");
+        } else if (i == 2) {
+            muxc::FontIcon icon;
+            icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+            icon.Glyph(L"");  // Info.
+            icon.FontSize(16);
+            line.Children().Append(icon);
+            name = Str(L"details.title");
         } else {
             muxc::FontIcon icon;
             icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
@@ -890,7 +930,8 @@ void OpenSettingsWindow(WindowState* state) {
                     width = sw;
                     height = sh;
                 }
-                page = sp >= 0 && sp < SettingsPageCount() ? sp : 0;
+                page = 0;  // It always opens on the first section.
+                (void)sp;
             }
         }
         HWND window = CreateWindowExW(0, kSettingsClass, Str(L"window.title"), WS_OVERLAPPEDWINDOW, x, y, width, height,
@@ -901,6 +942,20 @@ void OpenSettingsWindow(WindowState* state) {
         }
         g_settingsWindow = window;
         g_settingsThread = GetCurrentThreadId();
+        {
+            // No icon and no title drawn in the title bar (the window keeps its name for the taskbar).
+            if (HMODULE theme = LoadLibraryW(L"uxtheme.dll")) {
+                struct Options {
+                    DWORD flags;
+                    DWORD mask;
+                } options = {3, 3};  // WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON
+                auto setAttribute = (HRESULT(WINAPI*)(HWND, int, void*, DWORD))GetProcAddress(theme, "SetWindowThemeAttribute");
+                if (setAttribute) {
+                    setAttribute(window, 1 /* WTA_NONCLIENT */, &options, sizeof(options));
+                }
+                FreeLibrary(theme);
+            }
+        }
         auto* ui = new SettingsUi();
         g_settingsUi = ui;
 

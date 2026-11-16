@@ -2,12 +2,12 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     A Columns layout for File Explorer: Miller columns in the View menu, with drag and drop, a restyled context menu, touch support and per-folder memory.
-// @version         0.36.7
+// @version         0.52.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys
 // @license         MIT
 // ==/WindhawkMod==
 

@@ -2,7 +2,7 @@
 
 A [Windhawk](https://windhawk.net) mod for File Explorer on Windows 11. It adds a **Columns** layout to the View menu: Miller columns, one column per folder level, drawn with Explorer's own WinUI 3 controls.
 
-Status: version 0.36, release candidate, in daily use by its author, not yet published to the Windhawk catalog. Tested on Windows 11 build 26100 (24H2), ARM64, French. The x86-64 build compiles and links (checked with Windhawk's own compiler) but has not been run.
+Status: version 0.52, release candidate, in daily use by its author, not yet published to the Windhawk catalog. Tested on Windows 11 build 26100 (24H2), ARM64, French. The x86-64 build compiles and links (checked with Windhawk's own compiler) but has not been run.
 
 ![The Columns layout](assets/captures/columns.svg)
 
@@ -18,6 +18,7 @@ Status: version 0.36, release candidate, in daily use by its author, not yet pub
 - **Widths.** Drag a border to resize a column, double-click it to fit the names, Shift and double-click to give every column the average fitted width. A small handle follows the pointer along the border.
 - **Touch.** Tap, press and hold, drag and drop and a rubber band work by touch.
 - **Look.** Selected neighbouring rows share one background, the chevron of the folder that leads to dimmed columns sits on a small badge, and the View button wears a Columns icon while Columns is on.
+- **Details pane.** One pane that replaces Explorer's Details and Preview panes, in Columns and in every view. It shows a preview on top and the details below: PDF, text and code, Markdown, images at full size (wheel, pinch and double-tap zoom, drag to pan), video and sound with small controls, a stack of thumbnails for several items, a folder's count. Actions (Open, Copy path, Properties), click a value to copy it, "More details" for the rest. Alt+P, the View menu and the toolbar toggle all show and hide it.
 - **Archives.** Zip, 7z, rar and tar files open as folders in the next column, with Extract here and Extract selected here.
 - **Undo.** Ctrl+Z takes back a delete, a rename, a new folder, or a group of renames.
 - **Marks.** Cloud files that are not downloaded, always-kept and downloaded cloud files, network items and phones get a small glyph.
@@ -48,6 +49,14 @@ Open the settings window from **Extras** at the bottom of the toolbar's ... menu
 | Double-click empty space to go up | off | Goes up one folder. |
 | Remember sort and grouping, column widths, Columns per folder | on | The per folder memory. |
 | Open folders while dragging | on | Hold dragged items on a folder for about 0.7 s to open it. |
+| Folders first | on | Folders are listed before files in each column. |
+| Alternate row shading | off | Every other row is a shade apart. |
+| Accent badge on the path chevron | on | The chevron of the folder you came from sits in an accent badge. |
+| Details pane | on | The merged details and preview pane. |
+| Preview pane opens this pane | on | Alt+P and the View menu's Preview entry show the pane. |
+| Animate the pane | on | The content slides and fades in. |
+| Preview documents and code | on | The real preview of documents, text, images, video and audio. |
+| Open previews by themselves | on | Off: a button on the card opens the preview. |
 | Border after the last column | off | Draws a separator on the right of the last column. |
 | Shift + double-click to even widths | on | Gives all columns the same width. |
 | Show the focus outline | on | Outline around the item under the keyboard cursor. |

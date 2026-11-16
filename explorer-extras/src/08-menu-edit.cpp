@@ -506,7 +506,7 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
                 if (GetTickCount64() - state->rename->startedAt < 400) {
                     state->rename->box.Focus(mux::FocusState::Programmatic);
                 } else {
-                    CommitRename(state);
+                    CancelRename(state);  // A click anywhere else cancels the rename.
                 }
             } catch (...) {
                 LogHresult(L"rename lost focus");

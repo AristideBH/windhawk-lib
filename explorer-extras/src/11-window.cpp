@@ -248,7 +248,7 @@ HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, LPCWSTR className,
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || !g_enabled) {
+    if (g_unloading || (!g_enabled && !g_detailsPane)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -281,6 +281,7 @@ void OnWindowCreated(Inspectable const& rootObject) {
         });
     timer.Start();
     state->entryTimer = timer;
+    StartDetails(state);
     Out(L"window created, window=%p, looking for the View flyout", top);
 }
 
@@ -291,7 +292,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && g_enabled) {
+    if (!g_unloading && (g_enabled || g_detailsPane)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);
@@ -417,6 +418,7 @@ void CloseEverything() {
                     }
                     HidePanel(state, L"mod unloading");
                     RemoveMenuEntry(state);
+                    ReleaseDetails(state);
                     ReleaseEntry(state);
                     state->queue = nullptr;
                     delete state;

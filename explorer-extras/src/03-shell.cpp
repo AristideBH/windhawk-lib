@@ -968,6 +968,13 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
     }
     std::stable_sort(result->entries.begin(), result->entries.end(),
                      [folder, &keys](const Entry& a, const Entry& b) {
+                         if (g_foldersFirst) {
+                             bool aFolder = a.folder && !a.archive;
+                             bool bFolder = b.folder && !b.archive;
+                             if (aFolder != bFolder) {
+                                 return aFolder;
+                             }
+                         }
                          for (auto& key : keys) {
                              HRESULT cmp = folder->CompareIDs(
                                  key.column, a.child.get(), b.child.get());
@@ -1004,6 +1011,23 @@ bool SelectInExplorer(IShellBrowser* browser, PCUITEMID_CHILD child) {
                    SVSI_NOTAKEFOCUS);
     view->Release();
     return SUCCEEDED(hr);
+}
+
+// Nothing selected in Explorer's own view.
+std::vector<Pidl> ExplorerSelection(IShellBrowser* browser);
+
+void ClearExplorerSelection(IShellBrowser* browser) {
+    // Each selected item is deselected by name: a null item with "deselect others" did not
+    // empty the selection.
+    std::vector<Pidl> selected = ExplorerSelection(browser);
+    IShellView* view = nullptr;
+    if (!selected.empty() && SUCCEEDED(browser->QueryActiveShellView(&view)) && view) {
+        for (auto const& child : selected) {
+            view->SelectItem(child.get(), SVSI_DESELECT | SVSI_NOTAKEFOCUS);
+        }
+        view->Release();
+    }
+    Out(L"cleared Explorer's selection, %d items were selected", (int)selected.size());
 }
 
 // The items selected in Explorer's own view, as child ids.

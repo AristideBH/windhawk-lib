@@ -3,6 +3,12 @@ namespace {
 std::atomic<bool> g_unloading{false};
 std::atomic<bool> g_debugLog{false};
 std::atomic<bool> g_follow{true};
+std::atomic<bool> g_detailsPane{true};     // The merged details pane.
+std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
+std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.
+std::atomic<bool> g_paneAnim{true};         // The content of the pane slides and fades.
+std::atomic<int> g_paneJobs{0};             // Readers of file details that are running.
+ULONGLONG g_paneLeaveUntil = 0;  // While the details pane slides out, the Columns panel stays behind it.
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{false};
@@ -14,6 +20,12 @@ std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_archives{true};
 std::atomic<bool> g_dragOut{true};
 std::atomic<bool> g_keepStale{true};
+std::atomic<bool> g_foldersFirst{true};
+std::atomic<bool> g_oddRows{false};
+std::atomic<int> g_paneVolume{100};    // The volume of the pane's player, in percent, kept between runs.
+std::atomic<bool> g_paneMuted{false};
+std::atomic<bool> g_staleAccent{true};  // The chevron of the folder you came from sits in an accent badge.
+std::atomic<bool> g_autoPreview{true};  // The real preview opens by itself; otherwise a button opens it.
 std::atomic<bool> g_harmonize{true};
 std::atomic<bool> g_springLoad{true};
 std::atomic<bool> g_rememberSort{true};
