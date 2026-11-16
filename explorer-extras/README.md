@@ -4,7 +4,7 @@ A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11.
 
 > **Beta, and vibe-coded.** Explorer Extras is in public beta, in daily use by its author, not yet in the Windhawk catalog. It is built largely with AI assistance and tested by hand, without an independent code audit. Use it at your own judgment, and please report anything odd.
 
-Tested on Windows 11 build 26100 (24H2), ARM64, in French and English. The x86-64 build compiles and links but has not been run.
+Tested on Windows 11 build 26100 (24H2), on ARM64 and x86-64, in French and English. Removing the mod leaves Explorer as it was.
 
 ## Areas
 
@@ -47,6 +47,10 @@ Each area has its own page, and every area has an off switch, so you can use onl
 ## Feedback
 
 Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (turn on "Write a debug log", then use **Copy diagnostics** on the Home page). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
+
+## Support
+
+Explorer Extras is free. If you like it, you can [support the work on Ko-fi](https://ko-fi.com/aristidebh).
 
 ## Build from source
 

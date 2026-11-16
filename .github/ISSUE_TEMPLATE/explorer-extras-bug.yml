@@ -18,7 +18,7 @@ body:
     attributes:
       label: Mod version
       description: On the Home page of the settings window (Extras, in the toolbar's ... menu), or in Windhawk.
-      placeholder: "0.54.4"
+      placeholder: "0.55.0"
     validations:
       required: true
   - type: input

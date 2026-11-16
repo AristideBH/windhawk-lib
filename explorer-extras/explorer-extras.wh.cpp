@@ -2,9 +2,10 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.54.9
+// @version         0.55.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
+// @donateUrl       https://ko-fi.com/aristidebh
 // @include         explorer.exe
 // @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys
@@ -45,9 +46,11 @@ Works with QuickLook.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
-Tested on Windows 11 24H2 on ARM64, in French and English. The x86-64 build compiles but has not been run. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
+Tested on Windows 11 24H2, on ARM64 and x86-64, in French and English. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
 
 Bug reports and ideas: https://github.com/AristideBH/windhawk-lib/issues (the issue forms ask for the mod's version and diagnostics).
+
+If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 */
 // ==/WindhawkModReadme==
 
@@ -20516,7 +20519,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Out(L"explorer-extras v0.54.9 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Out(L"explorer-extras v0.55.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -21,4 +21,4 @@
 - {name: "status: wontfix", color: "ffffff", description: "Declined, with a reason in the thread"}
 - {name: "needs: windows build", color: "ededed", description: "Only seen on one Windows build"}
 - {name: "needs: arm64", color: "ededed", description: "Only seen on ARM64"}
-- {name: "needs: x64", color: "ededed", description: "Only seen on x86-64 (never run by the author)"}
+- {name: "needs: x64", color: "ededed", description: "Only seen on x86-64"}

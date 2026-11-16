@@ -2,7 +2,7 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
-## Beta, 0.54 (2026-11-16)
+## Beta, 0.55 (2026-11-16)
 
 The first public beta. Explorer Extras is now more than the Columns layout: it has a details pane and a settings window, each its own area.
 
@@ -16,6 +16,9 @@ The first public beta. Explorer Extras is now more than the Columns layout: it h
 
 ### Works with
 - QuickLook (the Space-bar previewer) in Columns, since Explorer's own view follows the selection.
+
+### Tested
+- On ARM64 and x86-64, and the mod was unloaded and removed without leaving a trace.
 
 ### Changed
 - A slow second click renames only in the active column, and a rename is cancelled by a click anywhere else.
