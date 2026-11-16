@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta, vibe-coded. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.54.6
+// @version         0.54.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @include         explorer.exe
@@ -36,6 +36,8 @@ A **Columns** entry in File Explorer's View menu: Miller columns, one column per
 One pane in place of Explorer's Details and Preview panes, in Columns and in every view. It previews PDF, text, Markdown, images (zoom and pan), video and sound, and shows the details of what is selected: properties by type, a folder's size and contents, a stack of thumbnails for several items. Alt+P, the View menu and the toolbar button show and hide it.
 
 Works with QuickLook.
+
+A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
 Tested on Windows 11 24H2 on ARM64, in French and English. The x86-64 build compiles but has not been run. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
 

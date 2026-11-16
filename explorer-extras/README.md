@@ -20,6 +20,10 @@ More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
 
 ![Columns, the View menu and the details pane in File Explorer](assets/captures/hero.png)
 
+A short tour:
+
+https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
+
 ## Install
 
 1. Install [Windhawk](https://windhawk.net).
