@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.55.1
+// @version         0.55.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -16,7 +16,7 @@
 /*
 # Explorer Extras
 
-![Columns, the View menu and the details pane in File Explorer](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/explorer-extras/assets/captures/hero.png)
+![Columns, the View menu and the details pane in File Explorer](https://raw.githubusercontent.com/AristideBH/windhawk-lib/3422bd28aa32f126030284b602fe06e1ddfceceb/explorer-extras/assets/captures/hero.png)
 
 Additions for File Explorer. The mod has several areas, each with its own page and switch in a settings window, so you use only what you like. Open the settings window from **Extras** at the bottom of the toolbar's ... menu.
 
