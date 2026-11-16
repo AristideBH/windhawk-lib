@@ -2545,7 +2545,7 @@ void PaneAnimateIn(WindowState* state, DetailsPane* pane, float dx, float dy, mu
     if (!body || !inner) {
         return;
     }
-    Wh_Log(L"details pane: content in, dx=%.0f dy=%.0f", dx, dy);
+    Wh_LogV(L"details pane: content in, dx=%.0f dy=%.0f", dx, dy);
     if (!g_paneAnim) {
         for (mux::UIElement e : {mux::UIElement(body), mux::UIElement(inner)}) {
             e.TranslationTransition(nullptr);
@@ -2672,7 +2672,7 @@ bool PaneHandleAltP(HWND hwnd, LPMSG msg) {
     if (msg->message == WM_SYSKEYDOWN && !(msg->lParam & (1 << 30))) {  // Not an auto-repeat.
         // No hold on the buttons: nothing flips them here (a click does), so they follow the pane at once.
         state->details->shortcutAt = GetTickCount64();
-        Wh_Log(L"details pane: Alt+P");
+        Wh_LogV(L"details pane: Alt+P");
     }
     return true;
 }
@@ -3410,7 +3410,7 @@ bool PaneReadSelection(WindowState* state, DetailsPane* pane, std::wstring* key)
     swprintf(tail, ARRAYSIZE(tail), L"|%d|%llx", (int)children.size(), hash);
     std::wstring next = PathOf(folder.get()) + tail;
     if (next != pane->wantedKey) {
-        Wh_Log(L"details pane: Explorer's selection is now %d item(s) in \"%s\"", (int)children.size(), PathOf(folder.get()).c_str());
+        Wh_LogV(L"details pane: Explorer's selection is now %d item(s) in \"%s\"", (int)children.size(), PathOf(folder.get()).c_str());
         pane->wantedKey = next;
         PaneClosePreview(pane);
         pane->wantedSince = GetTickCount64();

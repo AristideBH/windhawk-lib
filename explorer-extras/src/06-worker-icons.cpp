@@ -140,7 +140,10 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         IShellItemImageFactory* factory = nullptr;
         if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
             HBITMAP bitmap = nullptr;
-            HRESULT got = factory->GetImage(SIZE{32, 32}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
+            // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
+            LONG side = MulDiv(20, (int)GetDpiForSystem(), 96);
+            side = side < 32 ? 32 : side;
+            HRESULT got = factory->GetImage(SIZE{side, side}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
             if (SUCCEEDED(got) && bitmap) {
                 IconBits bits;
                 bits.index = indices[i];

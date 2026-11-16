@@ -141,7 +141,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 state->band.column->list.ReleasePointerCaptures();
             }
             EndBand(state, false);
-            Wh_Log(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
+            Wh_LogV(L"touch: a second finger, the rectangle is given up for the two-finger scroll");
             return;
         }
         // The middle button on a folder opens it in a new tab.
@@ -246,7 +246,7 @@ void OnBandPressed(muxc::ListView const& list, mux::Input::PointerRoutedEventArg
                 }
             }
             list.CapturePointer(args.Pointer());
-            Wh_Log(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
+            Wh_LogV(L"touch: pressed on the empty space of column %d, a rectangle may start (scrollers locked=%d)", index + 1,
                 (int)band.locked.size());
         }
     } catch (...) {
@@ -302,7 +302,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
             band.panLastAt = GetTickCount64();
             band.panVelocity = 0;
             list.CapturePointer(args.Pointer());
-            Wh_Log(L"touch: a sideways drag on the empty space, the columns scroll");
+            Wh_LogV(L"touch: a sideways drag on the empty space, the columns scroll");
             return true;
         }
         // A drag: take the pointer, remember the rows, start from the selection
@@ -310,7 +310,7 @@ bool OnBandMoved(WindowState* state, Column* column, muxc::ListView const& list,
         band.pending = false;
         band.active = true;
         if (band.touch) {
-            Wh_Log(L"touch: the finger moved, the rectangle starts");
+            Wh_LogV(L"touch: the finger moved, the rectangle starts");
         }
         list.CapturePointer(args.Pointer());
         auto scroller = FindListScroller(list);
@@ -1068,9 +1068,18 @@ void OnColumnKey(muxc::ListView const& list,
         // alone.
         int code = (int)key;
         wchar_t typedChar = 0;
-        if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5A)) {
-            typedChar = (wchar_t)code;
-        } else if (code >= 0x60 && code <= 0x69) {
+        {
+            // The character this key makes on the layout in use (an accented letter, a digit that needs
+            // Shift on AZERTY), not the virtual-key code, which is the same for every layout.
+            BYTE keyboard[256] = {};
+            wchar_t made[4] = {};
+            if (GetKeyboardState(keyboard) &&
+                ToUnicodeEx((UINT)code, args.KeyStatus().ScanCode, keyboard, made, 4, 4, GetKeyboardLayout(0)) == 1 &&
+                (iswalnum(made[0]) || made[0] == L'_')) {
+                typedChar = made[0];
+            }
+        }
+        if (!typedChar && code >= 0x60 && code <= 0x69) {
             typedChar = (wchar_t)(L'0' + (code - 0x60));
         }
         if (typedChar && !(GetKeyState(VK_CONTROL) & 0x8000) &&
@@ -1700,7 +1709,7 @@ void SyncSelectionFromExplorer(WindowState* state) {
             }
         }
         state->building = false;
-        Wh_Log(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
+        Wh_LogV(L"the toolbar changed Explorer's selection: %d items now selected in column %d", (int)wanted.size(),
             state->active + 1);
         OnRowSelected(column->list);
     } catch (...) {
@@ -1808,7 +1817,7 @@ void OnTick() {
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;
                 if (logged++ < 8) {
-                    Wh_Log(L"the panel was covered by a sibling window, raised again");
+                    Wh_LogV(L"the panel was covered by a sibling window, raised again");
                 }
             }
         }
@@ -2175,16 +2184,25 @@ void OnTick() {
                 state->watchEditUntil = 0;
             } else if (HWND edit = FindNativeRenameBox(state->topLevel)) {
                 state->watchEditUntil = 0;
+                // The name in the box is the item that was just made (a New folder, a New file): it is
+                // what the column renames once it lists it. The box is closed with its name kept.
+                wchar_t made[MAX_PATH] = L"";
+                GetWindowTextW(edit, made, MAX_PATH);
                 SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE, 0);
                 SendMessageW(edit, WM_KEYUP, VK_ESCAPE, 0);
                 if (state->active >= 0 && state->active < (int)state->columns.size() &&
                     !state->rename) {
                     Column* column = state->columns[state->active].get();
-                    std::vector<size_t> picked = SelectedEntries(column, column->list);
-                    Wh_Log(L"Explorer's own rename box found, renaming in the column instead (%d selected)",
-                        (int)picked.size());
-                    if (!picked.empty()) {
-                        BeginMultiRename(state, column, picked);
+                    if (made[0]) {
+                        Wh_Log(L"Explorer's own rename box found, \"%s\" is renamed in the column once it is listed", made);
+                        state->renameName = made;
+                        state->renameColumn = column;
+                        RequestLoad(state, column);
+                    } else {
+                        std::vector<size_t> picked = SelectedEntries(column, column->list);
+                        if (!picked.empty()) {
+                            BeginMultiRename(state, column, picked);
+                        }
                     }
                 }
             }
@@ -2208,7 +2226,7 @@ void OnTick() {
             // brings it into view, which cut the centring short.
             if (known && panel && !inside && now >= state->scrollQuietUntil) {
                 state->focusColumn->list.Focus(mux::FocusState::Programmatic);
-                Wh_Log(L"focus taken back from Explorer's view");
+                Wh_LogV(L"focus taken back from Explorer's view");
             }
         } else {
             state->focusColumn = nullptr;

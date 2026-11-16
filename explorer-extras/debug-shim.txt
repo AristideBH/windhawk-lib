@@ -1,3 +1,4 @@
+#define EXTRAS_VERBOSE
 #include <cstdarg>
 // Test build only: every log line is also appended to @@LOG_PATH@@
 static void ExtrasDebugLog(const wchar_t* format, ...) {

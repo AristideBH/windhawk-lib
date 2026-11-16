@@ -327,6 +327,8 @@ Ari tests on his own Windows machine (ARM64 here, with Windhawk 2). You build, h
 
 A mod reload does not rebuild what Explorer already built. To test code that runs when a window or its command bar is created, Ari must open a **new** Explorer window after the deploy. A log from a window that was open before the reload proves nothing about that code.
 
+**Smoke test.** After a deploy run `pwsh -NoProfile -File tools\smoke-test-explorer-extras.ps1 -Log <logfile>`: it opens a window of its own, checks what the mod must place without a click (log lines, the toolbar toggle through UI Automation), closes it, and prints PASS or FAIL for six checks, about ten lines. It is a committed script, so it costs one command, not a rewrite. It does not replace Ari's checks of what he sees.
+
 **Read.** After each test read the log file the debug build writes, then check `%LOCALAPPDATA%\CrashDumps` for a dump newer than the test. An Explorer crash on a disable shows in the log as a clean `explorer-extras end` followed by nothing: the crash came after the unload. See "Reading a crash dump".
 
 Rules for the loop:

@@ -2,6 +2,14 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.65 (2026-11-16)
+
+### Changed
+- Type-to-jump uses the character the key makes on your keyboard layout (accented letters, digits that need Shift on AZERTY).
+- A folder or file made from the toolbar's New menu is renamed in the column once it is listed, as the one just made, not the item that was selected.
+- Icons are asked for at the size of the screen (they were 32 px and soft at high DPI).
+- The log of a normal build is quiet: the lines that come with every click, selection or drag are only in a debug build.
+
 ## 0.64 (2026-11-16)
 
 From the second catalog review.
