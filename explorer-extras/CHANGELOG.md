@@ -2,6 +2,17 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.76 (2026-11-17)
+
+### Fixed, from a review of the whole Labels work
+- The handlers that the right-click menu gave to Explorer's elements are taken off at unload in every window, also in one that was open before the mod loaded (such a window has no state of its own, so nothing took them off before). This could have crashed Explorer after the mod was disabled or updated.
+- A folder is read again when you show it, and when it has been on show for 20 seconds, so a rename, a file tagged by another program or a file copied in shows its dot. The read of a folder you leave is cancelled. Before, a folder read once kept its dots until Explorer restarted.
+- Tagging one of two items that show the same name (hidden extensions) no longer puts the dot on both, and a newly tagged item no longer has its dot on top of the type text in Content.
+- The pane says when an item has no dot because another item shows the same name.
+- A tag name such as `{wip}` or with unusual characters can no longer stop the pane from showing a file.
+- Tags from the right-click menus (Explorer's and Columns') now report a read-only or locked file, and refresh the pane. Many files are written on a thread of the mod, not by the window, and a big selection is not read every time the pane or the menu is built.
+- After **Show labels** is switched off, the dots go at once and the Tags entry of a menu that was already built is taken out.
+
 ## 0.75 (2026-11-17)
 
 ### Added
@@ -12,6 +23,7 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 - Labels are kept in a named stream of the file itself, so they follow it on NTFS when it is copied or moved. The file's dates are not changed. A drive that is not NTFS, a read-only file or a file in use is told to you, not guessed at.
 - A **Labels** group on Windhawk's page: **Show labels**, and a name for each colour ("Red = Urgent").
 - Window threads that the mod never saw being created (a window open before the mod loaded) are found by class, so labels work in them too.
+- 0.75.1 and 0.75.2: in Content and Tiles the dot starts at the text edge of the name, and the Type line of a Content row is measured with the size of its own font.
 - 0.74.x: the hook on Explorer's right-click menu; 0.73: Columns; 0.72: the pane; 0.70 to 0.71: the dots on the list.
 
 ## 0.68 (2026-11-17)

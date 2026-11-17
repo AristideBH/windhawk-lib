@@ -10,7 +10,7 @@ A collection of [Windhawk](https://windhawk.net/) mods for Windows.
 
 | Mod | Status | Description |
 | --- | --- | --- |
-| [**Explorer Extras**](explorer-extras/README.md) | **Beta**, in the catalog review, takes reports | Additions for File Explorer, one switch per area: a Columns layout (Miller columns, drag and drop, touch), and a details and preview pane (PDF, text, Markdown, images, video, sound). Its settings are on the mod's Windhawk page. |
+| [**Explorer Extras**](explorer-extras/README.md) | **Beta**, in the catalog review, takes reports | Additions for File Explorer, one switch per area: a Columns layout (Miller columns, drag and drop, touch), a details and preview pane (PDF, text, Markdown, images, video, sound), and colour labels (tags) on files and folders. Its settings are on the mod's Windhawk page. |
 | [Windows 11 Start Button Tinter](windows-11-start-menu-button/README.md) | Not released | Recolor (with system accent color, gradient shading, and click shimmer) for the Windows 11 taskbar Start button, animation-preserving. |
 | [Taskbar Widget Stack](taskbar-widget-stack/README.md) | Prototype | Stack multiple taskbar widgets vertically in one snap-scrollable pane, iOS-widget-stack style. Live-tested. |
 | [Taskbar System Usage](taskbar-widget-system-usage/README.md) | Prototype | CPU/RAM/GPU usage bars in the taskbar. Standalone mod, live-tested; registers itself into Taskbar Widget Stack's pane when that mod is also installed. |

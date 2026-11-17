@@ -78,6 +78,31 @@ void LabelsPaneSelfTest() {
                      L"clearing the tags of a selection");
     result = LabelsClearSelection(files);
     PaneLabelsExpect(result.done == 0, L"clearing again writes nothing");
+    // More than a few files are written on a mod thread.
+    std::vector<std::wstring> crowd;
+    for (int i = 0; i < 40; i++) {
+        std::wstring path = dir + L"\\c" + std::to_wstring(i) + L".txt";
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            CloseHandle(file);
+        }
+        crowd.push_back(path);
+    }
+    std::atomic<bool> finished{false};
+    LabelsApplyResult asyncResult;
+    bool started = LabelsRunAsync([crowd, red]() { return LabelsApplyToSelection(crowd, red, true); },
+                                  [&](LabelsApplyResult const& done) {
+                                      asyncResult = done;
+                                      finished = true;
+                                  });
+    for (int i = 0; i < 250 && started && !finished; i++) {
+        Sleep(20);
+    }
+    PaneLabelsExpect(started && finished && asyncResult.done == 40, L"forty files tagged on a mod thread");
+    for (auto const& path : crowd) {
+        DeleteFileW((path + kLabelsStream).c_str());
+        DeleteFileW(path.c_str());
+    }
     std::vector<LabelTag> sixteen;
     for (int i = 0; i < 16; i++) {
         sixteen.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});

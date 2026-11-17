@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
-// @version         0.75.2
+// @version         0.76.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh

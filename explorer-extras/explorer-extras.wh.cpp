@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
-// @version         0.75.2
+// @version         0.76.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -719,6 +719,7 @@ constexpr StringInfo kStrings[] = {
     {L"labels.menu", L"Tags"},
     {L"labels.addtag", L"Add tag\u2026"},
     {L"labels.clear", L"Clear tags"},
+    {L"labels.ambiguous", L"Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart."},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -763,6 +764,7 @@ constexpr StringInfo kStringsFr[] = {
     {L"labels.menu", L"\u00C9tiquettes"},
     {L"labels.addtag", L"Ajouter une \u00E9tiquette\u2026"},
     {L"labels.clear", L"Effacer les \u00E9tiquettes"},
+    {L"labels.ambiguous", L"Un autre \u00E9l\u00E9ment porte le m\u00EAme nom affich\u00E9, donc aucun point n\u2019est montr\u00E9. Affichez les extensions de nom de fichier pour les distinguer."},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -2668,6 +2670,7 @@ struct LabelsFolder {
     std::unordered_map<std::wstring, std::vector<LabelTag>> byName;
     std::unordered_set<std::wstring> ambiguous;  // Names shown by more than one item, at least one of them tagged.
     std::unordered_map<std::wstring, std::wstring> typeNames;  // The type text ("Text file") of each tagged item.
+    std::unordered_map<std::wstring, int> counts;  // How many items show each name, tagged or not.
     std::unordered_set<std::wstring> folders;    // The items that are folders (a Tiles or Content row has no detail line then).
     bool streamsSupported = true;                // The volume can carry the stream.
     bool complete = false;                       // The folder was read to its end.
@@ -2704,8 +2707,37 @@ LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
             folder.typeNames.erase(name);
         }
     }
+    folder.counts = std::move(seen);
     folder.complete = true;
     return folder;
+}
+
+// The entry of a folder after one item's tags changed. An item that shares its displayed name with another one
+// (hidden extensions) cannot be told from it in the list: its name is ambiguous, whichever one was tagged. Pure.
+LabelsFolder LabelsFolderWithTags(LabelsFolder base, std::wstring const& name, std::vector<LabelTag> const& tags,
+                                  std::wstring const& typeName) {
+    auto counted = base.counts.find(name);
+    if (counted != base.counts.end() && counted->second > 1) {
+        if (!tags.empty()) {
+            base.ambiguous.insert(name);
+        }
+        base.byName.erase(name);
+        base.typeNames.erase(name);
+        return base;
+    }
+    if (tags.empty()) {
+        base.byName.erase(name);
+        base.typeNames.erase(name);
+    } else {
+        base.byName[name] = tags;
+        base.typeNames[name] = typeName;
+    }
+    return base;
+}
+
+// A folder that was read is read again after this long, when it is on show (a tag set by another program, a rename).
+bool LabelsShouldRefresh(ULONGLONG readAt, ULONGLONG now) {
+    return now - readAt >= 20000;
 }
 
 // The tag a window filters its list by. A colour-only filter (no name) matches any tag of that colour, a named
@@ -2735,6 +2767,7 @@ struct LabelsSlot {
     std::shared_ptr<const LabelsFolder> data = std::make_shared<LabelsFolder>();
     std::shared_ptr<std::atomic<bool>> cancel;  // Of the read that is running, null when none is.
     ULONGLONG used = 0;
+    ULONGLONG readAt = 0;  // When the data was published.
 };
 
 std::mutex g_labelsCacheMutex;
@@ -2809,6 +2842,7 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
         auto found = g_labelsCache.find(path);
         if (found != g_labelsCache.end() && found->second.cancel == cancel) {
             found->second.data = data;
+            found->second.readAt = GetTickCount64();
             found->second.cancel.reset();
             publish = true;
         }
@@ -2881,11 +2915,8 @@ void LabelsInvalidate(std::wstring const& folderPath) {
     LabelsStartRead(folderPath, found->second);
 }
 
-// The cache entry of the item's folder gets the item's new tags at once (after a successful write).
-void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
-    std::wstring folderPath = itemPath;
-    PathRemoveFileSpecW(folderPath.data());
-    folderPath.resize(wcslen(folderPath.c_str()));
+// The displayed name of an item, from its path.
+std::wstring LabelsDisplayNameOf(std::wstring const& itemPath) {
     PIDLIST_ABSOLUTE pidl = nullptr;
     std::wstring name;
     if (SUCCEEDED(SHParseDisplayName(itemPath.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
@@ -2897,21 +2928,50 @@ void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& ta
         }
         ILFree(pidl);
     }
+    return name;
+}
+
+// The cache entry of the item's folder gets the item's new tags at once (after a successful write).
+void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
+    std::wstring folderPath = itemPath;
+    PathRemoveFileSpecW(folderPath.data());
+    folderPath.resize(wcslen(folderPath.c_str()));
+    std::wstring name = LabelsDisplayNameOf(itemPath);
     if (name.empty()) {
         return;
     }
+    std::wstring typeName;
+    if (!tags.empty()) {
+        SHFILEINFOW info = {};
+        if (SHGetFileInfoW(itemPath.c_str(), 0, &info, sizeof(info), SHGFI_TYPENAME)) {
+            typeName = info.szTypeName;
+        }
+    }
     std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
     auto found = g_labelsCache.find(folderPath);
-    if (found == g_labelsCache.end()) {
+    if (found == g_labelsCache.end() || !found->second.data->complete) {
         return;
     }
-    auto copy = std::make_shared<LabelsFolder>(*found->second.data);
-    if (tags.empty()) {
-        copy->byName.erase(name);
-    } else if (!copy->ambiguous.count(name)) {
-        copy->byName[name] = tags;
+    found->second.data = std::make_shared<LabelsFolder>(LabelsFolderWithTags(*found->second.data, name, tags, typeName));
+}
+
+// A folder is not on show any more: its read, if it is still running, gives up.
+void LabelsCancelFolder(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found != g_labelsCache.end() && found->second.cancel) {
+        *found->second.cancel = true;
     }
-    found->second.data = copy;
+}
+
+// A folder on show that was read a while ago is read again, on a thread, and the old data is used meanwhile.
+void LabelsRefreshIfStale(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found != g_labelsCache.end() && found->second.data->complete && !found->second.cancel &&
+        LabelsShouldRefresh(found->second.readAt, GetTickCount64())) {
+        LabelsStartRead(folderPath, found->second);
+    }
 }
 
 // Every read that is running gives up. Called first when the mod unloads, before its threads are joined.
@@ -2980,6 +3040,18 @@ void CacheSelfTestRun() {
     std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
     CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
 
+    // A tag set on one of two items that show one name: the name becomes ambiguous (the review's finding).
+    LabelsFolder twins = LabelsCollect({{L"photo", {}}, {L"photo", {}}, {L"solo", {}}});
+    CacheExpect(twins.counts[L"photo"] == 2 && twins.counts[L"solo"] == 1, L"every name is counted, tagged or not");
+    LabelsFolder tagged1 = LabelsFolderWithTags(twins, L"photo", {LabelTag{1, L""}}, L"JPEG file");
+    CacheExpect(tagged1.ambiguous.count(L"photo") == 1 && !tagged1.byName.count(L"photo"),
+                L"tagging one of two same-named items makes the name ambiguous");
+    LabelsFolder tagged2 = LabelsFolderWithTags(twins, L"solo", {LabelTag{2, L""}}, L"Text file");
+    CacheExpect(tagged2.byName.count(L"solo") == 1 && tagged2.typeNames[L"solo"] == L"Text file",
+                L"a newly tagged item keeps its tags and its type text");
+    CacheExpect(LabelsFolderWithTags(tagged2, L"solo", {}, L"").byName.empty(), L"clearing the tags of an item");
+    CacheExpect(LabelsShouldRefresh(1000, 21000) && !LabelsShouldRefresh(1000, 20999), L"a folder is read again after 20 seconds");
+
     // The tag filter.
     LabelsFilter off;
     CacheExpect(LabelsMatches(off, {}) && LabelsMatches(off, {LabelTag{1, L"x"}}), L"a filter that is off matches everything");
@@ -3019,6 +3091,22 @@ void CacheSelfTestRun() {
                      (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
         CacheExpect(typed, L"a tagged file has its type text");
     }
+    std::wstring late = dir + L"\\late.txt";
+    CacheTouch(late);
+    LabelsWriteFile(late, {LabelTag{3, L"Late"}});  // Behind the cache's back: another program tagged it.
+    LabelsInvalidate(dir);
+    CacheExpect(LabelsFolderFor(dir)->complete, L"the old data stays in use while a folder is read again");
+    bool seen = false;
+    for (int i = 0; i < 100 && !seen; i++) {
+        auto fresh = LabelsFolderFor(dir);
+        seen = fresh->byName.count(L"late.txt") || fresh->byName.count(L"late");
+        if (!seen) {
+            Sleep(20);
+        }
+    }
+    CacheExpect(seen, L"a folder read again shows what was tagged behind the cache's back");
+    DeleteFileW((late + kLabelsStream).c_str());
+    DeleteFileW(late.c_str());
     LabelsSetTags(tagged, {});
     data = LabelsFolderFor(dir);
     CacheExpect(!data->byName.count(L"b.txt") && !data->byName.count(L"b"), L"clearing an item's tags updates the cache at once");
@@ -3040,6 +3128,18 @@ void CacheSelfTestRun() {
     CacheExpect(LabelsReadsRunning() == 0 && GetTickCount64() - waited < 200, L"a cancelled read ends in under 200 ms");
     LabelsFolderFor(big);  // Starts a new read; it is cancelled again at once.
     LabelsCancelAll();
+    waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+    LabelsFolderFor(big);
+    Sleep(5);
+    LabelsCancelFolder(big);  // Leaving a folder cancels its read.
+    waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+    CacheExpect(LabelsReadsRunning() == 0 && GetTickCount64() - waited < 200, L"leaving a folder cancels its read in under 200 ms");
     waited = GetTickCount64();
     while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
         Sleep(5);
@@ -3088,8 +3188,32 @@ struct KeptHandler {
 [[clang::no_destroy]] thread_local std::vector<KeptHandler> t_handlers;
 thread_local unsigned t_handlersSince = 0;
 
+// The UI threads that gave the mod a handler, with their queues. A window that was open before the mod loaded has no
+// WindowState, so nothing else would revoke what the menu hook gave to its elements: at unload each thread is asked.
+struct KeepThread {
+    DWORD id = 0;
+    mud::DispatcherQueue queue{nullptr};
+};
+std::mutex g_keepThreadsMutex;
+[[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
+thread_local bool t_keepRegistered = false;
+
 template <typename Element, typename Revoker>
 void Keep(Element const& element, Revoker&& revoker) {
+    if (!t_keepRegistered) {
+        t_keepRegistered = true;
+        try {
+            auto queue = mud::DispatcherQueue::GetForCurrentThread();
+            if (queue) {
+                std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+                KeepThread entry;
+                entry.id = GetCurrentThreadId();
+                entry.queue = queue;
+                g_keepThreads.push_back(std::move(entry));
+            }
+        } catch (...) {
+        }
+    }
     // The handlers of elements that are gone are dropped now and then, so the list stays short.
     if (++t_handlersSince >= 256) {
         t_handlersSince = 0;
@@ -3133,6 +3257,41 @@ void RevokeAllHandlers() {
         }
     }
 }
+// Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
+// by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
+void RevokeKeptThreads() {
+    std::vector<KeepThread> threads;
+    {
+        std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+        threads.swap(g_keepThreads);
+    }
+    DWORD self = GetCurrentThreadId();
+    for (auto& thread : threads) {
+        if (thread.id == self) {
+            RevokeAllHandlers();
+            continue;
+        }
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!done) {
+            continue;
+        }
+        bool queued = false;
+        try {
+            queued = thread.queue.TryEnqueue([done]() {
+                RevokeAllHandlers();
+                SetEvent(done);
+            });
+        } catch (...) {
+        }
+        if (queued && WaitForSingleObject(done, 1500) == WAIT_OBJECT_0) {
+            CloseHandle(done);  // After a time out the handle is left: the thread may still use it.
+        } else if (!queued) {
+            CloseHandle(done);
+        }
+    }
+    threads.clear();
+}
+
 using ItemsVector =
     winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase>;
 
@@ -20298,6 +20457,7 @@ std::wstring LabelsThreadFolder() {
         return path;
     }
     at = now;
+    std::wstring before = path;
     try {
         HWND topLevel = LabelsThreadTopLevel();
         if (topLevel) {
@@ -20308,6 +20468,18 @@ std::wstring LabelsThreadFolder() {
             }
         }
     } catch (...) {
+    }
+    if (path != before) {
+        // Another folder is shown: the one that was shown stops being read, and the new one is read again when it was
+        // cached, so what changed since (a rename, a tag from another program) shows. The old data is used meanwhile.
+        if (!before.empty()) {
+            LabelsCancelFolder(before);
+        }
+        if (!path.empty()) {
+            LabelsInvalidate(path);
+        }
+    } else if (!path.empty()) {
+        LabelsRefreshIfStale(path);
     }
     return path;
 }
@@ -21110,6 +21282,20 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
     return result;
 }
 
+// Runs `work` on a mod thread and hands its result to `done`, on that thread. False when the mod is unloading.
+bool LabelsRunAsync(std::function<LabelsApplyResult()> work, std::function<void(LabelsApplyResult const&)> done) {
+    return StartModThread([work, done]() {
+        HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        LabelsApplyResult result = work();
+        if (SUCCEEDED(init)) {
+            CoUninitialize();
+        }
+        if (!g_unloading) {
+            done(result);
+        }
+    });
+}
+
 namespace {
 
 std::wstring LabelsFailText(LabelsApplyResult const& result) {
@@ -21181,32 +21367,73 @@ mux::FrameworkElement LabelsDotElement(int colour, int size) {
 
 void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message);
 
-// Applies one change, then fills the section again a moment later (not from inside the click that asked).
-void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
+struct LabelsSectionRef {
+    winrt::weak_ref<muxc::StackPanel> host;
+    LabelsPaths paths;
+};
+[[clang::no_destroy]] thread_local LabelsSectionRef t_labelsSection;  // The Tags section of this window's pane.
+[[clang::no_destroy]] thread_local muxc::Flyout t_labelsNotice{nullptr};  // A notice when there is no pane to show it in.
+
+// After a change: what went wrong, if anything, is shown in the pane's Tags section, which is filled again a moment
+// later (not from inside the click that asked). Without a pane the notice is a small flyout at `anchor`.
+void LabelsAfterChange(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths,
+                       LabelsApplyResult const& result, std::function<mux::FrameworkElement()> const& anchor) {
     if (g_unloading) {
         return;
     }
-    LabelsApplyResult result = LabelsApplyToSelection(*paths, tag, add);
     std::wstring message;
     if (result.worst != LabelsWrite::Ok || result.full || result.unreadable) {
         message = LabelsFailText(result);
     }
     WindowState* state = StateForThisThread(false);
-    if (!state || !state->details) {
-        return;
-    }
-    PaneAfter(state, state->details, 30, [weakHost, paths, message]() {
-        if (auto host = weakHost.get()) {
-            LabelsFillSection(host, paths, message);
-        }
-    });
-    if (!message.empty()) {
-        PaneAfter(state, state->details, 6000, [weakHost, paths]() {
-            if (auto host = weakHost.get()) {
-                LabelsFillSection(host, paths, std::wstring());  // The line fades.
+    auto host = weakHost.get();
+    if (host && state && state->details) {
+        PaneAfter(state, state->details, 30, [weakHost, paths, message]() {
+            if (auto shown = weakHost.get()) {
+                LabelsFillSection(shown, paths, message);
             }
         });
+        if (!message.empty()) {
+            PaneAfter(state, state->details, 6000, [weakHost, paths]() {
+                if (auto shown = weakHost.get()) {
+                    LabelsFillSection(shown, paths, std::wstring());  // The line fades.
+                }
+            });
+        }
+        return;
     }
+    if (!message.empty() && anchor) {
+        mux::FrameworkElement target = anchor();
+        if (target) {
+            t_labelsNotice = muxc::Flyout();
+            t_labelsNotice.Content(MakeText(message, 13, false, false));
+            Keep(t_labelsNotice, t_labelsNotice.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
+                t_labelsNotice = nullptr;
+            }));
+            t_labelsNotice.ShowAt(target);
+        }
+    }
+}
+
+// Applies one change. A few items are written here; many are written on a mod thread, so the window does not wait
+// for the disk.
+void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
+    if (g_unloading) {
+        return;
+    }
+    if (paths->size() > 16) {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        bool started = LabelsRunAsync([paths, tag, add]() { return LabelsApplyToSelection(*paths, tag, add); },
+                                      [queue, weakHost, paths](LabelsApplyResult const& result) {
+                                          queue.TryEnqueue([weakHost, paths, result]() {
+                                              LabelsAfterChange(weakHost, paths, result, nullptr);
+                                          });
+                                      });
+        if (started) {
+            return;
+        }
+    }
+    LabelsAfterChange(weakHost, paths, LabelsApplyToSelection(*paths, tag, add), nullptr);
 }
 
 // The flyout of the [+] button: the colours, and a name that is optional. A colour makes the tag at once, with the
@@ -21268,14 +21495,31 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
+    std::wstring unreadableName;
+    bool ambiguous = false;
     if (supported) {
-        for (auto const& path : *paths) {
+        // The first 100 items give the badges (a bigger selection is not read item by item on every change).
+        std::shared_ptr<const LabelsFolder> data;
+        for (size_t i = 0; i < paths->size() && i < 100; i++) {
             std::vector<LabelTag> tags;
-            if (!LabelsReadFile(path, &tags)) {
+            if (!LabelsReadFile((*paths)[i], &tags)) {
+                if (!unreadable) {
+                    unreadableName = PathFindFileNameW((*paths)[i].c_str());
+                }
                 unreadable = true;
                 tags.clear();
             }
             perItem.push_back(std::move(tags));
+            if (i < 20 && !ambiguous) {
+                // An item that shares its displayed name with another one has no dot: the pane says so.
+                if (!data) {
+                    std::wstring folder = (*paths)[i];
+                    PathRemoveFileSpecW(folder.data());
+                    folder.resize(wcslen(folder.c_str()));
+                    data = LabelsFolderFor(folder);
+                }
+                ambiguous = data->complete && data->ambiguous.count(LabelsDisplayNameOf((*paths)[i])) != 0;
+            }
         }
     }
     LabelsMerged merged = LabelsMerge(perItem);
@@ -21293,8 +21537,8 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
         LabelTag const& tag = merged.tags[i].first;
         std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
         markup += L"<InlineUIContainer><Border x:Name='pill" + std::to_wstring(i) + L"' Background='" +
-                  LabelsPillFill(tag.colour, dark) + L"' CornerRadius='4' Padding='8,2,8,3' Margin='0,0,6,4'><TextBlock Text='" +
-                  LabelsXmlEscape(shown) + L"' FontSize='13'/></Border></InlineUIContainer>";
+                  LabelsPillFill(tag.colour, dark) + L"' CornerRadius='4' Padding='8,2,8,3' Margin='0,0,6,4'><TextBlock x:Name='text" +
+                  std::to_wstring(i) + L"' FontSize='13'/></Border></InlineUIContainer>";
     }
     markup += L"<InlineUIContainer><HyperlinkButton x:Name='addLink' Padding='4,2' MinHeight='0' MinWidth='0' FontSize='13' "
               L"Margin='0,0,0,2'>" + LabelsXmlEscape(Str(L"labels.add")) + L"</HyperlinkButton></InlineUIContainer></Paragraph></RichTextBlock>";
@@ -21306,6 +21550,9 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
         }
         LabelTag tag = merged.tags[i].first;
         bool everywhere = merged.tags[i].second;
+        if (auto label = text.FindName(L"text" + winrt::hstring{std::to_wstring(i)}).try_as<muxc::TextBlock>()) {
+            label.Text(tag.name.empty() ? LabelsColourName(tag.colour) : tag.name);
+        }
         if (!everywhere) {
             pill.Opacity(0.55);  // On some of the selected items only.
             muxc::ToolTipService::SetToolTip(pill, winrt::box_value(winrt::hstring{Str(L"labels.some")}));
@@ -21349,17 +21596,14 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     if (line.empty() && unreadable) {
         LabelsApplyResult shown;
         shown.unreadable = true;
-        for (auto const& path : *paths) {
-            std::vector<LabelTag> unused;
-            if (!LabelsReadFile(path, &unused)) {
-                shown.failedName = PathFindFileNameW(path.c_str());
-                break;
-            }
-        }
+        shown.failedName = unreadableName;
         line = LabelsFailText(shown);
     }
     if (!line.empty()) {
         host.Children().Append(MakeText(line, 12, false, true));
+    }
+    if (ambiguous) {
+        host.Children().Append(MakeText(Str(L"labels.ambiguous"), 12, false, true));
     }
 }
 
@@ -21383,8 +21627,35 @@ muxc::StackPanel LabelsPaneSection(DetailsPane* pane) {
         host.Visibility(mux::Visibility::Collapsed);
         return host;
     }
+    t_labelsSection.host = winrt::make_weak(host);
+    t_labelsSection.paths = paths;
     LabelsFillSection(host, paths, std::wstring());
     return host;
+}
+
+// A change made from a menu: the pane's Tags section is filled again (and shows what went wrong), or a notice
+// opens at the anchor when there is no pane.
+void LabelsAfterMenuChange(LabelsApplyResult const& result, std::function<mux::FrameworkElement()> const& anchor) {
+    LabelsAfterChange(t_labelsSection.host, t_labelsSection.paths, result, anchor);
+}
+
+// A change from a menu, with the same rule as the pane's: many items are written on a mod thread.
+void LabelsFromMenu(LabelsPaths const& paths, LabelTag const& tag, bool add, bool clear,
+                    std::function<mux::FrameworkElement()> const& anchor) {
+    if (g_unloading) {
+        return;
+    }
+    auto work = [paths, tag, add, clear]() { return clear ? LabelsClearSelection(*paths) : LabelsApplyToSelection(*paths, tag, add); };
+    if (paths->size() > 16) {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        bool started = LabelsRunAsync(work, [queue, anchor](LabelsApplyResult const& result) {
+            queue.TryEnqueue([result, anchor]() { LabelsAfterMenuChange(result, anchor); });
+        });
+        if (started) {
+            return;
+        }
+    }
+    LabelsAfterMenuChange(work(), anchor);
 }
 // Labels: the self-test of what the pane does with the tags of a selection (debug build only). One log line:
 // "LABELS PANE SELFTEST pass" or "LABELS PANE SELFTEST FAIL <what>".
@@ -21466,6 +21737,31 @@ void LabelsPaneSelfTest() {
                      L"clearing the tags of a selection");
     result = LabelsClearSelection(files);
     PaneLabelsExpect(result.done == 0, L"clearing again writes nothing");
+    // More than a few files are written on a mod thread.
+    std::vector<std::wstring> crowd;
+    for (int i = 0; i < 40; i++) {
+        std::wstring path = dir + L"\\c" + std::to_wstring(i) + L".txt";
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            CloseHandle(file);
+        }
+        crowd.push_back(path);
+    }
+    std::atomic<bool> finished{false};
+    LabelsApplyResult asyncResult;
+    bool started = LabelsRunAsync([crowd, red]() { return LabelsApplyToSelection(crowd, red, true); },
+                                  [&](LabelsApplyResult const& done) {
+                                      asyncResult = done;
+                                      finished = true;
+                                  });
+    for (int i = 0; i < 250 && started && !finished; i++) {
+        Sleep(20);
+    }
+    PaneLabelsExpect(started && finished && asyncResult.done == 40, L"forty files tagged on a mod thread");
+    for (auto const& path : crowd) {
+        DeleteFileW((path + kLabelsStream).c_str());
+        DeleteFileW(path.c_str());
+    }
     std::vector<LabelTag> sixteen;
     for (int i = 0; i < 16; i++) {
         sixteen.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});
@@ -21518,7 +21814,7 @@ std::wstring LabelsColumnPath(Column* column) {
 
 // Fills the dots of one row from the cache. Nothing is shown until the folder has been read.
 void LabelsFillRowDots(Column* column, size_t entry) {
-    if (!g_labels || entry >= column->labelHosts.size() || entry >= column->entries.size()) {
+    if (entry >= column->labelHosts.size() || entry >= column->entries.size()) {
         return;
     }
     auto host = column->labelHosts[entry];
@@ -21527,6 +21823,9 @@ void LabelsFillRowDots(Column* column, size_t entry) {
     }
     host.Children().Clear();
     host.Width(std::numeric_limits<double>::quiet_NaN());
+    if (!g_labels) {
+        return;  // Switched off: the dots go.
+    }
     std::wstring path = LabelsColumnPath(column);
     if (path.empty()) {
         return;
@@ -21573,7 +21872,7 @@ void LabelsRefreshColumns() {
         return;
     }
     WindowState* state = StateForThisThread(false);
-    if (!state || !g_labels) {
+    if (!state) {
         return;
     }
     try {
@@ -21607,9 +21906,10 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
-    for (auto const& path : *paths) {
+    // The first 30 items tell which colours are on all of them: a big selection is not read when the menu is built.
+    for (size_t i = 0; i < paths->size() && i < 30; i++) {
         std::vector<LabelTag> tags;
-        if (!LabelsReadFile(path, &tags)) {
+        if (!LabelsReadFile((*paths)[i], &tags)) {
             unreadable = true;
             tags.clear();
         }
@@ -21638,10 +21938,8 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
         dot.Foreground(mux::Media::SolidColorBrush(
             winrt::Windows::UI::ColorHelper::FromArgb(255, GetRValue(fill), GetGValue(fill), GetBValue(fill))));
         item.Icon(dot);
-        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere](Inspectable const&, mux::RoutedEventArgs const&) {
-            if (!g_unloading) {
-                LabelsApplyToSelection(*paths, tag, !everywhere);
-            }
+        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+            LabelsFromMenu(paths, tag, !everywhere, false, anchor);
         }));
         menu.Items().Append(item);
     }
@@ -21665,10 +21963,8 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     muxc::MenuFlyoutItem clear;
     clear.Text(Str(L"labels.clear"));
     clear.IsEnabled(!unreadable);
-    Keep(clear, clear.Click(winrt::auto_revoke, [paths](Inspectable const&, mux::RoutedEventArgs const&) {
-        if (!g_unloading) {
-            LabelsClearSelection(*paths);
-        }
+    Keep(clear, clear.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+        LabelsFromMenu(paths, LabelTag{}, false, true, anchor);
     }));
     menu.Items().Append(clear);
     return menu;
@@ -21723,7 +22019,7 @@ bool LabelsIsOurs(muxc::AppBarButton const& button) {
 
 // The menu is about to show: its "Tags" entry is put in, for the items that are selected now.
 void LabelsOnMenuOpening(Inspectable const& sender) {
-    if (!g_labels || g_unloading) {
+    if (g_unloading) {
         return;
     }
     auto bar = sender.try_as<muxc::CommandBarFlyout>();
@@ -21732,12 +22028,22 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
     }
     auto secondary = bar.SecondaryCommands();
     for (uint32_t i = secondary.Size(); i-- > 0;) {
-        // The flyout is reused: an entry of the last opening is taken out first.
+        // The flyout is reused: an entry of the last opening is taken out first, also when labels were switched off.
         auto old = secondary.GetAt(i).try_as<muxc::AppBarButton>();
         if (old && LabelsIsOurs(old)) {
             secondary.RemoveAt(i);
         }
     }
+    if (!g_labels) {
+        return;
+    }
+#ifdef EXTRAS_VERBOSE
+    try {
+        auto target = bar.Target();
+        LogVerbose(L"LABELS MENU target=%s", target ? std::wstring(winrt::get_class_name(target)).c_str() : L"(none)");
+    } catch (...) {
+    }
+#endif
     std::vector<std::wstring> paths = LabelsSelectedPaths();
     if (paths.empty() || !LabelsVolumeSupportsStreams(paths[0])) {
         LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());
@@ -22594,7 +22900,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.75.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.76.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -22632,6 +22938,7 @@ BOOL Wh_ModInit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
+    LabelsRepaintWindows(std::wstring());  // Show labels on or off, or a colour name changed: the lists draw again.
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
@@ -22655,6 +22962,7 @@ void Wh_ModBeforeUninit() {
     JoinModThreads();
     StopWorker();
     CloseEverything();
+    RevokeKeptThreads();
     LabelsReleaseDots();
     LabelsClearCache();
 }

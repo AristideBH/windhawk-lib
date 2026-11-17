@@ -45,6 +45,18 @@ void CacheSelfTestRun() {
     std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
     CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
 
+    // A tag set on one of two items that show one name: the name becomes ambiguous (the review's finding).
+    LabelsFolder twins = LabelsCollect({{L"photo", {}}, {L"photo", {}}, {L"solo", {}}});
+    CacheExpect(twins.counts[L"photo"] == 2 && twins.counts[L"solo"] == 1, L"every name is counted, tagged or not");
+    LabelsFolder tagged1 = LabelsFolderWithTags(twins, L"photo", {LabelTag{1, L""}}, L"JPEG file");
+    CacheExpect(tagged1.ambiguous.count(L"photo") == 1 && !tagged1.byName.count(L"photo"),
+                L"tagging one of two same-named items makes the name ambiguous");
+    LabelsFolder tagged2 = LabelsFolderWithTags(twins, L"solo", {LabelTag{2, L""}}, L"Text file");
+    CacheExpect(tagged2.byName.count(L"solo") == 1 && tagged2.typeNames[L"solo"] == L"Text file",
+                L"a newly tagged item keeps its tags and its type text");
+    CacheExpect(LabelsFolderWithTags(tagged2, L"solo", {}, L"").byName.empty(), L"clearing the tags of an item");
+    CacheExpect(LabelsShouldRefresh(1000, 21000) && !LabelsShouldRefresh(1000, 20999), L"a folder is read again after 20 seconds");
+
     // The tag filter.
     LabelsFilter off;
     CacheExpect(LabelsMatches(off, {}) && LabelsMatches(off, {LabelTag{1, L"x"}}), L"a filter that is off matches everything");
@@ -84,6 +96,22 @@ void CacheSelfTestRun() {
                      (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
         CacheExpect(typed, L"a tagged file has its type text");
     }
+    std::wstring late = dir + L"\\late.txt";
+    CacheTouch(late);
+    LabelsWriteFile(late, {LabelTag{3, L"Late"}});  // Behind the cache's back: another program tagged it.
+    LabelsInvalidate(dir);
+    CacheExpect(LabelsFolderFor(dir)->complete, L"the old data stays in use while a folder is read again");
+    bool seen = false;
+    for (int i = 0; i < 100 && !seen; i++) {
+        auto fresh = LabelsFolderFor(dir);
+        seen = fresh->byName.count(L"late.txt") || fresh->byName.count(L"late");
+        if (!seen) {
+            Sleep(20);
+        }
+    }
+    CacheExpect(seen, L"a folder read again shows what was tagged behind the cache's back");
+    DeleteFileW((late + kLabelsStream).c_str());
+    DeleteFileW(late.c_str());
     LabelsSetTags(tagged, {});
     data = LabelsFolderFor(dir);
     CacheExpect(!data->byName.count(L"b.txt") && !data->byName.count(L"b"), L"clearing an item's tags updates the cache at once");
@@ -105,6 +133,18 @@ void CacheSelfTestRun() {
     CacheExpect(LabelsReadsRunning() == 0 && GetTickCount64() - waited < 200, L"a cancelled read ends in under 200 ms");
     LabelsFolderFor(big);  // Starts a new read; it is cancelled again at once.
     LabelsCancelAll();
+    waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+    LabelsFolderFor(big);
+    Sleep(5);
+    LabelsCancelFolder(big);  // Leaving a folder cancels its read.
+    waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+    CacheExpect(LabelsReadsRunning() == 0 && GetTickCount64() - waited < 200, L"leaving a folder cancels its read in under 200 ms");
     waited = GetTickCount64();
     while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
         Sleep(5);

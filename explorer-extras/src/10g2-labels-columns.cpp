@@ -28,7 +28,7 @@ std::wstring LabelsColumnPath(Column* column) {
 
 // Fills the dots of one row from the cache. Nothing is shown until the folder has been read.
 void LabelsFillRowDots(Column* column, size_t entry) {
-    if (!g_labels || entry >= column->labelHosts.size() || entry >= column->entries.size()) {
+    if (entry >= column->labelHosts.size() || entry >= column->entries.size()) {
         return;
     }
     auto host = column->labelHosts[entry];
@@ -37,6 +37,9 @@ void LabelsFillRowDots(Column* column, size_t entry) {
     }
     host.Children().Clear();
     host.Width(std::numeric_limits<double>::quiet_NaN());
+    if (!g_labels) {
+        return;  // Switched off: the dots go.
+    }
     std::wstring path = LabelsColumnPath(column);
     if (path.empty()) {
         return;
@@ -83,7 +86,7 @@ void LabelsRefreshColumns() {
         return;
     }
     WindowState* state = StateForThisThread(false);
-    if (!state || !g_labels) {
+    if (!state) {
         return;
     }
     try {
@@ -117,9 +120,10 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
-    for (auto const& path : *paths) {
+    // The first 30 items tell which colours are on all of them: a big selection is not read when the menu is built.
+    for (size_t i = 0; i < paths->size() && i < 30; i++) {
         std::vector<LabelTag> tags;
-        if (!LabelsReadFile(path, &tags)) {
+        if (!LabelsReadFile((*paths)[i], &tags)) {
             unreadable = true;
             tags.clear();
         }
@@ -148,10 +152,8 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
         dot.Foreground(mux::Media::SolidColorBrush(
             winrt::Windows::UI::ColorHelper::FromArgb(255, GetRValue(fill), GetGValue(fill), GetBValue(fill))));
         item.Icon(dot);
-        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere](Inspectable const&, mux::RoutedEventArgs const&) {
-            if (!g_unloading) {
-                LabelsApplyToSelection(*paths, tag, !everywhere);
-            }
+        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+            LabelsFromMenu(paths, tag, !everywhere, false, anchor);
         }));
         menu.Items().Append(item);
     }
@@ -175,10 +177,8 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     muxc::MenuFlyoutItem clear;
     clear.Text(Str(L"labels.clear"));
     clear.IsEnabled(!unreadable);
-    Keep(clear, clear.Click(winrt::auto_revoke, [paths](Inspectable const&, mux::RoutedEventArgs const&) {
-        if (!g_unloading) {
-            LabelsClearSelection(*paths);
-        }
+    Keep(clear, clear.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+        LabelsFromMenu(paths, LabelTag{}, false, true, anchor);
     }));
     menu.Items().Append(clear);
     return menu;

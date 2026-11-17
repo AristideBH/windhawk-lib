@@ -452,3 +452,8 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - **Write files for Explorer with PowerShell, not Bash.** A control file written from the Bash tool into `%LOCALAPPDATA%` was never seen by Explorer; one written by the PowerShell tool was.
 - **Pasting Python into a heredoc mangles backslashes and quotes.** Write the script with the Write tool and run it.
 - **Keep one probe per question** (`probes/`), compile and deploy it with `tools/windhawk-build/build.ps1 -Source ...`, and disable it in Windhawk when the answer is in.
+- **Every handler needs an owner thread that will revoke it.** `Keep()` stores a revoker in a thread-local list, and the cleanup of a window runs it only for threads with a `WindowState`. A hook that puts a handler on an element of a window the mod never saw created (open before the mod loaded, or the desktop) must still be revoked at unload: `Keep()` records the thread and its `DispatcherQueue`, and `RevokeKeptThreads()` runs `RevokeAllHandlers()` on each, on its own thread, and waits a bounded time.
+- **A cache that is only filled once is wrong.** Say when it is read again (navigation, an age), when a read is cancelled (the folder is left), and what the old data does meanwhile (it stays in use). Test those with a file changed behind the cache's back.
+- **Ambiguity is a property of all the items, not of the tagged ones.** Count every name, so a later change cannot make two items look like one.
+- **Data is not markup.** Names from files go into XAML only through properties set in code.
+- **A review by a fresh agent finds what the author cannot see.** Run it before the first merge of a big feature: this one found a crash path in the first minute of reading.

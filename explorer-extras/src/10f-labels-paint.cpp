@@ -363,6 +363,7 @@ std::wstring LabelsThreadFolder() {
         return path;
     }
     at = now;
+    std::wstring before = path;
     try {
         HWND topLevel = LabelsThreadTopLevel();
         if (topLevel) {
@@ -373,6 +374,18 @@ std::wstring LabelsThreadFolder() {
             }
         }
     } catch (...) {
+    }
+    if (path != before) {
+        // Another folder is shown: the one that was shown stops being read, and the new one is read again when it was
+        // cached, so what changed since (a rename, a tag from another program) shows. The old data is used meanwhile.
+        if (!before.empty()) {
+            LabelsCancelFolder(before);
+        }
+        if (!path.empty()) {
+            LabelsInvalidate(path);
+        }
+    } else if (!path.empty()) {
+        LabelsRefreshIfStale(path);
     }
     return path;
 }

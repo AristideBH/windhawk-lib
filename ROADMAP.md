@@ -2,7 +2,50 @@
 
 Checklist of features and settings by version. Tick a box when the item is
 compiled and tested by Ari. Details live in `explorer-extras/PLAN.md` and
-the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
+the `SPEC` files next to it. The history below is kept as it was written; the
+boxes were reconciled on 2026-11-17.
+
+## Where we are, 2026-11-17 (version 0.76.0, tested by Ari on ARM64)
+
+Explorer Extras has three areas: **Columns** (Miller columns), the **details
+and preview pane**, and **Labels** (colour tags, new in 0.69 to 0.75). Settings
+are on Windhawk's page only, in groups (Columns, Details pane, Labels, Limits).
+The source is `explorer-extras/src/*.cpp`, joined by `build.py`; deploy and test
+with `tools/deploy-explorer-extras.ps1` and `tools/smoke-test-explorer-extras.ps1`.
+
+- **The catalog.** Pull request 7530 on ramensoftware/windhawk-mods (from the
+  fork AristideBH/windhawk-mods, branch `add-explorer-extras`) is at 0.68.2,
+  answered after three AI reviews, waiting for a fourth (the review tool was rate
+  limited on 2026-11-17). Then `/ready-for-reviewer`, only on Ari's word. The
+  version becomes 1.0.0 around the hand-over (ask Ari first). Labels are not in
+  that PR: they go in the next version after it.
+- **Labels, built from `docs/superpowers/specs/2026-11-17-labels-design.md`.**
+  A tag is a name (optional) plus a palette colour (seven and a neutral gray),
+  up to 16 per item, kept in a named NTFS stream on the item. Dots in every view
+  of Explorer's own list and in Columns (a hook on `dui70.dll`'s exported
+  `Element::PaintContent`), a Tags section in the details pane (badges), a Tags
+  entry in the right-click menu of the native list (a hook on
+  `MenuFlyoutControl::AppendMenuItem`) and of Columns. Self-tests in the debug
+  build and a smoke check cover what can be run without a mouse.
+- **Reviewed.** A fresh reviewer read the whole Labels branch against the spec and the plan: one Critical and eight
+  Important findings were fixed in 0.76 (handlers on windows with no state, a cache never refreshed, an ambiguous name
+  after a tag, the pane's markup, results from the menus, disk work on the UI thread, a stale menu entry, the dots after
+  Show labels is switched off). The Minors are deferred; the list is in the skill `windhawk-explorer-surfaces`, section
+  "Labels, as built".
+- **Next.**
+  1. The catalog: the fourth AI review, then the hand-over (Ari's word).
+  2. Test 0.75 on x86-64 (the deploy script and the smoke test work from any
+     Windhawk install).
+  3. Labels, later: the Content view placement (not perfect), drag onto a sidebar
+     tag together with an index and a cross-folder "Tagged" view, tag presets (a
+     Windhawk settings repeater, needs a list type in `settings.schema.json`), a
+     "select everything with this tag" action. Ari does not want a tag filter, so
+     the dimming code stays dormant.
+  4. The GitHub pre-release `explorer-extras-v0.55.1` is out of date (public, only
+     on Ari's word).
+  5. From the third review, not done: `FolderGone` on an offline path (a
+     `PathFileExistsW` on the UI thread), a Markdown preview without
+     virtualization, two `EnumChildWindows` passes per tick of an active window.
 
 ## 0.1, done and tested 2026-11-12
 
@@ -78,7 +121,7 @@ the `SPEC` files next to it. State on 2026-11-13: version 0.5.1, tested.
       sort (default 5000)
 - [x] Rows built only when visible, icons for every built row
 
-## Where we stopped, 2026-11-14 (version 0.15.0, since passed: see the plan from 0.18.5)
+## Where we stopped, 2026-11-14 (version 0.15.0, history: since passed, see the plan from 0.18.5 and "Where we are")
 
 Done and tested by Ari: everything in the plan table through 0.12.3 (columns
 per tab, menus, per-folder memory with three toggles, drag between columns,
@@ -152,6 +195,7 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | 0.53 to 0.54 | Folder size, contents and types on demand (a cancelled background count); previews by kind with size limits and a button for images over 40 megapixels (32 settings); French for every text of the settings window; a sideways one-finger drag scrolls the columns, a second finger gives the rectangle up (and the scrollers can no longer stay locked). A status bar switch was probed (the bar is a DirectUI element, not a window), built, and removed: Windows has its own option. |
 | Beta, 0.54.x | Done for the public beta (2026-11-16): README by areas (`explorer-extras/README.md`, `docs/columns.md`, `docs/settings.md` generated (no separate details pane page: the pane is learned by using it)), CHANGELOG, issue forms and labels in `.github/`, `explorer-extras/FEEDBACK.md`, the root README with a status per mod, the `explorer-extras-feedback` skill, the Desktop demo and showcase folders rebuilt (the showcase has `Edge cases\Pane previews`). To do: create the labels (`pwsh .github/apply-labels.ps1`), the showcase video (one capture, `assets/captures/hero.png`, is in), reload and uninstall walk on the device, the showcase video, the first tag `explorer-extras-v0.54.x`. |
 | 0.55 to 0.66 | The catalog review rounds (2026-11-16): unload safety (a registry of threads joined at unload, every XAML handler a revoker, a release on window close, a drain, a guard for the mod's modal loops and touch-drag coroutines), no injected keys or global keyboard hook, a command-bar hook that places the entries with no click, adaptive timers, the log and `%TEMP%` files removed, folder memory per value, smaller fixes; the settings window removed (0.66) and Windhawk's page regrouped; tooling: `tools/deploy-explorer-extras.ps1`, the smoke test and crash-analysis scripts. All tested by Ari on ARM64. 0.67 and 0.68 (2026-11-17): archives and renames with hidden extensions, a linear selection sync, the wheel hook removed, and a setting that counts folder sizes by itself (off by default, a Calculate button otherwise). To do: test on x86-64. |
+| 0.69 to 0.75 | Labels, 2026-11-17, built task by task from the design and plan in `docs/superpowers/` and tested by Ari on ARM64. 0.69 the tag stream and its settings (a "Labels" group: Show labels, a name for each colour), 0.69.2 the palette, the dot images and the folder cache with its reader thread, 0.70 the dots on Explorer's own list in every view (found by probes: `probes/probe-label-paint.wh.cpp` and two more), 0.71 the tag filter state and dimming (no UI, see Next), 0.72 the Tags section of the details pane (badges that wrap, the add flyout, the remove menu, the NTFS and failure notices), 0.73 the dots and the Tags submenu in Columns, 0.74 the Tags entry in Explorer's own right-click menu, 0.75 release prep and the Content and Tiles alignment. Left: see Next. | | |
 | 1.0 candidates | The pull request to windhawk-mods (done on the device 2026-11-16: the x86-64 build compiled and ran, and a reload and uninstall walk left no crash). A donate link (Ko-fi) is in the mod tags and the README. |
 | 1.0 | The pull request to windhawk-mods, skills updated one last time. |
 | later | toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options (crossed off 2026-11-16: Windows has its own option, Folder Options > View > Show status bar). |
@@ -274,23 +318,23 @@ first test says what the platform does.
 - [x] Tested in 0.6.3: rename several items at once (F2 or the toolbar, one name, numbered like Explorer). Ctrl+Z takes back a new folder or a group of renames.
 - [ ] Focusing a virtual shell item, such as a link, in the Desktop folder
 - [ ] Open in Columns without the flash of Explorer's own list. Fine for now.
-- [ ] The Documents folder icon shows small. Maybe the icon cache.
-- [ ] Indicator on remote items: phone, network
-- [ ] Icons for rows only read for the first 400 items were fixed in 0.5.1,
-      but icon jobs are not prioritised by what is on screen
+- [x] The Documents folder icon shows small (fixed in 0.21)
+- [x] Indicator on remote items: cloud, network, device, OneDrive syncing (0.21; fixed in the code since 0.66)
+- [x] Icons for rows only read for the first 400 items were fixed in 0.5.1,
+      and icon jobs are prioritised by what is on screen since 0.22
 - [ ] Compatibility with `DarkionAvey/windhawk-gpu-accelerated-explorer-view`
       (GPL-2.0, replaces the Details and Icons views with its own GPU
       overlay). Ari tests the two together first. If they conflict: detect
       its window property `WindhawkExplorerGpuOverlayOwnsShellView` on the
       native view, keep our panel above its overlay, and don't depend on a
       visible `SHELLDLL_DefView`. Never copy its code, only ideas.
-- [ ] Ideas to take from that mod: middle-click opens a folder in a new tab,
-      a drag preview with a count badge, a toggle back to the native view
-      with a hotkey.
-- [ ] Menu flyouts restyled to match Explorer's own, and Paste in the item
-      menu. The native look needs a probe, since a modal menu inside a XAML
-      handler crashed Explorer before.
-- [ ] PARKED, Ari's call 2026-11-13: transparent background mode. It works
+- [x] Ideas to take from that mod: middle-click opens a folder in a new tab
+      (0.7.0), a drag preview with a count badge (0.18). Not taken: a toggle
+      back to the native view with a hotkey.
+- [x] Menu flyouts restyled to match Explorer's own (0.9, 0.33 to 0.35: custom
+      XAML flyouts that copy the shell's menu). Paste in the item menu: Ari said
+      no need.
+- [x] GONE in 0.36: the transparent background mode. It worked
       after a restart, but after a layout switch the native view still shows
       through even though every visible view window is made transparent
       (0.4.18). Don't chase it again without a new idea.
@@ -307,63 +351,56 @@ Keyboard and everyday gaps:
 - [x] The pill and the selection rectangle follow a
       change of the system accent or theme
 - [x] Middle-click opens a folder in a new tab (0.7.0)
-- [ ] Space for a quick preview, if Explorer's preview pane can be driven
+- [x] Space for a quick preview: left to QuickLook (0.19), which works with Columns
 
 Structure and polish:
-- [ ] Columns per tab: the panel is per window, so switching tabs rebuilds the
-      columns from the new tab's folder. Each tab should keep its own columns.
-- [ ] The pill's accent colour is read when Columns turns on, so it doesn't
-      follow a live theme or accent change
-- [ ] Icon jobs are not prioritised by what is on screen
-- [ ] Texts are English only for now ("Paste", "New folder", "N more items
-      not shown", group names from the fallback): the string table in 0.6
-- [ ] The Documents icon, a virtual item in the Desktop folder, remote item
-      indicator (all under Open above)
-- [ ] The skills `windhawk-explorer-surfaces` and `windhawk-mod-development`
-      should get what this session proved: the tab creation hook, the
-      navigation pane click signature in `BrowseObject`, the path-versus-pidl
-      rooting, per-window workers, and the local clang syntax check
+- [x] Columns per tab (0.8): each tab keeps its own columns
+- [x] The pill's accent colour follows a live theme or accent change
+- [x] Icon jobs are prioritised by what is on screen (0.22)
+- [x] Texts: a string table, English and French (0.36, 0.53)
+- [ ] A virtual item in the Desktop folder (focusing it)
+- [x] The skills carry what each stretch proved (updated after every stretch,
+      and for Labels on 2026-11-17)
 
 ## 0.6
 
-- [ ] Drag and drop between columns
-- [ ] Scroll animation to the newest column
-- [ ] Per-folder memory and a "columns everywhere" setting
-- [ ] Strings moved to a table for translation
-- [ ] Setting: each column keeps its own folder's sort and group
-- [ ] Item-level change events update single rows, and a folder is diffed
-      instead of replaced
+- [x] Drag and drop between columns (0.12)
+- [x] Scroll animation to the newest column
+- [x] Per-folder memory (0.11) and three toggles for it (0.12)
+- [x] Strings moved to a table for translation (0.36)
+- [x] Each column keeps its own folder's sort and group (0.11)
+- [x] A reload patches single rows instead of rebuilding (0.34)
 
 ## With the second feature
 
-- [ ] Settings window laid out like Windows Settings, in sync with
-      Windhawk's page
-- [ ] "Extras settings" entry in the "..." menu under Options
-- [ ] One-time tip on the Columns entry
-- [ ] Source split into one file per feature, joined by a script
+- [x] Settings window laid out like Windows Settings (0.24 to 0.28), then
+      removed in 0.66: the settings are on Windhawk's page only
+- [x] "Extras settings" entry in the "..." menu (0.26), removed with the window
+- [x] One-time tip on the Columns entry (0.27)
+- [x] Source split into one file per area, joined by a script (0.7.15)
 
 ## Feature backlog, order open
 
 - [x] Labels, macOS style (0.75: dots in every view and in Columns, the Tags section of the pane, the right-click entry; later: drag onto a sidebar tag, an index and a cross-folder Tagged view, tag presets, Content view placement)
 - [ ] Home page overhaul
-- [ ] Option to show only real Desktop items, hiding the virtual ones (This
-      PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form
-      is open.
+- [x] Option to show only real Desktop items, hiding the virtual ones (This
+      PC, Recycle Bin, Control Panel, Libraries and so on): the setting
+      `desktopRealOnly`.
 - [x] New folder from selection, from the right-click menu (tested in 0.7.0)
       and with a shortcut. The command bar's New button is still open. Design: make "New folder" like Ctrl+Shift+N, then move the
       selected items into it with the shell's own move, so conflicts and
       progress behave as in Explorer, then edit the name. The undo entry holds
       the moves and the folder. The command bar's New button is a later step.
-- [ ] Toolbar selection actions in Columns: Select all, Invert selection and
-      Select none (Ctrl+A already works), acting on the active column and
-      mirrored into Explorer's view. Later, Ari's call 2026-11-14.
+- [x] Toolbar selection actions in Columns: Select all, Invert selection and
+      Select none (0.19; a group header is no longer selected by them, 0.67.1).
 - [ ] Mod ideas to note, 2026-11-14, separate mods or later features:
       sidebar overhaul (Ari already has a mod for the sidebar, so look at it
       first and don't duplicate), preview and details pane overhaul, status
       bar options.
-- [ ] Better archive extraction flow
+- [ ] Better archive extraction flow (Extract here, to a folder and all exist since 0.7 and 0.33)
 - [ ] Toolbar customization
-- [ ] Status bar and info bar customization
+- [x] Status bar customization: crossed off, Windows has its own option (Folder
+      Options, View, Show status bar)
 - [x] Double-click on empty space goes up one column, in Columns only (0.5.5
       to 0.5.8), a setting, off by default since 0.5.9. For the other layouts keep the
       Windhawk mod `explorer-double-click-up` enabled: it acts on Explorer's
@@ -375,7 +412,7 @@ Structure and polish:
 
 ## Outside this mod
 
-- [ ] Taskbar widget mods moved to the `Taskbar.View.dll` entry point
+- [ ] Taskbar widget mods moved to the `Taskbar.View.dll` entry point (not Explorer Extras)
 - [ ] Astur workspace indicator and layout toggle
 - [ ] Desktop stacks, parked
 

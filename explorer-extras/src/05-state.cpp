@@ -18,8 +18,32 @@ struct KeptHandler {
 [[clang::no_destroy]] thread_local std::vector<KeptHandler> t_handlers;
 thread_local unsigned t_handlersSince = 0;
 
+// The UI threads that gave the mod a handler, with their queues. A window that was open before the mod loaded has no
+// WindowState, so nothing else would revoke what the menu hook gave to its elements: at unload each thread is asked.
+struct KeepThread {
+    DWORD id = 0;
+    mud::DispatcherQueue queue{nullptr};
+};
+std::mutex g_keepThreadsMutex;
+[[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
+thread_local bool t_keepRegistered = false;
+
 template <typename Element, typename Revoker>
 void Keep(Element const& element, Revoker&& revoker) {
+    if (!t_keepRegistered) {
+        t_keepRegistered = true;
+        try {
+            auto queue = mud::DispatcherQueue::GetForCurrentThread();
+            if (queue) {
+                std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+                KeepThread entry;
+                entry.id = GetCurrentThreadId();
+                entry.queue = queue;
+                g_keepThreads.push_back(std::move(entry));
+            }
+        } catch (...) {
+        }
+    }
     // The handlers of elements that are gone are dropped now and then, so the list stays short.
     if (++t_handlersSince >= 256) {
         t_handlersSince = 0;
@@ -63,6 +87,41 @@ void RevokeAllHandlers() {
         }
     }
 }
+// Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
+// by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
+void RevokeKeptThreads() {
+    std::vector<KeepThread> threads;
+    {
+        std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+        threads.swap(g_keepThreads);
+    }
+    DWORD self = GetCurrentThreadId();
+    for (auto& thread : threads) {
+        if (thread.id == self) {
+            RevokeAllHandlers();
+            continue;
+        }
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!done) {
+            continue;
+        }
+        bool queued = false;
+        try {
+            queued = thread.queue.TryEnqueue([done]() {
+                RevokeAllHandlers();
+                SetEvent(done);
+            });
+        } catch (...) {
+        }
+        if (queued && WaitForSingleObject(done, 1500) == WAIT_OBJECT_0) {
+            CloseHandle(done);  // After a time out the handle is left: the thread may still use it.
+        } else if (!queued) {
+            CloseHandle(done);
+        }
+    }
+    threads.clear();
+}
+
 using ItemsVector =
     winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase>;
 

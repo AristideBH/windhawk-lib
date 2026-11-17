@@ -48,7 +48,7 @@ bool LabelsIsOurs(muxc::AppBarButton const& button) {
 
 // The menu is about to show: its "Tags" entry is put in, for the items that are selected now.
 void LabelsOnMenuOpening(Inspectable const& sender) {
-    if (!g_labels || g_unloading) {
+    if (g_unloading) {
         return;
     }
     auto bar = sender.try_as<muxc::CommandBarFlyout>();
@@ -57,12 +57,22 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
     }
     auto secondary = bar.SecondaryCommands();
     for (uint32_t i = secondary.Size(); i-- > 0;) {
-        // The flyout is reused: an entry of the last opening is taken out first.
+        // The flyout is reused: an entry of the last opening is taken out first, also when labels were switched off.
         auto old = secondary.GetAt(i).try_as<muxc::AppBarButton>();
         if (old && LabelsIsOurs(old)) {
             secondary.RemoveAt(i);
         }
     }
+    if (!g_labels) {
+        return;
+    }
+#ifdef EXTRAS_VERBOSE
+    try {
+        auto target = bar.Target();
+        LogVerbose(L"LABELS MENU target=%s", target ? std::wstring(winrt::get_class_name(target)).c_str() : L"(none)");
+    } catch (...) {
+    }
+#endif
     std::vector<std::wstring> paths = LabelsSelectedPaths();
     if (paths.empty() || !LabelsVolumeSupportsStreams(paths[0])) {
         LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());

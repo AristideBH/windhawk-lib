@@ -63,7 +63,7 @@
 
 ## Feature backlog beyond columns
 
-- Labels, macOS style.
+- [x] Labels, macOS style: built in 0.69 to 0.75 (design and plan in `docs/superpowers/`, `docs/labels.md`). Later: drag onto a sidebar tag, an index and a cross-folder view, tag presets.
 - New folder from selection.
 - Better archive extraction flow.
 - Toolbar customization.
@@ -72,7 +72,7 @@
 
 ## Architecture: one Explorer mod with sections
 
-Planned features beyond columns: labels, new folder from selection, archive
+Features beyond columns: the details pane and labels are built; planned: archive
 extraction flow, toolbar customization, small tweaks.
 
 - One mod, Explorer Extras. Each feature has its own settings

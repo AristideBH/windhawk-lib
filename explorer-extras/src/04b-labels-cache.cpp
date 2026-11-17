@@ -7,6 +7,7 @@ struct LabelsFolder {
     std::unordered_map<std::wstring, std::vector<LabelTag>> byName;
     std::unordered_set<std::wstring> ambiguous;  // Names shown by more than one item, at least one of them tagged.
     std::unordered_map<std::wstring, std::wstring> typeNames;  // The type text ("Text file") of each tagged item.
+    std::unordered_map<std::wstring, int> counts;  // How many items show each name, tagged or not.
     std::unordered_set<std::wstring> folders;    // The items that are folders (a Tiles or Content row has no detail line then).
     bool streamsSupported = true;                // The volume can carry the stream.
     bool complete = false;                       // The folder was read to its end.
@@ -43,8 +44,37 @@ LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
             folder.typeNames.erase(name);
         }
     }
+    folder.counts = std::move(seen);
     folder.complete = true;
     return folder;
+}
+
+// The entry of a folder after one item's tags changed. An item that shares its displayed name with another one
+// (hidden extensions) cannot be told from it in the list: its name is ambiguous, whichever one was tagged. Pure.
+LabelsFolder LabelsFolderWithTags(LabelsFolder base, std::wstring const& name, std::vector<LabelTag> const& tags,
+                                  std::wstring const& typeName) {
+    auto counted = base.counts.find(name);
+    if (counted != base.counts.end() && counted->second > 1) {
+        if (!tags.empty()) {
+            base.ambiguous.insert(name);
+        }
+        base.byName.erase(name);
+        base.typeNames.erase(name);
+        return base;
+    }
+    if (tags.empty()) {
+        base.byName.erase(name);
+        base.typeNames.erase(name);
+    } else {
+        base.byName[name] = tags;
+        base.typeNames[name] = typeName;
+    }
+    return base;
+}
+
+// A folder that was read is read again after this long, when it is on show (a tag set by another program, a rename).
+bool LabelsShouldRefresh(ULONGLONG readAt, ULONGLONG now) {
+    return now - readAt >= 20000;
 }
 
 // The tag a window filters its list by. A colour-only filter (no name) matches any tag of that colour, a named
@@ -74,6 +104,7 @@ struct LabelsSlot {
     std::shared_ptr<const LabelsFolder> data = std::make_shared<LabelsFolder>();
     std::shared_ptr<std::atomic<bool>> cancel;  // Of the read that is running, null when none is.
     ULONGLONG used = 0;
+    ULONGLONG readAt = 0;  // When the data was published.
 };
 
 std::mutex g_labelsCacheMutex;
@@ -148,6 +179,7 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
         auto found = g_labelsCache.find(path);
         if (found != g_labelsCache.end() && found->second.cancel == cancel) {
             found->second.data = data;
+            found->second.readAt = GetTickCount64();
             found->second.cancel.reset();
             publish = true;
         }
@@ -220,11 +252,8 @@ void LabelsInvalidate(std::wstring const& folderPath) {
     LabelsStartRead(folderPath, found->second);
 }
 
-// The cache entry of the item's folder gets the item's new tags at once (after a successful write).
-void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
-    std::wstring folderPath = itemPath;
-    PathRemoveFileSpecW(folderPath.data());
-    folderPath.resize(wcslen(folderPath.c_str()));
+// The displayed name of an item, from its path.
+std::wstring LabelsDisplayNameOf(std::wstring const& itemPath) {
     PIDLIST_ABSOLUTE pidl = nullptr;
     std::wstring name;
     if (SUCCEEDED(SHParseDisplayName(itemPath.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
@@ -236,21 +265,50 @@ void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& ta
         }
         ILFree(pidl);
     }
+    return name;
+}
+
+// The cache entry of the item's folder gets the item's new tags at once (after a successful write).
+void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
+    std::wstring folderPath = itemPath;
+    PathRemoveFileSpecW(folderPath.data());
+    folderPath.resize(wcslen(folderPath.c_str()));
+    std::wstring name = LabelsDisplayNameOf(itemPath);
     if (name.empty()) {
         return;
     }
+    std::wstring typeName;
+    if (!tags.empty()) {
+        SHFILEINFOW info = {};
+        if (SHGetFileInfoW(itemPath.c_str(), 0, &info, sizeof(info), SHGFI_TYPENAME)) {
+            typeName = info.szTypeName;
+        }
+    }
     std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
     auto found = g_labelsCache.find(folderPath);
-    if (found == g_labelsCache.end()) {
+    if (found == g_labelsCache.end() || !found->second.data->complete) {
         return;
     }
-    auto copy = std::make_shared<LabelsFolder>(*found->second.data);
-    if (tags.empty()) {
-        copy->byName.erase(name);
-    } else if (!copy->ambiguous.count(name)) {
-        copy->byName[name] = tags;
+    found->second.data = std::make_shared<LabelsFolder>(LabelsFolderWithTags(*found->second.data, name, tags, typeName));
+}
+
+// A folder is not on show any more: its read, if it is still running, gives up.
+void LabelsCancelFolder(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found != g_labelsCache.end() && found->second.cancel) {
+        *found->second.cancel = true;
     }
-    found->second.data = copy;
+}
+
+// A folder on show that was read a while ago is read again, on a thread, and the old data is used meanwhile.
+void LabelsRefreshIfStale(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found != g_labelsCache.end() && found->second.data->complete && !found->second.cancel &&
+        LabelsShouldRefresh(found->second.readAt, GetTickCount64())) {
+        LabelsStartRead(folderPath, found->second);
+    }
 }
 
 // Every read that is running gives up. Called first when the mod unloads, before its threads are joined.

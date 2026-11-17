@@ -134,6 +134,20 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
     return result;
 }
 
+// Runs `work` on a mod thread and hands its result to `done`, on that thread. False when the mod is unloading.
+bool LabelsRunAsync(std::function<LabelsApplyResult()> work, std::function<void(LabelsApplyResult const&)> done) {
+    return StartModThread([work, done]() {
+        HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        LabelsApplyResult result = work();
+        if (SUCCEEDED(init)) {
+            CoUninitialize();
+        }
+        if (!g_unloading) {
+            done(result);
+        }
+    });
+}
+
 namespace {
 
 std::wstring LabelsFailText(LabelsApplyResult const& result) {
@@ -205,32 +219,73 @@ mux::FrameworkElement LabelsDotElement(int colour, int size) {
 
 void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message);
 
-// Applies one change, then fills the section again a moment later (not from inside the click that asked).
-void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
+struct LabelsSectionRef {
+    winrt::weak_ref<muxc::StackPanel> host;
+    LabelsPaths paths;
+};
+[[clang::no_destroy]] thread_local LabelsSectionRef t_labelsSection;  // The Tags section of this window's pane.
+[[clang::no_destroy]] thread_local muxc::Flyout t_labelsNotice{nullptr};  // A notice when there is no pane to show it in.
+
+// After a change: what went wrong, if anything, is shown in the pane's Tags section, which is filled again a moment
+// later (not from inside the click that asked). Without a pane the notice is a small flyout at `anchor`.
+void LabelsAfterChange(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths,
+                       LabelsApplyResult const& result, std::function<mux::FrameworkElement()> const& anchor) {
     if (g_unloading) {
         return;
     }
-    LabelsApplyResult result = LabelsApplyToSelection(*paths, tag, add);
     std::wstring message;
     if (result.worst != LabelsWrite::Ok || result.full || result.unreadable) {
         message = LabelsFailText(result);
     }
     WindowState* state = StateForThisThread(false);
-    if (!state || !state->details) {
-        return;
-    }
-    PaneAfter(state, state->details, 30, [weakHost, paths, message]() {
-        if (auto host = weakHost.get()) {
-            LabelsFillSection(host, paths, message);
-        }
-    });
-    if (!message.empty()) {
-        PaneAfter(state, state->details, 6000, [weakHost, paths]() {
-            if (auto host = weakHost.get()) {
-                LabelsFillSection(host, paths, std::wstring());  // The line fades.
+    auto host = weakHost.get();
+    if (host && state && state->details) {
+        PaneAfter(state, state->details, 30, [weakHost, paths, message]() {
+            if (auto shown = weakHost.get()) {
+                LabelsFillSection(shown, paths, message);
             }
         });
+        if (!message.empty()) {
+            PaneAfter(state, state->details, 6000, [weakHost, paths]() {
+                if (auto shown = weakHost.get()) {
+                    LabelsFillSection(shown, paths, std::wstring());  // The line fades.
+                }
+            });
+        }
+        return;
     }
+    if (!message.empty() && anchor) {
+        mux::FrameworkElement target = anchor();
+        if (target) {
+            t_labelsNotice = muxc::Flyout();
+            t_labelsNotice.Content(MakeText(message, 13, false, false));
+            Keep(t_labelsNotice, t_labelsNotice.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
+                t_labelsNotice = nullptr;
+            }));
+            t_labelsNotice.ShowAt(target);
+        }
+    }
+}
+
+// Applies one change. A few items are written here; many are written on a mod thread, so the window does not wait
+// for the disk.
+void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
+    if (g_unloading) {
+        return;
+    }
+    if (paths->size() > 16) {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        bool started = LabelsRunAsync([paths, tag, add]() { return LabelsApplyToSelection(*paths, tag, add); },
+                                      [queue, weakHost, paths](LabelsApplyResult const& result) {
+                                          queue.TryEnqueue([weakHost, paths, result]() {
+                                              LabelsAfterChange(weakHost, paths, result, nullptr);
+                                          });
+                                      });
+        if (started) {
+            return;
+        }
+    }
+    LabelsAfterChange(weakHost, paths, LabelsApplyToSelection(*paths, tag, add), nullptr);
 }
 
 // The flyout of the [+] button: the colours, and a name that is optional. A colour makes the tag at once, with the
@@ -292,14 +347,31 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
+    std::wstring unreadableName;
+    bool ambiguous = false;
     if (supported) {
-        for (auto const& path : *paths) {
+        // The first 100 items give the badges (a bigger selection is not read item by item on every change).
+        std::shared_ptr<const LabelsFolder> data;
+        for (size_t i = 0; i < paths->size() && i < 100; i++) {
             std::vector<LabelTag> tags;
-            if (!LabelsReadFile(path, &tags)) {
+            if (!LabelsReadFile((*paths)[i], &tags)) {
+                if (!unreadable) {
+                    unreadableName = PathFindFileNameW((*paths)[i].c_str());
+                }
                 unreadable = true;
                 tags.clear();
             }
             perItem.push_back(std::move(tags));
+            if (i < 20 && !ambiguous) {
+                // An item that shares its displayed name with another one has no dot: the pane says so.
+                if (!data) {
+                    std::wstring folder = (*paths)[i];
+                    PathRemoveFileSpecW(folder.data());
+                    folder.resize(wcslen(folder.c_str()));
+                    data = LabelsFolderFor(folder);
+                }
+                ambiguous = data->complete && data->ambiguous.count(LabelsDisplayNameOf((*paths)[i])) != 0;
+            }
         }
     }
     LabelsMerged merged = LabelsMerge(perItem);
@@ -317,8 +389,8 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
         LabelTag const& tag = merged.tags[i].first;
         std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
         markup += L"<InlineUIContainer><Border x:Name='pill" + std::to_wstring(i) + L"' Background='" +
-                  LabelsPillFill(tag.colour, dark) + L"' CornerRadius='4' Padding='8,2,8,3' Margin='0,0,6,4'><TextBlock Text='" +
-                  LabelsXmlEscape(shown) + L"' FontSize='13'/></Border></InlineUIContainer>";
+                  LabelsPillFill(tag.colour, dark) + L"' CornerRadius='4' Padding='8,2,8,3' Margin='0,0,6,4'><TextBlock x:Name='text" +
+                  std::to_wstring(i) + L"' FontSize='13'/></Border></InlineUIContainer>";
     }
     markup += L"<InlineUIContainer><HyperlinkButton x:Name='addLink' Padding='4,2' MinHeight='0' MinWidth='0' FontSize='13' "
               L"Margin='0,0,0,2'>" + LabelsXmlEscape(Str(L"labels.add")) + L"</HyperlinkButton></InlineUIContainer></Paragraph></RichTextBlock>";
@@ -330,6 +402,9 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
         }
         LabelTag tag = merged.tags[i].first;
         bool everywhere = merged.tags[i].second;
+        if (auto label = text.FindName(L"text" + winrt::hstring{std::to_wstring(i)}).try_as<muxc::TextBlock>()) {
+            label.Text(tag.name.empty() ? LabelsColourName(tag.colour) : tag.name);
+        }
         if (!everywhere) {
             pill.Opacity(0.55);  // On some of the selected items only.
             muxc::ToolTipService::SetToolTip(pill, winrt::box_value(winrt::hstring{Str(L"labels.some")}));
@@ -373,17 +448,14 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     if (line.empty() && unreadable) {
         LabelsApplyResult shown;
         shown.unreadable = true;
-        for (auto const& path : *paths) {
-            std::vector<LabelTag> unused;
-            if (!LabelsReadFile(path, &unused)) {
-                shown.failedName = PathFindFileNameW(path.c_str());
-                break;
-            }
-        }
+        shown.failedName = unreadableName;
         line = LabelsFailText(shown);
     }
     if (!line.empty()) {
         host.Children().Append(MakeText(line, 12, false, true));
+    }
+    if (ambiguous) {
+        host.Children().Append(MakeText(Str(L"labels.ambiguous"), 12, false, true));
     }
 }
 
@@ -407,6 +479,33 @@ muxc::StackPanel LabelsPaneSection(DetailsPane* pane) {
         host.Visibility(mux::Visibility::Collapsed);
         return host;
     }
+    t_labelsSection.host = winrt::make_weak(host);
+    t_labelsSection.paths = paths;
     LabelsFillSection(host, paths, std::wstring());
     return host;
+}
+
+// A change made from a menu: the pane's Tags section is filled again (and shows what went wrong), or a notice
+// opens at the anchor when there is no pane.
+void LabelsAfterMenuChange(LabelsApplyResult const& result, std::function<mux::FrameworkElement()> const& anchor) {
+    LabelsAfterChange(t_labelsSection.host, t_labelsSection.paths, result, anchor);
+}
+
+// A change from a menu, with the same rule as the pane's: many items are written on a mod thread.
+void LabelsFromMenu(LabelsPaths const& paths, LabelTag const& tag, bool add, bool clear,
+                    std::function<mux::FrameworkElement()> const& anchor) {
+    if (g_unloading) {
+        return;
+    }
+    auto work = [paths, tag, add, clear]() { return clear ? LabelsClearSelection(*paths) : LabelsApplyToSelection(*paths, tag, add); };
+    if (paths->size() > 16) {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        bool started = LabelsRunAsync(work, [queue, anchor](LabelsApplyResult const& result) {
+            queue.TryEnqueue([result, anchor]() { LabelsAfterMenuChange(result, anchor); });
+        });
+        if (started) {
+            return;
+        }
+    }
+    LabelsAfterMenuChange(work(), anchor);
 }
