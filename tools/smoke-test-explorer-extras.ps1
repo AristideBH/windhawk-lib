@@ -85,6 +85,8 @@ Check 'toolbar toggle in the window, no click' ([bool]$toggle) 'WindhawkPaneTogg
 Check 'Columns entry added to the View menu' ([bool]($run | Select-String 'Columns entry added')) 'no "Columns entry added" line'
 Check 'closing the window released the mod''s objects' ([bool]($run | Select-String 'its objects are released')) 'no "its objects are released" line'
 $errors = @($run | Select-String -Pattern '0x8[0-9A-Fa-f]{7}|not usable|could not|did not open in time' | Where-Object { $_ -notmatch 'CreateCategory|CanCategorize' })
+$labelsLine = $lines | Select-String 'LABELS SELFTEST' | Select-Object -Last 1
+Check 'labels self-test passed' ($labelsLine -and $labelsLine.Line -match 'LABELS SELFTEST pass') ($(if ($labelsLine) { $labelsLine.Line } else { 'no LABELS SELFTEST line in the log' }))
 Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object -First 2 | ForEach-Object { $_.Line })
 $dumps = @(Get-ChildItem $dumpDir -Filter 'explorer.exe.*.dmp' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $began })
 Check 'no new crash dump of explorer.exe' ($dumps.Count -eq 0) ($dumps | ForEach-Object { $_.Name })

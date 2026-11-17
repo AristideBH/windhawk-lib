@@ -17,6 +17,12 @@
         "previews": "Previews"
       }
     },
+    "labels": {
+      "name": "Labels",
+      "subs": {
+        "names": "Colour names"
+      }
+    },
     "limits": {
       "name": "Limits"
     }
@@ -282,6 +288,104 @@
       "description": "Plays video and sound files in the pane.",
       "needs": "now",
       "sub": "previews"
+    },
+    {
+      "id": "labelsOn",
+      "group": "labels",
+      "type": "bool",
+      "default": true,
+      "name": "Show labels",
+      "description": "Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive.",
+      "needs": "now"
+    },
+    {
+      "id": "labelsDim",
+      "group": "labels",
+      "type": "bool",
+      "default": true,
+      "name": "Dim items that do not match the tag filter",
+      "description": "When a tag filter is on, the other items fade in File Explorer’s own list. Columns hides them instead.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName0",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Gray",
+      "name": "Name of the neutral gray",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName1",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Red",
+      "name": "Name of colour 2",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName2",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Orange",
+      "name": "Name of colour 3",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName3",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Yellow",
+      "name": "Name of colour 4",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName4",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Green",
+      "name": "Name of colour 5",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName5",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Teal",
+      "name": "Name of colour 6",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName6",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Blue",
+      "name": "Name of colour 7",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "colourName7",
+      "group": "labels",
+      "sub": "names",
+      "type": "string",
+      "default": "Purple",
+      "name": "Name of colour 8",
+      "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
     },
     {
       "id": "maxItems",

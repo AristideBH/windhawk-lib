@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.68.2
+// @version         0.69.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -150,6 +150,40 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
       $description: Plays video and sound files in the pane.
     $name: Previews
   $name: Details pane
+- labels:
+  - labelsOn: true
+    $name: Show labels
+    $description: Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive.
+  - labelsDim: true
+    $name: Dim items that do not match the tag filter
+    $description: When a tag filter is on, the other items fade in File Explorer’s own list. Columns hides them instead.
+  - names:
+    - colourName0: Gray
+      $name: Name of the neutral gray
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName1: Red
+      $name: Name of colour 2
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName2: Orange
+      $name: Name of colour 3
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName3: Yellow
+      $name: Name of colour 4
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName4: Green
+      $name: Name of colour 5
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName5: Teal
+      $name: Name of colour 6
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName6: Blue
+      $name: Name of colour 7
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    - colourName7: Purple
+      $name: Name of colour 8
+      $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
+    $name: Colour names
+  $name: Labels
 - limits:
   - maxItems: 5000
     $name: Maximum items per column
@@ -621,6 +655,16 @@ constexpr SettingInfo kSettings[] = {
     {L"livePreview", L"details.previews.livePreview", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewImages", L"details.previews.previewImages", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewMedia", L"details.previews.previewMedia", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"labelsOn", L"labels.labelsOn", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"labelsDim", L"labels.labelsDim", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"colourName0", L"labels.names.colourName0", SettingKind::String, 0, L"Gray", 0, 0, false},
+    {L"colourName1", L"labels.names.colourName1", SettingKind::String, 0, L"Red", 0, 0, false},
+    {L"colourName2", L"labels.names.colourName2", SettingKind::String, 0, L"Orange", 0, 0, false},
+    {L"colourName3", L"labels.names.colourName3", SettingKind::String, 0, L"Yellow", 0, 0, false},
+    {L"colourName4", L"labels.names.colourName4", SettingKind::String, 0, L"Green", 0, 0, false},
+    {L"colourName5", L"labels.names.colourName5", SettingKind::String, 0, L"Teal", 0, 0, false},
+    {L"colourName6", L"labels.names.colourName6", SettingKind::String, 0, L"Blue", 0, 0, false},
+    {L"colourName7", L"labels.names.colourName7", SettingKind::String, 0, L"Purple", 0, 0, false},
     {L"maxItems", L"limits.maxItems", SettingKind::Int, 5000, L"", 50, 20000, true},
     {L"previewMaxMb", L"limits.previewMaxMb", SettingKind::Int, 60, L"", 1, 1024, false},
     {L"previewMaxMp", L"limits.previewMaxMp", SettingKind::Int, 40, L"", 4, 400, false},
@@ -1815,6 +1859,382 @@ std::wstring MiddleEllipsis(const std::wstring& name, size_t maxChars) {
            name.substr(name.size() - tail);
 }
 
+// Labels: the tags of one item (a file or a folder), kept in one named NTFS stream on the item itself, so they
+// travel with it on NTFS. This part knows nothing about windows or painting.
+//
+// The text of the stream is UTF-8: a first line "v1", then one line per tag, a colour digit (0 is the neutral
+// gray, 1 to 7 the palette), a tab, and the name. A backslash, a tab, a line feed and a carriage return in a
+// name are written as \\, \t, \n and \r.
+
+struct LabelTag {
+    uint8_t colour = 0;
+    std::wstring name;
+};
+
+constexpr size_t kLabelsMaxTags = 16;
+constexpr size_t kLabelsMaxName = 40;
+constexpr wchar_t kLabelsStream[] = L":ExplorerExtras.Labels";
+
+enum class LabelsWrite { Ok, Unsupported, ReadOnly, Locked, Failed };
+
+std::atomic<bool> g_labels{true};     // Labels on or off.
+std::atomic<bool> g_labelsDim{true};  // Dim the items that do not match the tag filter.
+
+namespace {
+
+std::mutex g_labelNamesMutex;
+std::wstring g_labelNames[8];  // What each colour means to the user, from the settings.
+
+// The name cut to its limit, without splitting a surrogate pair.
+std::wstring LabelsClip(std::wstring const& name) {
+    if (name.size() <= kLabelsMaxName) {
+        return name;
+    }
+    size_t length = kLabelsMaxName;
+    if (name[length - 1] >= 0xD800 && name[length - 1] <= 0xDBFF) {
+        length--;
+    }
+    return name.substr(0, length);
+}
+
+std::wstring LabelsEscape(std::wstring const& name) {
+    std::wstring result;
+    for (wchar_t c : name) {
+        switch (c) {
+            case L'\\': result += L"\\\\"; break;
+            case L'\t': result += L"\\t"; break;
+            case L'\n': result += L"\\n"; break;
+            case L'\r': result += L"\\r"; break;
+            default: result += c;
+        }
+    }
+    return result;
+}
+
+bool LabelsUnescape(std::wstring_view text, std::wstring* out) {
+    out->clear();
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] != L'\\') {
+            *out += text[i];
+            continue;
+        }
+        if (++i >= text.size()) {
+            return false;
+        }
+        switch (text[i]) {
+            case L'\\': *out += L'\\'; break;
+            case L't': *out += L'\t'; break;
+            case L'n': *out += L'\n'; break;
+            case L'r': *out += L'\r'; break;
+            default: return false;
+        }
+    }
+    return true;
+}
+
+LabelsWrite LabelsMapError(DWORD error) {
+    switch (error) {
+        case ERROR_ACCESS_DENIED:
+        case ERROR_WRITE_PROTECT:
+            return LabelsWrite::ReadOnly;
+        case ERROR_SHARING_VIOLATION:
+        case ERROR_LOCK_VIOLATION:
+            return LabelsWrite::Locked;
+        case ERROR_INVALID_NAME:
+        case ERROR_NOT_SUPPORTED:
+        case ERROR_INVALID_FUNCTION:
+            return LabelsWrite::Unsupported;
+        default:
+            return LabelsWrite::Failed;
+    }
+}
+
+// Tells a handle not to change the file's times when it writes or deletes (the stream's own write would
+// otherwise reset the last-write time of the file or folder).
+void LabelsKeepTimes(HANDLE file) {
+    FILETIME keep = {0xFFFFFFFF, 0xFFFFFFFF};
+    SetFileTime(file, nullptr, nullptr, &keep);
+}
+
+}  // namespace
+
+std::wstring LabelsSerialize(std::vector<LabelTag> const& tags) {
+    std::wstring text = L"v1\n";
+    size_t count = 0;
+    for (auto const& tag : tags) {
+        if (count++ >= kLabelsMaxTags) {
+            break;
+        }
+        text += static_cast<wchar_t>(L'0' + std::min<int>(tag.colour, 7));
+        text += L'\t';
+        text += LabelsEscape(LabelsClip(tag.name));
+        text += L'\n';
+    }
+    return text;
+}
+
+bool LabelsParse(std::wstring_view text, std::vector<LabelTag>* out) {
+    out->clear();
+    size_t lineEnd = text.find(L'\n');
+    if (lineEnd == std::wstring_view::npos || text.substr(0, lineEnd) != L"v1") {
+        return false;
+    }
+    size_t at = lineEnd + 1;
+    while (at < text.size()) {
+        lineEnd = text.find(L'\n', at);
+        std::wstring_view line = text.substr(at, lineEnd == std::wstring_view::npos ? text.size() - at : lineEnd - at);
+        at = lineEnd == std::wstring_view::npos ? text.size() : lineEnd + 1;
+        if (line.size() < 2 || line[0] < L'0' || line[0] > L'7' || line[1] != L'\t') {
+            out->clear();
+            return false;
+        }
+        LabelTag tag;
+        tag.colour = static_cast<uint8_t>(line[0] - L'0');
+        if (!LabelsUnescape(line.substr(2), &tag.name)) {
+            out->clear();
+            return false;
+        }
+        tag.name = LabelsClip(tag.name);
+        if (out->size() < kLabelsMaxTags) {
+            out->push_back(std::move(tag));
+        }
+    }
+    return true;
+}
+
+bool LabelsVolumeSupportsStreams(std::wstring const& path) {
+    wchar_t root[MAX_PATH];
+    if (!GetVolumePathNameW(path.c_str(), root, MAX_PATH)) {
+        return false;
+    }
+    DWORD flags = 0;
+    if (!GetVolumeInformationW(root, nullptr, 0, nullptr, nullptr, &flags, nullptr, 0)) {
+        return false;
+    }
+    return (flags & FILE_NAMED_STREAMS) != 0;
+}
+
+// True with an empty list when the item has no stream. False when the item cannot be read, or its stream is
+// corrupt or from a newer version (the caller must then not overwrite it).
+bool LabelsReadFile(std::wstring const& path, std::vector<LabelTag>* out) {
+    out->clear();
+    HANDLE file = CreateFileW((path + kLabelsStream).c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        bool noStream = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        return noStream && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    }
+    char buffer[8192];
+    DWORD read = 0;
+    BOOL ok = ReadFile(file, buffer, sizeof(buffer), &read, nullptr);
+    DWORD size = GetFileSize(file, nullptr);
+    CloseHandle(file);
+    if (!ok || size > sizeof(buffer)) {
+        return false;
+    }
+    int wide = read ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, nullptr, 0) : 0;
+    if (read && wide <= 0) {
+        return false;
+    }
+    std::wstring text(wide, L'\0');
+    if (wide) {
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, text.data(), wide);
+    }
+    return text.empty() || LabelsParse(text, out);
+}
+
+// An empty list removes the stream. The item's times are never changed.
+LabelsWrite LabelsWriteFile(std::wstring const& path, std::vector<LabelTag> const& tags) {
+    if (!LabelsVolumeSupportsStreams(path)) {
+        return LabelsWrite::Unsupported;
+    }
+    std::wstring stream = path + kLabelsStream;
+    if (tags.empty()) {
+        HANDLE file = CreateFileW(stream.c_str(), DELETE | FILE_WRITE_ATTRIBUTES,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            DWORD error = GetLastError();
+            return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? LabelsWrite::Ok
+                                                                                  : LabelsMapError(error);
+        }
+        LabelsKeepTimes(file);
+        FILE_DISPOSITION_INFO remove = {TRUE};
+        BOOL removed = SetFileInformationByHandle(file, FileDispositionInfo, &remove, sizeof(remove));
+        DWORD error = GetLastError();
+        CloseHandle(file);
+        return removed ? LabelsWrite::Ok : LabelsMapError(error);
+    }
+    std::wstring text = LabelsSerialize(tags);
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), utf8.data(), bytes, nullptr, nullptr);
+    HANDLE file = CreateFileW(stream.c_str(), GENERIC_WRITE | FILE_WRITE_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return LabelsMapError(GetLastError());
+    }
+    LabelsKeepTimes(file);
+    DWORD written = 0;
+    BOOL ok = WriteFile(file, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
+    DWORD error = GetLastError();
+    CloseHandle(file);
+    return ok && written == utf8.size() ? LabelsWrite::Ok : LabelsMapError(error);
+}
+
+// The name the user gave a colour in the settings ("Red = Urgent"). Safe from any thread.
+std::wstring LabelsColourName(int colour) {
+    std::lock_guard<std::mutex> lock(g_labelNamesMutex);
+    return g_labelNames[std::clamp(colour, 0, 7)];
+}
+
+void LabelsLoadSettings() {
+    g_labels = SettingBool(L"labelsOn");
+    g_labelsDim = SettingBool(L"labelsDim");
+    std::lock_guard<std::mutex> lock(g_labelNamesMutex);
+    for (int i = 0; i < 8; i++) {
+        g_labelNames[i] = LabelsClip(SettingText((std::wstring(L"colourName") + std::to_wstring(i)).c_str()));
+    }
+}
+// Labels: the self-test of the tag stream. It only exists in the debug build (EXTRAS_VERBOSE), runs once
+// when the mod loads and writes one line to the log: "LABELS SELFTEST pass", or "LABELS SELFTEST FAIL <what>".
+// tools/smoke-test-explorer-extras.ps1 reads that line.
+#ifdef EXTRAS_VERBOSE
+
+namespace {
+
+std::wstring g_labelsFailure;
+
+void LabelsExpect(bool ok, const wchar_t* what) {
+    if (!ok && g_labelsFailure.empty()) {
+        g_labelsFailure = what;
+    }
+}
+
+bool LabelsSameTags(std::vector<LabelTag> const& a, std::vector<LabelTag> const& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); i++) {
+        if (a[i].colour != b[i].colour || a[i].name != b[i].name) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool LabelsWriteTime(std::wstring const& path, FILETIME* time) {
+    HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    bool ok = GetFileTime(file, nullptr, nullptr, time) != 0;
+    CloseHandle(file);
+    return ok;
+}
+
+bool LabelsSetWriteTime(std::wstring const& path, FILETIME time) {
+    HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    bool ok = SetFileTime(file, nullptr, nullptr, &time) != 0;
+    CloseHandle(file);
+    return ok;
+}
+
+}  // namespace
+
+void LabelsSelfTest() {
+    // The text format.
+    std::vector<LabelTag> tags = {{1, L"a:b"},
+                                  {2, L"x\ty"},
+                                  {3, L"line\nbreak"},
+                                  {4, L"p|q"},
+                                  {5, std::wstring(40, L'n')},
+                                  {6, L"\U0001F600 smile"},
+                                  {7, L""},
+                                  {0, L"back\\slash\r"}};
+    std::vector<LabelTag> back;
+    LabelsExpect(LabelsParse(LabelsSerialize(tags), &back), L"round trip parses");
+    LabelsExpect(LabelsSameTags(tags, back), L"round trip keeps every tag");
+
+    std::vector<LabelTag> many(17, LabelTag{1, L"t"});
+    LabelsExpect(LabelsParse(LabelsSerialize(many), &back) && back.size() == 16, L"17 tags are cut to 16");
+    std::vector<LabelTag> longName = {LabelTag{1, std::wstring(41, L'x')}};
+    LabelsExpect(LabelsParse(LabelsSerialize(longName), &back) && back.size() == 1 && back[0].name.size() == 40,
+                 L"a 41 character name is cut to 40");
+    LabelsExpect(!LabelsParse(L"v9\n1\tX", &back), L"a newer version is refused");
+    LabelsExpect(!LabelsParse(L"1\tX", &back), L"no version line is refused");
+    LabelsExpect(!LabelsParse(L"v1\nx\tY", &back), L"a colour that is not a digit is refused");
+    LabelsExpect(!LabelsParse(L"v1\n9\tY", &back), L"a colour out of range is refused");
+    LabelsExpect(LabelsParse(L"v1\n", &back) && back.empty(), L"a version line alone is an empty list");
+
+    // A file and a folder, on the temp drive.
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    std::wstring dir = std::wstring(temp) + L"ee-labels-test-" + std::to_wstring(GetCurrentProcessId());
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring file = dir + L"\\a.txt";
+    std::wstring folder = dir + L"\\sub";
+    CreateDirectoryW(folder.c_str(), nullptr);
+    HANDLE created = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (created != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(created, "hello", 5, &written, nullptr);
+        CloseHandle(created);
+    }
+    FILETIME old = {};
+    SYSTEMTIME oldSystem = {2020, 1, 4, 2, 3, 4, 5, 0};
+    SystemTimeToFileTime(&oldSystem, &old);
+    LabelsExpect(LabelsSetWriteTime(file, old) && LabelsSetWriteTime(folder, old), L"set the old write times");
+    LabelsExpect(LabelsVolumeSupportsStreams(file), L"the temp drive supports named streams");
+
+    std::vector<LabelTag> mine = {{1, L"Urgent"}, {5, L""}};
+    LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::Ok, L"write to a file");
+    LabelsExpect(LabelsReadFile(file, &back) && LabelsSameTags(mine, back), L"read back from a file");
+    FILETIME after = {};
+    LabelsExpect(LabelsWriteTime(file, &after) && CompareFileTime(&old, &after) == 0, L"a file's write time is unchanged");
+    LabelsExpect(LabelsWriteFile(folder, mine) == LabelsWrite::Ok, L"write to a folder");
+    LabelsExpect(LabelsReadFile(folder, &back) && LabelsSameTags(mine, back), L"read back from a folder");
+    LabelsExpect(LabelsWriteTime(folder, &after) && CompareFileTime(&old, &after) == 0, L"a folder's write time is unchanged");
+    LabelsExpect(LabelsReadFile(dir + L"\\missing.txt", &back) == false, L"a missing file cannot be read");
+
+    LabelsExpect(LabelsWriteFile(file, {}) == LabelsWrite::Ok, L"writing an empty list");
+    LabelsExpect(LabelsReadFile(file, &back) && back.empty(), L"an empty list leaves no tags");
+    WIN32_FIND_STREAM_DATA stream = {};
+    HANDLE find = FindFirstStreamW(file.c_str(), FindStreamInfoStandard, &stream, 0);
+    int streams = 0;
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            streams++;
+        } while (FindNextStreamW(find, &stream));
+        FindClose(find);
+    }
+    LabelsExpect(streams == 1, L"an empty list removes the stream");
+
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_READONLY);
+    LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::ReadOnly, L"a read-only file is refused");
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(folder.c_str());
+    RemoveDirectoryW(dir.c_str());
+
+    if (g_labelsFailure.empty()) {
+        Wh_Log(L"LABELS SELFTEST pass");
+    } else {
+        Wh_Log(L"LABELS SELFTEST FAIL %s", g_labelsFailure.c_str());
+    }
+}
+
+#endif  // EXTRAS_VERBOSE
 // ---- Change notifications: a hidden window per Explorer window receives
 // the shell's "this folder changed" messages for every open column. ----
 
@@ -19367,6 +19787,7 @@ void LoadSettings() {
     g_staleAccent = SettingBool(L"staleAccent");
     g_autoPreview = SettingBool(L"autoPreview");
     g_autoFolderSize = SettingBool(L"autoFolderSize");
+    LabelsLoadSettings();
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -19405,9 +19826,13 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.68.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.69.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
+
+#ifdef EXTRAS_VERBOSE
+    LabelsSelfTest();
+#endif
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
     if (!module) {

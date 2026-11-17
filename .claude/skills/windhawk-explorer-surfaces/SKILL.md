@@ -279,7 +279,22 @@ Confirmed on 2026-11-12 with `probes/probe-bench.wh.cpp` v0.1, ARM64, build 2630
 
 - Hooks on the exported `Element::PaintBackground` and `Element::PaintContent` both fire for file list items. `UIItem` rows came through with a 954x34 rectangle in details view, and `UIProperty`, `UIImage` and `UIDetailsPropertyCollection` came through too.
 - Class names are available without symbols. Find the vtable slot of `Element::GetClassInfoW` by searching the exported vtable `??_7Element@DirectUI@@6B@` for the exported function's address, and do the same for `ClassInfoBase::GetName` in `??_7ClassInfoBase@DirectUI@@6B@`. On this build the slots were 35 and 8. Never hard-code them.
-- Still open for labels: mapping a `UIItem` to its file. `Element::GetAccName` is the first thing to try.
+- Mapping a `UIItem` to its file: confirmed, `Element::GetAccName(Value** out)` returns the displayed name as a `const wchar_t*` (not an HRESULT; release the `Value` it hands back). Two files that show the same name with "hide extensions" on are ambiguous, so match by row position for those.
+
+### Drawing on file list rows (probe-label-paint 0.1 to 0.6, 2026-11-17, ARM64 build 26300, French)
+
+Confirmed first-hand. A dot drawn on the DC after the original `PaintContent` returns shows on the real Explorer list, survives hover, click and scroll, and costs about 10 to 30 microseconds per row. Every view mode paints rows as `UIItem`, so one hook covers them all. Row sizes at this scale: Details 594x19, List 105 to 169x22, Tiles 242x48, Content 911x49, Icons 66x64 to 97x127. Grouping adds `UIGroupHeader` and `UIGroupItem`.
+
+Children of a `UIItem` (position relative to the item):
+- Details: `UIImage` at x 4, then a `UIDetailsPropertyCollection` at x 22 whose first cell is the Name column (230 wide, not the text width).
+- List: a 28 px `UIBase` gap at x 4 (the item check box column), `UIImage` at x 32, `UIProperty` "Nom" at x 48. The cell is exactly as wide as the name text, so a dot after the text lies outside the item.
+- Tiles: an icon `Element`, then an `Element` holding a `UIProperty` "Nom" (first line, text width) and a `UITilesPropertyCollection` (second line, 16 high).
+- Content: `UIImage`, then a `UISmartPropertyCollection` with several lines.
+- Icons: a thumbnail `Element` (4,2) and a label `Element` below it, 16 high per line, centred text.
+
+Dimming a row (probe 0.7 to 0.11): children paint after the `UIItem`, so dim from the children's own `PaintContent` hooks (`UIImage`, `UIProperty`, `Element`, the three property collections, `UIBase`), finding the row by climbing `Element::GetParent` up to 4 levels. Fading toward a fixed page colour leaves dark blocks on hovered and selected rows. Instead, call `GetPixel` on the DC just inside the child's rect before the original paints, and alpha-blend (`AlphaBlend`, a 1x1 DIB, about 60 percent) that colour over the rect afterwards. This is clean on hover and selection. A List-view dot centred on `rect.top + height / 2`, with left margin `(height - side) / 2`, lines up with the icon.
+
+Pitfalls: the DC's font after the original paint is not the item's font, so `GetTextExtentPoint32W` there overstates widths by about 1.4x. Child lists are `DynamicArray<Element*>`, read by searching the first three words for a data pointer and a count. A file written from the Bash tool to `%LOCALAPPDATA%` was not seen by Explorer, so do not use a control file written that way; log automatically instead.
 
 ### Probe practice
 
@@ -315,4 +330,7 @@ Windows 11 24H2 build 26100, ARM64, French. First-hand facts, from probes and fr
 - **Preview handlers** are created with `CLSCTX_LOCAL_SERVER` only (they run in prevhost.exe). `IPreviewHandler::SetFocus` takes the focus. Do not attach input to another process.
 - **A new tab:** press the tab strip's add button, found in the window's XAML tree as the element named `AddButton` (UIA: "Ajouter un nouvel onglet", AutomationId `AddButton`), through its automation peer (`IInvokeProvider`). No key is sent. The folder's `opennewtab` verb does NOT work: through `IContextMenu::InvokeCommand` it opens a new window, even when the menu is given the window's browser as its site (tried in 0.64.2). To look for such a control, list the buttons of a live window with .NET UI Automation in PowerShell (`System.Windows.Automation`), then find the same name in the XAML tree.
 - **OneDrive states** come from the reparse tag: `(tag & 0xFFFF0FFF) == IO_REPARSE_TAG_CLOUD` covers the sixteen sub-states.
-- **`.ts`** is a video or TypeScript: an MPEG transport stream has byte 0x47 at offsets 0 and 188.
+- **Hidden extensions.** With Windows' default "hide extensions for known file types", the display name of `backup.zip` is `backup`. Take an extension from the parsing name (`SHGDN_FORPARSING`, `PathFindExtensionW`), never from the display name. A rename keeps the extension that is shown, and sets the name without it when it is hidden (the shell puts it back); a name is never cut at its last dot (`v1.2 notes`).
+- **A selectable group header.** In a grouped ListView a group header is a selectable row that is no file. Comparing "which entries are selected" skips it, so Invert selection and Select none left a header selected; compare the selected row count too.
+- **A preview scrolls without a hook.** With `IPreviewHandler::SetFocus` on hover, the wheel and the keys reach a handler's window by themselves: a low-level mouse hook to forward the wheel was never needed.
+- **The `.ts` extension** is a video or TypeScript: an MPEG transport stream has byte 0x47 at offsets 0 and 188.
