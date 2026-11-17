@@ -858,6 +858,8 @@ void PaneShowSizeRows(DetailsPane* pane, muxc::StackPanel const& host) {
     host.Children().Append(sizeList);
 }
 
+muxc::StackPanel LabelsPaneSection(DetailsPane* pane);  // 10g
+
 mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     muxc::StackPanel page;  // The part that stays on top: preview, name, actions.
     page.Spacing(12);
@@ -1140,6 +1142,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     }
 
     // The details, then the rest of them behind a toggle.
+    details.Children().Append(LabelsPaneSection(pane));
     details.Children().Append(PaneRows(data.rows));
     if (!data.sizeRoots.empty()) {
         muxc::StackPanel sizeHost;

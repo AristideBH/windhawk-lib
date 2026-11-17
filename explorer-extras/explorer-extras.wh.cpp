@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.71.0
+// @version         0.72.4
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -697,6 +697,19 @@ constexpr StringInfo kStrings[] = {
     {L"pane.showthumb", L"Show the thumbnail"},
     {L"pane.getsize", L"Calculate"},
     {L"pane.sizecontent", L"Size and content"},
+    {L"labels.tags", L"Tags"},
+    {L"labels.add", L"Add a tag"},
+    {L"labels.name", L"Name (optional)"},
+    {L"labels.ntfs", L"Tags need an NTFS drive"},
+    {L"labels.remove", L"Remove"},
+    {L"labels.some", L"On some of the selected items"},
+    {L"labels.fail.readonly", L"Could not tag %s, it is read-only"},
+    {L"labels.fail.locked", L"Could not tag %s, it is in use"},
+    {L"labels.fail.ntfs", L"Could not tag %s, its drive needs to be NTFS"},
+    {L"labels.fail.failed", L"Could not tag %s"},
+    {L"labels.fail.full", L"%s already has 16 tags"},
+    {L"labels.fail.corrupt", L"%s has tags this version cannot read"},
+    {L"labels.apply", L"Add to all selected"},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -725,6 +738,19 @@ constexpr StringInfo kStringsFr[] = {
     {L"pane.showthumb", L"Afficher la miniature"},
     {L"pane.getsize", L"Calculer"},
     {L"pane.sizecontent", L"Taille et contenu"},
+    {L"labels.tags", L"\u00C9tiquettes"},
+    {L"labels.add", L"Ajouter une \u00E9tiquette"},
+    {L"labels.name", L"Nom (facultatif)"},
+    {L"labels.ntfs", L"Les \u00E9tiquettes demandent un disque NTFS"},
+    {L"labels.remove", L"Retirer"},
+    {L"labels.some", L"Sur une partie des \u00E9l\u00E9ments s\u00E9lectionn\u00E9s"},
+    {L"labels.fail.readonly", L"Impossible d\u2019\u00E9tiqueter %s, il est en lecture seule"},
+    {L"labels.fail.locked", L"Impossible d\u2019\u00E9tiqueter %s, il est utilis\u00E9"},
+    {L"labels.fail.ntfs", L"Impossible d\u2019\u00E9tiqueter %s, son disque doit \u00EAtre NTFS"},
+    {L"labels.fail.failed", L"Impossible d\u2019\u00E9tiqueter %s"},
+    {L"labels.fail.full", L"%s a d\u00E9j\u00E0 16 \u00E9tiquettes"},
+    {L"labels.fail.corrupt", L"%s a des \u00E9tiquettes que cette version ne sait pas lire"},
+    {L"labels.apply", L"Ajouter \u00E0 tous les \u00E9l\u00E9ments"},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -16668,6 +16694,8 @@ void PaneShowSizeRows(DetailsPane* pane, muxc::StackPanel const& host) {
     host.Children().Append(sizeList);
 }
 
+muxc::StackPanel LabelsPaneSection(DetailsPane* pane);  // 10g
+
 mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     muxc::StackPanel page;  // The part that stays on top: preview, name, actions.
     page.Spacing(12);
@@ -16950,6 +16978,7 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     }
 
     // The details, then the rest of them behind a toggle.
+    details.Children().Append(LabelsPaneSection(pane));
     details.Children().Append(PaneRows(data.rows));
     if (!data.sizeRoots.empty()) {
         muxc::StackPanel sizeHost;
@@ -19514,6 +19543,17 @@ COLORREF LabelsColourRgb(int colour, bool dark) {
     return dark ? entry.dark : entry.light;
 }
 
+// The colour of a dot. Dark theme: the palette colour. Light theme: the palette colour softened toward white, about
+// the colour a badge in the details pane has, so the list and the pane agree.
+COLORREF LabelsDotRgb(int colour, bool dark) {
+    COLORREF base = LabelsColourRgb(colour, dark);
+    if (dark) {
+        return base;
+    }
+    auto soften = [](int channel) { return channel + (255 - channel) * 45 / 100; };
+    return RGB(soften(GetRValue(base)), soften(GetGValue(base)), soften(GetBValue(base)));
+}
+
 // The apps' theme, read again at most once a second. Safe from any thread.
 bool LabelsDarkTheme() {
     ULONGLONG now = GetTickCount64();
@@ -19540,10 +19580,10 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
     if (side < 2 || side > 256) {
         return false;
     }
-    COLORREF fill = LabelsColourRgb(colour, dark);
-    // The rim is the fill a little darker, in both themes: it separates stacked dots without a light outline.
-    int percent = dark ? 18 : 28;
-    auto toward = [percent](int channel) { return channel - channel * percent / 100; };
+    COLORREF fill = LabelsDotRgb(colour, dark);
+    // The rim is the fill a little darker in the dark theme (it separates stacked dots without a light outline)
+    // and a little lighter in the light theme.
+    auto toward = [dark](int channel) { return dark ? channel - channel * 18 / 100 : channel + (255 - channel) * 35 / 100; };
     COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
     const double radius = side / 2.0;
     const double rimWidth = std::max(1.0, side / 10.0);
@@ -19763,7 +19803,7 @@ void LabelsDotsSelfTest() {
                     continue;
                 }
                 uint32_t centre = pixels[(side / 2) * side + side / 2];
-                DotsExpect(centre == DotsPixelOf(LabelsColourRgb(colour, dark != 0)), L"the centre is the opaque fill colour");
+                DotsExpect(centre == DotsPixelOf(LabelsDotRgb(colour, dark != 0)), L"the centre is the opaque fill colour");
                 DotsExpect((pixels[0] >> 24) == 0, L"a corner is transparent");
                 bool partial = false;
                 for (uint32_t pixel : pixels) {
@@ -19779,10 +19819,11 @@ void LabelsDotsSelfTest() {
             std::vector<uint32_t> big;
             if (LabelsRenderDot(colour, dark != 0, 24, &big) && big.size() == 24 * 24) {
                 uint32_t rim = big[12 * 24 + 1];
-                COLORREF fill = LabelsColourRgb(colour, dark != 0);
+                COLORREF fill = LabelsDotRgb(colour, dark != 0);
                 int rimSum = (int)((rim >> 16) & 255) + (int)((rim >> 8) & 255) + (int)(rim & 255);
                 int fillSum = GetRValue(fill) + GetGValue(fill) + GetBValue(fill);
-                DotsExpect((rim >> 24) == 255 && rimSum < fillSum, L"the rim is the fill a little darker, in both themes");
+                DotsExpect((rim >> 24) == 255 && (dark ? rimSum < fillSum : rimSum > fillSum),
+                           L"the rim is darker than the fill in the dark theme and lighter in the light theme");
             }
         }
     }
@@ -19791,6 +19832,11 @@ void LabelsDotsSelfTest() {
                    (disc[0] >> 24) == 0,
                L"a disc is opaque in the middle and transparent in the corner");
     DotsExpect(LabelsColourRgb(1, false) != LabelsColourRgb(1, true), L"light and dark variants differ");
+    DotsExpect(LabelsDotRgb(1, true) == LabelsColourRgb(1, true), L"in the dark theme a dot is the palette colour");
+    COLORREF lightDot = LabelsDotRgb(1, false), lightBase = LabelsColourRgb(1, false);
+    DotsExpect(GetRValue(lightDot) > GetRValue(lightBase) && GetGValue(lightDot) > GetGValue(lightBase) &&
+                   GetBValue(lightDot) > GetBValue(lightBase) && GetGValue(lightDot) < 255,
+               L"in the light theme a dot is the palette colour softened toward white, like a badge");
     DotsExpect(LabelsColourRgb(0, false) != LabelsColourRgb(1, false), L"gray differs from red");
 
     // Drawing onto a DC with a white background.
@@ -19813,7 +19859,7 @@ void LabelsDotsSelfTest() {
             bits[i] = 0x00FFFFFF;
         }
         LabelsDrawDot(dc, 14, 20, 1, 12);
-        COLORREF fill = LabelsColourRgb(1, LabelsDarkTheme());
+        COLORREF fill = LabelsDotRgb(1, LabelsDarkTheme());
         DotsExpect((bits[20 * size + 20] & 0xFFFFFF) == (DotsPixelOf(fill) & 0xFFFFFF), L"a drawn dot has its colour at the centre");
         DotsExpect((bits[0] & 0xFFFFFF) == 0xFFFFFF, L"a drawn dot leaves the corner untouched");
         bool blended = false;
@@ -20845,6 +20891,485 @@ void LabelsPlaceSelfTest() {
 }
 
 #endif  // EXTRAS_VERBOSE
+// Labels in the details pane: a "Tags" section with one row per tag of the selection, a [+] button that opens a
+// small flyout (the colours, and a name that is optional), and an inline line when a tag cannot be written.
+// What it does with the tags is plain code at the top, tested by the self-test; the XAML is below.
+
+struct LabelsMerged {
+    std::vector<std::pair<LabelTag, bool>> tags;  // Each tag once; true when every selected item has it.
+};
+
+static bool LabelsSameTag(LabelTag const& a, LabelTag const& b) {
+    return a.colour == b.colour && _wcsicmp(a.name.c_str(), b.name.c_str()) == 0;
+}
+
+// The tags of several items as one list.
+LabelsMerged LabelsMerge(std::vector<std::vector<LabelTag>> const& perItem) {
+    LabelsMerged merged;
+    for (auto const& item : perItem) {
+        for (auto const& tag : item) {
+            bool known = false;
+            for (auto const& entry : merged.tags) {
+                known = known || LabelsSameTag(entry.first, tag);
+            }
+            if (!known) {
+                merged.tags.push_back({tag, true});
+            }
+        }
+    }
+    for (auto& entry : merged.tags) {
+        for (auto const& item : perItem) {
+            bool has = false;
+            for (auto const& tag : item) {
+                has = has || LabelsSameTag(entry.first, tag);
+            }
+            if (!has) {
+                entry.second = false;
+                break;
+            }
+        }
+    }
+    return merged;
+}
+
+// False when the list is full (16) and the tag is not in it yet.
+bool LabelsAddTag(std::vector<LabelTag>* tags, LabelTag const& tag) {
+    for (auto const& existing : *tags) {
+        if (LabelsSameTag(existing, tag)) {
+            return true;
+        }
+    }
+    if (tags->size() >= kLabelsMaxTags) {
+        return false;
+    }
+    tags->push_back(tag);
+    return true;
+}
+
+void LabelsRemoveTag(std::vector<LabelTag>* tags, LabelTag const& tag) {
+    tags->erase(std::remove_if(tags->begin(), tags->end(), [&](LabelTag const& t) { return LabelsSameTag(t, tag); }), tags->end());
+}
+
+struct LabelsApplyResult {
+    int done = 0;                          // Items that were written.
+    LabelsWrite worst = LabelsWrite::Ok;   // The last write that failed.
+    std::wstring failedName;               // The item that failed, a full one or an unreadable one.
+    bool full = false;                     // An item already has 16 tags.
+    bool unreadable = false;               // An item's stream is corrupt or from a newer version: left alone.
+};
+
+// Adds or removes one tag on every item. Items whose tags would not change are not written. The cache and the
+// list are told.
+LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths, LabelTag const& tag, bool add) {
+    LabelsApplyResult result;
+    for (auto const& path : paths) {
+        std::vector<LabelTag> tags;
+        std::wstring fileName = PathFindFileNameW(path.c_str());
+        if (!LabelsReadFile(path, &tags)) {
+            result.unreadable = true;
+            result.failedName = fileName;
+            continue;
+        }
+        std::wstring before = LabelsSerialize(tags);
+        if (add) {
+            if (!LabelsAddTag(&tags, tag)) {
+                result.full = true;
+                result.failedName = fileName;
+                continue;
+            }
+        } else {
+            LabelsRemoveTag(&tags, tag);
+        }
+        if (LabelsSerialize(tags) == before) {
+            continue;
+        }
+        LabelsWrite written = LabelsWriteFile(path, tags);
+        if (written == LabelsWrite::Ok) {
+            result.done++;
+            LabelsSetTags(path, tags);
+        } else {
+            result.worst = written;
+            result.failedName = fileName;
+        }
+    }
+    if (result.done > 0) {
+        LabelsRepaintWindows(std::wstring());
+    }
+    return result;
+}
+
+namespace {
+
+std::wstring LabelsFailText(LabelsApplyResult const& result) {
+    const wchar_t* key = L"labels.fail.failed";
+    if (result.worst == LabelsWrite::ReadOnly) {
+        key = L"labels.fail.readonly";
+    } else if (result.worst == LabelsWrite::Locked) {
+        key = L"labels.fail.locked";
+    } else if (result.worst == LabelsWrite::Unsupported) {
+        key = L"labels.fail.ntfs";
+    } else if (result.worst == LabelsWrite::Ok) {
+        key = result.full ? L"labels.fail.full" : L"labels.fail.corrupt";
+    }
+    wchar_t text[400];
+    swprintf_s(text, Str(key), result.failedName.c_str());
+    return text;
+}
+
+std::wstring LabelsTrim(std::wstring text) {
+    while (!text.empty() && iswspace(text.back())) {
+        text.pop_back();
+    }
+    size_t start = 0;
+    while (start < text.size() && iswspace(text[start])) {
+        start++;
+    }
+    return text.substr(start);
+}
+
+using LabelsPaths = std::shared_ptr<std::vector<std::wstring>>;
+
+// The fill of a tag's badge: the colour of the theme, at about a third of full strength, so the text keeps its
+// own colour and reads in both themes.
+std::wstring LabelsPillFill(int colour, bool dark) {
+    COLORREF fill = LabelsColourRgb(colour, dark);
+    wchar_t text[16];
+    swprintf_s(text, L"#59%02X%02X%02X", GetRValue(fill), GetGValue(fill), GetBValue(fill));
+    return text;
+}
+
+std::wstring LabelsXmlEscape(std::wstring const& text) {
+    std::wstring result;
+    for (wchar_t c : text) {
+        switch (c) {
+            case L'&': result += L"&amp;"; break;
+            case L'<': result += L"&lt;"; break;
+            case L'>': result += L"&gt;"; break;
+            case L'"': result += L"&quot;"; break;
+            case L'\'': result += L"&apos;"; break;
+            default: result += c;
+        }
+    }
+    return result;
+}
+
+// A coloured dot as XAML: the fill, and a rim a little darker.
+mux::FrameworkElement LabelsDotElement(int colour, int size) {
+    bool dark = LabelsDarkTheme();
+    COLORREF fill = LabelsDotRgb(colour, dark);
+    auto toward = [dark](int channel) { return dark ? channel * 82 / 100 : channel + (255 - channel) * 35 / 100; };
+    COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
+    wchar_t markup[400];
+    swprintf_s(markup,
+               L"<Ellipse xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='%d' Height='%d' "
+               L"Fill='#FF%02X%02X%02X' Stroke='#FF%02X%02X%02X' StrokeThickness='1' VerticalAlignment='Center'/>",
+               size, size, GetRValue(fill), GetGValue(fill), GetBValue(fill), GetRValue(rim), GetGValue(rim), GetBValue(rim));
+    return LoadXaml(markup).as<mux::FrameworkElement>();
+}
+
+void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message);
+
+// Applies one change, then fills the section again a moment later (not from inside the click that asked).
+void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
+    if (g_unloading) {
+        return;
+    }
+    LabelsApplyResult result = LabelsApplyToSelection(*paths, tag, add);
+    std::wstring message;
+    if (result.worst != LabelsWrite::Ok || result.full || result.unreadable) {
+        message = LabelsFailText(result);
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->details) {
+        return;
+    }
+    PaneAfter(state, state->details, 30, [weakHost, paths, message]() {
+        if (auto host = weakHost.get()) {
+            LabelsFillSection(host, paths, message);
+        }
+    });
+    if (!message.empty()) {
+        PaneAfter(state, state->details, 6000, [weakHost, paths]() {
+            if (auto host = weakHost.get()) {
+                LabelsFillSection(host, paths, std::wstring());  // The line fades.
+            }
+        });
+    }
+}
+
+// The flyout of the [+] button: the colours, and a name that is optional. A colour makes the tag at once, with the
+// name typed so far; Enter in the box makes a named tag in the neutral gray.
+muxc::Flyout LabelsMakeFlyout(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths) {
+    muxc::Flyout flyout;
+    muxc::StackPanel content;
+    content.Spacing(10);
+    muxc::StackPanel colours;
+    colours.Orientation(muxc::Orientation::Horizontal);
+    colours.Spacing(4);
+    auto box = LoadXaml(std::wstring(L"<TextBox ") + kXamlNs + L" MaxLength='40' MinWidth='200'/>").as<muxc::TextBox>();
+    box.PlaceholderText(Str(L"labels.name"));
+    auto weakFlyout = winrt::make_weak(flyout);
+    for (int colour = 0; colour < 8; colour++) {
+        auto button = LoadXaml(std::wstring(L"<Button ") + kXamlNs +
+                               L" Padding='5' MinHeight='0' MinWidth='0' Background='Transparent' BorderThickness='0'/>").as<muxc::Button>();
+        button.Content(LabelsDotElement(colour, 18));
+        std::wstring colourName = LabelsColourName(colour);
+        if (!colourName.empty()) {
+            muxc::ToolTipService::SetToolTip(button, winrt::box_value(winrt::hstring{colourName}));
+        }
+        Keep(button, button.Click(winrt::auto_revoke, [weakHost, paths, weakFlyout, box, colour](Inspectable const&, mux::RoutedEventArgs const&) {
+            std::wstring name = LabelsTrim(std::wstring(box.Text()));
+            if (auto shown = weakFlyout.get()) {
+                shown.Hide();
+            }
+            LabelsDo(weakHost, paths, LabelTag{(uint8_t)colour, name}, true);
+        }));
+        colours.Children().Append(button);
+    }
+    Keep(box, box.KeyDown(winrt::auto_revoke, [weakHost, paths, weakFlyout](Inspectable const& sender, mux::Input::KeyRoutedEventArgs const& args) {
+        using winrt::Windows::System::VirtualKey;
+        if (args.Key() != VirtualKey::Enter) {
+            return;
+        }
+        auto text = sender.try_as<muxc::TextBox>();
+        std::wstring name = text ? LabelsTrim(std::wstring(text.Text())) : std::wstring();
+        if (name.empty()) {
+            return;
+        }
+        args.Handled(true);
+        if (auto shown = weakFlyout.get()) {
+            shown.Hide();
+        }
+        LabelsDo(weakHost, paths, LabelTag{0, name}, true);
+    }));
+    content.Children().Append(colours);
+    content.Children().Append(box);
+    flyout.Content(content);
+    return flyout;
+}
+
+// Builds the section: the title, the tags as badges that wrap like text, with the "Add a tag" link after the last
+// one, and the line of a failed write. A click on a badge opens a small menu (remove, or add to all).
+void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message) {
+    host.Children().Clear();
+    auto weakHost = winrt::make_weak(host);
+    bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
+    std::vector<std::vector<LabelTag>> perItem;
+    bool unreadable = false;
+    if (supported) {
+        for (auto const& path : *paths) {
+            std::vector<LabelTag> tags;
+            if (!LabelsReadFile(path, &tags)) {
+                unreadable = true;
+                tags.clear();
+            }
+            perItem.push_back(std::move(tags));
+        }
+    }
+    LabelsMerged merged = LabelsMerge(perItem);
+    host.Children().Append(MakeText(Str(L"labels.tags"), 13, true, false));
+    if (!supported) {
+        host.Children().Append(MakeText(Str(L"labels.ntfs"), 12, false, true));
+        return;
+    }
+
+    bool dark = LabelsDarkTheme();
+    std::wstring markup = std::wstring(L"<RichTextBlock ") + kXamlNs +
+                          L" xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TextWrapping='Wrap' "
+                          L"IsTextSelectionEnabled='False'><Paragraph>";
+    for (size_t i = 0; i < merged.tags.size(); i++) {
+        LabelTag const& tag = merged.tags[i].first;
+        std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
+        markup += L"<InlineUIContainer><Border x:Name='pill" + std::to_wstring(i) + L"' Background='" +
+                  LabelsPillFill(tag.colour, dark) + L"' CornerRadius='4' Padding='8,2,8,3' Margin='0,0,6,4'><TextBlock Text='" +
+                  LabelsXmlEscape(shown) + L"' FontSize='13'/></Border></InlineUIContainer>";
+    }
+    markup += L"<InlineUIContainer><HyperlinkButton x:Name='addLink' Padding='4,2' MinHeight='0' MinWidth='0' FontSize='13' "
+              L"Margin='0,0,0,2'>" + LabelsXmlEscape(Str(L"labels.add")) + L"</HyperlinkButton></InlineUIContainer></Paragraph></RichTextBlock>";
+    auto text = LoadXaml(markup).as<muxc::RichTextBlock>();
+    for (size_t i = 0; i < merged.tags.size(); i++) {
+        auto pill = text.FindName(L"pill" + winrt::hstring{std::to_wstring(i)}).try_as<muxc::Border>();
+        if (!pill) {
+            continue;
+        }
+        LabelTag tag = merged.tags[i].first;
+        bool everywhere = merged.tags[i].second;
+        if (!everywhere) {
+            pill.Opacity(0.55);  // On some of the selected items only.
+            muxc::ToolTipService::SetToolTip(pill, winrt::box_value(winrt::hstring{Str(L"labels.some")}));
+        }
+        Keep(pill, pill.Tapped(winrt::auto_revoke, [weakHost, paths, tag, everywhere](Inspectable const& sender, mux::Input::TappedRoutedEventArgs const&) {
+            auto element = sender.try_as<mux::FrameworkElement>();
+            if (!element) {
+                return;
+            }
+            muxc::MenuFlyout menu;
+            if (!everywhere) {
+                muxc::MenuFlyoutItem all;
+                all.Text(Str(L"labels.apply"));
+                Keep(all, all.Click(winrt::auto_revoke, [weakHost, paths, tag](Inspectable const&, mux::RoutedEventArgs const&) {
+                    LabelsDo(weakHost, paths, tag, true);
+                }));
+                menu.Items().Append(all);
+            }
+            muxc::MenuFlyoutItem remove;
+            remove.Text(Str(L"labels.remove"));
+            Keep(remove, remove.Click(winrt::auto_revoke, [weakHost, paths, tag](Inspectable const&, mux::RoutedEventArgs const&) {
+                LabelsDo(weakHost, paths, tag, false);
+            }));
+            menu.Items().Append(remove);
+            menu.ShowAt(element);
+        }));
+    }
+    auto link = text.FindName(L"addLink").try_as<muxc::HyperlinkButton>();
+    if (link) {
+        link.IsEnabled(!unreadable);
+        auto flyout = LabelsMakeFlyout(weakHost, paths);
+        Keep(link, link.Click(winrt::auto_revoke, [flyout](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            if (auto element = sender.try_as<mux::FrameworkElement>()) {
+                flyout.ShowAt(element);
+            }
+        }));
+    }
+    host.Children().Append(text);
+
+    std::wstring line = message;
+    if (line.empty() && unreadable) {
+        LabelsApplyResult shown;
+        shown.unreadable = true;
+        for (auto const& path : *paths) {
+            std::vector<LabelTag> unused;
+            if (!LabelsReadFile(path, &unused)) {
+                shown.failedName = PathFindFileNameW(path.c_str());
+                break;
+            }
+        }
+        line = LabelsFailText(shown);
+    }
+    if (!line.empty()) {
+        host.Children().Append(MakeText(line, 12, false, true));
+    }
+}
+
+}  // namespace
+
+// The Tags section for the page of the details pane. Empty (collapsed) when labels are off or the selection has
+// no file system path.
+muxc::StackPanel LabelsPaneSection(DetailsPane* pane) {
+    muxc::StackPanel host;
+    host.Spacing(6);
+    auto paths = std::make_shared<std::vector<std::wstring>>();
+    if (g_labels) {
+        for (auto const& pidl : pane->shownItems) {
+            std::wstring path = pidl ? PathOf(pidl.get()) : std::wstring();
+            if (!path.empty()) {
+                paths->push_back(path);
+            }
+        }
+    }
+    if (paths->empty()) {
+        host.Visibility(mux::Visibility::Collapsed);
+        return host;
+    }
+    LabelsFillSection(host, paths, std::wstring());
+    return host;
+}
+// Labels: the self-test of what the pane does with the tags of a selection (debug build only). One log line:
+// "LABELS PANE SELFTEST pass" or "LABELS PANE SELFTEST FAIL <what>".
+#ifdef EXTRAS_VERBOSE
+
+namespace {
+
+std::wstring g_paneLabelsFailure;
+
+void PaneLabelsExpect(bool ok, const wchar_t* what) {
+    if (!ok && g_paneLabelsFailure.empty()) {
+        g_paneLabelsFailure = what;
+    }
+}
+
+}  // namespace
+
+void LabelsPaneSelfTest() {
+    LabelTag red{1, L""}, urgent{2, L"Urgent"}, urgentLower{2, L"urgent"};
+
+    // Merging the tags of several items: a tag is solid when every item has it.
+    auto merged = LabelsMerge({{red, urgent}, {red}, {red, urgentLower}});
+    PaneLabelsExpect(merged.tags.size() == 2, L"merging gives each tag once, names matched without case");
+    if (merged.tags.size() == 2) {
+        PaneLabelsExpect(merged.tags[0].first.colour == 1 && merged.tags[0].second, L"a tag on every item is solid");
+        PaneLabelsExpect(merged.tags[1].first.colour == 2 && !merged.tags[1].second, L"a tag on some of the items is mixed");
+    }
+    PaneLabelsExpect(LabelsMerge({}).tags.empty(), L"nothing selected, nothing merged");
+    PaneLabelsExpect(LabelsMerge({{urgent}}).tags.size() == 1 && LabelsMerge({{urgent}}).tags[0].second, L"one item: its tags are solid");
+
+    // The look of a tag as a badge.
+    PaneLabelsExpect(LabelsPillFill(1, false) == L"#59D13438", L"a badge is the colour at about a third of full strength");
+    PaneLabelsExpect(LabelsPillFill(0, true) == L"#59A19F9D", L"the dark variant is used in the dark theme");
+    PaneLabelsExpect(LabelsXmlEscape(L"A&B<\"'>") == L"A&amp;B&lt;&quot;&apos;&gt;", L"names are escaped for the markup");
+
+    // Adding and removing in one list.
+    std::vector<LabelTag> tags = {red};
+    PaneLabelsExpect(LabelsAddTag(&tags, red) && tags.size() == 1, L"adding a tag that is there changes nothing");
+    PaneLabelsExpect(LabelsAddTag(&tags, urgent) && tags.size() == 2, L"adding a new tag");
+    LabelsRemoveTag(&tags, urgentLower);
+    PaneLabelsExpect(tags.size() == 1 && tags[0].colour == 1, L"removing matches the name without case");
+    std::vector<LabelTag> full;
+    for (int i = 0; i < 16; i++) {
+        full.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});
+    }
+    PaneLabelsExpect(!LabelsAddTag(&full, LabelTag{1, L"one more"}) && full.size() == 16, L"a 17th tag is refused");
+
+    // Applying to files.
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    std::wstring dir = std::wstring(temp) + L"ee-labels-pane-" + std::to_wstring(GetCurrentProcessId());
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::vector<std::wstring> files;
+    for (int i = 0; i < 3; i++) {
+        std::wstring path = dir + L"\\f" + std::to_wstring(i) + L".txt";
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            CloseHandle(file);
+        }
+        files.push_back(path);
+    }
+    auto result = LabelsApplyToSelection(files, red, true);
+    PaneLabelsExpect(result.done == 3 && result.worst == LabelsWrite::Ok, L"a tag added to three files");
+    std::vector<LabelTag> read;
+    PaneLabelsExpect(LabelsReadFile(files[1], &read) && read.size() == 1 && read[0].colour == 1, L"the tag is on the file");
+    result = LabelsApplyToSelection(files, red, true);
+    PaneLabelsExpect(result.done == 0 && result.worst == LabelsWrite::Ok, L"adding it again writes nothing");
+    SetFileAttributesW(files[2].c_str(), FILE_ATTRIBUTE_READONLY);
+    result = LabelsApplyToSelection(files, urgent, true);
+    PaneLabelsExpect(result.done == 2 && result.worst == LabelsWrite::ReadOnly && result.failedName == L"f2.txt",
+                     L"a read-only file is reported by name and the others are tagged");
+    SetFileAttributesW(files[2].c_str(), FILE_ATTRIBUTE_NORMAL);
+    result = LabelsApplyToSelection(files, red, false);
+    PaneLabelsExpect(result.done == 3 && LabelsReadFile(files[0], &read) && read.size() == 1 && read[0].colour == 2,
+                     L"removing a tag keeps the others");
+    std::vector<LabelTag> sixteen;
+    for (int i = 0; i < 16; i++) {
+        sixteen.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});
+    }
+    LabelsWriteFile(files[0], sixteen);
+    result = LabelsApplyToSelection({files[0]}, LabelTag{1, L"extra"}, true);
+    PaneLabelsExpect(result.full && result.done == 0, L"a file with 16 tags is reported as full");
+    for (auto const& path : files) {
+        SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+        DeleteFileW((path + kLabelsStream).c_str());
+        DeleteFileW(path.c_str());
+    }
+    RemoveDirectoryW(dir.c_str());
+
+    if (g_paneLabelsFailure.empty()) {
+        Wh_Log(L"LABELS PANE SELFTEST pass");
+    } else {
+        Wh_Log(L"LABELS PANE SELFTEST FAIL %s", g_paneLabelsFailure.c_str());
+    }
+}
+
+#endif  // EXTRAS_VERBOSE
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -21619,7 +22144,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.71.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.72.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -21628,6 +22153,7 @@ BOOL Wh_ModInit() {
     LabelsDotsSelfTest();
     LabelsCacheSelfTest();
     LabelsPlaceSelfTest();
+    LabelsPaneSelfTest();
 #endif
 
     LabelsInstallPaintHooks();

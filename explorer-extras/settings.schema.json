@@ -446,7 +446,20 @@
     "pane.showpreview": "Show the preview",
     "pane.showthumb": "Show the thumbnail",
     "pane.getsize": "Calculate",
-    "pane.sizecontent": "Size and content"
+    "pane.sizecontent": "Size and content",
+    "labels.tags": "Tags",
+    "labels.add": "Add a tag",
+    "labels.name": "Name (optional)",
+    "labels.ntfs": "Tags need an NTFS drive",
+    "labels.remove": "Remove",
+    "labels.some": "On some of the selected items",
+    "labels.fail.readonly": "Could not tag %s, it is read-only",
+    "labels.fail.locked": "Could not tag %s, it is in use",
+    "labels.fail.ntfs": "Could not tag %s, its drive needs to be NTFS",
+    "labels.fail.failed": "Could not tag %s",
+    "labels.fail.full": "%s already has 16 tags",
+    "labels.fail.corrupt": "%s has tags this version cannot read",
+    "labels.apply": "Add to all selected"
   },
   "fr": {
     "strings": {
@@ -474,7 +487,20 @@
       "pane.showpreview": "Afficher l’aperçu",
       "pane.showthumb": "Afficher la miniature",
       "pane.getsize": "Calculer",
-      "pane.sizecontent": "Taille et contenu"
+      "pane.sizecontent": "Taille et contenu",
+      "labels.tags": "Étiquettes",
+      "labels.add": "Ajouter une étiquette",
+      "labels.name": "Nom (facultatif)",
+      "labels.ntfs": "Les étiquettes demandent un disque NTFS",
+      "labels.remove": "Retirer",
+      "labels.some": "Sur une partie des éléments sélectionnés",
+      "labels.fail.readonly": "Impossible d’étiqueter %s, il est en lecture seule",
+      "labels.fail.locked": "Impossible d’étiqueter %s, il est utilisé",
+      "labels.fail.ntfs": "Impossible d’étiqueter %s, son disque doit être NTFS",
+      "labels.fail.failed": "Impossible d’étiqueter %s",
+      "labels.fail.full": "%s a déjà 16 étiquettes",
+      "labels.fail.corrupt": "%s a des étiquettes que cette version ne sait pas lire",
+      "labels.apply": "Ajouter à tous les éléments"
     }
   }
 }

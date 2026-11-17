@@ -34,7 +34,7 @@ void LabelsDotsSelfTest() {
                     continue;
                 }
                 uint32_t centre = pixels[(side / 2) * side + side / 2];
-                DotsExpect(centre == DotsPixelOf(LabelsColourRgb(colour, dark != 0)), L"the centre is the opaque fill colour");
+                DotsExpect(centre == DotsPixelOf(LabelsDotRgb(colour, dark != 0)), L"the centre is the opaque fill colour");
                 DotsExpect((pixels[0] >> 24) == 0, L"a corner is transparent");
                 bool partial = false;
                 for (uint32_t pixel : pixels) {
@@ -50,10 +50,11 @@ void LabelsDotsSelfTest() {
             std::vector<uint32_t> big;
             if (LabelsRenderDot(colour, dark != 0, 24, &big) && big.size() == 24 * 24) {
                 uint32_t rim = big[12 * 24 + 1];
-                COLORREF fill = LabelsColourRgb(colour, dark != 0);
+                COLORREF fill = LabelsDotRgb(colour, dark != 0);
                 int rimSum = (int)((rim >> 16) & 255) + (int)((rim >> 8) & 255) + (int)(rim & 255);
                 int fillSum = GetRValue(fill) + GetGValue(fill) + GetBValue(fill);
-                DotsExpect((rim >> 24) == 255 && rimSum < fillSum, L"the rim is the fill a little darker, in both themes");
+                DotsExpect((rim >> 24) == 255 && (dark ? rimSum < fillSum : rimSum > fillSum),
+                           L"the rim is darker than the fill in the dark theme and lighter in the light theme");
             }
         }
     }
@@ -62,6 +63,11 @@ void LabelsDotsSelfTest() {
                    (disc[0] >> 24) == 0,
                L"a disc is opaque in the middle and transparent in the corner");
     DotsExpect(LabelsColourRgb(1, false) != LabelsColourRgb(1, true), L"light and dark variants differ");
+    DotsExpect(LabelsDotRgb(1, true) == LabelsColourRgb(1, true), L"in the dark theme a dot is the palette colour");
+    COLORREF lightDot = LabelsDotRgb(1, false), lightBase = LabelsColourRgb(1, false);
+    DotsExpect(GetRValue(lightDot) > GetRValue(lightBase) && GetGValue(lightDot) > GetGValue(lightBase) &&
+                   GetBValue(lightDot) > GetBValue(lightBase) && GetGValue(lightDot) < 255,
+               L"in the light theme a dot is the palette colour softened toward white, like a badge");
     DotsExpect(LabelsColourRgb(0, false) != LabelsColourRgb(1, false), L"gray differs from red");
 
     // Drawing onto a DC with a white background.
@@ -84,7 +90,7 @@ void LabelsDotsSelfTest() {
             bits[i] = 0x00FFFFFF;
         }
         LabelsDrawDot(dc, 14, 20, 1, 12);
-        COLORREF fill = LabelsColourRgb(1, LabelsDarkTheme());
+        COLORREF fill = LabelsDotRgb(1, LabelsDarkTheme());
         DotsExpect((bits[20 * size + 20] & 0xFFFFFF) == (DotsPixelOf(fill) & 0xFFFFFF), L"a drawn dot has its colour at the centre");
         DotsExpect((bits[0] & 0xFFFFFF) == 0xFFFFFF, L"a drawn dot leaves the corner untouched");
         bool blended = false;

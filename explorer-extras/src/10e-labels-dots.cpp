@@ -48,6 +48,17 @@ COLORREF LabelsColourRgb(int colour, bool dark) {
     return dark ? entry.dark : entry.light;
 }
 
+// The colour of a dot. Dark theme: the palette colour. Light theme: the palette colour softened toward white, about
+// the colour a badge in the details pane has, so the list and the pane agree.
+COLORREF LabelsDotRgb(int colour, bool dark) {
+    COLORREF base = LabelsColourRgb(colour, dark);
+    if (dark) {
+        return base;
+    }
+    auto soften = [](int channel) { return channel + (255 - channel) * 45 / 100; };
+    return RGB(soften(GetRValue(base)), soften(GetGValue(base)), soften(GetBValue(base)));
+}
+
 // The apps' theme, read again at most once a second. Safe from any thread.
 bool LabelsDarkTheme() {
     ULONGLONG now = GetTickCount64();
@@ -74,10 +85,10 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
     if (side < 2 || side > 256) {
         return false;
     }
-    COLORREF fill = LabelsColourRgb(colour, dark);
-    // The rim is the fill a little darker, in both themes: it separates stacked dots without a light outline.
-    int percent = dark ? 18 : 28;
-    auto toward = [percent](int channel) { return channel - channel * percent / 100; };
+    COLORREF fill = LabelsDotRgb(colour, dark);
+    // The rim is the fill a little darker in the dark theme (it separates stacked dots without a light outline)
+    // and a little lighter in the light theme.
+    auto toward = [dark](int channel) { return dark ? channel - channel * 18 / 100 : channel + (255 - channel) * 35 / 100; };
     COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
     const double radius = side / 2.0;
     const double rimWidth = std::max(1.0, side / 10.0);
