@@ -483,6 +483,10 @@ void HookExtensions(HMODULE module) {
          &InvokeMenuItem_Original,
          InvokeMenuItem_Hook,
          true},
+        {{LR"(private: void __cdecl winrt::FileExplorerExtensions::implementation::MenuFlyoutControl::AppendMenuItem(struct winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout &,struct winrt::WindowsUdk::UI::MenuItem const &))"},
+         &LabelsAppendMenuItem_Original,
+         LabelsAppendMenuItem_Hook,
+         true},
     };
     if (!WindhawkUtils::SetFunctionHook(TranslateAcceleratorW, TranslateAcceleratorW_Hook,
                                         &TranslateAcceleratorW_Original)) {
@@ -495,7 +499,7 @@ void HookExtensions(HMODULE module) {
     Wh_Log(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
         ok ? 1 : 0, (void*)PointerPressed_Original,
         (void*)PointerPressedWave1_Original, (void*)InvokeMenuItem_Original);
-    Wh_Log(L"OnDpiChanged=%p", (void*)DpiChanged_Original);
+    Wh_Log(L"OnDpiChanged=%p, labels menu hook=%p", (void*)DpiChanged_Original, (void*)LabelsAppendMenuItem_Original);
     g_hooked = PointerPressed_Original || PointerPressedWave1_Original ||
                DpiChanged_Original;
 }

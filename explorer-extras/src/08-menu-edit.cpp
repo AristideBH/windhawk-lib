@@ -2267,7 +2267,7 @@ struct MenuBuilder {
     }
 };
 
-muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, muxc::ListView const& list);  // 10g2
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, std::function<mux::FrameworkElement()> anchor);  // 10g2
 
 // The shell's context menu for one item, shown the way Explorer's own is: a row
 // of quick actions with icons on top, the usual commands below, and the rest
@@ -2543,7 +2543,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     }
                 }
                 if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
-                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, list), L"");
+                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; }), L"");
                 }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {

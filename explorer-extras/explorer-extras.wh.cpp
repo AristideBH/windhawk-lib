@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.73.0
+// @version         0.74.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -9359,7 +9359,7 @@ struct MenuBuilder {
     }
 };
 
-muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, muxc::ListView const& list);  // 10g2
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, std::function<mux::FrameworkElement()> anchor);  // 10g2
 
 // The shell's context menu for one item, shown the way Explorer's own is: a row
 // of quick actions with icons on top, the usual commands below, and the rest
@@ -9635,7 +9635,7 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                     }
                 }
                 if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
-                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, list), L"");
+                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; }), L"");
                 }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {
@@ -20264,6 +20264,27 @@ UINT LabelsThreadDpi() {
     return dpi;
 }
 
+// The Explorer window of this thread. A window the mod has not seen being created (one that was open before the
+// mod loaded) has no state of its own, so its top-level window is looked up by class.
+HWND LabelsThreadTopLevel() {
+    WindowState* state = StateForThisThread(false);
+    if (state && state->topLevel) {
+        return state->topLevel;
+    }
+    struct Find {
+        HWND window = nullptr;
+    } find;
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND window, LPARAM param) -> BOOL {
+        wchar_t name[40];
+        if (GetClassNameW(window, name, 40) && wcscmp(name, L"CabinetWClass") == 0) {
+            ((Find*)param)->window = window;
+            return FALSE;
+        }
+        return TRUE;
+    }, (LPARAM)&find);
+    return find.window;
+}
+
 // The folder this thread's Explorer window shows, as a path, looked up at most four times a second.
 std::wstring LabelsThreadFolder() {
     [[clang::no_destroy]] thread_local std::wstring path;
@@ -20274,9 +20295,9 @@ std::wstring LabelsThreadFolder() {
     }
     at = now;
     try {
-        WindowState* state = StateForThisThread(false);
-        if (state && state->topLevel) {
-            IShellBrowser* browser = BrowserOf(state->topLevel);
+        HWND topLevel = LabelsThreadTopLevel();
+        if (topLevel) {
+            IShellBrowser* browser = BrowserOf(topLevel);
             if (browser) {
                 Pidl folder = CurrentFolder(browser);
                 path = folder ? PathOf(folder.get()) : std::wstring();
@@ -21573,7 +21594,7 @@ namespace {
 }  // namespace
 
 // The "Tags" submenu of the Columns context menu: the colours as checkable items, "Add tag...", "Clear tags".
-muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, muxc::ListView const& list) {
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, std::function<mux::FrameworkElement()> anchor) {
     muxc::MenuFlyout menu;
     auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
     std::vector<std::vector<LabelTag>> perItem;
@@ -21620,8 +21641,9 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, mu
     muxc::MenuFlyoutItem add;
     add.Text(Str(L"labels.addtag"));
     add.IsEnabled(!unreadable);
-    Keep(add, add.Click(winrt::auto_revoke, [paths, list](Inspectable const&, mux::RoutedEventArgs const&) {
-        if (g_unloading) {
+    Keep(add, add.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+        mux::FrameworkElement target = g_unloading ? mux::FrameworkElement{nullptr} : anchor();
+        if (!target) {
             return;
         }
         winrt::weak_ref<muxc::StackPanel> none;
@@ -21629,7 +21651,7 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, mu
         Keep(t_labelsMenuFlyout, t_labelsMenuFlyout.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
             t_labelsMenuFlyout = nullptr;
         }));
-        t_labelsMenuFlyout.ShowAt(list);
+        t_labelsMenuFlyout.ShowAt(target);
     }));
     menu.Items().Append(add);
     muxc::MenuFlyoutItem clear;
@@ -21642,6 +21664,149 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, mu
     }));
     menu.Items().Append(clear);
     return menu;
+}
+// Labels in File Explorer's own right-click menu. The menu is a CommandBarFlyout that FileExplorerExtensions.dll fills
+// one command at a time through MenuFlyoutControl::AppendMenuItem. The first time a flyout is seen there, a handler
+// is put on its Opening event; when the menu opens, a "Tags" entry with a submenu is added to its secondary commands
+// (before "Show more options" when that is there), for the items selected in the window. The menu of an empty space
+// has no selection, so it gets no entry.
+
+// The paths of the items selected in this thread's Explorer window.
+std::vector<std::wstring> LabelsSelectedPaths() {
+    std::vector<std::wstring> paths;
+    HWND topLevel = LabelsThreadTopLevel();
+    if (!topLevel) {
+        LogVerbose(L"LABELS MENU selection: no Explorer window on this thread");
+        return paths;
+    }
+    IShellBrowser* browser = BrowserOf(topLevel);
+    if (!browser) {
+        LogVerbose(L"LABELS MENU selection: no shell browser for window %p", (void*)topLevel);
+        return paths;
+    }
+    Pidl folder = CurrentFolder(browser);
+    if (!folder) {
+        LogVerbose(L"LABELS MENU selection: no current folder");
+        return paths;
+    }
+    std::vector<Pidl> selected = ExplorerSelection(browser);
+    LogVerbose(L"LABELS MENU selection: folder \"%s\", %d selected", PathOf(folder.get()).c_str(), (int)selected.size());
+    for (auto const& child : selected) {
+        std::wstring path = FilePathOf(folder.get(), child.get());
+        if (path.empty()) {
+            return std::vector<std::wstring>();  // One item without a path (a library, This PC): no entry.
+        }
+        paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+namespace {
+
+struct LabelsHookedFlyout {
+    void* key = nullptr;
+    winrt::weak_ref<muxc::CommandBarFlyout> flyout;
+};
+[[clang::no_destroy]] thread_local std::vector<LabelsHookedFlyout> t_labelsFlyouts;
+
+bool LabelsIsOurs(muxc::AppBarButton const& button) {
+    return winrt::unbox_value_or<winrt::hstring>(button.Tag(), L"") == L"ee-labels";
+}
+
+// The menu is about to show: its "Tags" entry is put in, for the items that are selected now.
+void LabelsOnMenuOpening(Inspectable const& sender) {
+    if (!g_labels || g_unloading) {
+        return;
+    }
+    auto bar = sender.try_as<muxc::CommandBarFlyout>();
+    if (!bar) {
+        return;
+    }
+    auto secondary = bar.SecondaryCommands();
+    for (uint32_t i = secondary.Size(); i-- > 0;) {
+        // The flyout is reused: an entry of the last opening is taken out first.
+        auto old = secondary.GetAt(i).try_as<muxc::AppBarButton>();
+        if (old && LabelsIsOurs(old)) {
+            secondary.RemoveAt(i);
+        }
+    }
+    std::vector<std::wstring> paths = LabelsSelectedPaths();
+    if (paths.empty() || !LabelsVolumeSupportsStreams(paths[0])) {
+        LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());
+        return;
+    }
+    muxc::AppBarButton button;
+    button.Label(Str(L"labels.menu"));
+    button.Tag(winrt::box_value(winrt::hstring{L"ee-labels"}));
+    muxc::FontIcon icon;
+    icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
+    icon.Glyph(L"");
+    button.Icon(icon);
+    auto weakBar = winrt::make_weak(bar);
+    button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
+        auto shown = weakBar.get();
+        return shown ? shown.Target() : mux::FrameworkElement{nullptr};
+    }));
+    // Before "Show more options" (the command with Shift+F10) when it is there, else at the end.
+    uint32_t at = secondary.Size();
+    for (uint32_t i = 0; i < secondary.Size(); i++) {
+        auto other = secondary.GetAt(i).try_as<muxc::AppBarButton>();
+        if (!other) {
+            continue;
+        }
+        for (auto accelerator : other.KeyboardAccelerators()) {
+            if (accelerator.Key() == winrt::Windows::System::VirtualKey::F10) {
+                at = i;
+            }
+        }
+    }
+    secondary.InsertAt(at, button);
+    LogVerbose(L"LABELS MENU appended entries=%u selection=%d at=%u", secondary.Size(), (int)paths.size(), at);
+}
+
+}  // namespace
+
+using LabelsAppendMenuItem_t = void(WINAPI*)(void* self, void* flyout, void* menuItem);
+LabelsAppendMenuItem_t LabelsAppendMenuItem_Original;
+
+// Called for every command that Explorer puts in a menu: the first one of a flyout puts the handler on it.
+void WINAPI LabelsAppendMenuItem_Hook(void* self, void* flyout, void* menuItem) {
+    LabelsAppendMenuItem_Original(self, flyout, menuItem);
+#ifdef EXTRAS_VERBOSE
+    {
+        static std::atomic<int> seen{0};
+        if (seen++ < 40) {
+            Wh_Log(L"LABELS MENU append seen, flyout=%p thread=%lu", flyout, GetCurrentThreadId());
+        }
+    }
+#endif
+    if (!g_labels || g_unloading || !flyout) {
+        return;
+    }
+    try {
+        auto& bar = *(muxc::CommandBarFlyout*)flyout;
+        void* key = *(void**)flyout;
+        auto& all = t_labelsFlyouts;
+        all.erase(std::remove_if(all.begin(), all.end(), [](LabelsHookedFlyout const& hooked) { return !hooked.flyout.get(); }),
+                  all.end());
+        for (auto const& hooked : all) {
+            if (hooked.key == key) {
+                return;
+            }
+        }
+        Keep(bar, bar.Opening(winrt::auto_revoke, [](Inspectable const& sender, Inspectable const&) {
+            try {
+                LabelsOnMenuOpening(sender);
+            } catch (...) {
+            }
+        }));
+        LabelsHookedFlyout hooked;
+        hooked.key = key;
+        hooked.flyout = winrt::make_weak(bar);
+        all.push_back(std::move(hooked));
+        LogVerbose(L"LABELS MENU flyout seen, handler attached");
+    } catch (...) {
+    }
 }
 // ---- Window creation ----
 //
@@ -22128,6 +22293,10 @@ void HookExtensions(HMODULE module) {
          &InvokeMenuItem_Original,
          InvokeMenuItem_Hook,
          true},
+        {{LR"(private: void __cdecl winrt::FileExplorerExtensions::implementation::MenuFlyoutControl::AppendMenuItem(struct winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout &,struct winrt::WindowsUdk::UI::MenuItem const &))"},
+         &LabelsAppendMenuItem_Original,
+         LabelsAppendMenuItem_Hook,
+         true},
     };
     if (!WindhawkUtils::SetFunctionHook(TranslateAcceleratorW, TranslateAcceleratorW_Hook,
                                         &TranslateAcceleratorW_Original)) {
@@ -22140,7 +22309,7 @@ void HookExtensions(HMODULE module) {
     Wh_Log(L"HookSymbols returned %d, PointerPressedHandler=%p, Wave1=%p, InvokeMenuItem=%p",
         ok ? 1 : 0, (void*)PointerPressed_Original,
         (void*)PointerPressedWave1_Original, (void*)InvokeMenuItem_Original);
-    Wh_Log(L"OnDpiChanged=%p", (void*)DpiChanged_Original);
+    Wh_Log(L"OnDpiChanged=%p, labels menu hook=%p", (void*)DpiChanged_Original, (void*)LabelsAppendMenuItem_Original);
     g_hooked = PointerPressed_Original || PointerPressedWave1_Original ||
                DpiChanged_Original;
 }
@@ -22417,7 +22586,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.73.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.74.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

@@ -333,6 +333,27 @@ UINT LabelsThreadDpi() {
     return dpi;
 }
 
+// The Explorer window of this thread. A window the mod has not seen being created (one that was open before the
+// mod loaded) has no state of its own, so its top-level window is looked up by class.
+HWND LabelsThreadTopLevel() {
+    WindowState* state = StateForThisThread(false);
+    if (state && state->topLevel) {
+        return state->topLevel;
+    }
+    struct Find {
+        HWND window = nullptr;
+    } find;
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND window, LPARAM param) -> BOOL {
+        wchar_t name[40];
+        if (GetClassNameW(window, name, 40) && wcscmp(name, L"CabinetWClass") == 0) {
+            ((Find*)param)->window = window;
+            return FALSE;
+        }
+        return TRUE;
+    }, (LPARAM)&find);
+    return find.window;
+}
+
 // The folder this thread's Explorer window shows, as a path, looked up at most four times a second.
 std::wstring LabelsThreadFolder() {
     [[clang::no_destroy]] thread_local std::wstring path;
@@ -343,9 +364,9 @@ std::wstring LabelsThreadFolder() {
     }
     at = now;
     try {
-        WindowState* state = StateForThisThread(false);
-        if (state && state->topLevel) {
-            IShellBrowser* browser = BrowserOf(state->topLevel);
+        HWND topLevel = LabelsThreadTopLevel();
+        if (topLevel) {
+            IShellBrowser* browser = BrowserOf(topLevel);
             if (browser) {
                 Pidl folder = CurrentFolder(browser);
                 path = folder ? PathOf(folder.get()) : std::wstring();

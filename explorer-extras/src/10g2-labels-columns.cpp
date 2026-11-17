@@ -112,7 +112,7 @@ namespace {
 }  // namespace
 
 // The "Tags" submenu of the Columns context menu: the colours as checkable items, "Add tag...", "Clear tags".
-muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, muxc::ListView const& list) {
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, std::function<mux::FrameworkElement()> anchor) {
     muxc::MenuFlyout menu;
     auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
     std::vector<std::vector<LabelTag>> perItem;
@@ -159,8 +159,9 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, mu
     muxc::MenuFlyoutItem add;
     add.Text(Str(L"labels.addtag"));
     add.IsEnabled(!unreadable);
-    Keep(add, add.Click(winrt::auto_revoke, [paths, list](Inspectable const&, mux::RoutedEventArgs const&) {
-        if (g_unloading) {
+    Keep(add, add.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+        mux::FrameworkElement target = g_unloading ? mux::FrameworkElement{nullptr} : anchor();
+        if (!target) {
             return;
         }
         winrt::weak_ref<muxc::StackPanel> none;
@@ -168,7 +169,7 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, mu
         Keep(t_labelsMenuFlyout, t_labelsMenuFlyout.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
             t_labelsMenuFlyout = nullptr;
         }));
-        t_labelsMenuFlyout.ShowAt(list);
+        t_labelsMenuFlyout.ShowAt(target);
     }));
     menu.Items().Append(add);
     muxc::MenuFlyoutItem clear;
