@@ -100,6 +100,7 @@ struct DetailsPane {
     std::vector<uint64_t> stackKeys;  // The thumbnails the stack shows now.
     int previewSeen = 0;
     std::shared_ptr<PaneData> deferred;                       // A big picture that waits for the corner button.
+    std::shared_ptr<PaneData> shownData;                       // The data of the page on show (the size button needs it).
     std::shared_ptr<std::atomic<bool>> sizeCancel;            // Stops the size of folders being worked out.
     std::vector<muxc::TextBlock> sizeBlocks;                  // Where the size, the contents and the types go.
     winrt::Windows::Media::Playback::MediaPlayer mediaPlayer{nullptr};  // The player of the video or sound on show.
@@ -840,6 +841,23 @@ muxc::Grid PaneStack(PaneData const& data, std::vector<uint64_t> const& before, 
     return stack;
 }
 
+void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data);
+
+// The rows where the size, the contents and the types of folders go, filled in when the count has run.
+void PaneShowSizeRows(DetailsPane* pane, muxc::StackPanel const& host) {
+    host.Children().Clear();
+    pane->sizeBlocks.clear();
+    auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
+    for (auto child : sizeList.Children()) {
+        if (auto grid = child.try_as<muxc::Grid>()) {
+            if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+                pane->sizeBlocks.push_back(block);
+            }
+        }
+    }
+    host.Children().Append(sizeList);
+}
+
 mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     muxc::StackPanel page;  // The part that stays on top: preview, name, actions.
     page.Spacing(12);
@@ -1124,16 +1142,43 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     // The details, then the rest of them behind a toggle.
     details.Children().Append(PaneRows(data.rows));
     if (!data.sizeRoots.empty()) {
-        // What the folders hold, filled in when the background count has run.
-        auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
-        for (auto child : sizeList.Children()) {
-            if (auto grid = child.try_as<muxc::Grid>()) {
-                if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
-                    pane->sizeBlocks.push_back(block);
+        muxc::StackPanel sizeHost;
+        if (g_autoFolderSize) {
+            PaneShowSizeRows(pane, sizeHost);
+        } else {
+            // A row like the others, with a compact button where the value goes: the count is made when it is
+            // asked for (it can be heavy on a slow computer).
+            muxc::Grid entry;
+            muxc::ColumnDefinition nameColumn, valueColumn;
+            nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Auto});
+            nameColumn.MaxWidth(150);
+            valueColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+            entry.ColumnDefinitions().Append(nameColumn);
+            entry.ColumnDefinitions().Append(valueColumn);
+            entry.ColumnSpacing(16);
+            auto label = MakeText(Str(L"pane.sizecontent"), 12, false, true);
+            label.VerticalAlignment(mux::VerticalAlignment::Center);
+            muxc::Grid::SetColumn(label, 0);
+            entry.Children().Append(label);
+            auto button = LoadXaml(std::wstring(L"<Button ") + kXamlNs +
+                                   L" Padding='12,4' MinHeight='0' FontSize='13' HorizontalAlignment='Right'/>").as<muxc::Button>();
+            button.Content(winrt::box_value(winrt::hstring{Str(L"pane.getsize")}));
+            muxc::Grid::SetColumn(button, 1);
+            entry.Children().Append(button);
+            auto weakHost = winrt::make_weak(sizeHost);
+            const PaneData* built = &data;
+            Keep(button, button.Click(winrt::auto_revoke, [weakHost, built](Inspectable const&, mux::RoutedEventArgs const&) {
+                WindowState* now = StateForThisThread(false);
+                auto host = weakHost.get();
+                if (g_unloading || !now || !now->details || !host || now->details->shownData.get() != built) {
+                    return;
                 }
-            }
+                PaneShowSizeRows(now->details, host);
+                PaneStartSizeJob(now, now->details, now->details->shownKey, now->details->shownData);
+            }));
+            sizeHost.Children().Append(entry);
         }
-        details.Children().Append(sizeList);
+        details.Children().Append(sizeHost);
     }
     if (!data.more.empty()) {
         auto more = PaneRows(data.more);
@@ -1232,51 +1277,6 @@ void PaneStopMedia(DetailsPane* pane) {
     }
 }
 
-// The wheel over the preview is sent to the window under the mouse by the pane itself: the
-// handler's window is in another process, and the wheel did not scroll it by itself.
-// A low-level hook runs on the thread that installed it, so each window thread has its own.
-static thread_local HHOOK g_wheelHook = nullptr;
-static thread_local HWND g_wheelHost = nullptr;
-
-LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
-    if (code == HC_ACTION && wParam == WM_MOUSEWHEEL && g_wheelHost && IsWindowVisible(g_wheelHost)) {
-        auto* info = (MSLLHOOKSTRUCT*)lParam;
-        HWND target = WindowFromPoint(info->pt);
-        if (target && (target == g_wheelHost || IsChild(g_wheelHost, target))) {
-            WORD keys = 0;
-            if (GetKeyState(VK_CONTROL) & 0x8000) {
-                keys |= MK_CONTROL;
-            }
-            if (GetKeyState(VK_SHIFT) & 0x8000) {
-                keys |= MK_SHIFT;
-            }
-            PostMessageW(target, WM_MOUSEWHEEL, MAKEWPARAM(keys, (WORD)HIWORD(info->mouseData)),
-                         MAKELPARAM((WORD)(short)info->pt.x, (WORD)(short)info->pt.y));
-            return 1;
-        }
-    }
-    return CallNextHookEx(nullptr, code, wParam, lParam);
-}
-
-// On while the pointer is over the preview: every mouse event of the system goes through this
-// thread's message loop while it is on.
-void PaneWheelOn(HWND host) {
-    g_wheelHost = host;
-    if (!g_wheelHook) {
-        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
-    }
-}
-
-void PaneWheelOff(HWND host) {
-    if (g_wheelHost == host) {
-        g_wheelHost = nullptr;
-        if (g_wheelHook) {
-            UnhookWindowsHookEx(g_wheelHook);
-            g_wheelHook = nullptr;
-        }
-    }
-}
-
 void PaneClosePreview(DetailsPane* pane) {
     pane->deferred = nullptr;
     if (pane->sizeCancel) {
@@ -1284,7 +1284,6 @@ void PaneClosePreview(DetailsPane* pane) {
         pane->sizeCancel = nullptr;
     }
     PaneStopMedia(pane);
-    PaneWheelOff(pane->host);
     if (pane->handler) {
         IPreviewHandler* handler = pane->handler;
         pane->handler = nullptr;
@@ -3065,6 +3064,7 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
     }
     try {
         auto inner = pane->inner;
+        pane->shownData = data;
         auto page = PaneBuild(*data, pane);
         auto layer = LoadXaml(std::wstring(L"<Grid ") + kXamlNs + L" Background='{ThemeResource SolidBackgroundFillColorBaseBrush}'/>").as<muxc::Grid>();
         layer.Children().Append(page);
@@ -3074,7 +3074,7 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
         }
         inner.Children().Append(layer);
         PaneAnimateIn(state, pane, dx, dy, layer);
-        if (!data->sizeRoots.empty()) {
+        if (!data->sizeRoots.empty() && g_autoFolderSize) {
             PaneStartSizeJob(state, pane, key, data);
         }
         if (g_panePreview && (data->previewKind == 2 || data->previewKind == 3) && pane->preview) {
@@ -3470,7 +3470,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(pane->host, &hostRect);
         bool over = IsWindowVisible(pane->host) && PtInRect(&hostRect, cursor);
         if (over) {
-            PaneWheelOn(pane->host);
             pane->overTicks++;
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
@@ -3480,7 +3479,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                 pane->previewFocused = true;
             }
         } else {
-            PaneWheelOff(pane->host);
             pane->overTicks = 0;
             if (pane->previewFocused) {
                 pane->previewFocused = false;
@@ -3604,7 +3602,6 @@ void AbandonDetails(WindowState* state) {
         PaneStopMedia(pane);  // A song or video must not go on playing with no window to stop it.
     } catch (...) {
     }
-    PaneWheelOff(pane->host);
     pane->handler = nullptr;  // Let go: the window it lived in is gone.
     pane->host = nullptr;
     PaneStopTimers(pane);

@@ -43,6 +43,20 @@ Short, plain, in the reporter's language when it is English or French. Say what 
 
 Labels `mod: explorer-extras` and `mod: other`; pull request titles start with `[explorer-extras]`; tags are `explorer-extras-v<version>`; notes are in `explorer-extras/CHANGELOG.md`. The root `README.md` lists every mod with its status (Beta, Prototype, Not compiled, Not released); only Beta takes bug reports for sure.
 
+## Before a release: refresh what says what the mod is
+
+A change that adds, removes or renames something leaves text behind. Before 1.0.0 and before each release, go through these, in order, and grep each for what changed (a removed feature, an old setting key, an old version, a step that no longer exists):
+
+1. **The mod itself:** the `@description` tag in `src/00-header.cpp` (30 to 250 characters; it is the line of the catalog list) and the readme block under it, which Windhawk shows on the mod's page. Both are inside the file the catalog reads, so changing them bumps the version.
+2. **`explorer-extras/README.md`** (areas, install, settings, build, tested-on line) and `docs/columns.md`. Regenerate `docs/settings.md` with `python docs/make-settings-doc.py`: it is built from `settings.schema.json`, and a description there must not hold a colon and a space (`build.py` refuses it).
+3. **`CHANGELOG.md`:** one entry per version, newest first, in words a user understands.
+4. **`ROADMAP.md`** (a row per stretch of work, what is tested, what is left) and **`explorer-extras/HANDOFF.md`** (the version line, the current workflow). The root `README.md` has one row per mod.
+5. **`FEEDBACK.md` and `.github/ISSUE_TEMPLATE/`:** what a reporter is asked for (version, Windows build, log) must exist in the mod.
+6. **The skills and the memory notes** (`windhawk-mod-development`, `windhawk-explorer-surfaces`, this one, the project note): new findings, changed workflow, anything that was true and no longer is.
+7. **Outside the repository, only on Ari's word:** the GitHub release and its attached file, the catalog pull request and its description.
+
+Words to grep for after a removal or a rename: the old feature's name, "settings window", "Extras entry", "diagnostics", a setting id, the previous version number.
+
 ## Releasing
 
 1. `python explorer-extras/build.py --check`, the syntax and link checks, and a device test of the changes.

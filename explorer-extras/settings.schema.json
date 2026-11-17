@@ -244,6 +244,16 @@
       "sub": "pane"
     },
     {
+      "id": "autoFolderSize",
+      "group": "details",
+      "sub": "pane",
+      "type": "bool",
+      "default": false,
+      "name": "Count folder sizes by itself",
+      "description": "A folder’s size, contents and types are counted when it is selected, which can use some CPU on a slow computer. Off, a button counts them when you ask.",
+      "needs": "now"
+    },
+    {
       "id": "livePreview",
       "group": "details",
       "type": "bool",
@@ -330,7 +340,9 @@
     "pane.insides": "Contents",
     "pane.filesfolders": "%llu files, %llu folders",
     "pane.showpreview": "Show the preview",
-    "pane.showthumb": "Show the thumbnail"
+    "pane.showthumb": "Show the thumbnail",
+    "pane.getsize": "Calculate",
+    "pane.sizecontent": "Size and content"
   },
   "fr": {
     "strings": {
@@ -356,7 +368,9 @@
       "pane.insides": "Contenu",
       "pane.filesfolders": "%llu fichiers, %llu dossiers",
       "pane.showpreview": "Afficher l’aperçu",
-      "pane.showthumb": "Afficher la miniature"
+      "pane.showthumb": "Afficher la miniature",
+      "pane.getsize": "Calculer",
+      "pane.sizecontent": "Taille et contenu"
     }
   }
 }

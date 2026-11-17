@@ -111,6 +111,7 @@ struct ModalScope {
 };
 
 std::atomic<bool> g_follow{true};
+std::atomic<bool> g_autoFolderSize{false};  // A folder's size is counted when it is selected; off, a button counts it.
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.

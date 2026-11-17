@@ -26,6 +26,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifndef MOD_NO_WINRT

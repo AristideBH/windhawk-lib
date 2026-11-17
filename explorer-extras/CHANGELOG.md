@@ -2,6 +2,22 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.68 (2026-11-17)
+
+### Changed
+- A new setting, **Count folder sizes by itself** (Details pane, Pane), off by default. A folder's size, contents and types are no longer counted when it is selected, which used some CPU on a slow computer: the pane shows a button, **Get folder size**, and counts when you press it. On, it counts by itself as before.
+- 0.68.2: the readme in Windhawk and the README say that a folder's size is counted when you press Calculate, or by itself if the setting is on.
+- 0.68.1: the folder size button is a compact **Calculate** button in the row "Size and content", the name on the left and the button on the right like the other details.
+- The wheel hook is gone. A preview scrolls with the wheel without it, so the mod no longer puts a global mouse hook in Explorer.
+
+## 0.67 (2026-11-17)
+
+### Changed
+- Archives open as folders when Windows hides their extension (the default: `backup.zip` is shown as `backup`). The real name decides, not the name shown.
+- Renaming keeps the extension that is really there, shown or hidden, and a name with dots (`v1.2 notes`) is no longer cut at its last dot. This holds for one item and for several.
+- 0.67.1: with a grouping on, Invert selection and Select none from the toolbar leave no group header selected.
+- Taking Explorer's selection after a toolbar command, such as Invert selection, is linear: a big folder no longer makes the window wait.
+
 ## 0.66 (2026-11-16)
 
 ### Changed

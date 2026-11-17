@@ -1677,10 +1677,25 @@ void SyncSelectionFromExplorer(WindowState* state) {
             wanted.push_back(i);
         }
     } else if (!selection.empty()) {
-        if (selection.size() * column->entries.size() > 4000000) {
-            return;  // Too much to match here.
+        // By the bytes of the item id first (one pass over each list), so an inverted selection in a big
+        // folder does not make the window wait; an item whose id differs in bytes is looked for the slow way.
+        auto bytesOf = [](PCUITEMID_CHILD id) { return std::string((const char*)id, ILGetSize(id)); };
+        std::unordered_map<std::string, size_t> byBytes;
+        byBytes.reserve(column->entries.size());
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            byBytes.emplace(bytesOf(column->entries[i].child.get()), i);
         }
+        size_t slowWork = 0;
         for (auto& child : selection) {
+            auto found = byBytes.find(bytesOf(child.get()));
+            if (found != byBytes.end()) {
+                wanted.push_back(found->second);
+                continue;
+            }
+            slowWork += column->entries.size();
+            if (slowWork > 4000000) {
+                return;  // Too much to match here.
+            }
             for (size_t i = 0; i < column->entries.size(); i++) {
                 if (ILIsEqual(column->entries[i].child.get(), child.get())) {
                     wanted.push_back(i);
@@ -1692,7 +1707,9 @@ void SyncSelectionFromExplorer(WindowState* state) {
     }
     auto shown = SelectedEntries(column, column->list);
     std::sort(shown.begin(), shown.end());
-    if (shown == wanted) {
+    // A group header can be selected too, and it is no entry: the same entries with a header selected is
+    // not the same selection (Invert selection, or Select none, must clear it).
+    if (shown == wanted && column->list.SelectedItems().Size() == shown.size()) {
         return;
     }
     try {

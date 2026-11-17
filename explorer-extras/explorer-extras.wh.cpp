@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.66.4
+// @version         0.68.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -37,7 +37,7 @@ A **Columns** entry in File Explorer's View menu: Miller columns, one column per
 One pane in place of Explorer's Details and Preview panes, in Columns and in every view.
 
 - Previews of PDF, text and code, Markdown, images (zoom, pan, animated GIF), video and sound.
-- The details of what is selected, by type. A folder's size and contents are counted in the background.
+- The details of what is selected, by type. A folder's size and contents are counted when you press **Calculate**, or by themselves if you turn that on in the settings.
 - A fanned stack of thumbnails when several items are selected.
 - Alt+P, the View menu and the toolbar button show and hide it.
 - Each kind of preview can be switched off, and has a size limit, in the settings (Limits).
@@ -134,6 +134,9 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - autoPreview: true
       $name: Open previews by themselves
       $description: When off, a button on the preview opens it, and switches back to the thumbnail.
+    - autoFolderSize: false
+      $name: Count folder sizes by itself
+      $description: A folder’s size, contents and types are counted when it is selected, which can use some CPU on a slow computer. Off, a button counts them when you ask.
     $name: Pane
   - previews:
     - livePreview: true
@@ -189,6 +192,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <windhawk_utils.h>
@@ -346,6 +350,7 @@ struct ModalScope {
 };
 
 std::atomic<bool> g_follow{true};
+std::atomic<bool> g_autoFolderSize{false};  // A folder's size is counted when it is selected; off, a button counts it.
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.
@@ -612,6 +617,7 @@ constexpr SettingInfo kSettings[] = {
     {L"previewRedirect", L"details.pane.previewRedirect", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"paneAnimation", L"details.pane.paneAnimation", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"autoPreview", L"details.pane.autoPreview", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"autoFolderSize", L"details.pane.autoFolderSize", SettingKind::Bool, 0, L"", 0, 0, false},
     {L"livePreview", L"details.previews.livePreview", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewImages", L"details.previews.previewImages", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewMedia", L"details.previews.previewMedia", SettingKind::Bool, 1, L"", 0, 0, false},
@@ -644,6 +650,8 @@ constexpr StringInfo kStrings[] = {
     {L"pane.filesfolders", L"%llu files, %llu folders"},
     {L"pane.showpreview", L"Show the preview"},
     {L"pane.showthumb", L"Show the thumbnail"},
+    {L"pane.getsize", L"Calculate"},
+    {L"pane.sizecontent", L"Size and content"},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -670,6 +678,8 @@ constexpr StringInfo kStringsFr[] = {
     {L"pane.filesfolders", L"%llu fichiers, %llu dossiers"},
     {L"pane.showpreview", L"Afficher l\u2019aper\u00E7u"},
     {L"pane.showthumb", L"Afficher la miniature"},
+    {L"pane.getsize", L"Calculer"},
+    {L"pane.sizecontent", L"Taille et contenu"},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -949,24 +959,22 @@ bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::
         !(attributes & SFGAO_FOLDER) || !(attributes & SFGAO_STREAM)) {
         return false;
     }
-    size_t dot = name.rfind(L'.');
-    if (dot == std::wstring::npos) {
-        return false;
-    }
-    static const wchar_t* kinds[] = {L".zip", L".7z", L".rar", L".tar", L".tgz",
-                                     L".gz", L".bz2", L".tbz", L".xz", L".zst"};
-    bool known = false;
-    for (auto kind : kinds) {
-        known = known || _wcsicmp(name.c_str() + dot, kind) == 0;
-    }
-    if (!known) {
-        return false;
-    }
+    // The real name decides: with "hide extensions" on (Windows' default), "backup.zip" is shown as "backup".
     STRRET text = {};
     wchar_t path[MAX_PATH] = L"";
     if (FAILED(folder->GetDisplayNameOf(child, SHGDN_FORPARSING, &text)) ||
         FAILED(StrRetToBufW(&text, child, path, MAX_PATH)) || !path[0] || path[1] != L':') {
         return false;  // Not a plain local path.
+    }
+    static const wchar_t* kinds[] = {L".zip", L".7z", L".rar", L".tar", L".tgz",
+                                     L".gz", L".bz2", L".tbz", L".xz", L".zst"};
+    const wchar_t* extension = PathFindExtensionW(path);
+    bool known = false;
+    for (auto kind : kinds) {
+        known = known || _wcsicmp(extension, kind) == 0;
+    }
+    if (!known) {
+        return false;
     }
     wchar_t root[4] = {path[0], L':', L'\\', 0};
     if (GetDriveTypeW(root) != DRIVE_FIXED) {
@@ -6228,6 +6236,27 @@ void CancelRename(WindowState* state) {
 
 // ---- Undo for deletes and renames ----
 
+// The extension a row's name SHOWS: the real one when the name ends with it, nothing when Windows hides it
+// ("hide extensions for known file types"), in which case the shell puts it back when a name is set.
+// A name is never cut at its last dot: "v1.2 notes" is a name, not "v1" and ".2 notes".
+std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child);
+std::wstring ShownExtensionOf(Column* column, size_t entry) {
+    if (entry >= column->entries.size() || column->entries[entry].folder) {
+        return std::wstring();
+    }
+    std::wstring path = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+    if (path.empty()) {
+        return std::wstring();
+    }
+    const wchar_t* real = PathFindExtensionW(path.c_str());
+    size_t length = wcslen(real);
+    std::wstring const& shown = column->entries[entry].name;
+    if (length > 1 && shown.size() >= length && _wcsicmp(shown.c_str() + shown.size() - length, real) == 0) {
+        return real;
+    }
+    return std::wstring();
+}
+
 std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
     Pidl absolute(ILCombine(folder, child));
     wchar_t path[MAX_PATH] = L"";
@@ -6521,14 +6550,7 @@ void CommitRename(WindowState* state) {
     // Several items: the typed name, then a number, and each keeps its own
     // extension, as Explorer names them: "Name (1).txt", "Name (2).jpg".
     if (together.size() > 1 && !newName.empty()) {
-        auto extensionOf = [](std::wstring const& name) {
-            size_t dot = name.rfind(L'.');
-            return dot != std::wstring::npos && dot > 0 ? name.substr(dot) : std::wstring();
-        };
-        std::wstring firstExtension =
-            entryIndex < column->entries.size() && !column->entries[entryIndex].folder
-                ? extensionOf(column->entries[entryIndex].name)
-                : std::wstring();
+        std::wstring firstExtension = ShownExtensionOf(column, entryIndex);
         std::wstring base = newName;
         if (!firstExtension.empty() && base.size() > firstExtension.size() &&
             _wcsicmp(base.c_str() + base.size() - firstExtension.size(), firstExtension.c_str()) == 0) {
@@ -6550,9 +6572,7 @@ void CommitRename(WindowState* state) {
             }
             number++;
             std::wstring name = base + L" (" + std::to_wstring(number) + L")" +
-                                (column->entries[entry].folder
-                                     ? std::wstring()
-                                     : extensionOf(column->entries[entry].name));
+                                ShownExtensionOf(column, entry);
             std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
             PITEMID_CHILD renamed = nullptr;
             ModalScope modal;
@@ -6713,11 +6733,9 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
     state->rename = std::move(rename);
     g_renaming = true;
     box.Focus(mux::FocusState::Programmatic);
-    size_t dot = name.rfind(L'.');
-    bool keepExtension = !column->entries[entryIndex].folder &&
-                         dot != std::wstring::npos && dot > 0;
+    size_t extensionLength = ShownExtensionOf(column, entryIndex).size();
     box.SelectionStart(0);
-    box.SelectionLength((uint32_t)(keepExtension ? dot : name.size()));
+    box.SelectionLength((uint32_t)(name.size() - (extensionLength < name.size() ? extensionLength : 0)));
     Wh_Log(L"rename started for \"%s\"", name.c_str());
 }
 
@@ -11069,10 +11087,25 @@ void SyncSelectionFromExplorer(WindowState* state) {
             wanted.push_back(i);
         }
     } else if (!selection.empty()) {
-        if (selection.size() * column->entries.size() > 4000000) {
-            return;  // Too much to match here.
+        // By the bytes of the item id first (one pass over each list), so an inverted selection in a big
+        // folder does not make the window wait; an item whose id differs in bytes is looked for the slow way.
+        auto bytesOf = [](PCUITEMID_CHILD id) { return std::string((const char*)id, ILGetSize(id)); };
+        std::unordered_map<std::string, size_t> byBytes;
+        byBytes.reserve(column->entries.size());
+        for (size_t i = 0; i < column->entries.size(); i++) {
+            byBytes.emplace(bytesOf(column->entries[i].child.get()), i);
         }
+        size_t slowWork = 0;
         for (auto& child : selection) {
+            auto found = byBytes.find(bytesOf(child.get()));
+            if (found != byBytes.end()) {
+                wanted.push_back(found->second);
+                continue;
+            }
+            slowWork += column->entries.size();
+            if (slowWork > 4000000) {
+                return;  // Too much to match here.
+            }
             for (size_t i = 0; i < column->entries.size(); i++) {
                 if (ILIsEqual(column->entries[i].child.get(), child.get())) {
                     wanted.push_back(i);
@@ -11084,7 +11117,9 @@ void SyncSelectionFromExplorer(WindowState* state) {
     }
     auto shown = SelectedEntries(column, column->list);
     std::sort(shown.begin(), shown.end());
-    if (shown == wanted) {
+    // A group header can be selected too, and it is no entry: the same entries with a header selected is
+    // not the same selection (Invert selection, or Select none, must clear it).
+    if (shown == wanted && column->list.SelectedItems().Size() == shown.size()) {
         return;
     }
     try {
@@ -15043,6 +15078,7 @@ struct DetailsPane {
     std::vector<uint64_t> stackKeys;  // The thumbnails the stack shows now.
     int previewSeen = 0;
     std::shared_ptr<PaneData> deferred;                       // A big picture that waits for the corner button.
+    std::shared_ptr<PaneData> shownData;                       // The data of the page on show (the size button needs it).
     std::shared_ptr<std::atomic<bool>> sizeCancel;            // Stops the size of folders being worked out.
     std::vector<muxc::TextBlock> sizeBlocks;                  // Where the size, the contents and the types go.
     winrt::Windows::Media::Playback::MediaPlayer mediaPlayer{nullptr};  // The player of the video or sound on show.
@@ -15783,6 +15819,23 @@ muxc::Grid PaneStack(PaneData const& data, std::vector<uint64_t> const& before, 
     return stack;
 }
 
+void PaneStartSizeJob(WindowState* state, DetailsPane* pane, std::wstring const& key, std::shared_ptr<PaneData> const& data);
+
+// The rows where the size, the contents and the types of folders go, filled in when the count has run.
+void PaneShowSizeRows(DetailsPane* pane, muxc::StackPanel const& host) {
+    host.Children().Clear();
+    pane->sizeBlocks.clear();
+    auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
+    for (auto child : sizeList.Children()) {
+        if (auto grid = child.try_as<muxc::Grid>()) {
+            if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+                pane->sizeBlocks.push_back(block);
+            }
+        }
+    }
+    host.Children().Append(sizeList);
+}
+
 mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     muxc::StackPanel page;  // The part that stays on top: preview, name, actions.
     page.Spacing(12);
@@ -16067,16 +16120,43 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
     // The details, then the rest of them behind a toggle.
     details.Children().Append(PaneRows(data.rows));
     if (!data.sizeRoots.empty()) {
-        // What the folders hold, filled in when the background count has run.
-        auto sizeList = PaneRows({{Str(L"pane.totalsize"), L"\u2026"}, {Str(L"pane.insides"), L"\u2026"}, {Str(L"pane.types"), L"\u2026"}});
-        for (auto child : sizeList.Children()) {
-            if (auto grid = child.try_as<muxc::Grid>()) {
-                if (auto block = grid.Children().GetAt(1).try_as<muxc::TextBlock>()) {
-                    pane->sizeBlocks.push_back(block);
+        muxc::StackPanel sizeHost;
+        if (g_autoFolderSize) {
+            PaneShowSizeRows(pane, sizeHost);
+        } else {
+            // A row like the others, with a compact button where the value goes: the count is made when it is
+            // asked for (it can be heavy on a slow computer).
+            muxc::Grid entry;
+            muxc::ColumnDefinition nameColumn, valueColumn;
+            nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Auto});
+            nameColumn.MaxWidth(150);
+            valueColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
+            entry.ColumnDefinitions().Append(nameColumn);
+            entry.ColumnDefinitions().Append(valueColumn);
+            entry.ColumnSpacing(16);
+            auto label = MakeText(Str(L"pane.sizecontent"), 12, false, true);
+            label.VerticalAlignment(mux::VerticalAlignment::Center);
+            muxc::Grid::SetColumn(label, 0);
+            entry.Children().Append(label);
+            auto button = LoadXaml(std::wstring(L"<Button ") + kXamlNs +
+                                   L" Padding='12,4' MinHeight='0' FontSize='13' HorizontalAlignment='Right'/>").as<muxc::Button>();
+            button.Content(winrt::box_value(winrt::hstring{Str(L"pane.getsize")}));
+            muxc::Grid::SetColumn(button, 1);
+            entry.Children().Append(button);
+            auto weakHost = winrt::make_weak(sizeHost);
+            const PaneData* built = &data;
+            Keep(button, button.Click(winrt::auto_revoke, [weakHost, built](Inspectable const&, mux::RoutedEventArgs const&) {
+                WindowState* now = StateForThisThread(false);
+                auto host = weakHost.get();
+                if (g_unloading || !now || !now->details || !host || now->details->shownData.get() != built) {
+                    return;
                 }
-            }
+                PaneShowSizeRows(now->details, host);
+                PaneStartSizeJob(now, now->details, now->details->shownKey, now->details->shownData);
+            }));
+            sizeHost.Children().Append(entry);
         }
-        details.Children().Append(sizeList);
+        details.Children().Append(sizeHost);
     }
     if (!data.more.empty()) {
         auto more = PaneRows(data.more);
@@ -16175,51 +16255,6 @@ void PaneStopMedia(DetailsPane* pane) {
     }
 }
 
-// The wheel over the preview is sent to the window under the mouse by the pane itself: the
-// handler's window is in another process, and the wheel did not scroll it by itself.
-// A low-level hook runs on the thread that installed it, so each window thread has its own.
-static thread_local HHOOK g_wheelHook = nullptr;
-static thread_local HWND g_wheelHost = nullptr;
-
-LRESULT CALLBACK PaneWheelProc(int code, WPARAM wParam, LPARAM lParam) {
-    if (code == HC_ACTION && wParam == WM_MOUSEWHEEL && g_wheelHost && IsWindowVisible(g_wheelHost)) {
-        auto* info = (MSLLHOOKSTRUCT*)lParam;
-        HWND target = WindowFromPoint(info->pt);
-        if (target && (target == g_wheelHost || IsChild(g_wheelHost, target))) {
-            WORD keys = 0;
-            if (GetKeyState(VK_CONTROL) & 0x8000) {
-                keys |= MK_CONTROL;
-            }
-            if (GetKeyState(VK_SHIFT) & 0x8000) {
-                keys |= MK_SHIFT;
-            }
-            PostMessageW(target, WM_MOUSEWHEEL, MAKEWPARAM(keys, (WORD)HIWORD(info->mouseData)),
-                         MAKELPARAM((WORD)(short)info->pt.x, (WORD)(short)info->pt.y));
-            return 1;
-        }
-    }
-    return CallNextHookEx(nullptr, code, wParam, lParam);
-}
-
-// On while the pointer is over the preview: every mouse event of the system goes through this
-// thread's message loop while it is on.
-void PaneWheelOn(HWND host) {
-    g_wheelHost = host;
-    if (!g_wheelHook) {
-        g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, PaneWheelProc, ModHandle(), 0);
-    }
-}
-
-void PaneWheelOff(HWND host) {
-    if (g_wheelHost == host) {
-        g_wheelHost = nullptr;
-        if (g_wheelHook) {
-            UnhookWindowsHookEx(g_wheelHook);
-            g_wheelHook = nullptr;
-        }
-    }
-}
-
 void PaneClosePreview(DetailsPane* pane) {
     pane->deferred = nullptr;
     if (pane->sizeCancel) {
@@ -16227,7 +16262,6 @@ void PaneClosePreview(DetailsPane* pane) {
         pane->sizeCancel = nullptr;
     }
     PaneStopMedia(pane);
-    PaneWheelOff(pane->host);
     if (pane->handler) {
         IPreviewHandler* handler = pane->handler;
         pane->handler = nullptr;
@@ -18008,6 +18042,7 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
     }
     try {
         auto inner = pane->inner;
+        pane->shownData = data;
         auto page = PaneBuild(*data, pane);
         auto layer = LoadXaml(std::wstring(L"<Grid ") + kXamlNs + L" Background='{ThemeResource SolidBackgroundFillColorBaseBrush}'/>").as<muxc::Grid>();
         layer.Children().Append(page);
@@ -18017,7 +18052,7 @@ void PaneShow(WindowState* state, DetailsPane* pane, std::wstring const& key, st
         }
         inner.Children().Append(layer);
         PaneAnimateIn(state, pane, dx, dy, layer);
-        if (!data->sizeRoots.empty()) {
+        if (!data->sizeRoots.empty() && g_autoFolderSize) {
             PaneStartSizeJob(state, pane, key, data);
         }
         if (g_panePreview && (data->previewKind == 2 || data->previewKind == 3) && pane->preview) {
@@ -18413,7 +18448,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(pane->host, &hostRect);
         bool over = IsWindowVisible(pane->host) && PtInRect(&hostRect, cursor);
         if (over) {
-            PaneWheelOn(pane->host);
             pane->overTicks++;
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
@@ -18423,7 +18457,6 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
                 pane->previewFocused = true;
             }
         } else {
-            PaneWheelOff(pane->host);
             pane->overTicks = 0;
             if (pane->previewFocused) {
                 pane->previewFocused = false;
@@ -18547,7 +18580,6 @@ void AbandonDetails(WindowState* state) {
         PaneStopMedia(pane);  // A song or video must not go on playing with no window to stop it.
     } catch (...) {
     }
-    PaneWheelOff(pane->host);
     pane->handler = nullptr;  // Let go: the window it lived in is gone.
     pane->host = nullptr;
     PaneStopTimers(pane);
@@ -19334,6 +19366,7 @@ void LoadSettings() {
     g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
     g_staleAccent = SettingBool(L"staleAccent");
     g_autoPreview = SettingBool(L"autoPreview");
+    g_autoFolderSize = SettingBool(L"autoFolderSize");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -19372,7 +19405,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.66.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.68.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

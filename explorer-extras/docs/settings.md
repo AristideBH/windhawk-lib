@@ -59,6 +59,7 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Preview pane opens this pane | on | When Explorer’s Preview pane is turned on (Alt+P or the View menu), this pane opens in its place. |
 | Animate the pane | on | The content slides and fades in when the selection changes. |
 | Open previews by themselves | on | When off, a button on the preview opens it, and switches back to the thumbnail. |
+| Count folder sizes by itself | off | A folder’s size, contents and types are counted when it is selected, which can use some CPU on a slow computer. Off, a button counts them when you ask. |
 
 ### Previews
 

@@ -32,6 +32,27 @@ void CancelRename(WindowState* state) {
 
 // ---- Undo for deletes and renames ----
 
+// The extension a row's name SHOWS: the real one when the name ends with it, nothing when Windows hides it
+// ("hide extensions for known file types"), in which case the shell puts it back when a name is set.
+// A name is never cut at its last dot: "v1.2 notes" is a name, not "v1" and ".2 notes".
+std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child);
+std::wstring ShownExtensionOf(Column* column, size_t entry) {
+    if (entry >= column->entries.size() || column->entries[entry].folder) {
+        return std::wstring();
+    }
+    std::wstring path = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+    if (path.empty()) {
+        return std::wstring();
+    }
+    const wchar_t* real = PathFindExtensionW(path.c_str());
+    size_t length = wcslen(real);
+    std::wstring const& shown = column->entries[entry].name;
+    if (length > 1 && shown.size() >= length && _wcsicmp(shown.c_str() + shown.size() - length, real) == 0) {
+        return real;
+    }
+    return std::wstring();
+}
+
 std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
     Pidl absolute(ILCombine(folder, child));
     wchar_t path[MAX_PATH] = L"";
@@ -325,14 +346,7 @@ void CommitRename(WindowState* state) {
     // Several items: the typed name, then a number, and each keeps its own
     // extension, as Explorer names them: "Name (1).txt", "Name (2).jpg".
     if (together.size() > 1 && !newName.empty()) {
-        auto extensionOf = [](std::wstring const& name) {
-            size_t dot = name.rfind(L'.');
-            return dot != std::wstring::npos && dot > 0 ? name.substr(dot) : std::wstring();
-        };
-        std::wstring firstExtension =
-            entryIndex < column->entries.size() && !column->entries[entryIndex].folder
-                ? extensionOf(column->entries[entryIndex].name)
-                : std::wstring();
+        std::wstring firstExtension = ShownExtensionOf(column, entryIndex);
         std::wstring base = newName;
         if (!firstExtension.empty() && base.size() > firstExtension.size() &&
             _wcsicmp(base.c_str() + base.size() - firstExtension.size(), firstExtension.c_str()) == 0) {
@@ -354,9 +368,7 @@ void CommitRename(WindowState* state) {
             }
             number++;
             std::wstring name = base + L" (" + std::to_wstring(number) + L")" +
-                                (column->entries[entry].folder
-                                     ? std::wstring()
-                                     : extensionOf(column->entries[entry].name));
+                                ShownExtensionOf(column, entry);
             std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
             PITEMID_CHILD renamed = nullptr;
             ModalScope modal;
@@ -517,11 +529,9 @@ void BeginRename(WindowState* state, Column* column, size_t entryIndex) {
     state->rename = std::move(rename);
     g_renaming = true;
     box.Focus(mux::FocusState::Programmatic);
-    size_t dot = name.rfind(L'.');
-    bool keepExtension = !column->entries[entryIndex].folder &&
-                         dot != std::wstring::npos && dot > 0;
+    size_t extensionLength = ShownExtensionOf(column, entryIndex).size();
     box.SelectionStart(0);
-    box.SelectionLength((uint32_t)(keepExtension ? dot : name.size()));
+    box.SelectionLength((uint32_t)(name.size() - (extensionLength < name.size() ? extensionLength : 0)));
     Wh_Log(L"rename started for \"%s\"", name.c_str());
 }
 

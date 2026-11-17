@@ -195,24 +195,22 @@ bool IsBrowsableArchive(IShellFolder* folder, PCUITEMID_CHILD child, const std::
         !(attributes & SFGAO_FOLDER) || !(attributes & SFGAO_STREAM)) {
         return false;
     }
-    size_t dot = name.rfind(L'.');
-    if (dot == std::wstring::npos) {
-        return false;
-    }
-    static const wchar_t* kinds[] = {L".zip", L".7z", L".rar", L".tar", L".tgz",
-                                     L".gz", L".bz2", L".tbz", L".xz", L".zst"};
-    bool known = false;
-    for (auto kind : kinds) {
-        known = known || _wcsicmp(name.c_str() + dot, kind) == 0;
-    }
-    if (!known) {
-        return false;
-    }
+    // The real name decides: with "hide extensions" on (Windows' default), "backup.zip" is shown as "backup".
     STRRET text = {};
     wchar_t path[MAX_PATH] = L"";
     if (FAILED(folder->GetDisplayNameOf(child, SHGDN_FORPARSING, &text)) ||
         FAILED(StrRetToBufW(&text, child, path, MAX_PATH)) || !path[0] || path[1] != L':') {
         return false;  // Not a plain local path.
+    }
+    static const wchar_t* kinds[] = {L".zip", L".7z", L".rar", L".tar", L".tgz",
+                                     L".gz", L".bz2", L".tbz", L".xz", L".zst"};
+    const wchar_t* extension = PathFindExtensionW(path);
+    bool known = false;
+    for (auto kind : kinds) {
+        known = known || _wcsicmp(extension, kind) == 0;
+    }
+    if (!known) {
+        return false;
     }
     wchar_t root[4] = {path[0], L':', L'\\', 0};
     if (GetDriveTypeW(root) != DRIVE_FIXED) {

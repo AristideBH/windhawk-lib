@@ -46,6 +46,7 @@ void LoadSettings() {
     g_paneMuted = Wh_GetIntValue(L"ui.paneMuted", 0) != 0;
     g_staleAccent = SettingBool(L"staleAccent");
     g_autoPreview = SettingBool(L"autoPreview");
+    g_autoFolderSize = SettingBool(L"autoFolderSize");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -84,7 +85,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.66.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.68.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
