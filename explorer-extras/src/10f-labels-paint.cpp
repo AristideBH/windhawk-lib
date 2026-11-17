@@ -467,6 +467,106 @@ void LabelsFitDots(LabelsRowContext* row, int available) {
     }
 }
 
+// The filter of this thread's window, or null when it has none. A debug build also reads
+// %LOCALAPPDATA%\\ExplorerExtras\\labels-filter.txt ("colour=3" or "name=Urgent", empty or missing for none), about
+// twice a second, so the dimming can be tried before the pane that sets the filter exists.
+LabelsFilter* LabelsFilterOfThread() {
+    WindowState* state = StateForThisThread(false);
+    if (!state) {
+        return nullptr;
+    }
+#ifdef EXTRAS_VERBOSE
+    thread_local ULONGLONG polled = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - polled > 500) {
+        polled = now;
+        wchar_t local[MAX_PATH];
+        std::wstring text;
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH)) {
+            HANDLE file = CreateFileW((std::wstring(local) + L"\\ExplorerExtras\\labels-filter.txt").c_str(), GENERIC_READ,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE) {
+                char buffer[200] = "";
+                DWORD read = 0;
+                ReadFile(file, buffer, sizeof(buffer) - 1, &read, nullptr);
+                CloseHandle(file);
+                buffer[read] = 0;
+                wchar_t wide[200] = L"";
+                MultiByteToWideChar(CP_UTF8, 0, buffer, -1, wide, 200);
+                text = wide;
+            }
+        }
+        LabelsFilter filter;
+        if (text.rfind(L"colour=", 0) == 0) {
+            filter.on = true;
+            filter.colour = (uint8_t)std::clamp(_wtoi(text.c_str() + 7), 0, 7);
+        } else if (text.rfind(L"name=", 0) == 0) {
+            filter.on = true;
+            filter.name = text.substr(5);
+            while (!filter.name.empty() && (filter.name.back() == L'\r' || filter.name.back() == L'\n')) {
+                filter.name.pop_back();
+            }
+        }
+        filter.folder = LabelsThreadFolder();
+        if (filter.on != state->labelsFilter.on || filter.colour != state->labelsFilter.colour ||
+            filter.name != state->labelsFilter.name) {
+            state->labelsFilter = filter;
+        }
+    }
+#endif
+    LabelsFilter& filter = state->labelsFilter;
+    if (filter.on && !filter.folder.empty() && _wcsicmp(filter.folder.c_str(), LabelsThreadFolder().c_str()) != 0) {
+        filter.on = false;  // Another folder is shown: the filter ends.
+    }
+    return filter.on ? &filter : nullptr;
+}
+
+// True when the row is to be dimmed: a filter is on, the row's name is not ambiguous, and its tags do not match.
+bool LabelsRowDims(void* item, LabelsFilter const& filter) {
+    std::wstring folder = LabelsThreadFolder();
+    if (folder.empty()) {
+        return false;
+    }
+    auto data = LabelsFolderFor(folder);
+    if (!data->complete || !data->streamsSupported) {
+        return false;
+    }
+    std::wstring name = LabelsAccName(item);
+    if (data->ambiguous.count(name)) {
+        return false;  // Cannot be told from the other item of that name.
+    }
+    auto found = data->byName.find(name);
+    static const std::vector<LabelTag> none;
+    return !LabelsMatches(filter, found == data->byName.end() ? none : found->second);
+}
+
+// Fades what a child painted toward the colour behind it (a hover or a selection colour included), about 60 percent.
+void LabelsDimRect(HDC dc, const RECT* r, COLORREF colour) {
+    int w = r->right - r->left, h = r->bottom - r->top;
+    if (w <= 0 || h <= 0 || w > 2000 || h > 2000) {
+        return;
+    }
+    HDC memory = CreateCompatibleDC(dc);
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 1;
+    info.bmiHeader.biHeight = -1;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = memory ? CreateDIBSection(memory, &info, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (bitmap && bits) {
+        *(DWORD*)bits = ((colour & 0xFF) << 16) | (colour & 0xFF00) | ((colour >> 16) & 0xFF);  // COLORREF to 0x00RRGGBB.
+        HGDIOBJ old = SelectObject(memory, bitmap);
+        BLENDFUNCTION blend = {AC_SRC_OVER, 0, 150, 0};
+        AlphaBlend(dc, r->left, r->top, w, h, memory, 0, 0, 1, 1, blend);
+        SelectObject(memory, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (memory) DeleteDC(memory);
+}
+
 using LabelsPaintContent_t = void (WINAPI*)(void* self, HDC dc, const RECT* rect);
 LabelsPaintContent_t LabelsPaintContent_Original;
 
@@ -697,8 +797,38 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
 }
 
 void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
+    bool usable = g_labels && !g_unloading && g_labelsPaintOk && self && rect && !IsBadReadPtr(rect, sizeof(RECT));
+    // Before the child paints: is it part of a row that the filter dims, and what colour is behind it?
+    bool dim = false;
+    COLORREF behind = 0;
+    if (usable && g_labelsDim) {
+        try {
+            LabelsKind own = LabelsKindOf(self);
+            if (own == kImage || own == kProperty || own == kSmartProperty || own == kElement || own == kTilesCollection ||
+                own == kSmartCollection || own == kDetailsCollection || own == kBase) {
+                LabelsFilter* filter = LabelsFilterOfThread();
+                if (filter) {
+                    void* item = LabelsGetParent(self);
+                    for (int up = 0; item && up < 4 && LabelsKindOf(item) != kItem; up++) {
+                        item = LabelsGetParent(item);
+                    }
+                    if (item && LabelsKindOf(item) == kItem && LabelsRowDims(item, *filter)) {
+                        dim = true;
+                        behind = GetPixel(dc, std::max<LONG>(rect->left, rect->right - 3), rect->top + 2);
+                        if (behind == CLR_INVALID) {
+                            behind = LabelsDarkTheme() ? RGB(25, 25, 25) : RGB(255, 255, 255);
+                        }
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
     LabelsPaintContent_Original(self, dc, rect);
-    if (!g_labels || g_unloading || !g_labelsPaintOk || !self || !rect || IsBadReadPtr(rect, sizeof(RECT))) {
+    if (dim) {
+        LabelsDimRect(dc, rect, behind);
+    }
+    if (!usable) {
         return;
     }
     try {

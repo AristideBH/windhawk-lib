@@ -47,6 +47,27 @@ LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
     return folder;
 }
 
+// The tag a window filters its list by. A colour-only filter (no name) matches any tag of that colour, a named
+// one matches the name, whatever the case and the colour.
+struct LabelsFilter {
+    bool on = false;
+    uint8_t colour = 0;
+    std::wstring name;
+    std::wstring folder;  // The folder it was set in: showing another folder ends it.
+};
+
+bool LabelsMatches(LabelsFilter const& filter, std::vector<LabelTag> const& tags) {
+    if (!filter.on) {
+        return true;
+    }
+    for (auto const& tag : tags) {
+        if (filter.name.empty() ? tag.colour == filter.colour : _wcsicmp(tag.name.c_str(), filter.name.c_str()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 namespace {
 
 struct LabelsSlot {

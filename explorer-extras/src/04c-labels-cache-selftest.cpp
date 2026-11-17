@@ -45,6 +45,18 @@ void CacheSelfTestRun() {
     std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
     CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
 
+    // The tag filter.
+    LabelsFilter off;
+    CacheExpect(LabelsMatches(off, {}) && LabelsMatches(off, {LabelTag{1, L"x"}}), L"a filter that is off matches everything");
+    LabelsFilter byColour{true, 1, L"", L""};
+    CacheExpect(LabelsMatches(byColour, {LabelTag{1, L"anything"}}) && !LabelsMatches(byColour, {LabelTag{2, L""}}) &&
+                    !LabelsMatches(byColour, {}),
+                L"a colour filter matches the items that have a tag of that colour");
+    LabelsFilter byName{true, 0, L"Urgent", L""};
+    CacheExpect(LabelsMatches(byName, {LabelTag{5, L"urgent"}}) && !LabelsMatches(byName, {LabelTag{5, L"Other"}}) &&
+                    !LabelsMatches(byName, {}),
+                L"a name filter matches by name, whatever the case and the colour");
+
     // A real folder.
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);

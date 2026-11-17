@@ -389,6 +389,7 @@ struct WindowState {
     } band;
     muxc::Border bandBox{nullptr};
     mud::DispatcherQueueTimer fadeTimer{nullptr};
+    LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
