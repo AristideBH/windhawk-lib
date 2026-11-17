@@ -72,6 +72,12 @@ void LabelsPaneSelfTest() {
     result = LabelsApplyToSelection(files, red, false);
     PaneLabelsExpect(result.done == 3 && LabelsReadFile(files[0], &read) && read.size() == 1 && read[0].colour == 2,
                      L"removing a tag keeps the others");
+    LabelsApplyToSelection(files, red, true);
+    result = LabelsClearSelection(files);
+    PaneLabelsExpect(result.done == 3 && LabelsReadFile(files[0], &read) && read.empty() && LabelsReadFile(files[2], &read) && read.empty(),
+                     L"clearing the tags of a selection");
+    result = LabelsClearSelection(files);
+    PaneLabelsExpect(result.done == 0, L"clearing again writes nothing");
     std::vector<LabelTag> sixteen;
     for (int i = 0; i < 16; i++) {
         sixteen.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});

@@ -124,6 +124,8 @@ LabelsPlace LabelsPlaceFor(LabelsPlaceInput const& in) {
     return place;
 }
 
+void LabelsRefreshColumns();  // 10g2
+
 namespace {
 
 bool g_labelsPaintOk = false;
@@ -854,6 +856,13 @@ void LabelsRepaintWindows(std::wstring const&) {
         }
         return TRUE;
     }, 0);
+    // The Columns view of each window is not painted by the list, its rows are XAML: its thread fills the dots again.
+    std::lock_guard<std::mutex> lock(g_statesMutex);
+    for (auto& state : g_states) {
+        if (state->queue) {
+            state->queue.TryEnqueue([]() { LabelsRefreshColumns(); });
+        }
+    }
 }
 
 }  // namespace

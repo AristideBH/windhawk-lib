@@ -105,6 +105,35 @@ LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths,
     return result;
 }
 
+// Removes every tag from every item. Items without tags are not written.
+LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
+    LabelsApplyResult result;
+    for (auto const& path : paths) {
+        std::vector<LabelTag> tags;
+        std::wstring fileName = PathFindFileNameW(path.c_str());
+        if (!LabelsReadFile(path, &tags)) {
+            result.unreadable = true;
+            result.failedName = fileName;
+            continue;
+        }
+        if (tags.empty()) {
+            continue;
+        }
+        LabelsWrite written = LabelsWriteFile(path, {});
+        if (written == LabelsWrite::Ok) {
+            result.done++;
+            LabelsSetTags(path, {});
+        } else {
+            result.worst = written;
+            result.failedName = fileName;
+        }
+    }
+    if (result.done > 0) {
+        LabelsRepaintWindows(std::wstring());
+    }
+    return result;
+}
+
 namespace {
 
 std::wstring LabelsFailText(LabelsApplyResult const& result) {

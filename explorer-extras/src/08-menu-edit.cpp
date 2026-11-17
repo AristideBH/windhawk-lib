@@ -2267,6 +2267,8 @@ struct MenuBuilder {
     }
 };
 
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, muxc::ListView const& list);  // 10g2
+
 // The shell's context menu for one item, shown the way Explorer's own is: a row
 // of quick actions with icons on top, the usual commands below, and the rest
 // of the shell's entries behind "Show more options". The shell's entries are
@@ -2530,6 +2532,19 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 addRow(L"New folder from selection", L"\uE8F4", L"", true, [column, picked]() {
                     NewFolderWithSelection(StateForThisThread(false), column, picked);
                 }, muxc::MenuFlyout{nullptr}, L"newfolder");
+            }
+            if (onDisk && g_labels) {
+                // Labels: every picked item needs a path on a drive that keeps named streams.
+                std::vector<std::wstring> labelPaths;
+                for (size_t index : picked) {
+                    std::wstring path = FilePathOf(column->folder.get(), column->entries[index].child.get());
+                    if (!path.empty()) {
+                        labelPaths.push_back(path);
+                    }
+                }
+                if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
+                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, list), L"");
+                }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {
                 addShellRow(row, nullptr);

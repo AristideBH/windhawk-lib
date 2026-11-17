@@ -459,7 +459,10 @@
     "labels.fail.failed": "Could not tag %s",
     "labels.fail.full": "%s already has 16 tags",
     "labels.fail.corrupt": "%s has tags this version cannot read",
-    "labels.apply": "Add to all selected"
+    "labels.apply": "Add to all selected",
+    "labels.menu": "Tags",
+    "labels.addtag": "Add tag…",
+    "labels.clear": "Clear tags"
   },
   "fr": {
     "strings": {
@@ -500,7 +503,10 @@
       "labels.fail.failed": "Impossible d’étiqueter %s",
       "labels.fail.full": "%s a déjà 16 étiquettes",
       "labels.fail.corrupt": "%s a des étiquettes que cette version ne sait pas lire",
-      "labels.apply": "Ajouter à tous les éléments"
+      "labels.apply": "Ajouter à tous les éléments",
+      "labels.menu": "Étiquettes",
+      "labels.addtag": "Ajouter une étiquette…",
+      "labels.clear": "Effacer les étiquettes"
     }
   }
 }

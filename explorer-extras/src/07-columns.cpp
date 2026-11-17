@@ -496,18 +496,22 @@ muxc::ListViewItem MakeRowShell(double rowHeight, bool stripe = false) {
 
 void ApplyIconBits(Column* column, IconBits const& icon);
 
+void LabelsFillRowDots(Column* column, size_t entry);  // 10g2
+
 // Builds the content of one row.
 void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const& row) {
     const Entry& entry = column->entries[entryIndex];
     size_t capacity = NameCapacity(column);
     muxc::Grid grid;
-    muxc::ColumnDefinition iconColumn, nameColumn, markColumn, chevronColumn;
+    muxc::ColumnDefinition iconColumn, nameColumn, dotsColumn, markColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
     nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
     chevronColumn.Width(mux::GridLength{16, mux::GridUnitType::Pixel});
     grid.ColumnDefinitions().Append(iconColumn);
     markColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
     grid.ColumnDefinitions().Append(nameColumn);
+    dotsColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+    grid.ColumnDefinitions().Append(dotsColumn);
     grid.ColumnDefinitions().Append(markColumn);
     grid.ColumnDefinitions().Append(chevronColumn);
 
@@ -533,6 +537,19 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     grid.Children().Append(name);
     column->texts[entryIndex] = name;
 
+    if (g_labels) {
+        // The label dots, after the name: filled from the cache, and again when the folder has been read.
+        muxc::Grid dots;
+        dots.VerticalAlignment(mux::VerticalAlignment::Center);
+        dots.Margin(mux::Thickness{8, 0, 0, 0});
+        muxc::Grid::SetColumn(dots, 2);
+        grid.Children().Append(dots);
+        if (entryIndex < column->labelHosts.size()) {
+            column->labelHosts[entryIndex] = dots;
+            LabelsFillRowDots(column, entryIndex);
+        }
+    }
+
     if (entry.remote) {
         muxc::FontIcon mark;
         mark.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
@@ -555,7 +572,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         mark.Opacity(0.6);
         mark.Margin(mux::Thickness{6, 0, 4, 0});
         mark.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(mark, 2);
+        muxc::Grid::SetColumn(mark, 3);
         grid.Children().Append(mark);
     }
     if (entry.folder) {
@@ -566,7 +583,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         chevron.Opacity(0.6);
         chevron.HorizontalAlignment(mux::HorizontalAlignment::Right);
         chevron.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(chevron, 3);
+        muxc::Grid::SetColumn(chevron, 4);
         grid.Children().Append(chevron);
         column->chevrons[entryIndex] = chevron;
     }
@@ -931,6 +948,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->pendingIcons.clear();
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
+    column->labelHosts.clear();
+    column->labelHosts.resize(column->entries.size(), muxc::Grid{nullptr});
+    column->labelPathKnown = false;
     column->hintEntry = -1;
     column->focusHeader = -1;
     column->tipBuilt.assign(column->entries.size(), 0);
@@ -1400,6 +1420,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
     follow(column->texts, muxc::TextBlock{nullptr});
     follow(column->iconHosts, muxc::Grid{nullptr});
     follow(column->chevrons, muxc::FontIcon{nullptr});
+    follow(column->labelHosts, muxc::Grid{nullptr});
     follow(column->built, (char)0);
     follow(column->iconAsked, (char)0);
     follow(column->tipBuilt, (char)0);

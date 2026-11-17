@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.72.4
+// @version         0.73.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -710,6 +710,9 @@ constexpr StringInfo kStrings[] = {
     {L"labels.fail.full", L"%s already has 16 tags"},
     {L"labels.fail.corrupt", L"%s has tags this version cannot read"},
     {L"labels.apply", L"Add to all selected"},
+    {L"labels.menu", L"Tags"},
+    {L"labels.addtag", L"Add tag\u2026"},
+    {L"labels.clear", L"Clear tags"},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -751,6 +754,9 @@ constexpr StringInfo kStringsFr[] = {
     {L"labels.fail.full", L"%s a d\u00E9j\u00E0 16 \u00E9tiquettes"},
     {L"labels.fail.corrupt", L"%s a des \u00E9tiquettes que cette version ne sait pas lire"},
     {L"labels.apply", L"Ajouter \u00E0 tous les \u00E9l\u00E9ments"},
+    {L"labels.menu", L"\u00C9tiquettes"},
+    {L"labels.addtag", L"Ajouter une \u00E9tiquette\u2026"},
+    {L"labels.clear", L"Effacer les \u00E9tiquettes"},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -3140,6 +3146,9 @@ struct Column {
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
+    std::vector<muxc::Grid> labelHosts;    // Where the label dots of each entry go (labels).
+    std::wstring labelPath;                // The folder's path, for the label cache.
+    bool labelPathKnown = false;
     int hintEntry = -1;  // The entry whose chevron wears the badge.
     muxc::Border hintBadge{nullptr};  // The small rounded background behind that chevron.
     muxc::Border goneBadge{nullptr};  // One that has faded out and is taken off at the next change.
@@ -4510,18 +4519,22 @@ muxc::ListViewItem MakeRowShell(double rowHeight, bool stripe = false) {
 
 void ApplyIconBits(Column* column, IconBits const& icon);
 
+void LabelsFillRowDots(Column* column, size_t entry);  // 10g2
+
 // Builds the content of one row.
 void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const& row) {
     const Entry& entry = column->entries[entryIndex];
     size_t capacity = NameCapacity(column);
     muxc::Grid grid;
-    muxc::ColumnDefinition iconColumn, nameColumn, markColumn, chevronColumn;
+    muxc::ColumnDefinition iconColumn, nameColumn, dotsColumn, markColumn, chevronColumn;
     iconColumn.Width(mux::GridLength{24, mux::GridUnitType::Pixel});
     nameColumn.Width(mux::GridLength{1, mux::GridUnitType::Star});
     chevronColumn.Width(mux::GridLength{16, mux::GridUnitType::Pixel});
     grid.ColumnDefinitions().Append(iconColumn);
     markColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
     grid.ColumnDefinitions().Append(nameColumn);
+    dotsColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+    grid.ColumnDefinitions().Append(dotsColumn);
     grid.ColumnDefinitions().Append(markColumn);
     grid.ColumnDefinitions().Append(chevronColumn);
 
@@ -4547,6 +4560,19 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     grid.Children().Append(name);
     column->texts[entryIndex] = name;
 
+    if (g_labels) {
+        // The label dots, after the name: filled from the cache, and again when the folder has been read.
+        muxc::Grid dots;
+        dots.VerticalAlignment(mux::VerticalAlignment::Center);
+        dots.Margin(mux::Thickness{8, 0, 0, 0});
+        muxc::Grid::SetColumn(dots, 2);
+        grid.Children().Append(dots);
+        if (entryIndex < column->labelHosts.size()) {
+            column->labelHosts[entryIndex] = dots;
+            LabelsFillRowDots(column, entryIndex);
+        }
+    }
+
     if (entry.remote) {
         muxc::FontIcon mark;
         mark.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
@@ -4569,7 +4595,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         mark.Opacity(0.6);
         mark.Margin(mux::Thickness{6, 0, 4, 0});
         mark.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(mark, 2);
+        muxc::Grid::SetColumn(mark, 3);
         grid.Children().Append(mark);
     }
     if (entry.folder) {
@@ -4580,7 +4606,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
         chevron.Opacity(0.6);
         chevron.HorizontalAlignment(mux::HorizontalAlignment::Right);
         chevron.VerticalAlignment(mux::VerticalAlignment::Center);
-        muxc::Grid::SetColumn(chevron, 3);
+        muxc::Grid::SetColumn(chevron, 4);
         grid.Children().Append(chevron);
         column->chevrons[entryIndex] = chevron;
     }
@@ -4945,6 +4971,9 @@ void FillColumn(WindowState* state, Column* column, FolderResult&& data) {
     column->pendingIcons.clear();
     column->chevrons.clear();
     column->chevrons.resize(column->entries.size(), muxc::FontIcon{nullptr});
+    column->labelHosts.clear();
+    column->labelHosts.resize(column->entries.size(), muxc::Grid{nullptr});
+    column->labelPathKnown = false;
     column->hintEntry = -1;
     column->focusHeader = -1;
     column->tipBuilt.assign(column->entries.size(), 0);
@@ -5414,6 +5443,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
     follow(column->texts, muxc::TextBlock{nullptr});
     follow(column->iconHosts, muxc::Grid{nullptr});
     follow(column->chevrons, muxc::FontIcon{nullptr});
+    follow(column->labelHosts, muxc::Grid{nullptr});
     follow(column->built, (char)0);
     follow(column->iconAsked, (char)0);
     follow(column->tipBuilt, (char)0);
@@ -9329,6 +9359,8 @@ struct MenuBuilder {
     }
 };
 
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& paths, muxc::ListView const& list);  // 10g2
+
 // The shell's context menu for one item, shown the way Explorer's own is: a row
 // of quick actions with icons on top, the usual commands below, and the rest
 // of the shell's entries behind "Show more options". The shell's entries are
@@ -9592,6 +9624,19 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 addRow(L"New folder from selection", L"\uE8F4", L"", true, [column, picked]() {
                     NewFolderWithSelection(StateForThisThread(false), column, picked);
                 }, muxc::MenuFlyout{nullptr}, L"newfolder");
+            }
+            if (onDisk && g_labels) {
+                // Labels: every picked item needs a path on a drive that keeps named streams.
+                std::vector<std::wstring> labelPaths;
+                for (size_t index : picked) {
+                    std::wstring path = FilePathOf(column->folder.get(), column->entries[index].child.get());
+                    if (!path.empty()) {
+                        labelPaths.push_back(path);
+                    }
+                }
+                if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
+                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, list), L"");
+                }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {
                 addShellRow(row, nullptr);
@@ -20010,6 +20055,8 @@ LabelsPlace LabelsPlaceFor(LabelsPlaceInput const& in) {
     return place;
 }
 
+void LabelsRefreshColumns();  // 10g2
+
 namespace {
 
 bool g_labelsPaintOk = false;
@@ -20740,6 +20787,13 @@ void LabelsRepaintWindows(std::wstring const&) {
         }
         return TRUE;
     }, 0);
+    // The Columns view of each window is not painted by the list, its rows are XAML: its thread fills the dots again.
+    std::lock_guard<std::mutex> lock(g_statesMutex);
+    for (auto& state : g_states) {
+        if (state->queue) {
+            state->queue.TryEnqueue([]() { LabelsRefreshColumns(); });
+        }
+    }
 }
 
 }  // namespace
@@ -20987,6 +21041,35 @@ LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths,
         if (written == LabelsWrite::Ok) {
             result.done++;
             LabelsSetTags(path, tags);
+        } else {
+            result.worst = written;
+            result.failedName = fileName;
+        }
+    }
+    if (result.done > 0) {
+        LabelsRepaintWindows(std::wstring());
+    }
+    return result;
+}
+
+// Removes every tag from every item. Items without tags are not written.
+LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
+    LabelsApplyResult result;
+    for (auto const& path : paths) {
+        std::vector<LabelTag> tags;
+        std::wstring fileName = PathFindFileNameW(path.c_str());
+        if (!LabelsReadFile(path, &tags)) {
+            result.unreadable = true;
+            result.failedName = fileName;
+            continue;
+        }
+        if (tags.empty()) {
+            continue;
+        }
+        LabelsWrite written = LabelsWriteFile(path, {});
+        if (written == LabelsWrite::Ok) {
+            result.done++;
+            LabelsSetTags(path, {});
         } else {
             result.worst = written;
             result.failedName = fileName;
@@ -21348,6 +21431,12 @@ void LabelsPaneSelfTest() {
     result = LabelsApplyToSelection(files, red, false);
     PaneLabelsExpect(result.done == 3 && LabelsReadFile(files[0], &read) && read.size() == 1 && read[0].colour == 2,
                      L"removing a tag keeps the others");
+    LabelsApplyToSelection(files, red, true);
+    result = LabelsClearSelection(files);
+    PaneLabelsExpect(result.done == 3 && LabelsReadFile(files[0], &read) && read.empty() && LabelsReadFile(files[2], &read) && read.empty(),
+                     L"clearing the tags of a selection");
+    result = LabelsClearSelection(files);
+    PaneLabelsExpect(result.done == 0, L"clearing again writes nothing");
     std::vector<LabelTag> sixteen;
     for (int i = 0; i < 16; i++) {
         sixteen.push_back(LabelTag{(uint8_t)(i % 8), std::to_wstring(i)});
@@ -21370,6 +21459,190 @@ void LabelsPaneSelfTest() {
 }
 
 #endif  // EXTRAS_VERBOSE
+// Labels in the Columns view: the dots at the end of a row, and the "Tags" submenu of the Columns context menu.
+// The tags come from the same folder cache as Explorer's own list (04b), looked up by the row's displayed name.
+
+namespace {
+
+// The dot of a Columns row as XAML: the colour, and a thin ring in the page colour, so that stacked dots are cut free
+// of each other.
+mux::FrameworkElement LabelsRowDot(int colour, int side, int left, bool dark) {
+    COLORREF fill = LabelsDotRgb(colour, dark);
+    wchar_t markup[500];
+    swprintf_s(markup,
+               L"<Ellipse xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='%d' Height='%d' "
+               L"Fill='#FF%02X%02X%02X' Stroke='%s' StrokeThickness='1.5' HorizontalAlignment='Left' "
+               L"VerticalAlignment='Center' Margin='%d,0,0,0'/>",
+               side, side, GetRValue(fill), GetGValue(fill), GetBValue(fill), dark ? L"#FF191919" : L"#FFFFFFFF", left);
+    return LoadXaml(markup).as<mux::FrameworkElement>();
+}
+
+std::wstring LabelsColumnPath(Column* column) {
+    if (!column->labelPathKnown) {
+        column->labelPath = column->folder ? PathOf(column->folder.get()) : std::wstring();
+        column->labelPathKnown = true;
+    }
+    return column->labelPath;
+}
+
+}  // namespace
+
+// Fills the dots of one row from the cache. Nothing is shown until the folder has been read.
+void LabelsFillRowDots(Column* column, size_t entry) {
+    if (!g_labels || entry >= column->labelHosts.size() || entry >= column->entries.size()) {
+        return;
+    }
+    auto host = column->labelHosts[entry];
+    if (!host) {
+        return;
+    }
+    host.Children().Clear();
+    host.Width(std::numeric_limits<double>::quiet_NaN());
+    std::wstring path = LabelsColumnPath(column);
+    if (path.empty()) {
+        return;
+    }
+    auto data = LabelsFolderFor(path);
+    if (!data->complete || !data->streamsSupported) {
+        return;
+    }
+    std::wstring const& name = column->entries[entry].name;
+    if (data->ambiguous.count(name)) {
+        return;
+    }
+    auto found = data->byName.find(name);
+    if (found == data->byName.end()) {
+        return;
+    }
+    bool more = false;
+    std::vector<int> colours = LabelsDotColours(found->second, &more);
+    if (colours.empty()) {
+        return;
+    }
+    const int side = 9;
+    int step = LabelsDotStep(side);
+    bool dark = LabelsDarkTheme();
+    int count = (int)colours.size();
+    for (int i = count - 1; i >= 0; i--) {
+        host.Children().Append(LabelsRowDot(colours[i], side, i * step, dark));
+    }
+    int width = side + (count - 1) * step;
+    if (more) {
+        auto plus = MakeText(L"+", 11, false, true);
+        plus.HorizontalAlignment(mux::HorizontalAlignment::Left);
+        plus.VerticalAlignment(mux::VerticalAlignment::Center);
+        plus.Margin(mux::Thickness{(double)width + 4, 0, 0, 0});
+        host.Children().Append(plus);
+        width += 4 + 8;
+    }
+    host.Width(width);
+}
+
+// Every built row of this window's columns gets its dots again (a folder was read, or tags changed).
+void LabelsRefreshColumns() {
+    if (g_unloading) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || !g_labels) {
+        return;
+    }
+    try {
+        int rows = 0, dots = 0;
+        for (auto& column : state->columns) {
+            if (!column->list) {
+                continue;
+            }
+            for (size_t i = 0; i < column->entries.size() && i < column->built.size(); i++) {
+                if (column->built[i]) {
+                    LabelsFillRowDots(column.get(), i);
+                    rows++;
+                    dots += (i < column->labelHosts.size() && column->labelHosts[i] && column->labelHosts[i].Children().Size() > 0) ? 1 : 0;
+                }
+            }
+        }
+        LogVerbose(L"LABELS COLUMNS refreshed rows=%d withDots=%d", rows, dots);
+    } catch (...) {
+    }
+}
+
+namespace {
+
+[[clang::no_destroy]] thread_local muxc::Flyout t_labelsMenuFlyout{nullptr};  // The "Add tag" flyout opened from the menu.
+
+}  // namespace
+
+// The "Tags" submenu of the Columns context menu: the colours as checkable items, "Add tag...", "Clear tags".
+muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, muxc::ListView const& list) {
+    muxc::MenuFlyout menu;
+    auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
+    std::vector<std::vector<LabelTag>> perItem;
+    bool unreadable = false;
+    for (auto const& path : *paths) {
+        std::vector<LabelTag> tags;
+        if (!LabelsReadFile(path, &tags)) {
+            unreadable = true;
+            tags.clear();
+        }
+        perItem.push_back(std::move(tags));
+    }
+    bool dark = LabelsDarkTheme();
+    for (int colour = 0; colour < 8; colour++) {
+        LabelTag tag{(uint8_t)colour, L""};
+        bool everywhere = !perItem.empty();
+        for (auto const& item : perItem) {
+            bool has = false;
+            for (auto const& existing : item) {
+                has = has || (existing.colour == colour && existing.name.empty());
+            }
+            everywhere = everywhere && has;
+        }
+        muxc::ToggleMenuFlyoutItem item;
+        std::wstring name = LabelsColourName(colour);
+        item.Text(name.empty() ? std::wstring(L"…") : name);
+        item.IsChecked(everywhere);
+        item.IsEnabled(!unreadable);
+        muxc::FontIcon dot;
+        dot.FontFamily(mux::Media::FontFamily(L"Segoe UI"));
+        dot.Glyph(L"●");
+        COLORREF fill = LabelsDotRgb(colour, dark);
+        dot.Foreground(mux::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(255, GetRValue(fill), GetGValue(fill), GetBValue(fill))));
+        item.Icon(dot);
+        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere](Inspectable const&, mux::RoutedEventArgs const&) {
+            if (!g_unloading) {
+                LabelsApplyToSelection(*paths, tag, !everywhere);
+            }
+        }));
+        menu.Items().Append(item);
+    }
+    menu.Items().Append(muxc::MenuFlyoutSeparator());
+    muxc::MenuFlyoutItem add;
+    add.Text(Str(L"labels.addtag"));
+    add.IsEnabled(!unreadable);
+    Keep(add, add.Click(winrt::auto_revoke, [paths, list](Inspectable const&, mux::RoutedEventArgs const&) {
+        if (g_unloading) {
+            return;
+        }
+        winrt::weak_ref<muxc::StackPanel> none;
+        t_labelsMenuFlyout = LabelsMakeFlyout(none, paths);
+        Keep(t_labelsMenuFlyout, t_labelsMenuFlyout.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
+            t_labelsMenuFlyout = nullptr;
+        }));
+        t_labelsMenuFlyout.ShowAt(list);
+    }));
+    menu.Items().Append(add);
+    muxc::MenuFlyoutItem clear;
+    clear.Text(Str(L"labels.clear"));
+    clear.IsEnabled(!unreadable);
+    Keep(clear, clear.Click(winrt::auto_revoke, [paths](Inspectable const&, mux::RoutedEventArgs const&) {
+        if (!g_unloading) {
+            LabelsClearSelection(*paths);
+        }
+    }));
+    menu.Items().Append(clear);
+    return menu;
+}
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -22144,7 +22417,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.72.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.73.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

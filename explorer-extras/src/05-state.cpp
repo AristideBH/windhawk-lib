@@ -80,6 +80,9 @@ struct Column {
     std::vector<muxc::TextBlock> texts;  // Name text per entry.
     std::vector<muxc::Grid> iconHosts;   // Icon cell per entry.
     std::vector<muxc::FontIcon> chevrons;  // Chevron per entry, folders only.
+    std::vector<muxc::Grid> labelHosts;    // Where the label dots of each entry go (labels).
+    std::wstring labelPath;                // The folder's path, for the label cache.
+    bool labelPathKnown = false;
     int hintEntry = -1;  // The entry whose chevron wears the badge.
     muxc::Border hintBadge{nullptr};  // The small rounded background behind that chevron.
     muxc::Border goneBadge{nullptr};  // One that has faded out and is taken off at the next change.
