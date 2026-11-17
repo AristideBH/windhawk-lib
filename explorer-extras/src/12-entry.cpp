@@ -86,12 +86,14 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.69.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.69.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
 #ifdef EXTRAS_VERBOSE
     LabelsSelfTest();
+    LabelsDotsSelfTest();
+    LabelsCacheSelfTest();
 #endif
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
@@ -136,9 +138,12 @@ void Wh_ModSettingsChanged() {
 void Wh_ModBeforeUninit() {
     g_unloading = true;
     // Every thread of the mod ends first, so no result is queued after the windows are cleaned.
+    LabelsCancelAll();
     JoinModThreads();
     StopWorker();
     CloseEverything();
+    LabelsReleaseDots();
+    LabelsClearCache();
 }
 
 void Wh_ModUninit() {

@@ -2,13 +2,13 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.69.0
+// @version         0.69.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys -lmsimg32
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -227,6 +227,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <windhawk_utils.h>
@@ -2622,6 +2623,358 @@ void RememberFolderColumns(std::wstring const& path, int columns) {
 int RememberedColumns(std::wstring const& path) {
     return GetFolderMemory(path).columns;
 }
+// Labels: the tags of the items of a folder, read once by a thread of the mod and kept in a cache that the
+// paint hook only reads (it never touches the disk). The key of an item is its displayed name, the same text
+// that the file list gives back as the accessible name of a row. Two items that show the same name (hidden
+// extensions) cannot be told apart in the list, so a name like that is "ambiguous" and gets no dot.
+
+struct LabelsFolder {
+    std::unordered_map<std::wstring, std::vector<LabelTag>> byName;
+    std::unordered_set<std::wstring> ambiguous;  // Names shown by more than one item, at least one of them tagged.
+    bool streamsSupported = true;                // The volume can carry the stream.
+    bool complete = false;                       // The folder was read to its end.
+};
+
+// What one item of a folder gave: its displayed name, and its tags (empty when it has none).
+struct LabelsItem {
+    std::wstring name;
+    std::vector<LabelTag> tags;
+};
+
+// Builds the cache entry of a folder from what its items gave. Pure.
+LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
+    LabelsFolder folder;
+    std::unordered_map<std::wstring, int> seen;
+    std::unordered_set<std::wstring> tagged;
+    for (auto const& item : items) {
+        seen[item.name]++;
+        if (!item.tags.empty()) {
+            tagged.insert(item.name);
+            folder.byName[item.name] = item.tags;
+        }
+    }
+    for (auto const& name : tagged) {
+        if (seen[name] > 1) {
+            folder.ambiguous.insert(name);
+            folder.byName.erase(name);
+        }
+    }
+    folder.complete = true;
+    return folder;
+}
+
+namespace {
+
+struct LabelsSlot {
+    std::shared_ptr<const LabelsFolder> data = std::make_shared<LabelsFolder>();
+    std::shared_ptr<std::atomic<bool>> cancel;  // Of the read that is running, null when none is.
+    ULONGLONG used = 0;
+};
+
+std::mutex g_labelsCacheMutex;
+[[clang::no_destroy]] std::map<std::wstring, LabelsSlot> g_labelsCache;
+std::atomic<int> g_labelsReadsRunning{0};
+void (*g_labelsLoaded)(std::wstring const& folderPath) = nullptr;
+constexpr size_t kLabelsCachedFolders = 16;
+
+// Reads one folder on a thread of the mod. Gives up as soon as `cancel` is set or the mod unloads.
+void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
+    g_labelsReadsRunning++;
+    HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    std::vector<LabelsItem> items;
+    bool finished = false;
+    bool supported = LabelsVolumeSupportsStreams(path);
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    IShellFolder* folder = nullptr;
+    if (!supported) {
+        finished = true;
+    } else if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl &&
+               SUCCEEDED(SHBindToObject(nullptr, pidl, nullptr, IID_PPV_ARGS(&folder))) && folder) {
+        IEnumIDList* list = nullptr;
+        if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &list) == S_OK && list) {
+            finished = true;
+            PITEMID_CHILD child = nullptr;
+            int count = 0;
+            while (list->Next(1, &child, nullptr) == S_OK && child) {
+                if (*cancel || g_unloading) {
+                    CoTaskMemFree(child);
+                    finished = false;
+                    break;
+                }
+                LabelsItem item;
+                item.name = DisplayName(folder, child);
+                std::wstring file = ParsingName(folder, child);
+                std::vector<LabelTag> tags;
+                if (!file.empty() && LabelsReadFile(file, &tags)) {
+                    item.tags = std::move(tags);
+                }
+                items.push_back(std::move(item));
+                CoTaskMemFree(child);
+                child = nullptr;
+                if (++count >= kReadCap) {
+                    break;
+                }
+            }
+            list->Release();
+        }
+        folder->Release();
+    }
+    if (pidl) {
+        ILFree(pidl);
+    }
+    if (SUCCEEDED(init)) {
+        CoUninitialize();
+    }
+    bool publish = false;
+    if (finished && !*cancel) {
+        auto data = std::make_shared<LabelsFolder>(supported ? LabelsCollect(items) : LabelsFolder());
+        data->streamsSupported = supported;
+        data->complete = true;
+        std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+        auto found = g_labelsCache.find(path);
+        if (found != g_labelsCache.end() && found->second.cancel == cancel) {
+            found->second.data = data;
+            found->second.cancel.reset();
+            publish = true;
+        }
+    } else {
+        std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+        auto found = g_labelsCache.find(path);
+        if (found != g_labelsCache.end() && found->second.cancel == cancel) {
+            found->second.cancel.reset();  // Cancelled: the old data stays, and a new read can start.
+        }
+    }
+    g_labelsReadsRunning--;
+    if (publish && g_labelsLoaded && !g_unloading) {
+        g_labelsLoaded(path);
+    }
+}
+
+// Starts a read for the slot (the cache lock is held by the caller).
+void LabelsStartRead(std::wstring const& path, LabelsSlot& slot) {
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    slot.cancel = cancel;
+    if (!StartModThread([path, cancel]() { LabelsRead(path, cancel); })) {
+        slot.cancel.reset();
+    }
+}
+
+}  // namespace
+
+// Tells the cache what to call, on a thread of the mod, when a folder has been read.
+void LabelsSetLoadedCallback(void (*callback)(std::wstring const& folderPath)) {
+    g_labelsLoaded = callback;
+}
+
+// The tags of a folder's items. Never blocks: the first call returns an empty, not complete entry and starts
+// the read; the entry is replaced when the read ends.
+std::shared_ptr<const LabelsFolder> LabelsFolderFor(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found == g_labelsCache.end()) {
+        if (g_labelsCache.size() >= kLabelsCachedFolders) {
+            auto oldest = g_labelsCache.end();
+            for (auto at = g_labelsCache.begin(); at != g_labelsCache.end(); ++at) {
+                if (!at->second.cancel && (oldest == g_labelsCache.end() || at->second.used < oldest->second.used)) {
+                    oldest = at;
+                }
+            }
+            if (oldest != g_labelsCache.end()) {
+                g_labelsCache.erase(oldest);
+            }
+        }
+        found = g_labelsCache.emplace(folderPath, LabelsSlot()).first;
+    }
+    LabelsSlot& slot = found->second;
+    slot.used = GetTickCount64();
+    if (!slot.data->complete && !slot.cancel) {
+        LabelsStartRead(folderPath, slot);
+    }
+    return slot.data;
+}
+
+// Read again (navigation, the window got focus). The old data stays in use until the new read ends.
+void LabelsInvalidate(std::wstring const& folderPath) {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found == g_labelsCache.end()) {
+        return;
+    }
+    if (found->second.cancel) {
+        *found->second.cancel = true;
+    }
+    LabelsStartRead(folderPath, found->second);
+}
+
+// The cache entry of the item's folder gets the item's new tags at once (after a successful write).
+void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
+    std::wstring folderPath = itemPath;
+    PathRemoveFileSpecW(folderPath.data());
+    folderPath.resize(wcslen(folderPath.c_str()));
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    std::wstring name;
+    if (SUCCEEDED(SHParseDisplayName(itemPath.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        IShellFolder* parent = nullptr;
+        PCUITEMID_CHILD child = nullptr;
+        if (SUCCEEDED(SHBindToParent(pidl, IID_PPV_ARGS(&parent), &child)) && parent) {
+            name = DisplayName(parent, child);
+            parent->Release();
+        }
+        ILFree(pidl);
+    }
+    if (name.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    auto found = g_labelsCache.find(folderPath);
+    if (found == g_labelsCache.end()) {
+        return;
+    }
+    auto copy = std::make_shared<LabelsFolder>(*found->second.data);
+    if (tags.empty()) {
+        copy->byName.erase(name);
+    } else if (!copy->ambiguous.count(name)) {
+        copy->byName[name] = tags;
+    }
+    found->second.data = copy;
+}
+
+// Every read that is running gives up. Called first when the mod unloads, before its threads are joined.
+void LabelsCancelAll() {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    for (auto& entry : g_labelsCache) {
+        if (entry.second.cancel) {
+            *entry.second.cancel = true;
+        }
+    }
+}
+
+int LabelsReadsRunning() {
+    return g_labelsReadsRunning;
+}
+
+// Empties the cache. Called when the mod unloads, after its threads are joined.
+void LabelsClearCache() {
+    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
+    g_labelsCache.clear();
+}
+// Labels: the self-test of the folder cache (debug build only). It runs on a thread of the mod, since it
+// waits for reads. One log line: "LABELS CACHE SELFTEST pass" or "LABELS CACHE SELFTEST FAIL <what>".
+#ifdef EXTRAS_VERBOSE
+
+namespace {
+
+std::wstring g_cacheFailure;
+
+void CacheExpect(bool ok, const wchar_t* what) {
+    if (!ok && g_cacheFailure.empty()) {
+        g_cacheFailure = what;
+    }
+}
+
+bool CacheTouch(std::wstring const& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    CloseHandle(file);
+    return true;
+}
+
+void CacheWaitComplete(std::wstring const& dir, std::shared_ptr<const LabelsFolder>* data) {
+    for (int i = 0; i < 100; i++) {
+        *data = LabelsFolderFor(dir);
+        if ((*data)->complete) {
+            return;
+        }
+        Sleep(20);
+    }
+}
+
+void CacheSelfTestRun() {
+    // The pure part: names shown by two items, one of them tagged.
+    std::vector<LabelsItem> items = {{L"report", {LabelTag{1, L"x"}}}, {L"report", {}}, {L"solo", {LabelTag{2, L""}}}, {L"plain", {}}};
+    LabelsFolder collected = LabelsCollect(items);
+    CacheExpect(collected.complete, L"a collected folder is complete");
+    CacheExpect(collected.ambiguous.count(L"report") == 1, L"two items named report are ambiguous");
+    CacheExpect(!collected.byName.count(L"report"), L"an ambiguous name gets no tags");
+    CacheExpect(collected.byName.count(L"solo") == 1 && !collected.byName.count(L"plain"), L"a unique tagged name keeps its tags");
+    std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
+    CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
+
+    // A real folder.
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    std::wstring dir = std::wstring(temp) + L"ee-labels-cache-" + std::to_wstring(GetCurrentProcessId());
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring tagged = dir + L"\\b.txt";
+    std::wstring folder = dir + L"\\sub";
+    CacheTouch(dir + L"\\a.txt");
+    CacheTouch(tagged);
+    CreateDirectoryW(folder.c_str(), nullptr);
+    LabelsExpect(LabelsWriteFile(tagged, {LabelTag{1, L"Urgent"}}) == LabelsWrite::Ok, L"tag the file");
+    LabelsExpect(LabelsWriteFile(folder, {LabelTag{5, L""}}) == LabelsWrite::Ok, L"tag the folder");
+
+    auto first = LabelsFolderFor(dir);
+    CacheExpect(!first->complete, L"the first call returns an entry that is not complete yet");
+    std::shared_ptr<const LabelsFolder> data;
+    CacheWaitComplete(dir, &data);
+    CacheExpect(data && data->complete, L"the read completes within 2 seconds");
+    if (data) {
+        bool file = data->byName.count(L"b.txt") || data->byName.count(L"b");
+        CacheExpect(file && data->byName.count(L"sub") == 1, L"both tagged items are in the cache");
+        CacheExpect(!data->byName.count(L"a.txt") && !data->byName.count(L"a"), L"the untagged item is not");
+    }
+    LabelsSetTags(tagged, {});
+    data = LabelsFolderFor(dir);
+    CacheExpect(!data->byName.count(L"b.txt") && !data->byName.count(L"b"), L"clearing an item's tags updates the cache at once");
+
+    // A read that is cancelled in the middle keeps the old data and ends quickly.
+    std::wstring big = dir + L"\\big";
+    CreateDirectoryW(big.c_str(), nullptr);
+    for (int i = 0; i < 1500; i++) {
+        CacheTouch(big + L"\\f" + std::to_wstring(i) + L".txt");
+    }
+    auto before = LabelsFolderFor(big);
+    CacheExpect(!before->complete, L"the big folder starts not complete");
+    Sleep(5);
+    LabelsCancelAll();
+    ULONGLONG waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+    CacheExpect(LabelsReadsRunning() == 0 && GetTickCount64() - waited < 200, L"a cancelled read ends in under 200 ms");
+    LabelsFolderFor(big);  // Starts a new read; it is cancelled again at once.
+    LabelsCancelAll();
+    waited = GetTickCount64();
+    while (LabelsReadsRunning() > 0 && GetTickCount64() - waited < 1000) {
+        Sleep(5);
+    }
+
+    for (int i = 0; i < 1500; i++) {
+        DeleteFileW((big + L"\\f" + std::to_wstring(i) + L".txt").c_str());
+    }
+    RemoveDirectoryW(big.c_str());
+    DeleteFileW((tagged + kLabelsStream).c_str());
+    DeleteFileW(tagged.c_str());
+    DeleteFileW((dir + L"\\a.txt").c_str());
+    RemoveDirectoryW(folder.c_str());
+    RemoveDirectoryW(dir.c_str());
+
+    if (g_cacheFailure.empty()) {
+        Wh_Log(L"LABELS CACHE SELFTEST pass");
+    } else {
+        Wh_Log(L"LABELS CACHE SELFTEST FAIL %s", g_cacheFailure.c_str());
+    }
+}
+
+}  // namespace
+
+void LabelsCacheSelfTest() {
+    StartModThread([]() { CacheSelfTestRun(); });
+}
+
+#endif  // EXTRAS_VERBOSE
 
 // ---------------------------------------------------------------------------
 // The panel and the menu entry. One WindowState per Explorer window, used only
@@ -19052,6 +19405,280 @@ void AbandonDetails(WindowState* state) {
     // The pane itself is not deleted: it still holds what the XAML objects held.
 }
 
+// Labels: the palette, the theme and the dot images. A dot is rendered once per colour, theme and size into a
+// premultiplied 32-bit image (4x4 supersampling, so its edge is soft), kept in a cache, and blended onto a
+// device context with AlphaBlend. There is no outline: the rim of a dot is its fill, a little lighter in the
+// dark theme and a little darker in the light one. GDI+ is not used on purpose (its start-up and shutdown are
+// the kind of global teardown that hangs Explorer at sign-out).
+
+namespace {
+
+struct LabelsPaletteEntry {
+    COLORREF light;
+    COLORREF dark;
+};
+
+// 0 is the neutral gray, then red, orange, yellow, green, teal, blue, purple. From the Fluent colours; the dark
+// variants are the lighter tints that keep their contrast on a dark list.
+constexpr LabelsPaletteEntry kLabelsPalette[8] = {
+    {RGB(138, 136, 134), RGB(161, 159, 157)},  // gray
+    {RGB(209, 52, 56), RGB(241, 112, 123)},    // red
+    {RGB(247, 99, 12), RGB(255, 140, 58)},     // orange
+    {RGB(255, 185, 0), RGB(252, 225, 0)},      // yellow
+    {RGB(16, 124, 16), RGB(108, 203, 95)},     // green
+    {RGB(0, 153, 188), RGB(76, 194, 207)},     // teal
+    {RGB(0, 120, 212), RGB(96, 205, 255)},     // blue
+    {RGB(135, 100, 184), RGB(180, 160, 255)},  // purple
+};
+
+std::atomic<ULONGLONG> g_labelsThemeChecked{0};
+std::atomic<bool> g_labelsDark{false};
+std::mutex g_labelDotMutex;
+[[clang::no_destroy]] std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
+
+BITMAPINFO LabelsDotInfo(int side) {
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = side;
+    info.bmiHeader.biHeight = -side;  // Top down.
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    return info;
+}
+
+}  // namespace
+
+COLORREF LabelsColourRgb(int colour, bool dark) {
+    const LabelsPaletteEntry& entry = kLabelsPalette[std::clamp(colour, 0, 7)];
+    return dark ? entry.dark : entry.light;
+}
+
+// The apps' theme, read again at most once a second. Safe from any thread.
+bool LabelsDarkTheme() {
+    ULONGLONG now = GetTickCount64();
+    ULONGLONG checked = g_labelsThemeChecked;
+    if (checked == 0 || now - checked >= 1000) {
+        DWORD light = 1, size = sizeof(light);
+        RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+        g_labelsDark = light == 0;
+        g_labelsThemeChecked = now ? now : 1;
+    }
+    return g_labelsDark;
+}
+
+// 8 px at 96 DPI, scaled with the DPI, at most 60 percent of the row and at least 6 px.
+int LabelsDotSide(int rowHeightPx, UINT dpi) {
+    int side = MulDiv(8, (int)dpi, 96);
+    side = std::min(side, rowHeightPx * 6 / 10);
+    return std::max(side, 6);
+}
+
+// The image of a dot: side x side premultiplied BGRA pixels, top down.
+bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out) {
+    if (side < 2 || side > 256) {
+        return false;
+    }
+    COLORREF fill = LabelsColourRgb(colour, dark);
+    int target = dark ? 255 : 0;
+    auto toward = [target](int channel) { return channel + (target - channel) * 28 / 100; };
+    COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
+    const double radius = side / 2.0;
+    const double rimWidth = std::max(1.0, side / 10.0);
+    const int n = 4;
+    out->assign((size_t)side * side, 0);
+    for (int y = 0; y < side; y++) {
+        for (int x = 0; x < side; x++) {
+            int covered = 0, red = 0, green = 0, blue = 0;
+            for (int sy = 0; sy < n; sy++) {
+                for (int sx = 0; sx < n; sx++) {
+                    double dx = x + (sx + 0.5) / n - radius;
+                    double dy = y + (sy + 0.5) / n - radius;
+                    double distance = std::sqrt(dx * dx + dy * dy);
+                    if (distance > radius) {
+                        continue;
+                    }
+                    COLORREF colourHere = distance >= radius - rimWidth ? rim : fill;
+                    covered++;
+                    red += GetRValue(colourHere);
+                    green += GetGValue(colourHere);
+                    blue += GetBValue(colourHere);
+                }
+            }
+            if (!covered) {
+                continue;
+            }
+            uint32_t alpha = (uint32_t)(covered * 255 / (n * n));
+            (*out)[(size_t)y * side + x] = (alpha << 24) | ((uint32_t)(red / (n * n)) << 16) |
+                                           ((uint32_t)(green / (n * n)) << 8) | (uint32_t)(blue / (n * n));
+        }
+    }
+    return true;
+}
+
+// Blends a dot onto the device context: x is its left edge, centreY the middle of the row.
+void LabelsDrawDot(HDC dc, int x, int centreY, int colour, int sidePx) {
+    if (sidePx < 2 || sidePx > 256) {
+        return;
+    }
+    bool dark = LabelsDarkTheme();
+    unsigned key = (unsigned)(std::clamp(colour, 0, 7) | (dark ? 8 : 0) | (sidePx << 4));
+    std::lock_guard<std::mutex> lock(g_labelDotMutex);
+    HBITMAP bitmap = nullptr;
+    auto found = g_labelDots.find(key);
+    if (found != g_labelDots.end()) {
+        bitmap = found->second;
+    } else {
+        std::vector<uint32_t> pixels;
+        if (!LabelsRenderDot(colour, dark, sidePx, &pixels)) {
+            return;
+        }
+        BITMAPINFO info = LabelsDotInfo(sidePx);
+        void* bits = nullptr;
+        bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bitmap || !bits) {
+            if (bitmap) {
+                DeleteObject(bitmap);
+            }
+            return;
+        }
+        memcpy(bits, pixels.data(), pixels.size() * sizeof(uint32_t));
+        g_labelDots[key] = bitmap;
+    }
+    // The image is selected into a device context only while the lock is held: one bitmap cannot be in two.
+    HDC memory = CreateCompatibleDC(dc);
+    if (!memory) {
+        return;
+    }
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    AlphaBlend(dc, x, centreY - sidePx / 2, sidePx, sidePx, memory, 0, 0, sidePx, sidePx, blend);
+    SelectObject(memory, old);
+    DeleteDC(memory);
+}
+
+// The small "plus" that says there are more tags than dots.
+void LabelsDrawMore(HDC dc, int x, int centreY, int sidePx) {
+    int arm = std::max(sidePx / 2, 3);
+    int thickness = sidePx >= 16 ? 2 : 1;
+    HPEN pen = CreatePen(PS_SOLID, thickness, LabelsDarkTheme() ? RGB(200, 200, 200) : RGB(96, 96, 96));
+    if (!pen) {
+        return;
+    }
+    HGDIOBJ old = SelectObject(dc, pen);
+    int centreX = x + arm;
+    MoveToEx(dc, x, centreY, nullptr);
+    LineTo(dc, x + 2 * arm + 1, centreY);
+    MoveToEx(dc, centreX, centreY - arm, nullptr);
+    LineTo(dc, centreX, centreY + arm + 1);
+    SelectObject(dc, old);
+    DeleteObject(pen);
+}
+
+// Frees every cached image. Called when the mod unloads.
+void LabelsReleaseDots() {
+    std::lock_guard<std::mutex> lock(g_labelDotMutex);
+    for (auto& entry : g_labelDots) {
+        DeleteObject(entry.second);
+    }
+    g_labelDots.clear();
+}
+// Labels: the self-test of the palette and the dot images (debug build only). One log line:
+// "LABELS DOTS SELFTEST pass" or "LABELS DOTS SELFTEST FAIL <what>".
+#ifdef EXTRAS_VERBOSE
+
+namespace {
+
+std::wstring g_dotsFailure;
+
+void DotsExpect(bool ok, const wchar_t* what) {
+    if (!ok && g_dotsFailure.empty()) {
+        g_dotsFailure = what;
+    }
+}
+
+uint32_t DotsPixelOf(COLORREF rgb) {
+    return (255u << 24) | (GetRValue(rgb) << 16) | (GetGValue(rgb) << 8) | GetBValue(rgb);
+}
+
+}  // namespace
+
+void LabelsDotsSelfTest() {
+    DotsExpect(LabelsDotSide(22, 96) == 8, L"8 px at 96 DPI");
+    DotsExpect(LabelsDotSide(44, 192) == 16, L"16 px at 192 DPI");
+    DotsExpect(LabelsDotSide(10, 96) == 6, L"never above 60 percent of a short row");
+    DotsExpect(LabelsDotSide(100, 48) >= 6, L"never below 6 px");
+
+    for (int dark = 0; dark < 2; dark++) {
+        for (int colour = 0; colour < 8; colour++) {
+            for (int side : {8, 12, 24}) {
+                std::vector<uint32_t> pixels;
+                bool rendered = LabelsRenderDot(colour, dark != 0, side, &pixels);
+                DotsExpect(rendered && (int)pixels.size() == side * side, L"a dot image has side x side pixels");
+                if (!rendered || (int)pixels.size() != side * side) {
+                    continue;
+                }
+                uint32_t centre = pixels[(side / 2) * side + side / 2];
+                DotsExpect(centre == DotsPixelOf(LabelsColourRgb(colour, dark != 0)), L"the centre is the opaque fill colour");
+                DotsExpect((pixels[0] >> 24) == 0, L"a corner is transparent");
+                bool partial = false;
+                for (uint32_t pixel : pixels) {
+                    uint32_t alpha = pixel >> 24;
+                    partial = partial || (alpha > 0 && alpha < 255);
+                }
+                DotsExpect(partial, L"the edge is anti-aliased");
+            }
+        }
+    }
+    DotsExpect(LabelsColourRgb(1, false) != LabelsColourRgb(1, true), L"light and dark variants differ");
+    DotsExpect(LabelsColourRgb(0, false) != LabelsColourRgb(1, false), L"gray differs from red");
+
+    // Drawing onto a DC with a white background.
+    const int size = 40;
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = size;
+    info.bmiHeader.biHeight = -size;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    uint32_t* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, (void**)&bits, nullptr, 0);
+    if (!bitmap || !bits) {
+        DotsExpect(false, L"could not make a test bitmap");
+    } else {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        for (int i = 0; i < size * size; i++) {
+            bits[i] = 0x00FFFFFF;
+        }
+        LabelsDrawDot(dc, 14, 20, 1, 12);
+        COLORREF fill = LabelsColourRgb(1, LabelsDarkTheme());
+        DotsExpect((bits[20 * size + 20] & 0xFFFFFF) == (DotsPixelOf(fill) & 0xFFFFFF), L"a drawn dot has its colour at the centre");
+        DotsExpect((bits[0] & 0xFFFFFF) == 0xFFFFFF, L"a drawn dot leaves the corner untouched");
+        bool blended = false;
+        for (int y = 12; y < 28; y++) {
+            for (int x = 12; x < 28; x++) {
+                uint32_t pixel = bits[y * size + x] & 0xFFFFFF;
+                blended = blended || (pixel != 0xFFFFFF && pixel != (DotsPixelOf(fill) & 0xFFFFFF));
+            }
+        }
+        DotsExpect(blended, L"a drawn dot has soft edge pixels");
+        SelectObject(dc, old);
+        DeleteObject(bitmap);
+    }
+    DeleteDC(dc);
+    LabelsReleaseDots();
+
+    if (g_dotsFailure.empty()) {
+        Wh_Log(L"LABELS DOTS SELFTEST pass");
+    } else {
+        Wh_Log(L"LABELS DOTS SELFTEST FAIL %s", g_dotsFailure.c_str());
+    }
+}
+
+#endif  // EXTRAS_VERBOSE
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -19826,12 +20453,14 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.69.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.69.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
 #ifdef EXTRAS_VERBOSE
     LabelsSelfTest();
+    LabelsDotsSelfTest();
+    LabelsCacheSelfTest();
 #endif
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
@@ -19876,9 +20505,12 @@ void Wh_ModSettingsChanged() {
 void Wh_ModBeforeUninit() {
     g_unloading = true;
     // Every thread of the mod ends first, so no result is queued after the windows are cleaned.
+    LabelsCancelAll();
     JoinModThreads();
     StopWorker();
     CloseEverything();
+    LabelsReleaseDots();
+    LabelsClearCache();
 }
 
 void Wh_ModUninit() {

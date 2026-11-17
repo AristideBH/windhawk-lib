@@ -22,6 +22,7 @@ Ari wants macOS-style tags in Windows File Explorer, as part of the Explorer Ext
 - No renaming of a named tag (the name lives in each file).
 - No tags on FAT, exFAT or other volumes without named streams, and no fallback store for them.
 - No custom colours, no colour picker, no tag management window.
+- Later, not now: a "Tag presets" list in Windhawk's settings (a repeater of name plus palette colour pairs) shown as quick picks in the [+] flyout. It needs a list type in `build.py`'s settings generator. Windhawk's `$format: color` picker is 2.0 only and stays out, so the catalog keeps installing on 1.7.3.
 
 ## Anti-goals
 
