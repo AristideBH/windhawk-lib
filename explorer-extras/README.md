@@ -41,6 +41,14 @@ https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 - They are kept in a named stream of the file, so they follow it when it is copied or moved on an NTFS drive, and the file's dates do not change. A drive that is not NTFS cannot keep them, and the pane and the menu say so.
 - Each colour has a name you can edit on Windhawk's page, such as "Red = Urgent". Switch labels off with **Show labels**.
 
+## Toolbar
+
+- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together (4 pixels by default, Explorer's is 16), and the address bar sits closer to them (4, Explorer's is 8); the address bar takes the room that frees.
+- **Command bar.** The gap between New, Cut, Copy, Paste and the rest is a setting (4 pixels by default, Explorer's is 8).
+- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings; a width you drag is kept until you change that setting.
+- **Corners.** A corner radius for the address bar and one for the search box, 0 to 16 (16 makes the ends round).
+- **Switch it off** with **Change the toolbar**, and Explorer's own spacing, search box and corners come back.
+
 ## Install
 
 1. Install [Windhawk](https://windhawk.net).

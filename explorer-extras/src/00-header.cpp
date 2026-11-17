@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tidier toolbar.
-// @version         0.77.19
+// @description     Beta. Additions for File Explorer, one switch per area: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
+// @version         0.77.21
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -56,7 +56,7 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 
 ## Toolbar
 
-The top of the window, with a setting for each part (group **Toolbar**):
+The top of the window, with a setting for each part (group **Toolbar**, switch **Change the toolbar**):
 
 - **Navigation buttons.** Back, Forward, Up and Refresh sit closer together (gap 4 pixels, 0 to 16; Explorer's is 16), and so does the address bar after them (4 pixels, 0 to 16; Explorer's is 8). The address bar takes the room that frees.
 - **Command bar.** The gap between New, Cut, Copy, Paste and the rest (4 pixels, 0 to 8; Explorer's is 8).

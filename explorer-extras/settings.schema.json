@@ -386,8 +386,8 @@
       "group": "toolbar",
       "type": "bool",
       "default": true,
-      "name": "Tighten the navigation buttons",
-      "description": "Changes the gap between Back, Forward, Up and Refresh, in front of the address bar. Off leaves Explorer’s own spacing.",
+      "name": "Change the toolbar",
+      "description": "Turns on the toolbar settings below. Off leaves Explorer’s own spacing, search box and corners.",
       "needs": "now"
     },
     {
@@ -398,7 +398,7 @@
       "min": 0,
       "max": 16,
       "name": "Gap between the navigation buttons",
-      "description": "In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16.",
+      "description": "In pixels, between the four buttons and before the first. Explorer’s own gap is 16.",
       "needs": "now"
     },
     {
