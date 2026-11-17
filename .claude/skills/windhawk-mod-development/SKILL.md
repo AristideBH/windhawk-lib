@@ -457,3 +457,11 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - **Ambiguity is a property of all the items, not of the tagged ones.** Count every name, so a later change cannot make two items look like one.
 - **Data is not markup.** Names from files go into XAML only through properties set in code.
 - **A review by a fresh agent finds what the author cannot see.** Run it before the first merge of a big feature: this one found a crash path in the first minute of reading.
+
+## Lessons from the toolbar build (explorer-extras 0.77)
+
+- **Tweaking Explorer's own XAML properties is a pattern.** Find the element from `xamlRoot.Content()` by `Name()` on the ticks of a new window (the tree is not complete at creation), keep a weak reference and the original value for each property, set yours, and restore the originals on setting-off and in the unload path of that thread (register the thread with `RegisterKeepThread`, restore after `RevokeAllHandlers`). Explorer rebuilds some elements later (the command bar's buttons change with the selection): re-apply on `LayoutUpdated` and only write when the value differs, and treat a value you did not set as Explorer's new original.
+- **A setting equal to Explorer's own value looks like a bug.** A gap setting at 8 did nothing visible because 8 was Explorer's gap; a log line with the value read and the count of elements changed settled it in one run. Log the value and the effect on every settings change in new areas.
+- **Setting values to prove "it works" in one round.** Ask Ari for an extreme value (0 or the maximum) when verifying a setting live.
+- **A draggable handle in XAML.** A transparent Border added to the grid, with `ProtectedCursor` through `IUIElementProtected`, `CapturePointer` on press and the pointer position relative to the grid, works for mouse, touch and pen. Persist the dragged value with `Wh_SetIntValue`, together with the setting value it was dragged against, so a change of the setting wins over an old drag.
+- **Know when to stop.** A compact height meant moving native windows in the frame (no symbols for ExplorerFrame.dll) and was dropped at Ari's word. Estimate the cost of the host side before building on the XAML side.

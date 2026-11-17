@@ -116,3 +116,9 @@ Add to the mod's PLAN.md, under "Confirmed facts":
 ## When to stop
 
 Some targets can't be done well, and saying so early is a result. Snipaste's hover and selected states are drawn by its own code and no style sheet reaches them. The honest options were a resting-state restyle, a much heavier paint hook, or a feature request to the author. Give the options with their cost and let Ari choose.
+
+## Probe by dumping, not by guessing (learned on the Explorer Extras toolbar, 0.77)
+
+When a XAML change does nothing, or does half of what was expected, do not try the next likely element. Log the whole branch once from the mod (debug build, once per process, with a budget of lines): for every `FrameworkElement` the class, `Name()`, margin, `ActualWidth`/`ActualHeight`, `Height`, `MinHeight`, padding, spacing, and for Borders, Grids and Controls the `CornerRadius`, whether `Background` and `BorderBrush` are set. Read the dump once and name the element that draws the thing. Two examples of what the guesses missed: the address bar's rounded outline is drawn by a Grid (`PART_LayoutRoot`) around the AutoSuggestBox, not by its TextBox, so setting the radius on the box did nothing; and a toolbar button's gap was half in a margin and half in a 6 DIP spare column of the CommandBar's `ContentRoot`.
+
+Pair the dump with a UI Automation dump of the real window (screen pixels, scale about 1.75 on Ari's laptop) to see what Windows really placed, and with `GetWindow`/`GetWindowRect` on the frame's direct child windows when a size does not follow the XAML: Explorer's toolbar island is sized by the frame, not by its content, so shrinking rows in XAML only leaves blank space. Log first, then decide; one dump answers what three tries do not.

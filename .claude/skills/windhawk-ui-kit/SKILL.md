@@ -257,3 +257,9 @@ Give stored keys a stable prefix and never rename one without a migration.
 - **No icon or title in the title bar** (`SetWindowThemeAttribute` with no caption and no icon); the window keeps its name for the taskbar.
 - **French.** The window's texts, the setting titles and descriptions, and the card names have a French table. A string with a format keeps the same placeholders in both.
 - **Settings that tune a feature** sit on its page in a card of their own (for example "Previews": which kinds, and the size limits).
+
+## Explorer Extras 0.77 (Toolbar)
+
+- A group per area on Windhawk's page, with the area's off switch first ("Tighten the navigation buttons"), then one setting per visible part. Name the pixel settings with their unit in the description ("In pixels") and give Explorer's own value there ("Explorer's own is 8"), and default to a value that differs from it only where Ari asked for a change.
+- Spacing and corner settings are ints with `min` and `max` and `needs: 'now'`. Switching the area off must give every value back to Explorer.
+- A control you can drag (a resize handle) is also a setting: a bool to enable it and an int for the default value, a double click or double tap to go back to that default, and a minimum that keeps the neighbouring control usable.
