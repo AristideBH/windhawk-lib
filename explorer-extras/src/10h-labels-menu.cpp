@@ -34,6 +34,27 @@ std::vector<std::wstring> LabelsSelectedPaths() {
     return paths;
 }
 
+// True when the window is, or is inside, the navigation pane's tree.
+static bool LabelsInNavTree(HWND window) {
+    for (HWND at = window; at; at = GetParent(at)) {
+        wchar_t name[64];
+        if (GetClassNameW(at, name, 64) && (wcscmp(name, L"NamespaceTreeControl") == 0 || wcscmp(name, L"SysTreeView32") == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The menu of a folder in the navigation pane comes through the same hook, but the selection read here is the file
+// list's, not the folder that was clicked: such a menu gets no entry. The focus and the pointer tell where it was asked.
+bool LabelsMenuIsForNavPane() {
+    if (LabelsInNavTree(GetFocus())) {
+        return true;
+    }
+    POINT where = {};
+    return GetCursorPos(&where) && LabelsInNavTree(WindowFromPoint(where));
+}
+
 namespace {
 
 struct LabelsHookedFlyout {
@@ -64,6 +85,10 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
         }
     }
     if (!g_labels) {
+        return;
+    }
+    if (LabelsMenuIsForNavPane()) {
+        LogVerbose(L"LABELS MENU no entry, the menu is the navigation pane's");
         return;
     }
 #ifdef EXTRAS_VERBOSE
@@ -149,5 +174,25 @@ void WINAPI LabelsAppendMenuItem_Hook(void* self, void* flyout, void* menuItem) 
         all.push_back(std::move(hooked));
         LogVerbose(L"LABELS MENU flyout seen, handler attached");
     } catch (...) {
+    }
+}
+
+// Show labels, or a colour name, changed: the lists draw again, and a pane that is on show builds its page again
+// (its Tags section appears or goes).
+void LabelsSettingsChanged() {
+    LabelsRepaintWindows(std::wstring());
+    std::lock_guard<std::mutex> lock(g_statesMutex);
+    for (auto& state : g_states) {
+        if (state->queue) {
+            state->queue.TryEnqueue([]() {
+                if (g_unloading) {
+                    return;
+                }
+                WindowState* now = StateForThisThread(false);
+                if (now && now->details && now->details->visible) {
+                    now->details->shownKey.clear();
+                }
+            });
+        }
     }
 }

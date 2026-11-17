@@ -86,7 +86,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.76.0 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.76.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -124,7 +124,7 @@ BOOL Wh_ModInit() {
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
-    LabelsRepaintWindows(std::wstring());  // Show labels on or off, or a colour name changed: the lists draw again.
+    LabelsSettingsChanged();  // Show labels on or off, or a colour name changed.
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
