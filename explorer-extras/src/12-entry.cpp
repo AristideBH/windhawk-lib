@@ -25,6 +25,9 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
     return module;
 }
 
+// What the settings that need a rebuild added up to when they were last read.
+unsigned long long g_rebuildSignature = 0;
+
 void LoadSettings() {
     g_enabled = SettingBool(L"enabled");
     g_restore = SettingBool(L"restoreOnOpen");
@@ -73,6 +76,7 @@ void LoadSettings() {
 BOOL Wh_ModInit() {
     g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     LoadSettings();
+    g_rebuildSignature = RebuildSignature();
 #if defined(_M_ARM64) || defined(__aarch64__)
     const wchar_t* arch = L"arm64";
 #elif defined(_M_X64) || defined(__x86_64__)
@@ -80,7 +84,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.66.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.66.4 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -107,7 +111,6 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModSettingsChanged() {
-    static unsigned long long rebuildSignature = RebuildSignature();
     LoadSettings();
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
@@ -118,10 +121,10 @@ void Wh_ModSettingsChanged() {
         } else {
             CloseEverything();
         }
-    } else if (unsigned long long now = RebuildSignature(); now != rebuildSignature) {
+    } else if (RebuildSignature() != g_rebuildSignature) {
         RebuildEverywhere();  // Widths, shading, names or limits changed: the columns are fitted and read again.
     }
-    rebuildSignature = RebuildSignature();
+    g_rebuildSignature = RebuildSignature();
 }
 
 void Wh_ModBeforeUninit() {

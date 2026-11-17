@@ -1181,6 +1181,7 @@ void DropItems(WindowState* state, Pidl sourceFolder, std::vector<Pidl> children
         DWORD offered = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
         drop->DragOver(keyState, where, &offered);
         DWORD result = offered;
+        ModalScope modal;
         hr = drop->Drop(data, keyState, where, &result);
         Wh_Log(L"dropped %d item(s) on \"%s\": effect %lu, hr=0x%08lX", (int)children.size(),
             PathOf(targetFolder.get()).c_str(), (unsigned long)result, hr);

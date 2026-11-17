@@ -10,6 +10,8 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 - A change on Windhawk's page applies at once, and the columns are fitted and read again when it needs it.
 - The settings keys changed with the groups, so every setting returns to its default once.
 - The "Extras" entry of the toolbar's ... menu is gone, since it only opened the window.
+- 0.66.4: the details pane's button in the toolbar no longer shows a ticked state: no accent colour, and the icon stays as Explorer draws it (the one-colour icon is gone with it). After this update, if the mod's settings page looks wrong, use Windhawk's reset to defaults once: the settings were renamed in 0.66.
+- 0.66.3, from the third review: the calls that can show a dialog (paste, a drop, a rename in place) also hold the cleanup back until they return; the timer that waits for a dialog is held, so it ticks; the first change of a setting rebuilds the columns too; icons are asked for at the scale of the window's monitor; two leftover fields of the settings window are gone.
 - 0.66.2: the macro for debug-only log lines is no longer named like a Windhawk symbol (`Wh_LogV` is now `LogVerbose`), which the catalog check flagged.
 - 0.66.1: the texts of the settings, the readme in Windhawk and the documents are brought up to date (the minimum width and the item limit had no description).
 

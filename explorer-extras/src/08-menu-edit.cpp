@@ -359,6 +359,7 @@ void CommitRename(WindowState* state) {
                                      : extensionOf(column->entries[entry].name));
             std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
             PITEMID_CHILD renamed = nullptr;
+            ModalScope modal;
             HRESULT hr = parent->SetNameOf(state->topLevel, column->entries[entry].child.get(),
                                            name.c_str(), SHGDN_INFOLDER, &renamed);
             Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
@@ -395,6 +396,7 @@ void CommitRename(WindowState* state) {
     PITEMID_CHILD renamed = nullptr;
     std::wstring oldPath = FilePathOf(column->folder.get(),
                                       column->entries[entryIndex].child.get());
+    ModalScope modal;
     hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
                            newName.c_str(), SHGDN_INFOLDER, &renamed);
     Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX",
@@ -2899,6 +2901,7 @@ HRESULT PasteIntoFolder(WindowState* state, PCIDLIST_ABSOLUTE folder) {
     DWORD allowed = effect;
     hr = drop->DragEnter(data, MK_LBUTTON, where, &allowed);
     if (SUCCEEDED(hr) && allowed != DROPEFFECT_NONE) {
+        ModalScope modal;
         hr = drop->Drop(data, 0, where, &allowed);
         if (SUCCEEDED(hr) && effect == DROPEFFECT_MOVE) {
             OleSetClipboard(nullptr);

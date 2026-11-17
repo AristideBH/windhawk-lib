@@ -20,11 +20,12 @@
     The log file of the debug build (the same path given to deploy-explorer-extras.ps1).
 
 .PARAMETER Path
-    The folder the test window opens.
+    The folder the test window opens. By default a new empty folder of its own in %TEMP%, removed at the end:
+    Explorer does not open a second window for a folder that one of your windows already shows.
 #>
 param(
     [string]$Log = (Join-Path $env:LOCALAPPDATA 'ExplorerExtras\debug.log'),
-    [string]$Path = $env:SystemRoot
+    [string]$Path = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,12 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
 }
 
 if (-not (Test-Path $Log)) { Write-Host "FAIL  no log file at $Log (is it the debug build, and is the mod enabled?)"; exit 1 }
+$ownFolder = $false
+if (-not $Path) {
+    $Path = Join-Path $env:TEMP ('ExplorerExtrasSmoke-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $Path | Out-Null
+    $ownFolder = $true
+}
 $dumpDir = Join-Path $env:LOCALAPPDATA 'CrashDumps'
 $began = Get-Date
 
@@ -51,7 +58,10 @@ for ($i = 0; $i -lt 50 -and -not $window; $i++) {
         if (-not ($before | Where-Object { $_.Current.NativeWindowHandle -eq $candidate.Current.NativeWindowHandle })) { $window = $candidate }
     }
 }
-if (-not $window) { Write-Host 'FAIL  the test window did not open'; exit 1 }
+if (-not $window) {
+    if ($ownFolder) { Remove-Item $Path -Recurse -Force -ErrorAction SilentlyContinue }
+    Write-Host 'FAIL  the test window did not open'; exit 1
+}
 
 # the toggle, with no click: waited for up to 4 s
 $toggle = $null
@@ -79,5 +89,6 @@ Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object 
 $dumps = @(Get-ChildItem $dumpDir -Filter 'explorer.exe.*.dmp' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $began })
 Check 'no new crash dump of explorer.exe' ($dumps.Count -eq 0) ($dumps | ForEach-Object { $_.Name })
 
+if ($ownFolder) { Remove-Item $Path -Recurse -Force -ErrorAction SilentlyContinue }
 Write-Host ("{0} check(s) failed" -f $failed)
 exit $failed

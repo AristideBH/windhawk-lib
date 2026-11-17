@@ -558,9 +558,12 @@ void WaitForCoroutines() {
 
 // Work for a window's thread that must not run inside a message loop of the mod's own (see ModalScope):
 // it waits, by a one-shot timer, until none is on the stack.
+// The timers that wait: held here, since a timer nobody holds is dropped and never ticks.
+[[clang::no_destroy]] thread_local std::vector<mud::DispatcherQueueTimer> t_waitTimers;
+
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work) {
     if (t_modalDepth == 0) {
-        (*work)();
+        (*work)();  // The timers stay in the list: this may be a tick of one of them.
         return;
     }
     static int logged = 0;
@@ -573,6 +576,7 @@ void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::fun
         sender.Stop();
         RunOutsideModal(queue, work);
     }));
+    t_waitTimers.push_back(timer);
     timer.Start();
 }
 

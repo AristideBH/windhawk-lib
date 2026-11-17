@@ -277,10 +277,7 @@ void OnCommandBarPointer(Inspectable const& sender, bool force = false) {
                 // outside the tree that was walked. Its button is still one of the command bar's
                 // own commands.
                 int found = 0;
-                auto bar = state->overflowBar;
-                if (!bar) {
-                    bar = FindCommandBar(root, 0, found);
-                }
+                auto bar = FindCommandBar(root, 0, found);
                 if (bar) {
                     for (auto const& command : bar.PrimaryCommands()) {
                         if (auto button = command.try_as<muxc::Button>()) {

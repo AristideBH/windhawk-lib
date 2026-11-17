@@ -325,8 +325,6 @@ struct WindowState {
     // View menu entry.
     ItemsVector menuItems{nullptr};
     muxc::RadioMenuFlyoutItem menuItem{nullptr};
-    muxc::CommandBar overflowBar{nullptr};     // The toolbar that holds it.
-    winrt::event_token settingsClickToken{};
     // The View button of the toolbar: while Columns shows, its icon is ours.
     muxc::Button viewButton{nullptr};
     mux::UIElement viewIconOriginal{nullptr};

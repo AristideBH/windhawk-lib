@@ -6,6 +6,7 @@ struct Loaded {
 };
 
 struct Job {
+    LONG iconSide = 0;  // The size of the icons to ask for: the scale of the window's monitor. 0: the system's.
     unsigned generation = 0;
     Pidl folder;
     SortSpec spec;
@@ -30,6 +31,9 @@ struct Worker {
     std::atomic<bool> stop{false};
     std::atomic<bool> finished{false};
 };
+
+// The icon size of the job the worker is on.
+thread_local LONG t_iconSide = 0;
 
 std::mutex g_workersMutex;
 [[clang::no_destroy]] std::vector<std::unique_ptr<Worker>> g_workers;
@@ -141,7 +145,7 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
             HBITMAP bitmap = nullptr;
             // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
-            LONG side = MulDiv(20, (int)GetDpiForSystem(), 96);
+            LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
             HRESULT got = factory->GetImage(SIZE{side, side}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
             if (SUCCEEDED(got) && bitmap) {
@@ -208,6 +212,7 @@ DWORD WINAPI WorkerProc(LPVOID param) {
             if (job->cancel && *job->cancel) {
                 continue;
             }
+            t_iconSide = job->iconSide;
             if (job->iconsOnly) {
                 try {
                     LoadIcons(job->folder.get(), job->iconChildren, job->iconIndices,
@@ -255,6 +260,17 @@ DWORD WINAPI WorkerProc(LPVOID param) {
     }
     CoUninitialize();
     worker->finished = true;
+    return 0;
+}
+
+// The size of a row's icon on the monitor this window is on (20 DIP at its scale), or 0 when unknown.
+LONG IconSideOf(WindowState* state) {
+    try {
+        if (state->xamlRoot) {
+            return (LONG)std::lround(20.0 * state->xamlRoot.RasterizationScale());
+        }
+    } catch (...) {
+    }
     return 0;
 }
 
@@ -353,6 +369,7 @@ void RequestLoad(WindowState* state, Column* column) {
     job->folder.reset(ILClone(column->folder.get()));
     job->spec = column->hasSpec ? column->spec : state->spec;
     job->hidden = ShowHiddenFiles();
+    job->iconSide = IconSideOf(state);
     job->maxItems = g_maxItems;
     job->queue = state->queue;
     job->cancel = column->cancel;
@@ -368,6 +385,7 @@ void RequestIcons(WindowState* state, Column* column) {
     }
     auto job = std::make_unique<Job>();
     job->iconsOnly = true;
+    job->iconSide = IconSideOf(state);
     job->generation = column->generation;
     job->folder.reset(ILClone(column->folder.get()));
     job->queue = state->queue;

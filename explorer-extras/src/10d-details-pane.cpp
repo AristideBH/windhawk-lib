@@ -123,9 +123,6 @@ struct DetailsPane {
     mux::FrameworkElement toolNative{nullptr};     // Explorer's own Details toggle (hidden).
     muxc::CommandBar toolBar{nullptr};
     muxc::IconElement toolIcon{nullptr};           // Its icon, moved to ours.
-    muxc::IconElement toolMono{nullptr};  // The same icon in black, for when the button is ticked (dark theme).
-    muxc::IconElement toolMonoLight{nullptr};  // In white (light theme).
-    bool toolIconTicked = false;
     ULONGLONG toggleHoldUntil = 0;
     muxc::MenuFlyoutItemBase navSeparator{nullptr};  // The line that followed it in the Show submenu (hidden).
     muxc::IconElement movedIcon{nullptr};  // The icon Explorer gave its Details entry, now on ours.
@@ -2844,93 +2841,6 @@ void PaneSetButtonIcon(mux::FrameworkElement const& button, muxc::IconElement co
     }
 }
 
-// The icon of a button is an SVG file of Explorer's own, in two colours. A copy of it is made
-// with every fill and stroke set to one colour, written to the temp folder and loaded from there.
-std::string PaneRecolorSvg(std::string const& in, std::string const& color) {
-    std::string out;
-    size_t i = 0;
-    while (i < in.size()) {
-        bool isFill = in.compare(i, 4, "fill") == 0;
-        bool isStroke = in.compare(i, 6, "stroke") == 0;
-        size_t keyLength = isFill ? 4 : isStroke ? 6 : 0;
-        bool word = i == 0 || !(isalnum((unsigned char)in[i - 1]) || in[i - 1] == '-' || in[i - 1] == '_');
-        if (keyLength && word && i + keyLength < in.size() && (in[i + keyLength] == '=' || in[i + keyLength] == ':')) {
-            bool attribute = in[i + keyLength] == '=';
-            size_t start = i + keyLength + 1;
-            char quote = 0;
-            if (attribute && start < in.size() && (in[start] == '"' || in[start] == '\'')) {
-                quote = in[start];
-                start++;
-            }
-            size_t end = start;
-            while (end < in.size() && (quote ? in[end] != quote : (in[end] != ';' && in[end] != '"' && in[end] != '\'' && in[end] != '}' && in[end] != ' ' && in[end] != '>'))) {
-                end++;
-            }
-            std::string value = in.substr(start, end - start);
-            out.append(in, i, start - i);
-            bool keep = value == "none" || value.rfind("url(", 0) == 0;
-            out += keep ? value : color;
-            i = end;
-            continue;
-        }
-        out += in[i++];
-    }
-    // Shapes with no fill of their own are black: the root gets the colour to hand down.
-    size_t root = out.find("<svg");
-    if (root != std::string::npos) {
-        size_t close = out.find('>', root);
-        if (close != std::string::npos && out.substr(root, close - root).find("fill=") == std::string::npos) {
-            out.insert(root + 4, " fill=\"" + color + "\"");
-        }
-    }
-    return out;
-}
-
-muxc::IconElement PaneMonoIcon(muxc::ImageIcon const& original, std::wstring const& uri, const char* color, const wchar_t* name) {
-    if (uri.rfind(L"file:///", 0) != 0) {
-        return nullptr;
-    }
-    std::wstring path = uri.substr(8);
-    std::wstring decoded;
-    for (size_t i = 0; i < path.size(); i++) {
-        if (path[i] == L'%' && i + 2 < path.size() && iswxdigit(path[i + 1]) && iswxdigit(path[i + 2])) {
-            decoded += (wchar_t)wcstol(path.substr(i + 1, 2).c_str(), nullptr, 16);
-            i += 2;
-        } else {
-            decoded += path[i] == L'/' ? L'\\' : path[i];
-        }
-    }
-    HANDLE file = CreateFileW(decoded.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        Wh_Log(L"details pane: the icon file could not be read, gle=%lu", GetLastError());
-        return nullptr;
-    }
-    std::string svg(200 * 1024, '\0');
-    DWORD got = 0;
-    ReadFile(file, svg.data(), (DWORD)svg.size(), &got, nullptr);
-    CloseHandle(file);
-    svg.resize(got);
-    std::string mono = PaneRecolorSvg(svg, color);
-    // The recoloured picture stays in memory: the mod writes no file for it.
-    winrt::Windows::Storage::Streams::InMemoryRandomAccessStream stream;
-    {
-        winrt::Windows::Storage::Streams::DataWriter writer{stream};
-        writer.WriteBytes(winrt::array_view<const uint8_t>((const uint8_t*)mono.data(), (uint32_t)mono.size()));
-        writer.StoreAsync().get();
-        writer.DetachStream();
-    }
-    stream.Seek(0);
-    mux::Media::Imaging::SvgImageSource source;
-    source.SetSourceAsync(stream);
-    muxc::ImageIcon icon;
-    icon.Source(source);
-    icon.Width(original.Width());
-    icon.Height(original.Height());
-    Wh_Log(L"details pane: a one-colour icon (%S, %s) was made", color, name);
-    return icon;
-}
-
 // Explorer's Details toggle at the far right of the toolbar ("PaneToggle") is replaced by a toggle
 // of ours: the same icon and label, in the same place, ticked while the pane shows. Choosing it
 // sends the shortcut that shows or hides the pane.
@@ -2952,8 +2862,6 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
             pane->toolBar = nullptr;
             pane->toolNative = nullptr;
             pane->toolIcon = nullptr;
-        pane->toolMono = nullptr;
-        pane->toolMonoLight = nullptr;
         }
         mux::DependencyObject top = node;
         for (int i = 0; i < 60; i++) {
@@ -2997,32 +2905,12 @@ void PaneToolbarSetup(WindowState* state, mux::DependencyObject const& node) {
             PaneSetButtonIcon(native, nullptr);  // Explorer's icon moves to ours.
             button.Icon(icon);
             pane->toolIcon = icon;
-            // The same image, asked for in one colour: the runtime may know ImageIcon's
-            // ShowAsMonochrome even though the headers here do not, so it is made from markup.
-            try {
-                if (auto image = icon.try_as<muxc::ImageIcon>()) {
-                    auto source = image.Source();
-                    std::wstring tag, uri;
-                    if (auto svg = source.try_as<mux::Media::Imaging::SvgImageSource>()) {
-                        tag = L"SvgImageSource";
-                        uri = svg.UriSource() ? svg.UriSource().AbsoluteUri().c_str() : L"";
-                    } else if (auto bitmap = source.try_as<mux::Media::Imaging::BitmapImage>()) {
-                        tag = L"BitmapImage";
-                        uri = bitmap.UriSource() ? bitmap.UriSource().AbsoluteUri().c_str() : L"";
-                    }
-                    Wh_Log(L"details pane: the toolbar icon is an ImageIcon with a %s, uri %s", tag.empty() ? L"source of another kind" : tag.c_str(),
-                        uri.c_str());
-                    if (!tag.empty() && !uri.empty()) {
-                        pane->toolMono = PaneMonoIcon(image, uri, "#000000", L"dark");
-                        pane->toolMonoLight = PaneMonoIcon(image, uri, "#FFFFFF", L"light");
-                    }
-                }
-            } catch (...) {
-                LogHresult(L"the one-colour toolbar icon");
-            }
         }
-        button.IsChecked(pane->visible && !pane->leaving);
-        pane->toolClickToken = button.Click([](Inspectable const&, mux::RoutedEventArgs const&) {
+        button.IsChecked(false);  // Never shown as ticked: no accent colour, and the icon stays as Explorer draws it.
+        pane->toolClickToken = button.Click([](Inspectable const& sender, mux::RoutedEventArgs const&) {
+            if (auto toggle = sender.try_as<muxc::AppBarToggleButton>()) {
+                toggle.IsChecked(false);
+            }
             WindowState* now = StateForThisThread(false);
             if (now && now->details && !g_unloading) {
                 now->details->shortcutAt = GetTickCount64() + 60;
@@ -3085,8 +2973,6 @@ void PaneMenuRestore(DetailsPane* pane) {
         pane->toolBar = nullptr;
         pane->toolNative = nullptr;
         pane->toolIcon = nullptr;
-        pane->toolMono = nullptr;
-        pane->toolMonoLight = nullptr;
 
         if (pane->menuItems && pane->navEntry) {
             uint32_t at = 0;
@@ -3491,36 +3377,8 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             LogHresult(L"the navigation pane entry");
         }
     }
-    if (pane->toolToggle) {
-        // The button flips itself when it is clicked. Until the pane has followed (or a moment has
-        // passed) the tick does not set it back, which made it flicker.
-        bool want = pane->visible && !pane->leaving;
-        bool have = pane->toolToggle.IsChecked().Value();
-        if (have != want && pane->toggleHoldUntil && GetTickCount64() < pane->toggleHoldUntil) {
-            // Waiting for the pane.
-        } else {
-            if (have != want) {
-                pane->toolToggle.IsChecked(want);
-                have = want;
-            }
-        }
-        // Ticked, the button is on the accent colour: the duotone icon would lose its blue part
-        // there, so a one-colour glyph is shown instead while it is ticked.
-        if (pane->toolIcon && have != pane->toolIconTicked) {
-            pane->toolIconTicked = have;
-            if (have && pane->toolMono && pane->toolMonoLight) {
-                // The accent colour is light in the dark theme: a dark icon; and the other way.
-                bool darkTheme = pane->toolToggle.ActualTheme() == mux::ElementTheme::Dark;
-                pane->toolToggle.Icon(darkTheme ? pane->toolMono : pane->toolMonoLight);
-            } else if (have) {
-                muxc::FontIcon glyph;
-                glyph.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-                glyph.Glyph(L"");
-                pane->toolToggle.Icon(glyph);
-            } else {
-                pane->toolToggle.Icon(pane->toolIcon);
-            }
-        }
+    if (pane->toolToggle && pane->toolToggle.IsChecked().Value()) {
+        pane->toolToggle.IsChecked(false);  // A click flips it; it is set back, so it never shows as ticked.
     }
     if (pane->navEntry && pane->navOriginal && pane->navEntry.IsChecked() != pane->navOriginal.IsChecked()) {
         pane->navEntry.IsChecked(pane->navOriginal.IsChecked());
@@ -3770,8 +3628,6 @@ void AbandonDetails(WindowState* state) {
     (void)winrt::detach_abi(pane->toolNative);
     (void)winrt::detach_abi(pane->toolBar);
     (void)winrt::detach_abi(pane->toolIcon);
-    (void)winrt::detach_abi(pane->toolMono);
-    (void)winrt::detach_abi(pane->toolMonoLight);
     (void)winrt::detach_abi(pane->mediaPlayer);
     (void)winrt::detach_abi(pane->pendingImage);
     (void)winrt::detach_abi(pane->mediaElement);

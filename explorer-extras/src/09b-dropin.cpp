@@ -303,6 +303,7 @@ struct PanelDropTarget : IDropTarget {
             DWORD buttons = lastButtons;
             DWORD dropKeys = (keys & ~(DWORD)(MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) | (buttons ? buttons : MK_LBUTTON);
             DWORD result = wanted;
+            ModalScope modal;
             HRESULT hr = folder->Drop(data, dropKeys, pt, &result);
             Wh_Log(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
                 (unsigned long)result, hr);
