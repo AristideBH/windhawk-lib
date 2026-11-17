@@ -27,6 +27,7 @@ constexpr LabelsPaletteEntry kLabelsPalette[8] = {
 std::atomic<ULONGLONG> g_labelsThemeChecked{0};
 std::atomic<bool> g_labelsDark{false};
 std::mutex g_labelDotMutex;
+[[clang::no_destroy]] std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
 [[clang::no_destroy]] std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
 
 BITMAPINFO LabelsDotInfo(int side) {
@@ -74,8 +75,9 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
         return false;
     }
     COLORREF fill = LabelsColourRgb(colour, dark);
-    int target = dark ? 255 : 0;
-    auto toward = [target](int channel) { return channel + (target - channel) * 28 / 100; };
+    // The rim is the fill a little darker, in both themes: it separates stacked dots without a light outline.
+    int percent = dark ? 18 : 28;
+    auto toward = [percent](int channel) { return channel - channel * percent / 100; };
     COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
     const double radius = side / 2.0;
     const double rimWidth = std::max(1.0, side / 10.0);
@@ -105,6 +107,36 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
             uint32_t alpha = (uint32_t)(covered * 255 / (n * n));
             (*out)[(size_t)y * side + x] = (alpha << 24) | ((uint32_t)(red / (n * n)) << 16) |
                                            ((uint32_t)(green / (n * n)) << 8) | (uint32_t)(blue / (n * n));
+        }
+    }
+    return true;
+}
+
+// A plain disc of one colour, anti-aliased, premultiplied, top down. It cuts one stacked dot free of the next.
+bool LabelsRenderDisc(COLORREF colour, int side, std::vector<uint32_t>* out) {
+    if (side < 2 || side > 256) {
+        return false;
+    }
+    const double radius = side / 2.0;
+    const int n = 4;
+    out->assign((size_t)side * side, 0);
+    for (int y = 0; y < side; y++) {
+        for (int x = 0; x < side; x++) {
+            int covered = 0;
+            for (int sy = 0; sy < n; sy++) {
+                for (int sx = 0; sx < n; sx++) {
+                    double dx = x + (sx + 0.5) / n - radius;
+                    double dy = y + (sy + 0.5) / n - radius;
+                    covered += std::sqrt(dx * dx + dy * dy) <= radius ? 1 : 0;
+                }
+            }
+            if (!covered) {
+                continue;
+            }
+            uint32_t alpha = (uint32_t)(covered * 255 / (n * n));
+            (*out)[(size_t)y * side + x] = (alpha << 24) | ((uint32_t)(GetRValue(colour) * covered / (n * n)) << 16) |
+                                           ((uint32_t)(GetGValue(colour) * covered / (n * n)) << 8) |
+                                           (uint32_t)(GetBValue(colour) * covered / (n * n));
         }
     }
     return true;
@@ -151,20 +183,68 @@ void LabelsDrawDot(HDC dc, int x, int centreY, int colour, int sidePx) {
     DeleteDC(memory);
 }
 
-// The small "plus" that says there are more tags than dots.
+// Blends a disc of the given colour: x is its left edge, centreY the middle.
+void LabelsDrawDisc(HDC dc, int x, int centreY, COLORREF colour, int sidePx) {
+    if (sidePx < 2 || sidePx > 256) {
+        return;
+    }
+    unsigned long long key = ((unsigned long long)(colour & 0xFFFFFF) << 16) | (unsigned)sidePx;
+    std::lock_guard<std::mutex> lock(g_labelDotMutex);
+    HBITMAP bitmap = nullptr;
+    auto found = g_labelDiscs.find(key);
+    if (found != g_labelDiscs.end()) {
+        bitmap = found->second;
+    } else {
+        std::vector<uint32_t> pixels;
+        if (!LabelsRenderDisc(colour, sidePx, &pixels)) {
+            return;
+        }
+        BITMAPINFO info = LabelsDotInfo(sidePx);
+        void* bits = nullptr;
+        bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bitmap || !bits) {
+            if (bitmap) {
+                DeleteObject(bitmap);
+            }
+            return;
+        }
+        memcpy(bits, pixels.data(), pixels.size() * sizeof(uint32_t));
+        if (g_labelDiscs.size() > 64) {
+            for (auto& entry : g_labelDiscs) {
+                DeleteObject(entry.second);
+            }
+            g_labelDiscs.clear();
+        }
+        g_labelDiscs[key] = bitmap;
+    }
+    HDC memory = CreateCompatibleDC(dc);
+    if (!memory) {
+        return;
+    }
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    AlphaBlend(dc, x, centreY - sidePx / 2, sidePx, sidePx, memory, 0, 0, sidePx, sidePx, blend);
+    SelectObject(memory, old);
+    DeleteDC(memory);
+}
+
+// The "plus" that says there are more tags: small, so it does not crowd the name. 5/8 of a side, at least 5 px.
+int LabelsMoreWidth(int side) {
+    return std::max(5, side * 5 / 8);
+}
+
 void LabelsDrawMore(HDC dc, int x, int centreY, int sidePx) {
-    int arm = std::max(sidePx / 2, 3);
-    int thickness = sidePx >= 16 ? 2 : 1;
-    HPEN pen = CreatePen(PS_SOLID, thickness, LabelsDarkTheme() ? RGB(200, 200, 200) : RGB(96, 96, 96));
+    int width = LabelsMoreWidth(sidePx);
+    int arm = width / 2;
+    HPEN pen = CreatePen(PS_SOLID, 1, LabelsDarkTheme() ? RGB(215, 215, 215) : RGB(70, 70, 70));
     if (!pen) {
         return;
     }
     HGDIOBJ old = SelectObject(dc, pen);
-    int centreX = x + arm;
     MoveToEx(dc, x, centreY, nullptr);
     LineTo(dc, x + 2 * arm + 1, centreY);
-    MoveToEx(dc, centreX, centreY - arm, nullptr);
-    LineTo(dc, centreX, centreY + arm + 1);
+    MoveToEx(dc, x + arm, centreY - arm, nullptr);
+    LineTo(dc, x + arm, centreY + arm + 1);
     SelectObject(dc, old);
     DeleteObject(pen);
 }
@@ -176,4 +256,8 @@ void LabelsReleaseDots() {
         DeleteObject(entry.second);
     }
     g_labelDots.clear();
+    for (auto& entry : g_labelDiscs) {
+        DeleteObject(entry.second);
+    }
+    g_labelDiscs.clear();
 }

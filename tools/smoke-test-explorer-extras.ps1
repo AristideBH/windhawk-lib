@@ -91,6 +91,8 @@ $dotsLine = $lines | Select-String 'LABELS DOTS SELFTEST' | Select-Object -Last 
 Check 'labels dots self-test passed' ($dotsLine -and $dotsLine.Line -match 'LABELS DOTS SELFTEST pass') ($(if ($dotsLine) { $dotsLine.Line } else { 'no LABELS DOTS SELFTEST line in the log' }))
 $cacheLine = $lines | Select-String 'LABELS CACHE SELFTEST' | Select-Object -Last 1
 Check 'labels cache self-test passed' ($cacheLine -and $cacheLine.Line -match 'LABELS CACHE SELFTEST pass') ($(if ($cacheLine) { $cacheLine.Line } else { 'no LABELS CACHE SELFTEST line in the log' }))
+$placeLine = $lines | Select-String 'LABELS PLACE SELFTEST' | Select-Object -Last 1
+Check 'labels placement self-test passed' ($placeLine -and $placeLine.Line -match 'LABELS PLACE SELFTEST pass') ($(if ($placeLine) { $placeLine.Line } else { 'no LABELS PLACE SELFTEST line in the log' }))
 Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object -First 2 | ForEach-Object { $_.Line })
 $dumps = @(Get-ChildItem $dumpDir -Filter 'explorer.exe.*.dmp' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $began })
 Check 'no new crash dump of explorer.exe' ($dumps.Count -eq 0) ($dumps | ForEach-Object { $_.Name })

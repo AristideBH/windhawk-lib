@@ -6,6 +6,8 @@
 struct LabelsFolder {
     std::unordered_map<std::wstring, std::vector<LabelTag>> byName;
     std::unordered_set<std::wstring> ambiguous;  // Names shown by more than one item, at least one of them tagged.
+    std::unordered_map<std::wstring, std::wstring> typeNames;  // The type text ("Text file") of each tagged item.
+    std::unordered_set<std::wstring> folders;    // The items that are folders (a Tiles or Content row has no detail line then).
     bool streamsSupported = true;                // The volume can carry the stream.
     bool complete = false;                       // The folder was read to its end.
 };
@@ -14,6 +16,8 @@ struct LabelsFolder {
 struct LabelsItem {
     std::wstring name;
     std::vector<LabelTag> tags;
+    bool folder = false;
+    std::wstring typeName;  // What Explorer calls the type of the item, for tagged items only.
 };
 
 // Builds the cache entry of a folder from what its items gave. Pure.
@@ -23,15 +27,20 @@ LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
     std::unordered_set<std::wstring> tagged;
     for (auto const& item : items) {
         seen[item.name]++;
+        if (item.folder) {
+            folder.folders.insert(item.name);
+        }
         if (!item.tags.empty()) {
             tagged.insert(item.name);
             folder.byName[item.name] = item.tags;
+            folder.typeNames[item.name] = item.typeName;
         }
     }
     for (auto const& name : tagged) {
         if (seen[name] > 1) {
             folder.ambiguous.insert(name);
             folder.byName.erase(name);
+            folder.typeNames.erase(name);
         }
     }
     folder.complete = true;
@@ -78,10 +87,19 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
                 }
                 LabelsItem item;
                 item.name = DisplayName(folder, child);
+                SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
+                item.folder = SUCCEEDED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&child, &attributes)) &&
+                              (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
                 std::wstring file = ParsingName(folder, child);
                 std::vector<LabelTag> tags;
                 if (!file.empty() && LabelsReadFile(file, &tags)) {
                     item.tags = std::move(tags);
+                }
+                if (!item.tags.empty()) {
+                    SHFILEINFOW info = {};
+                    if (SHGetFileInfoW(file.c_str(), 0, &info, sizeof(info), SHGFI_TYPENAME)) {
+                        item.typeName = info.szTypeName;
+                    }
                 }
                 items.push_back(std::move(item));
                 CoTaskMemFree(child);

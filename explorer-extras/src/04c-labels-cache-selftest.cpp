@@ -33,12 +33,15 @@ void CacheWaitComplete(std::wstring const& dir, std::shared_ptr<const LabelsFold
 
 void CacheSelfTestRun() {
     // The pure part: names shown by two items, one of them tagged.
-    std::vector<LabelsItem> items = {{L"report", {LabelTag{1, L"x"}}}, {L"report", {}}, {L"solo", {LabelTag{2, L""}}}, {L"plain", {}}};
+    std::vector<LabelsItem> items = {{L"report", {LabelTag{1, L"x"}}}, {L"report", {}}, {L"solo", {LabelTag{2, L""}}}, {L"plain", {}},
+                                     {L"dir", {LabelTag{3, L""}}, true}, {L"typed", {LabelTag{4, L""}}, false, L"Text file"}};
     LabelsFolder collected = LabelsCollect(items);
     CacheExpect(collected.complete, L"a collected folder is complete");
     CacheExpect(collected.ambiguous.count(L"report") == 1, L"two items named report are ambiguous");
     CacheExpect(!collected.byName.count(L"report"), L"an ambiguous name gets no tags");
     CacheExpect(collected.byName.count(L"solo") == 1 && !collected.byName.count(L"plain"), L"a unique tagged name keeps its tags");
+    CacheExpect(collected.folders.count(L"dir") == 1 && !collected.folders.count(L"solo"), L"folders are known by name");
+    CacheExpect(collected.typeNames.count(L"typed") == 1 && collected.typeNames[L"typed"] == L"Text file", L"the type text of a tagged item is kept");
     std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
     CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
 
@@ -64,6 +67,10 @@ void CacheSelfTestRun() {
         bool file = data->byName.count(L"b.txt") || data->byName.count(L"b");
         CacheExpect(file && data->byName.count(L"sub") == 1, L"both tagged items are in the cache");
         CacheExpect(!data->byName.count(L"a.txt") && !data->byName.count(L"a"), L"the untagged item is not");
+        CacheExpect(data->folders.count(L"sub") == 1, L"a read folder lists its subfolders");
+        bool typed = (data->typeNames.count(L"b.txt") && !data->typeNames.at(L"b.txt").empty()) ||
+                     (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
+        CacheExpect(typed, L"a tagged file has its type text");
     }
     LabelsSetTags(tagged, {});
     data = LabelsFolderFor(dir);

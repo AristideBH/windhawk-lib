@@ -45,6 +45,22 @@ void LabelsDotsSelfTest() {
             }
         }
     }
+    for (int dark = 0; dark < 2; dark++) {
+        for (int colour = 1; colour < 8; colour++) {
+            std::vector<uint32_t> big;
+            if (LabelsRenderDot(colour, dark != 0, 24, &big) && big.size() == 24 * 24) {
+                uint32_t rim = big[12 * 24 + 1];
+                COLORREF fill = LabelsColourRgb(colour, dark != 0);
+                int rimSum = (int)((rim >> 16) & 255) + (int)((rim >> 8) & 255) + (int)(rim & 255);
+                int fillSum = GetRValue(fill) + GetGValue(fill) + GetBValue(fill);
+                DotsExpect((rim >> 24) == 255 && rimSum < fillSum, L"the rim is the fill a little darker, in both themes");
+            }
+        }
+    }
+    std::vector<uint32_t> disc;
+    DotsExpect(LabelsRenderDisc(RGB(10, 20, 30), 12, &disc) && disc.size() == 144 && disc[6 * 12 + 6] == DotsPixelOf(RGB(10, 20, 30)) &&
+                   (disc[0] >> 24) == 0,
+               L"a disc is opaque in the middle and transparent in the corner");
     DotsExpect(LabelsColourRgb(1, false) != LabelsColourRgb(1, true), L"light and dark variants differ");
     DotsExpect(LabelsColourRgb(0, false) != LabelsColourRgb(1, false), L"gray differs from red");
 

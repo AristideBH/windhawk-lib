@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.69.2
+// @version         0.70.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -2631,6 +2631,8 @@ int RememberedColumns(std::wstring const& path) {
 struct LabelsFolder {
     std::unordered_map<std::wstring, std::vector<LabelTag>> byName;
     std::unordered_set<std::wstring> ambiguous;  // Names shown by more than one item, at least one of them tagged.
+    std::unordered_map<std::wstring, std::wstring> typeNames;  // The type text ("Text file") of each tagged item.
+    std::unordered_set<std::wstring> folders;    // The items that are folders (a Tiles or Content row has no detail line then).
     bool streamsSupported = true;                // The volume can carry the stream.
     bool complete = false;                       // The folder was read to its end.
 };
@@ -2639,6 +2641,8 @@ struct LabelsFolder {
 struct LabelsItem {
     std::wstring name;
     std::vector<LabelTag> tags;
+    bool folder = false;
+    std::wstring typeName;  // What Explorer calls the type of the item, for tagged items only.
 };
 
 // Builds the cache entry of a folder from what its items gave. Pure.
@@ -2648,15 +2652,20 @@ LabelsFolder LabelsCollect(std::vector<LabelsItem> const& items) {
     std::unordered_set<std::wstring> tagged;
     for (auto const& item : items) {
         seen[item.name]++;
+        if (item.folder) {
+            folder.folders.insert(item.name);
+        }
         if (!item.tags.empty()) {
             tagged.insert(item.name);
             folder.byName[item.name] = item.tags;
+            folder.typeNames[item.name] = item.typeName;
         }
     }
     for (auto const& name : tagged) {
         if (seen[name] > 1) {
             folder.ambiguous.insert(name);
             folder.byName.erase(name);
+            folder.typeNames.erase(name);
         }
     }
     folder.complete = true;
@@ -2703,10 +2712,19 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
                 }
                 LabelsItem item;
                 item.name = DisplayName(folder, child);
+                SFGAOF attributes = SFGAO_FOLDER | SFGAO_STREAM;
+                item.folder = SUCCEEDED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&child, &attributes)) &&
+                              (attributes & SFGAO_FOLDER) && !(attributes & SFGAO_STREAM);
                 std::wstring file = ParsingName(folder, child);
                 std::vector<LabelTag> tags;
                 if (!file.empty() && LabelsReadFile(file, &tags)) {
                     item.tags = std::move(tags);
+                }
+                if (!item.tags.empty()) {
+                    SHFILEINFOW info = {};
+                    if (SHGetFileInfoW(file.c_str(), 0, &info, sizeof(info), SHGFI_TYPENAME)) {
+                        item.typeName = info.szTypeName;
+                    }
                 }
                 items.push_back(std::move(item));
                 CoTaskMemFree(child);
@@ -2893,12 +2911,15 @@ void CacheWaitComplete(std::wstring const& dir, std::shared_ptr<const LabelsFold
 
 void CacheSelfTestRun() {
     // The pure part: names shown by two items, one of them tagged.
-    std::vector<LabelsItem> items = {{L"report", {LabelTag{1, L"x"}}}, {L"report", {}}, {L"solo", {LabelTag{2, L""}}}, {L"plain", {}}};
+    std::vector<LabelsItem> items = {{L"report", {LabelTag{1, L"x"}}}, {L"report", {}}, {L"solo", {LabelTag{2, L""}}}, {L"plain", {}},
+                                     {L"dir", {LabelTag{3, L""}}, true}, {L"typed", {LabelTag{4, L""}}, false, L"Text file"}};
     LabelsFolder collected = LabelsCollect(items);
     CacheExpect(collected.complete, L"a collected folder is complete");
     CacheExpect(collected.ambiguous.count(L"report") == 1, L"two items named report are ambiguous");
     CacheExpect(!collected.byName.count(L"report"), L"an ambiguous name gets no tags");
     CacheExpect(collected.byName.count(L"solo") == 1 && !collected.byName.count(L"plain"), L"a unique tagged name keeps its tags");
+    CacheExpect(collected.folders.count(L"dir") == 1 && !collected.folders.count(L"solo"), L"folders are known by name");
+    CacheExpect(collected.typeNames.count(L"typed") == 1 && collected.typeNames[L"typed"] == L"Text file", L"the type text of a tagged item is kept");
     std::vector<LabelsItem> untaggedPair = {{L"same", {}}, {L"same", {}}};
     CacheExpect(LabelsCollect(untaggedPair).ambiguous.empty(), L"two untagged items of one name are not ambiguous");
 
@@ -2924,6 +2945,10 @@ void CacheSelfTestRun() {
         bool file = data->byName.count(L"b.txt") || data->byName.count(L"b");
         CacheExpect(file && data->byName.count(L"sub") == 1, L"both tagged items are in the cache");
         CacheExpect(!data->byName.count(L"a.txt") && !data->byName.count(L"a"), L"the untagged item is not");
+        CacheExpect(data->folders.count(L"sub") == 1, L"a read folder lists its subfolders");
+        bool typed = (data->typeNames.count(L"b.txt") && !data->typeNames.at(L"b.txt").empty()) ||
+                     (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
+        CacheExpect(typed, L"a tagged file has its type text");
     }
     LabelsSetTags(tagged, {});
     data = LabelsFolderFor(dir);
@@ -19434,6 +19459,7 @@ constexpr LabelsPaletteEntry kLabelsPalette[8] = {
 std::atomic<ULONGLONG> g_labelsThemeChecked{0};
 std::atomic<bool> g_labelsDark{false};
 std::mutex g_labelDotMutex;
+[[clang::no_destroy]] std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
 [[clang::no_destroy]] std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
 
 BITMAPINFO LabelsDotInfo(int side) {
@@ -19481,8 +19507,9 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
         return false;
     }
     COLORREF fill = LabelsColourRgb(colour, dark);
-    int target = dark ? 255 : 0;
-    auto toward = [target](int channel) { return channel + (target - channel) * 28 / 100; };
+    // The rim is the fill a little darker, in both themes: it separates stacked dots without a light outline.
+    int percent = dark ? 18 : 28;
+    auto toward = [percent](int channel) { return channel - channel * percent / 100; };
     COLORREF rim = RGB(toward(GetRValue(fill)), toward(GetGValue(fill)), toward(GetBValue(fill)));
     const double radius = side / 2.0;
     const double rimWidth = std::max(1.0, side / 10.0);
@@ -19512,6 +19539,36 @@ bool LabelsRenderDot(int colour, bool dark, int side, std::vector<uint32_t>* out
             uint32_t alpha = (uint32_t)(covered * 255 / (n * n));
             (*out)[(size_t)y * side + x] = (alpha << 24) | ((uint32_t)(red / (n * n)) << 16) |
                                            ((uint32_t)(green / (n * n)) << 8) | (uint32_t)(blue / (n * n));
+        }
+    }
+    return true;
+}
+
+// A plain disc of one colour, anti-aliased, premultiplied, top down. It cuts one stacked dot free of the next.
+bool LabelsRenderDisc(COLORREF colour, int side, std::vector<uint32_t>* out) {
+    if (side < 2 || side > 256) {
+        return false;
+    }
+    const double radius = side / 2.0;
+    const int n = 4;
+    out->assign((size_t)side * side, 0);
+    for (int y = 0; y < side; y++) {
+        for (int x = 0; x < side; x++) {
+            int covered = 0;
+            for (int sy = 0; sy < n; sy++) {
+                for (int sx = 0; sx < n; sx++) {
+                    double dx = x + (sx + 0.5) / n - radius;
+                    double dy = y + (sy + 0.5) / n - radius;
+                    covered += std::sqrt(dx * dx + dy * dy) <= radius ? 1 : 0;
+                }
+            }
+            if (!covered) {
+                continue;
+            }
+            uint32_t alpha = (uint32_t)(covered * 255 / (n * n));
+            (*out)[(size_t)y * side + x] = (alpha << 24) | ((uint32_t)(GetRValue(colour) * covered / (n * n)) << 16) |
+                                           ((uint32_t)(GetGValue(colour) * covered / (n * n)) << 8) |
+                                           (uint32_t)(GetBValue(colour) * covered / (n * n));
         }
     }
     return true;
@@ -19558,20 +19615,68 @@ void LabelsDrawDot(HDC dc, int x, int centreY, int colour, int sidePx) {
     DeleteDC(memory);
 }
 
-// The small "plus" that says there are more tags than dots.
+// Blends a disc of the given colour: x is its left edge, centreY the middle.
+void LabelsDrawDisc(HDC dc, int x, int centreY, COLORREF colour, int sidePx) {
+    if (sidePx < 2 || sidePx > 256) {
+        return;
+    }
+    unsigned long long key = ((unsigned long long)(colour & 0xFFFFFF) << 16) | (unsigned)sidePx;
+    std::lock_guard<std::mutex> lock(g_labelDotMutex);
+    HBITMAP bitmap = nullptr;
+    auto found = g_labelDiscs.find(key);
+    if (found != g_labelDiscs.end()) {
+        bitmap = found->second;
+    } else {
+        std::vector<uint32_t> pixels;
+        if (!LabelsRenderDisc(colour, sidePx, &pixels)) {
+            return;
+        }
+        BITMAPINFO info = LabelsDotInfo(sidePx);
+        void* bits = nullptr;
+        bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bitmap || !bits) {
+            if (bitmap) {
+                DeleteObject(bitmap);
+            }
+            return;
+        }
+        memcpy(bits, pixels.data(), pixels.size() * sizeof(uint32_t));
+        if (g_labelDiscs.size() > 64) {
+            for (auto& entry : g_labelDiscs) {
+                DeleteObject(entry.second);
+            }
+            g_labelDiscs.clear();
+        }
+        g_labelDiscs[key] = bitmap;
+    }
+    HDC memory = CreateCompatibleDC(dc);
+    if (!memory) {
+        return;
+    }
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    AlphaBlend(dc, x, centreY - sidePx / 2, sidePx, sidePx, memory, 0, 0, sidePx, sidePx, blend);
+    SelectObject(memory, old);
+    DeleteDC(memory);
+}
+
+// The "plus" that says there are more tags: small, so it does not crowd the name. 5/8 of a side, at least 5 px.
+int LabelsMoreWidth(int side) {
+    return std::max(5, side * 5 / 8);
+}
+
 void LabelsDrawMore(HDC dc, int x, int centreY, int sidePx) {
-    int arm = std::max(sidePx / 2, 3);
-    int thickness = sidePx >= 16 ? 2 : 1;
-    HPEN pen = CreatePen(PS_SOLID, thickness, LabelsDarkTheme() ? RGB(200, 200, 200) : RGB(96, 96, 96));
+    int width = LabelsMoreWidth(sidePx);
+    int arm = width / 2;
+    HPEN pen = CreatePen(PS_SOLID, 1, LabelsDarkTheme() ? RGB(215, 215, 215) : RGB(70, 70, 70));
     if (!pen) {
         return;
     }
     HGDIOBJ old = SelectObject(dc, pen);
-    int centreX = x + arm;
     MoveToEx(dc, x, centreY, nullptr);
     LineTo(dc, x + 2 * arm + 1, centreY);
-    MoveToEx(dc, centreX, centreY - arm, nullptr);
-    LineTo(dc, centreX, centreY + arm + 1);
+    MoveToEx(dc, x + arm, centreY - arm, nullptr);
+    LineTo(dc, x + arm, centreY + arm + 1);
     SelectObject(dc, old);
     DeleteObject(pen);
 }
@@ -19583,6 +19688,10 @@ void LabelsReleaseDots() {
         DeleteObject(entry.second);
     }
     g_labelDots.clear();
+    for (auto& entry : g_labelDiscs) {
+        DeleteObject(entry.second);
+    }
+    g_labelDiscs.clear();
 }
 // Labels: the self-test of the palette and the dot images (debug build only). One log line:
 // "LABELS DOTS SELFTEST pass" or "LABELS DOTS SELFTEST FAIL <what>".
@@ -19631,6 +19740,22 @@ void LabelsDotsSelfTest() {
             }
         }
     }
+    for (int dark = 0; dark < 2; dark++) {
+        for (int colour = 1; colour < 8; colour++) {
+            std::vector<uint32_t> big;
+            if (LabelsRenderDot(colour, dark != 0, 24, &big) && big.size() == 24 * 24) {
+                uint32_t rim = big[12 * 24 + 1];
+                COLORREF fill = LabelsColourRgb(colour, dark != 0);
+                int rimSum = (int)((rim >> 16) & 255) + (int)((rim >> 8) & 255) + (int)(rim & 255);
+                int fillSum = GetRValue(fill) + GetGValue(fill) + GetBValue(fill);
+                DotsExpect((rim >> 24) == 255 && rimSum < fillSum, L"the rim is the fill a little darker, in both themes");
+            }
+        }
+    }
+    std::vector<uint32_t> disc;
+    DotsExpect(LabelsRenderDisc(RGB(10, 20, 30), 12, &disc) && disc.size() == 144 && disc[6 * 12 + 6] == DotsPixelOf(RGB(10, 20, 30)) &&
+                   (disc[0] >> 24) == 0,
+               L"a disc is opaque in the middle and transparent in the corner");
     DotsExpect(LabelsColourRgb(1, false) != LabelsColourRgb(1, true), L"light and dark variants differ");
     DotsExpect(LabelsColourRgb(0, false) != LabelsColourRgb(1, false), L"gray differs from red");
 
@@ -19675,6 +19800,883 @@ void LabelsDotsSelfTest() {
         Wh_Log(L"LABELS DOTS SELFTEST pass");
     } else {
         Wh_Log(L"LABELS DOTS SELFTEST FAIL %s", g_dotsFailure.c_str());
+    }
+}
+
+#endif  // EXTRAS_VERBOSE
+// Labels on Explorer's own file list. Explorer draws the list with DirectUI. A hook on the exported
+// Element::PaintContent of dui70.dll sees every element as it is painted: after a row (a "UIItem") has been
+// painted, the dot of its tags is drawn next to its name. The tags come from the folder cache (04b), looked up by
+// the row's accessible name, so painting never touches the disk. Where a dot goes depends on the view mode, see the
+// surfaces skill and docs/superpowers/specs/2026-11-17-labels-design.md.
+
+enum class LabelsView { None, Details, List, Tiles, Content, Icons };
+
+struct LabelsPlaceInput {
+    LabelsView view = LabelsView::None;
+    RECT row = {};          // The row (UIItem).
+    RECT cell = {};         // The cell the dot is placed against, in the same coordinates.
+    int textLeft = 0;       // The text in that cell. textRight < textLeft when the cell has no text.
+    int textRight = -1;
+    int lineHeight = 16;
+    int iconLeft = 0;       // The icon, for the corner of it.
+    int iconBottom = 0;
+    int blockWidth = 8;     // All the dots and the plus, side by side.
+    int side = 8;
+    int columnPad = 18;     // The padding after a Details cell, up to the next column.
+};
+
+struct LabelsPlace {
+    int x = 0;  // Left edge of the block of dots.
+    int centreY = 0;
+    bool corner = false;  // There is no room by the name: the block goes on the icon's bottom-left corner.
+};
+
+// The gap between two dots.
+static int LabelsDotGap(int side) {
+    return std::max(2, side / 4);
+}
+
+// How far each dot is after the one before: the dots are stacked, each one partly under the one on its left.
+int LabelsDotStep(int side) {
+    return side * 3 / 4;
+}
+
+// The width of `count` stacked dots, plus a gap and a "plus" when there are more.
+int LabelsBlockWidth(int count, bool more, int side) {
+    if (count <= 0) {
+        return 0;
+    }
+    return side + (count - 1) * LabelsDotStep(side) + (more ? std::max(4, side / 2) + LabelsMoreWidth(side) : 0);
+}
+
+// The colours to draw: each colour once, in the order of the tags, at most four, and whether more were left out.
+std::vector<int> LabelsDotColours(std::vector<LabelTag> const& tags, bool* more) {
+    std::vector<int> colours;
+    *more = false;
+    for (auto const& tag : tags) {
+        if (std::find(colours.begin(), colours.end(), (int)tag.colour) != colours.end()) {
+            continue;
+        }
+        if (colours.size() >= 4) {
+            *more = true;
+            break;
+        }
+        colours.push_back(tag.colour);
+    }
+    return colours;
+}
+
+// How many lines of text a block holds, and whether a property that ends at `bottom` is on the last of them.
+int LabelsLines(int blockHeight, int lineHeight) {
+    return lineHeight > 0 ? std::max(1, (blockHeight + lineHeight / 2) / lineHeight) : 1;
+}
+
+bool LabelsIsLastLine(int bottom, int blockBottom, int lineHeight) {
+    return bottom >= blockBottom - lineHeight / 2;
+}
+
+// Where the dots go, from the geometry of the row. Pure, so it is tested without Explorer.
+LabelsPlace LabelsPlaceFor(LabelsPlaceInput const& in) {
+    LabelsPlace place;
+    const int gap = 6;
+    const int margin = std::max(4, in.side * 3 / 4);
+    switch (in.view) {
+        case LabelsView::List: {
+            int height = in.row.bottom - in.row.top;
+            place.x = in.row.left + (height - in.side) / 2;
+            place.centreY = in.row.top + height / 2;
+            return place;
+        }
+        case LabelsView::Details:
+            // Right-aligned in the name cell, the same place on every row.
+            place.x = in.cell.right - in.blockWidth - margin;
+            place.centreY = (in.cell.top + in.cell.bottom) / 2;
+            break;
+        case LabelsView::Tiles:
+            place.x = in.textRight >= in.textLeft ? in.textRight + gap : in.cell.left;
+            place.centreY = (in.cell.top + in.cell.bottom) / 2 + in.lineHeight / 8;  // A little below the middle: the text sits low.
+            place.corner = place.x + in.blockWidth > in.cell.right;
+            break;
+        case LabelsView::Content:
+            if (in.textRight >= in.textLeft) {
+                // The cell is the type line: after its text.
+                place.x = in.textRight + gap;
+                place.centreY = (in.cell.top + in.cell.bottom) / 2 + in.lineHeight / 8;
+            } else {
+                // The cell is the name line: at the start of the line below it.
+                place.x = in.cell.left;
+                place.centreY = in.cell.top + in.lineHeight * 3 / 2;
+            }
+            break;
+        case LabelsView::Icons: {
+            // The cell is the last line of the name: after its text, or on a new line below when it has no room.
+            int width = in.cell.right - in.cell.left;
+            place.x = in.textRight + gap;
+            place.centreY = (in.cell.top + in.cell.bottom) / 2;
+            if (place.x + in.blockWidth > in.cell.right) {
+                place.x = in.cell.left + (width - in.blockWidth) / 2;
+                place.centreY = in.cell.bottom + in.lineHeight / 2;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    if (place.corner) {
+        place.x = in.iconLeft + 2;
+        place.centreY = in.iconBottom - in.side / 2 - 2;
+    }
+    return place;
+}
+
+namespace {
+
+bool g_labelsPaintOk = false;
+int g_labelsClassSlot = -1;
+int g_labelsNameSlot = -1;
+
+using LabelsGetAccName_t = const wchar_t* (*)(void* self, void** out);
+using LabelsValueRelease_t = void (*)(void* value);
+using LabelsGetChildren_t = void* (*)(void* self, void** out);
+using LabelsGetLocation_t = const POINT* (*)(void* self, void** out);
+using LabelsGetExtent_t = const SIZE* (*)(void* self, void** out);
+using LabelsGetParent_t = void* (*)(void* self);
+LabelsGetAccName_t LabelsGetAccName = nullptr;
+LabelsValueRelease_t LabelsValueRelease = nullptr;
+LabelsGetChildren_t LabelsGetChildren = nullptr;
+LabelsGetLocation_t LabelsGetLocation = nullptr;
+LabelsGetExtent_t LabelsGetExtent = nullptr;
+LabelsGetParent_t LabelsGetParent = nullptr;
+
+void* LabelsExport(HMODULE module, const char* prefix) {
+    auto base = (BYTE*)module;
+    auto dos = (IMAGE_DOS_HEADER*)base;
+    auto nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!dir.VirtualAddress) {
+        return nullptr;
+    }
+    auto exports = (IMAGE_EXPORT_DIRECTORY*)(base + dir.VirtualAddress);
+    auto names = (DWORD*)(base + exports->AddressOfNames);
+    size_t length = strlen(prefix);
+    for (DWORD i = 0; i < exports->NumberOfNames; i++) {
+        const char* name = (const char*)(base + names[i]);
+        if (strncmp(name, prefix, length) == 0) {
+            return (void*)GetProcAddress(module, name);
+        }
+    }
+    return nullptr;
+}
+
+int LabelsFindSlot(void* vtable, void* function) {
+    if (!vtable || !function) {
+        return -1;
+    }
+    void** slots = (void**)vtable;
+    for (int i = 0; i < 120; i++) {
+        if (IsBadReadPtr(&slots[i], sizeof(void*))) {
+            break;
+        }
+        if (slots[i] == function) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+enum LabelsKind { kOther, kItem, kProperty, kTilesCollection, kSmartCollection, kElement, kImage, kCheckbox,
+                  kDetailsCollection, kBase, kSmartProperty };
+
+LabelsKind LabelsKindOf(void* element) {
+    [[clang::no_destroy]] thread_local std::unordered_map<void*, LabelsKind> kinds;
+    void* vtable = *(void**)element;
+    auto found = kinds.find(vtable);
+    if (found != kinds.end()) {
+        return found->second;
+    }
+    LabelsKind kind = kOther;
+    void** table = (void**)vtable;
+    using GetClassInfo_t = void* (*)(void*);
+    void* classInfo = ((GetClassInfo_t)table[g_labelsClassSlot])(element);
+    if (classInfo && !IsBadReadPtr(classInfo, sizeof(void*))) {
+        void** infoTable = *(void***)classInfo;
+        using GetName_t = const wchar_t* (*)(void*);
+        const wchar_t* name = ((GetName_t)infoTable[g_labelsNameSlot])(classInfo);
+        if (name && !IsBadStringPtrW(name, 200)) {
+            struct Row { const wchar_t* name; LabelsKind kind; };
+            static const Row rows[] = {{L"UIItem", kItem}, {L"UIProperty", kProperty},
+                                       {L"UITilesPropertyCollection", kTilesCollection},
+                                       {L"UISmartPropertyCollection", kSmartCollection}, {L"Element", kElement},
+                                       {L"UIImage", kImage}, {L"UICheckbox", kCheckbox},
+                                       {L"UIDetailsPropertyCollection", kDetailsCollection}, {L"UIBase", kBase},
+                                       {L"UISmartProperty", kSmartProperty}};
+            for (auto const& row : rows) {
+                if (wcscmp(name, row.name) == 0) {
+                    kind = row.kind;
+                }
+            }
+        }
+    }
+    if (kinds.size() < 400) {
+        kinds[vtable] = kind;
+    }
+    return kind;
+}
+
+std::wstring LabelsAccName(void* element) {
+    void* value = nullptr;
+    const wchar_t* text = LabelsGetAccName(element, &value);
+    std::wstring result;
+    if (text && !IsBadStringPtrW(text, 600)) {
+        result = text;
+    }
+    if (value) {
+        LabelsValueRelease(value);
+    }
+    return result;
+}
+
+bool LabelsReadable(const void* p, size_t n) {
+    return p && !IsBadReadPtr(p, n);
+}
+
+// The elements of a DynamicArray<Element*>: a data pointer and a count are searched for among its first words.
+bool LabelsReadArray(void* array, std::vector<void*>* out) {
+    if (!LabelsReadable(array, 24)) {
+        return false;
+    }
+    unsigned long long q[3];
+    memcpy(q, array, 24);
+    for (int d = 0; d < 3; d++) {
+        for (int s = 0; s < 3; s++) {
+            for (int half = 0; half < 2; half++) {
+                if (s == d) {
+                    continue;
+                }
+                unsigned long long count = half ? (q[s] >> 32) : (q[s] & 0xffffffffull);
+                void** data = (void**)q[d];
+                if (count == 0 || count > 60 || !LabelsReadable(data, count * sizeof(void*))) {
+                    continue;
+                }
+                bool ok = true;
+                for (unsigned long long i = 0; i < count && ok; i++) {
+                    ok = LabelsReadable(data[i], 8) && LabelsReadable(*(void**)data[i], 8);
+                }
+                if (ok) {
+                    out->assign(data, data + count);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+struct LabelsChild {
+    void* element = nullptr;
+    LabelsKind kind = kOther;
+    POINT at = {};
+    SIZE size = {};
+};
+
+std::vector<LabelsChild> LabelsChildrenOf(void* element) {
+    std::vector<LabelsChild> result;
+    void* value = nullptr;
+    void* array = LabelsGetChildren(element, &value);
+    std::vector<void*> children;
+    bool ok = LabelsReadArray(array, &children);
+    if (value) {
+        LabelsValueRelease(value);
+    }
+    if (!ok) {
+        return result;
+    }
+    for (void* child : children) {
+        LabelsChild entry;
+        entry.element = child;
+        entry.kind = LabelsKindOf(child);
+        void* v1 = nullptr;
+        void* v2 = nullptr;
+        const POINT* at = LabelsGetLocation(child, &v1);
+        const SIZE* size = LabelsGetExtent(child, &v2);
+        if (at && LabelsReadable(at, sizeof(POINT))) {
+            entry.at = *at;
+        }
+        if (size && LabelsReadable(size, sizeof(SIZE))) {
+            entry.size = *size;
+        }
+        if (v1) LabelsValueRelease(v1);
+        if (v2) LabelsValueRelease(v2);
+        result.push_back(entry);
+    }
+    return result;
+}
+
+// The DPI of the Explorer window of this thread, looked up at most twice a second.
+UINT LabelsThreadDpi() {
+    thread_local UINT dpi = 0;
+    thread_local ULONGLONG at = 0;
+    ULONGLONG now = GetTickCount64();
+    if (dpi && now - at < 500) {
+        return dpi;
+    }
+    struct Find {
+        UINT dpi = 0;
+    } find;
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND window, LPARAM param) -> BOOL {
+        wchar_t name[40];
+        if (GetClassNameW(window, name, 40) && wcscmp(name, L"CabinetWClass") == 0) {
+            ((Find*)param)->dpi = GetDpiForWindow(window);
+            return FALSE;
+        }
+        return TRUE;
+    }, (LPARAM)&find);
+    dpi = find.dpi ? find.dpi : GetDpiForSystem();
+    at = now;
+    return dpi;
+}
+
+// The folder this thread's Explorer window shows, as a path, looked up at most four times a second.
+std::wstring LabelsThreadFolder() {
+    [[clang::no_destroy]] thread_local std::wstring path;
+    thread_local ULONGLONG at = 0;
+    ULONGLONG now = GetTickCount64();
+    if (at && now - at < 250) {
+        return path;
+    }
+    at = now;
+    try {
+        WindowState* state = StateForThisThread(false);
+        if (state && state->topLevel) {
+            IShellBrowser* browser = BrowserOf(state->topLevel);
+            if (browser) {
+                Pidl folder = CurrentFolder(browser);
+                path = folder ? PathOf(folder.get()) : std::wstring();
+            }
+        }
+    } catch (...) {
+    }
+    return path;
+}
+
+// The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI), measured on `dc`.
+int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi) {
+    [[clang::no_destroy]] thread_local std::map<UINT, HFONT> fonts;
+    HFONT& font = fonts[dpi];
+    if (!font) {
+        font = CreateFontW(-MulDiv(13, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                           CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    }
+    if (!font) {
+        return 0;
+    }
+    HGDIOBJ old = SelectObject(dc, font);
+    SIZE size = {};
+    GetTextExtentPoint32W(dc, text.c_str(), (int)text.size(), &size);
+    SelectObject(dc, old);
+    return size.cx;
+}
+
+// The right edge of the text drawn inside `band`: the last column with a pixel that differs from the corner's.
+bool LabelsScanText(HDC dc, RECT const& band, int* left, int* right) {
+    int width = band.right - band.left;
+    int height = band.bottom - band.top;
+    if (width <= 0 || height <= 0 || width > 1200 || height > 120) {
+        return false;
+    }
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    uint32_t* bits = nullptr;
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = memory ? CreateDIBSection(memory, &info, DIB_RGB_COLORS, (void**)&bits, nullptr, 0) : nullptr;
+    bool found = false;
+    if (bitmap && bits) {
+        HGDIOBJ old = SelectObject(memory, bitmap);
+        BitBlt(memory, 0, 0, width, height, dc, band.left, band.top, SRCCOPY);
+        uint32_t background = bits[width - 1] & 0xFFFFFF;
+        *left = width;
+        *right = -1;
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                if ((bits[y * width + x] & 0xFFFFFF) != background) {
+                    *left = std::min(*left, x);
+                    *right = std::max(*right, x);
+                    break;
+                }
+            }
+        }
+        found = *right >= 0;
+        *left += band.left;
+        *right += band.left;
+        SelectObject(memory, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (memory) DeleteDC(memory);
+    return found;
+}
+
+// What the row that was just painted needs from the elements that paint after it.
+struct LabelsRowContext {
+    void* item = nullptr;
+    LabelsView view = LabelsView::None;
+    RECT row = {};
+    RECT block = {};  // The text block of Tiles and Icons rows, in the device context's coordinates.
+    RECT name = {};   // The name line of a Content row, once it has been painted.
+    bool haveName = false;
+    bool folder = false;
+    std::wstring typeName;  // The text of the type line of a Content row, from the cache.
+    UINT dpi = 96;
+    int iconLeft = 0;
+    int iconBottom = 0;
+    std::vector<int> colours;
+    bool more = false;
+    int side = 8;
+    int lineHeight = 16;
+    int columnPad = 18;
+    bool drawn = false;
+};
+thread_local LabelsRowContext t_labelsRow;
+thread_local int t_contentTextOffset = -1;  // Where a Content row's text starts, learned from a row that has a Type line.
+
+void LabelsDrawBlock(HDC dc, LabelsRowContext const& row, LabelsPlace const& place) {
+    int step = LabelsDotStep(row.side);
+    int count = (int)row.colours.size();
+    // What is behind the dots, so that each dot can be cut free of the one it overlaps in the colour of the row.
+    COLORREF background = GetPixel(dc, place.x - 2, place.centreY - row.side / 2 - 1);
+    if (background == CLR_INVALID) {
+        background = LabelsDarkTheme() ? RGB(25, 25, 25) : RGB(255, 255, 255);
+    }
+    // The last dot first: each one is drawn over the one on its right, the first on top.
+    for (int i = count - 1; i >= 0; i--) {
+        int x = place.x + i * step;
+        if (i < count - 1) {
+            LabelsDrawDisc(dc, x - 1, place.centreY, background, row.side + 2);
+        }
+        LabelsDrawDot(dc, x, place.centreY, row.colours[i], row.side);
+    }
+    if (row.more && count > 0) {
+        LabelsDrawMore(dc, place.x + (count - 1) * step + row.side + std::max(4, row.side / 2), place.centreY, row.side);
+    }
+}
+
+// Fewer dots, and a plus, when the room is narrow: the colours that do not fit are left out.
+void LabelsFitDots(LabelsRowContext* row, int available) {
+    while (row->colours.size() > 1 && LabelsBlockWidth((int)row->colours.size(), row->more, row->side) > available) {
+        row->colours.pop_back();
+        row->more = true;
+    }
+}
+
+using LabelsPaintContent_t = void (WINAPI*)(void* self, HDC dc, const RECT* rect);
+LabelsPaintContent_t LabelsPaintContent_Original;
+
+// A row was painted: classify its view, and draw the dot now where the view allows it (List). The other views
+// draw from the element that paints the name, after it.
+void LabelsOnItem(void* item, HDC dc, const RECT* rect) {
+    t_labelsRow.item = nullptr;
+    std::wstring folder = LabelsThreadFolder();
+    if (folder.empty()) {
+        return;
+    }
+    auto data = LabelsFolderFor(folder);
+    if (!data->complete || !data->streamsSupported || data->byName.empty()) {
+        return;
+    }
+    std::wstring name = LabelsAccName(item);
+    auto found = data->byName.find(name);
+    if (found == data->byName.end()) {
+        return;
+    }
+    LabelsRowContext row;
+    row.colours = LabelsDotColours(found->second, &row.more);
+    if (row.colours.empty()) {
+        return;
+    }
+    row.folder = data->folders.count(name) != 0;
+    auto typed = data->typeNames.find(name);
+    if (typed != data->typeNames.end()) {
+        row.typeName = typed->second;
+    }
+    UINT dpi = LabelsThreadDpi();
+    row.dpi = dpi;
+    row.row = *rect;
+    row.side = LabelsDotSide(rect->bottom - rect->top, dpi);
+    row.lineHeight = MulDiv(16, (int)dpi, 96);
+    row.columnPad = MulDiv(18, (int)dpi, 96);
+    auto children = LabelsChildrenOf(item);
+    int elements = 0;
+    bool checkbox = false, image = false, property = false, details = false, smart = false;
+    const LabelsChild* icon = nullptr;
+    const LabelsChild* label = nullptr;
+    for (auto const& child : children) {
+        checkbox = checkbox || child.kind == kCheckbox;
+        image = image || child.kind == kImage;
+        property = property || child.kind == kProperty;
+        details = details || child.kind == kDetailsCollection;
+        smart = smart || child.kind == kSmartCollection;
+        if (child.kind == kImage && !icon) {
+            icon = &child;
+        }
+        if (child.kind == kElement) {
+            if (++elements == 1 && !icon) {
+                icon = &child;
+            } else if (elements == 2) {
+                label = &child;
+            }
+        }
+    }
+    if (details) {
+        row.view = LabelsView::Details;
+    } else if (smart) {
+        row.view = LabelsView::Content;
+    } else if (property && image) {
+        row.view = LabelsView::List;
+    } else if (elements >= 2 && checkbox) {
+        row.view = LabelsView::Tiles;
+    } else if (elements >= 2) {
+        row.view = LabelsView::Icons;
+    } else {
+        return;
+    }
+    if (icon) {
+        row.iconLeft = rect->left + icon->at.x;
+        row.iconBottom = rect->top + icon->at.y + icon->size.cy;
+    }
+    if (label) {
+        row.block = {rect->left + label->at.x, rect->top + label->at.y, rect->left + label->at.x + label->size.cx,
+                     rect->top + label->at.y + label->size.cy};
+    }
+    if (row.view == LabelsView::List) {
+        // The gap in front of the icon (where the check box shows) is the room: fewer dots when it is narrow.
+        if (icon) {
+            int start = (rect->bottom - rect->top - row.side) / 2;
+            LabelsFitDots(&row, std::max<int>(row.side, (int)icon->at.x - start - 2));
+        }
+        LabelsPlaceInput in;
+        in.view = row.view;
+        in.row = *rect;
+        in.side = row.side;
+        in.blockWidth = LabelsBlockWidth((int)row.colours.size(), row.more, row.side);
+        LabelsDrawBlock(dc, row, LabelsPlaceFor(in));
+        return;
+    }
+    row.item = item;
+    t_labelsRow = row;
+}
+
+// A name or detail text of the row was painted: Details, Tiles, Content and Icons draw from here, next to it.
+void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
+    LabelsRowContext& row = t_labelsRow;
+    if (!row.item || row.drawn || (kind != kProperty && kind != kSmartProperty)) {
+        return;
+    }
+    void* up = LabelsGetParent(self);
+    for (int level = 0; up && level < 3 && up != row.item; level++) {
+        up = LabelsGetParent(up);
+    }
+    if (up != row.item) {
+        return;
+    }
+    int textLeft = rect->left, textRight = rect->right - 1;
+    int scanLeft = 0, scanRight = -1;
+    RECT band = *rect;
+    if (row.view == LabelsView::Icons) {
+        band.top = std::max(rect->top, rect->bottom - row.lineHeight);  // The last line of the name.
+    }
+    bool scanned = LabelsScanText(dc, band, &scanLeft, &scanRight);
+    if (scanned) {
+        textLeft = scanLeft;
+        textRight = scanRight;
+    }
+    COLORREF detailsPad = CLR_INVALID;
+    LabelsPlaceInput in;
+    in.view = row.view;
+    in.row = row.row;
+    in.lineHeight = row.lineHeight;
+    in.iconLeft = row.iconLeft;
+    in.iconBottom = row.iconBottom;
+    in.side = row.side;
+    in.columnPad = row.columnPad;
+#ifdef EXTRAS_VERBOSE
+    {
+        static std::atomic<int> logged{0};
+        if (logged++ < 250) {
+            Wh_Log(L"LABELS PROP view=%d kind=%d rect=(%ld,%ld,%ld,%ld) text=%d..%d scanned=%d acc='%.30s' row=(%ld,%ld,%ld,%ld) block=(%ld,%ld,%ld,%ld) folder=%d",
+                   (int)row.view, (int)kind, rect->left, rect->top, rect->right, rect->bottom, textLeft, textRight,
+                   scanned ? 1 : 0, LabelsAccName(self).c_str(), row.row.left, row.row.top, row.row.right,
+                   row.row.bottom, row.block.left, row.block.top, row.block.right, row.block.bottom, row.folder ? 1 : 0);
+        }
+    }
+#endif
+    if (row.view == LabelsView::Details) {
+        in.cell = *rect;
+        in.textLeft = textLeft;
+        in.textRight = textRight;
+        detailsPad = GetPixel(dc, rect->right + 2, rect->top + 2);
+    } else if (row.view == LabelsView::Icons) {
+        // The name, centred under the icon: the dot goes after its last line.
+        in.cell = {row.block.left, band.top, row.block.right, band.bottom};
+        in.textLeft = textLeft;
+        in.textRight = textRight;
+        if (!scanned) {
+            return;
+        }
+    } else if (row.view == LabelsView::Tiles) {
+        int lines = LabelsLines(row.block.bottom - row.block.top, row.lineHeight);
+        bool nameLine = rect->top < row.block.top + row.lineHeight / 2;
+        if (row.folder) {
+            // A folder has no detail lines: the dot goes at the start of the empty line below its name.
+            if (!nameLine) {
+                return;
+            }
+            in.cell = {rect->left, rect->top + row.lineHeight, row.block.right, rect->top + 2 * row.lineHeight};
+            in.textLeft = rect->left;
+            in.textRight = rect->left - 1;
+        } else if (LabelsIsLastLine(rect->bottom, row.block.bottom, row.lineHeight) && (lines <= 1 || !nameLine)) {
+            // The last detail line: after its text.
+            in.cell = {rect->left, rect->top, row.block.right, rect->bottom};
+            in.textLeft = textLeft;
+            in.textRight = scanned ? textRight : rect->left - 1;
+        } else {
+            return;  // The name, or a detail line that is not the last one: the next ones are painted after it.
+        }
+    } else if (row.view == LabelsView::Content) {
+        // The left block (name, then the type when there is one) is painted before the columns on the right.
+        bool leftBlock = rect->left < row.row.left + (row.row.right - row.row.left) * 45 / 100;
+        bool secondLine = rect->top - row.row.top > (row.row.bottom - row.row.top) * 35 / 100;
+        if (leftBlock && secondLine) {
+            t_contentTextOffset = rect->left - row.row.left;
+            in.cell = *rect;
+            in.textLeft = textLeft;
+            in.textRight = scanned ? textRight : rect->left - 1;
+            if (!scanned && !row.typeName.empty()) {
+                // The type line paints its text in children, after this element: its width is measured instead.
+                in.textLeft = rect->left + 4;
+                in.textRight = in.textLeft + LabelsTextWidth(dc, LabelsAccName(self) + L" : " + row.typeName, row.dpi);
+            }
+        } else if (leftBlock) {
+            row.name = *rect;
+            row.haveName = true;
+            return;
+        } else {
+            // The first column on the right: the row has no type line, the dot goes at the start of the line below the name.
+            int left = row.haveName ? row.name.left : (t_contentTextOffset >= 0 ? row.row.left + t_contentTextOffset : -1);
+            if (left < 0) {
+                return;
+            }
+            in.cell = {left, row.row.top, rect->left, row.row.bottom};
+            in.cell.top = row.row.top + row.lineHeight * 35 / 16 - row.lineHeight * 3 / 2;
+            in.textLeft = left;
+            in.textRight = left - 1;
+        }
+    } else {
+        return;
+    }
+    in.blockWidth = LabelsBlockWidth((int)row.colours.size(), row.more, row.side);
+    row.drawn = true;
+    LabelsPlace place = LabelsPlaceFor(in);
+#ifdef EXTRAS_VERBOSE
+    {
+        static std::atomic<int> placed{0};
+        if (placed++ < 150) {
+            Wh_Log(L"LABELS DRAW view=%d x=%d centreY=%d corner=%d dots=%d", (int)row.view, place.x, place.centreY,
+                   place.corner ? 1 : 0, (int)row.colours.size());
+        }
+    }
+#endif
+    if (row.view == LabelsView::Details && detailsPad != CLR_INVALID && textRight > place.x - 4) {
+        // A long name runs under the dots: the end of it is cleared in the colour of the row, so the dots read.
+        HBRUSH brush = CreateSolidBrush(detailsPad);
+        if (brush) {
+            RECT clear = {place.x - 3, rect->top, place.x + in.blockWidth + 3, rect->bottom};
+            FillRect(dc, &clear, brush);
+            DeleteObject(brush);
+        }
+    }
+    LabelsDrawBlock(dc, row, place);
+}
+
+void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
+    LabelsPaintContent_Original(self, dc, rect);
+    if (!g_labels || g_unloading || !g_labelsPaintOk || !self || !rect || IsBadReadPtr(rect, sizeof(RECT))) {
+        return;
+    }
+    try {
+        LabelsKind kind = LabelsKindOf(self);
+        if (kind == kItem) {
+            LabelsOnItem(self, dc, rect);
+        } else if (kind == kProperty || kind == kSmartProperty) {
+            LabelsOnChild(self, kind, dc, rect);
+        }
+    } catch (...) {
+    }
+}
+
+// A folder was read: the windows are painted again so the dots show.
+void LabelsRepaintWindows(std::wstring const&) {
+    EnumWindows([](HWND window, LPARAM) -> BOOL {
+        DWORD pid = 0;
+        wchar_t name[40];
+        GetWindowThreadProcessId(window, &pid);
+        if (pid == GetCurrentProcessId() && GetClassNameW(window, name, 40) && wcscmp(name, L"CabinetWClass") == 0 &&
+            IsWindowVisible(window)) {
+            RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+        }
+        return TRUE;
+    }, 0);
+}
+
+}  // namespace
+
+// Installs the hook. False, with one log line, when a needed export or slot is missing: labels are then off and
+// everything else works.
+bool LabelsInstallPaintHooks() {
+    HMODULE dui = GetModuleHandleW(L"dui70.dll");
+    if (!dui) {
+        Wh_Log(L"labels: dui70.dll is not loaded, labels are off");
+        return false;
+    }
+    void* elementVtable = (void*)GetProcAddress(dui, "??_7Element@DirectUI@@6B@");
+    void* infoVtable = (void*)GetProcAddress(dui, "??_7ClassInfoBase@DirectUI@@6B@");
+    g_labelsClassSlot = LabelsFindSlot(elementVtable, LabelsExport(dui, "?GetClassInfoW@Element@DirectUI@@"));
+    g_labelsNameSlot = LabelsFindSlot(infoVtable, LabelsExport(dui, "?GetName@ClassInfoBase@DirectUI@@"));
+    LabelsGetAccName = (LabelsGetAccName_t)LabelsExport(dui, "?GetAccName@Element@DirectUI@@");
+    LabelsValueRelease = (LabelsValueRelease_t)LabelsExport(dui, "?Release@Value@DirectUI@@");
+    LabelsGetChildren = (LabelsGetChildren_t)LabelsExport(dui, "?GetChildren@Element@DirectUI@@");
+    LabelsGetLocation = (LabelsGetLocation_t)LabelsExport(dui, "?GetLocation@Element@DirectUI@@");
+    LabelsGetExtent = (LabelsGetExtent_t)LabelsExport(dui, "?GetExtent@Element@DirectUI@@");
+    LabelsGetParent = (LabelsGetParent_t)LabelsExport(dui, "?GetParent@Element@DirectUI@@");
+    void* paintContent = LabelsExport(dui, "?PaintContent@Element@DirectUI@@");
+    if (g_labelsClassSlot < 0 || g_labelsNameSlot < 0 || !LabelsGetAccName || !LabelsValueRelease || !LabelsGetChildren ||
+        !LabelsGetLocation || !LabelsGetExtent || !LabelsGetParent || !paintContent) {
+        Wh_Log(L"labels: a dui70.dll export or vtable slot is missing (slots %d %d), labels are off",
+               g_labelsClassSlot, g_labelsNameSlot);
+        return false;
+    }
+    if (!Wh_SetFunctionHook(paintContent, (void*)LabelsPaintContent_Hook, (void**)&LabelsPaintContent_Original)) {
+        Wh_Log(L"labels: the PaintContent hook could not be set, labels are off");
+        return false;
+    }
+    LabelsSetLoadedCallback(LabelsRepaintWindows);
+    g_labelsPaintOk = true;
+    Wh_Log(L"labels: paint hook installed (slots %d %d)", g_labelsClassSlot, g_labelsNameSlot);
+    return true;
+}
+
+void LabelsRemovePaintHooks() {
+    g_labelsPaintOk = false;
+    LabelsSetLoadedCallback(nullptr);
+}
+// Labels: the self-test of where a dot goes (debug build only). One log line: "LABELS PLACE SELFTEST pass" or
+// "LABELS PLACE SELFTEST FAIL <what>". The geometry is the one recorded from the real list in the surfaces skill.
+#ifdef EXTRAS_VERBOSE
+
+namespace {
+
+std::wstring g_placeFailure;
+
+void PlaceExpect(bool ok, const wchar_t* what) {
+    if (!ok && g_placeFailure.empty()) {
+        g_placeFailure = what;
+    }
+}
+
+}  // namespace
+
+void LabelsPlaceSelfTest() {
+    PlaceExpect(LabelsBlockWidth(1, false, 8) == 8, L"one dot is one side wide");
+    PlaceExpect(LabelsBlockWidth(3, false, 8) == 20, L"three stacked dots, each 6 px after the one before");
+    PlaceExpect(LabelsBlockWidth(4, true, 8) == 35, L"four stacked dots, then a 4 px gap and a 5 px plus");
+    PlaceExpect(LabelsDotStep(8) == 6 && LabelsDotStep(16) == 12, L"the step is 3/4 of a side");
+    PlaceExpect(LabelsMoreWidth(8) == 5 && LabelsMoreWidth(16) == 10, L"the plus is small: 5/8 of a side, at least 5 px");
+
+    LabelTag red{1, L""}, green{4, L"x"}, blue{6, L""};
+    bool more = true;
+    auto colours = LabelsDotColours({red, red, green}, &more);
+    PlaceExpect(colours == std::vector<int>({1, 4}) && !more, L"equal colours make one dot");
+    std::vector<LabelTag> many;
+    for (uint8_t c = 0; c < 6; c++) {
+        many.push_back(LabelTag{c, L""});
+    }
+    colours = LabelsDotColours(many, &more);
+    PlaceExpect(colours.size() == 4 && more, L"more than four colours show four dots and a plus");
+    PlaceExpect(LabelsDotColours({blue}, &more) == std::vector<int>({6}), L"a single colour");
+
+    LabelsPlaceInput in = {};
+    in.side = 8;
+    in.blockWidth = 8;
+    in.lineHeight = 16;
+
+    // List: the 28 px gap in front of the icon, centred on the row.
+    in.view = LabelsView::List;
+    in.row = {0, 0, 165, 22};
+    LabelsPlace place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 7 && place.centreY == 11 && !place.corner, L"List: centred in the gap before the icon");
+
+    // Details: right end of the name cell, unless the name nearly fills it.
+    in.view = LabelsView::Details;
+    in.row = {0, 0, 594, 19};
+    in.cell = {22, 0, 252, 19};
+    in.textLeft = 36;
+    in.textRight = 80;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 238 && place.centreY == 9 && !place.corner, L"Details: right-aligned in the name cell");
+    in.textRight = 240;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 238 && !place.corner, L"Details: a long name does not move the dot");
+
+    // Tiles: after the last detail line, or at its start when it is empty.
+    in.view = LabelsView::Tiles;
+    in.cell = {55, 16, 246, 32};
+    in.textLeft = 55;
+    in.textRight = 100;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 106 && place.centreY == 26 && !place.corner, L"Tiles: after the detail text, a little below the middle of the line");
+    in.textRight = in.textLeft - 1;
+    PlaceExpect(LabelsPlaceFor(in).x == 55, L"Tiles: at the start of an empty line");
+
+    // Content: the start of the second line of the text block.
+    in.view = LabelsView::Content;
+    in.cell = {66, 0, 911, 49};
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 66 && place.centreY == 24, L"Content: start of the line below the name");
+    in.cell = {121, 27, 258, 43};
+    in.textLeft = 123;
+    in.textRight = 255;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 261 && place.centreY == 37, L"Content: after the type text when there is one");
+    in.textLeft = 0;
+    in.textRight = -1;
+
+    // The lines of a Tiles text block.
+    PlaceExpect(LabelsLines(64, 32) == 2 && LabelsLines(96, 32) == 3 && LabelsLines(32, 32) == 1, L"lines in a text block");
+    PlaceExpect(LabelsIsLastLine(420, 424, 32) && !LabelsIsLastLine(388, 424, 32) && !LabelsIsLastLine(356, 424, 32),
+                L"only the bottom line is the last");
+
+    // Icons: after the last line of the name, on a new line below when that line has no room.
+    in.view = LabelsView::Icons;
+    in.cell = {0, 98, 97, 114};  // The last line of the label.
+    in.textLeft = 28;
+    in.textRight = 69;
+    in.iconLeft = 4;
+    in.iconBottom = 98;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 75 && place.centreY == 106 && !place.corner, L"Icons: after the text of the last line");
+    in.textLeft = 2;
+    in.textRight = 95;
+    place = LabelsPlaceFor(in);
+    PlaceExpect(place.x == 44 && place.centreY == 122 && !place.corner, L"Icons: a full last line wraps the dot onto a new line, centred");
+
+    if (g_placeFailure.empty()) {
+        Wh_Log(L"LABELS PLACE SELFTEST pass");
+    } else {
+        Wh_Log(L"LABELS PLACE SELFTEST FAIL %s", g_placeFailure.c_str());
     }
 }
 
@@ -20453,7 +21455,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.69.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.70.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -20461,7 +21463,10 @@ BOOL Wh_ModInit() {
     LabelsSelfTest();
     LabelsDotsSelfTest();
     LabelsCacheSelfTest();
+    LabelsPlaceSelfTest();
 #endif
+
+    LabelsInstallPaintHooks();
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
     if (!module) {
@@ -20505,6 +21510,7 @@ void Wh_ModSettingsChanged() {
 void Wh_ModBeforeUninit() {
     g_unloading = true;
     // Every thread of the mod ends first, so no result is queued after the windows are cleaned.
+    LabelsRemovePaintHooks();
     LabelsCancelAll();
     JoinModThreads();
     StopWorker();
