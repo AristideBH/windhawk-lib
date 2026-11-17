@@ -13,7 +13,7 @@ Tested daily on Windows 11 build 26100 (24H2) on ARM64, in French and English; x
 | **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
 | **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
 | **Labels** | Colour labels, like the tags of macOS, on files and folders: dots in every view and in Columns, a Tags section in the details pane and a Tags entry in the right-click menu. They are kept in the file itself, on NTFS. [More](docs/labels.md) |
-| **Toolbar** | The Back, Forward, Up and Refresh buttons before the address bar sit closer together, and the address bar grows into the room. The gap is a setting. |
+| **Toolbar** | Tighter navigation and command bar buttons, a search box you resize by dragging its edge (mouse, touch or pen), and round corners for the address bar and the search box. Each is a setting. |
 | **Settings** | On the mod's page in Windhawk, in groups: Columns (Behaviour, Content, Layout, Memory), Details pane (Pane, Previews), Labels (Colour names), Toolbar and Limits. They apply at once. |
 
 **Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does in any other view.

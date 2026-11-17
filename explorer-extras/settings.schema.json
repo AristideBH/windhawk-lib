@@ -402,6 +402,70 @@
       "needs": "now"
     },
     {
+      "id": "addressGap",
+      "group": "toolbar",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 16,
+      "name": "Gap between the navigation buttons and the address bar",
+      "description": "In pixels, between Refresh and the address bar. Explorer’s own is 8.",
+      "needs": "now"
+    },
+    {
+      "id": "commandGap",
+      "group": "toolbar",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 8,
+      "name": "Gap between the command bar buttons",
+      "description": "In pixels, between New, Cut, Copy, Paste and the rest. Explorer’s own gap is 8.",
+      "needs": "now"
+    },
+    {
+      "id": "searchResize",
+      "group": "toolbar",
+      "type": "bool",
+      "default": true,
+      "name": "Resize the search box by dragging",
+      "description": "Drag the edge between the address bar and the search box, with the mouse, a finger or a pen. A double click on it goes back to the width below.",
+      "needs": "now"
+    },
+    {
+      "id": "searchWidth",
+      "group": "toolbar",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 800,
+      "name": "Search box width",
+      "description": "In pixels. 0 keeps Explorer’s own proportion. A width you dragged is kept until you change this value.",
+      "needs": "now"
+    },
+    {
+      "id": "addressRadius",
+      "group": "toolbar",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 16,
+      "name": "Corner radius of the address bar",
+      "description": "In pixels. Explorer’s own is 4, 16 makes the ends fully round.",
+      "needs": "now"
+    },
+    {
+      "id": "searchRadius",
+      "group": "toolbar",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 16,
+      "name": "Corner radius of the search box",
+      "description": "In pixels. Explorer’s own is 4, 16 makes the ends fully round.",
+      "needs": "now"
+    },
+    {
       "id": "maxItems",
       "group": "limits",
       "type": "int",

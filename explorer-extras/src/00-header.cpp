@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tighter toolbar.
-// @version         0.77.7
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tidier toolbar.
+// @version         0.77.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -56,7 +56,14 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 
 ## Toolbar
 
-The row before the address bar: **Back**, **Forward**, **Up** and **Refresh** sit closer together, and the address bar takes the room that frees. The gap is a setting (Toolbar, 4 pixels by default, 0 to 16; Explorer's own is 16). Switch the area off and Explorer's spacing comes back.
+The top of the window, with a setting for each part (group **Toolbar**):
+
+- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together (gap 4 pixels, 0 to 16; Explorer's is 16), and so does the address bar after them (4 pixels, 0 to 16; Explorer's is 8). The address bar takes the room that frees.
+- **Command bar.** The gap between New, Cut, Copy, Paste and the rest (4 pixels, 0 to 8; Explorer's is 8).
+- **Search box.** Drag the edge between the address bar and the search box, with the mouse, a finger or a pen; a double click or double tap goes back to the width in the settings. A width you drag is kept until you change the setting.
+- **Corners.** The corner radius of the address bar and of the search box (0 to 16; 16 makes the ends round).
+
+Switch the area off and Explorer's own spacing and corners come back.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 

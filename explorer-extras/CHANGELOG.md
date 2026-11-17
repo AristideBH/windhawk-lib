@@ -5,8 +5,11 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 ## 0.77 (2026-11-17)
 
 ### Added
-- **Toolbar**, a new area: the Back, Forward, Up and Refresh buttons in front of the address bar sit closer together. Explorer gave each of them a margin of 8 on every side but the bottom, so two buttons were 16 apart; the mod sets the margin of each button, and the address bar, which takes what is left, grows. A **Toolbar** group on Windhawk's page: **Tighten the navigation buttons** (on) and **Gap between the navigation buttons** (4 pixels by default, 0 to 16; the gap is also the space at the two ends). Switching it off, or unloading the mod, puts Explorer's margins back.
-- The space between Refresh and the address bar is the gap too: the command bar's spare column of 6 pixels after the buttons is taken away, so it was 17 pixels and is now about 7.
+- **Toolbar**, a new area, with its own **Toolbar** group on Windhawk's page. Every part is a setting, and switching the area off, or unloading the mod, puts Explorer's own values back.
+  - **Navigation buttons.** Explorer gave Back, Forward, Up and Refresh a margin of 8 on each side, so two buttons were 16 apart and the address bar sat 17 away from Refresh. **Gap between the navigation buttons** (4 pixels by default, 0 to 16) and **Gap between the navigation buttons and the address bar** (4, 0 to 16, Explorer's is 8). The address bar takes the room that frees.
+  - **Command bar.** **Gap between the command bar buttons** (4 pixels by default, 0 to 8, Explorer's is 8). It follows the buttons Explorer builds as the selection changes.
+  - **Search box.** **Resize the search box by dragging** (on): a handle on the edge between the address bar and the search box with the left-right resize cursor, for the mouse, touch and pen. A double click or double tap goes back to **Search box width** (0 keeps Explorer's proportion, up to 800). A dragged width is kept across windows and restarts until the setting changes, and a narrower window keeps 240 pixels for the address bar.
+  - **Corners.** **Corner radius of the address bar** and **Corner radius of the search box** (4 by default, Explorer's own; 0 to 16).
 
 ### Changed
 - New defaults, from the author's own settings: double-click on empty space goes up one column (on), only real Desktop items (on), no focus outline (off), the theme's colour as the panel background (instead of Explorer's), no accent on stale columns (off), alternate row shading (on).

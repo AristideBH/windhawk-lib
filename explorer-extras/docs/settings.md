@@ -94,6 +94,12 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | --- | --- | --- |
 | Tighten the navigation buttons | on | Changes the gap between Back, Forward, Up and Refresh, in front of the address bar. Off leaves Explorer’s own spacing. |
 | Gap between the navigation buttons | 4 | In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16. (0 to 16) |
+| Gap between the navigation buttons and the address bar | 4 | In pixels, between Refresh and the address bar. Explorer’s own is 8. (0 to 16) |
+| Gap between the command bar buttons | 4 | In pixels, between New, Cut, Copy, Paste and the rest. Explorer’s own gap is 8. (0 to 8) |
+| Resize the search box by dragging | on | Drag the edge between the address bar and the search box, with the mouse, a finger or a pen. A double click on it goes back to the width below. |
+| Search box width | 0 | In pixels. 0 keeps Explorer’s own proportion. A width you dragged is kept until you change this value. (0 to 800) |
+| Corner radius of the address bar | 4 | In pixels. Explorer’s own is 4, 16 makes the ends fully round. (0 to 16) |
+| Corner radius of the search box | 4 | In pixels. Explorer’s own is 4, 16 makes the ends fully round. (0 to 16) |
 
 ## Limits
 

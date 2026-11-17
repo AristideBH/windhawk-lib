@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tighter toolbar.
-// @version         0.77.7
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tidier toolbar.
+// @version         0.77.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -56,7 +56,14 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 
 ## Toolbar
 
-The row before the address bar: **Back**, **Forward**, **Up** and **Refresh** sit closer together, and the address bar takes the room that frees. The gap is a setting (Toolbar, 4 pixels by default, 0 to 16; Explorer's own is 16). Switch the area off and Explorer's spacing comes back.
+The top of the window, with a setting for each part (group **Toolbar**):
+
+- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together (gap 4 pixels, 0 to 16; Explorer's is 16), and so does the address bar after them (4 pixels, 0 to 16; Explorer's is 8). The address bar takes the room that frees.
+- **Command bar.** The gap between New, Cut, Copy, Paste and the rest (4 pixels, 0 to 8; Explorer's is 8).
+- **Search box.** Drag the edge between the address bar and the search box, with the mouse, a finger or a pen; a double click or double tap goes back to the width in the settings. A width you drag is kept until you change the setting.
+- **Corners.** The corner radius of the address bar and of the search box (0 to 16; 16 makes the ends round).
+
+Switch the area off and Explorer's own spacing and corners come back.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
@@ -202,6 +209,24 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
   - navGap: 4
     $name: Gap between the navigation buttons
     $description: In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16.
+  - addressGap: 4
+    $name: Gap between the navigation buttons and the address bar
+    $description: In pixels, between Refresh and the address bar. Explorer’s own is 8.
+  - commandGap: 4
+    $name: Gap between the command bar buttons
+    $description: In pixels, between New, Cut, Copy, Paste and the rest. Explorer’s own gap is 8.
+  - searchResize: true
+    $name: Resize the search box by dragging
+    $description: Drag the edge between the address bar and the search box, with the mouse, a finger or a pen. A double click on it goes back to the width below.
+  - searchWidth: 0
+    $name: Search box width
+    $description: In pixels. 0 keeps Explorer’s own proportion. A width you dragged is kept until you change this value.
+  - addressRadius: 4
+    $name: Corner radius of the address bar
+    $description: In pixels. Explorer’s own is 4, 16 makes the ends fully round.
+  - searchRadius: 4
+    $name: Corner radius of the search box
+    $description: In pixels. Explorer’s own is 4, 16 makes the ends fully round.
   $name: Toolbar
 - limits:
   - maxItems: 5000
@@ -686,6 +711,12 @@ constexpr SettingInfo kSettings[] = {
     {L"colourName7", L"labels.names.colourName7", SettingKind::String, 0, L"Purple", 0, 0, false},
     {L"toolbarOn", L"toolbar.toolbarOn", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"navGap", L"toolbar.navGap", SettingKind::Int, 4, L"", 0, 16, false},
+    {L"addressGap", L"toolbar.addressGap", SettingKind::Int, 4, L"", 0, 16, false},
+    {L"commandGap", L"toolbar.commandGap", SettingKind::Int, 4, L"", 0, 8, false},
+    {L"searchResize", L"toolbar.searchResize", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"searchWidth", L"toolbar.searchWidth", SettingKind::Int, 0, L"", 0, 800, false},
+    {L"addressRadius", L"toolbar.addressRadius", SettingKind::Int, 4, L"", 0, 16, false},
+    {L"searchRadius", L"toolbar.searchRadius", SettingKind::Int, 4, L"", 0, 16, false},
     {L"maxItems", L"limits.maxItems", SettingKind::Int, 5000, L"", 50, 20000, true},
     {L"previewMaxMb", L"limits.previewMaxMb", SettingKind::Int, 60, L"", 1, 1024, false},
     {L"previewMaxMp", L"limits.previewMaxMp", SettingKind::Int, 40, L"", 4, 400, false},
@@ -22332,13 +22363,38 @@ void LabelsSettingsChanged() {
 
 std::atomic<bool> g_toolbar{true};  // Change the navigation buttons.
 std::atomic<int> g_navGap{0};       // The gap between them, in pixels (DIP).
+std::atomic<int> g_addressGap{4};  // The gap between the last navigation button and the address bar.
+std::atomic<bool> g_searchResize{true};  // The edge of the search box can be dragged.
+std::atomic<int> g_searchWidth{0};       // The search box's width in pixels, 0 for Explorer's own proportion.
+std::atomic<int> g_addressRadius{4};  // The corner radius of the address bar (Explorer's own is 4).
+std::atomic<int> g_searchRadius{4};   // The same for the search box.
+std::atomic<int> g_cmdGap{8};       // The gap between the command bar's buttons (Explorer's own is 8 for the icons).
 
 // The margin of button `index` of `count`, for a gap, from the margin Explorer gave it. Pure.
-mux::Thickness ToolbarMarginFor(mux::Thickness original, size_t index, size_t count, double gap) {
+mux::Thickness ToolbarMarginFor(mux::Thickness original, size_t index, size_t count, double gap, double addressGap) {
     mux::Thickness margin = original;
     margin.Left = index == 0 ? std::min(original.Left, gap) : 0;
-    margin.Right = index + 1 == count ? std::min(original.Right, gap) : gap;
+    margin.Right = index + 1 == count ? addressGap : gap;
     return margin;
+}
+
+// The margin of a command bar button for a gap between two neighbours: half on each side, never more than Explorer's own.
+mux::Thickness ToolbarCommandMargin(mux::Thickness original, double gap) {
+    mux::Thickness margin = original;
+    margin.Left = std::min(original.Left, gap / 2);
+    margin.Right = std::min(original.Right, gap / 2);
+    return margin;
+}
+
+// The width the search box gets for a wanted one: at least 160, at most what leaves 240 for the address bar. Pure.
+double ToolbarSearchWidth(double wanted, double gridWidth, double leftWidth) {
+    double most = std::max(160.0, gridWidth - leftWidth - 240);
+    return std::min(std::max(wanted, 160.0), most);
+}
+
+// The corner radius for a box: the setting, between 0 and 16, or Explorer's own when the area is off. Pure.
+double ToolbarRadius(double original, double wanted, bool on) {
+    return on ? std::min(16.0, std::max(0.0, wanted)) : original;
 }
 
 namespace {
@@ -22411,20 +22467,274 @@ void ToolbarDump(const wchar_t* id, mux::FrameworkElement const& button) {
 }
 #endif
 
+#ifdef EXTRAS_VERBOSE
+// The whole top of the island, for the log: every element down to a depth, with class, name, margin, size and padding.
+void ToolbarTreeDump(mux::DependencyObject const& node, int depth, int& budget) {
+    if (depth > 16 || budget <= 0) {
+        return;
+    }
+    if (auto element = node.try_as<mux::FrameworkElement>()) {
+        budget--;
+        auto margin = element.Margin();
+        wchar_t extra[200] = L"";
+        if (auto control = element.try_as<muxc::Control>()) {
+            auto padding = control.Padding();
+            swprintf_s(extra, L" padding=%.1f,%.1f,%.1f,%.1f", padding.Left, padding.Top, padding.Right, padding.Bottom);
+        } else if (auto stack = element.try_as<muxc::StackPanel>()) {
+            swprintf_s(extra, L" spacing=%.1f", stack.Spacing());
+        }
+        wchar_t look[120] = L"";
+        if (auto border = element.try_as<muxc::Border>()) {
+            swprintf_s(look, L" radius=%.1f bg=%d borderBrush=%d", border.CornerRadius().TopLeft, border.Background() ? 1 : 0,
+                       border.BorderBrush() ? 1 : 0);
+        } else if (auto grid = element.try_as<muxc::Grid>()) {
+            swprintf_s(look, L" radius=%.1f bg=%d", grid.CornerRadius().TopLeft, grid.Background() ? 1 : 0);
+        } else if (auto control = element.try_as<muxc::Control>()) {
+            swprintf_s(look, L" radius=%.1f bg=%d borderBrush=%d", control.CornerRadius().TopLeft, control.Background() ? 1 : 0,
+                       control.BorderBrush() ? 1 : 0);
+        }
+        LogVerbose(L"TREE %*s%s '%s' m=%.1f,%.1f,%.1f,%.1f size=%.1fx%.1f h=%.1f minh=%.1f%s%s", depth * 2, L"",
+                   ToolbarClassOf(element).c_str(), std::wstring(element.Name()).c_str(), margin.Left, margin.Top, margin.Right,
+                   margin.Bottom, element.ActualWidth(), element.ActualHeight(), element.Height(), element.MinHeight(), extra, look);
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        ToolbarTreeDump(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, budget);
+    }
+}
+#endif
+
 const wchar_t* const kToolbarIds[] = {L"backButton", L"forwardButton", L"upButton", L"refreshButton"};
 
+struct ToolbarCommandButton {
+    winrt::weak_ref<mux::FrameworkElement> button;
+    void* key = nullptr;
+    mux::Thickness original = {};  // The margin Explorer gave.
+    mux::Thickness applied = {};   // The one this part set last.
+};
+
 struct ToolbarButtons {
+    winrt::weak_ref<muxc::Panel> commandStack;  // The StackPanel of the command bar's buttons.
+    std::vector<ToolbarCommandButton> command;
     winrt::weak_ref<mux::FrameworkElement> button[4];
     mux::Thickness original[4] = {};
     winrt::weak_ref<muxc::Grid> contentRoot;  // The grid of the command bar: its second column is a spare of 6 DIP.
     mux::GridLength spare = {0, mux::GridUnitType::Auto};
     double spareMin = 0;  // The column also has a minimum width of its own.
+    winrt::weak_ref<muxc::Grid> navGrid;  // NavigationBarControlGrid: [buttons][address bar][search box].
+    winrt::weak_ref<muxc::Border> searchHandle;
+    mux::GridLength searchOriginal = {3, mux::GridUnitType::Star};
+    winrt::weak_ref<muxc::Control> address, search;  // The two boxes (AutoSuggestBox) and the corner radius Explorer gave.
+    mux::CornerRadius addressOriginal = {}, searchOriginal2 = {};
+    winrt::weak_ref<muxc::Control> addressText;      // The address bar's own TextBox and its border draw the outline.
+    winrt::weak_ref<muxc::Border> addressBorder;
+    mux::CornerRadius addressTextOriginal = {}, addressBorderOriginal = {};
+    // The grids around the box: PART_LayoutRoot paints the background that shows the outline (a radius of 4 of its own).
+    winrt::weak_ref<muxc::Grid> addressGrid[2];
+    mux::CornerRadius addressGridOriginal[2] = {};
     bool known = false;
 };
 [[clang::no_destroy]] thread_local ToolbarButtons t_toolbar;  // Weak: the buttons belong to the window.
 
+// The command bar's buttons: margins from the gap, each one's own original kept. Runs again on every layout of the
+// stack, because Explorer builds and shows buttons as the selection changes.
+void ToolbarApplyCommandBar() {
+    auto stack = t_toolbar.commandStack.get();
+    if (!stack || !t_toolbar.known) {
+        LogVerbose(L"TOOLBAR command bar not applied: stack=%d known=%d", stack ? 1 : 0, t_toolbar.known ? 1 : 0);
+        return;
+    }
+    int changed = 0, seen = 0;
+    try {
+        for (auto const& child : stack.Children()) {
+            auto element = child.try_as<muxc::AppBarButton>();
+            if (!element) {
+                continue;
+            }
+            mux::FrameworkElement frame = element;
+            void* key = winrt::get_abi(frame);
+            ToolbarCommandButton* entry = nullptr;
+            for (auto& known : t_toolbar.command) {
+                if (known.key == key && winrt::get_abi(known.button.get()) == key) {
+                    entry = &known;
+                    break;
+                }
+            }
+            auto now = element.Margin();
+            if (!entry) {
+                ToolbarCommandButton added;
+                added.button = winrt::make_weak(frame);
+                added.key = key;
+                added.original = now;
+                added.applied = now;
+                t_toolbar.command.push_back(added);
+                entry = &t_toolbar.command.back();
+            } else if (now.Left != entry->applied.Left || now.Right != entry->applied.Right) {
+                entry->original = now;  // Explorer set it again: this is the new margin to work from.
+            }
+            auto wanted = g_toolbar ? ToolbarCommandMargin(entry->original, (double)g_cmdGap) : entry->original;
+            seen++;
+            if (wanted.Left != now.Left || wanted.Right != now.Right) {
+                element.Margin(wanted);
+                changed++;
+            }
+            entry->applied = wanted;
+        }
+    } catch (...) {
+        LogVerbose(L"TOOLBAR command bar apply threw");
+    }
+    LogVerbose(L"TOOLBAR command bar: gap %d, %d of %d buttons changed", g_cmdGap.load(), changed, seen);
+}
+
+// The wanted width of the search box: the dragged one (kept while the setting it was made against is unchanged), else the setting.
+double ToolbarWantedSearch() {
+    int stored = Wh_GetIntValue(L"ui.searchWidth", 0);
+    if (stored > 0 && Wh_GetIntValue(L"ui.searchBase", -1) == g_searchWidth) {
+        return stored;
+    }
+    return g_searchWidth;
+}
+
+// The search box's column and its handle, for the current settings.
+void ToolbarApplySearch(double forced = 0) {
+    auto grid = t_toolbar.navGrid.get();
+    if (!grid || !t_toolbar.known) {
+        return;
+    }
+    try {
+        auto columns = grid.ColumnDefinitions();
+        if (columns.Size() < 3) {
+            return;
+        }
+        auto column = columns.GetAt(2);
+        double want = forced > 0 ? forced : (g_searchResize ? ToolbarWantedSearch() : (double)g_searchWidth);
+        if (!g_toolbar || want <= 0 || grid.ActualWidth() <= 0) {
+            column.Width(t_toolbar.searchOriginal);
+        } else {
+            column.Width(mux::GridLength{ToolbarSearchWidth(want, grid.ActualWidth(), columns.GetAt(0).ActualWidth()),
+                                         mux::GridUnitType::Pixel});
+        }
+        if (auto handle = t_toolbar.searchHandle.get()) {
+            handle.Visibility(g_toolbar && g_searchResize ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        }
+    } catch (...) {
+    }
+}
+
+// A handle on the edge between the address bar and the search box: drag it (mouse, touch or pen) to resize, double click or
+// double tap to go back to the setting.
+void ToolbarMakeHandle(muxc::Grid const& grid) {
+    muxc::Border handle;
+    handle.Width(16);
+    handle.Height(36);
+    handle.HorizontalAlignment(mux::HorizontalAlignment::Left);
+    handle.VerticalAlignment(mux::VerticalAlignment::Center);
+    handle.Margin(mux::Thickness{-8, 0, 0, 0});
+    handle.Background(Brush(0, 0, 0, 0));
+    muxc::Grid::SetColumn(handle, 2);
+    try {
+        handle.as<mux::IUIElementProtected>().ProtectedCursor(winrt::Microsoft::UI::Input::InputSystemCursor::Create(
+            winrt::Microsoft::UI::Input::InputSystemCursorShape::SizeWestEast));
+    } catch (...) {
+        LogHresult(L"setting the resize cursor of the search box");
+    }
+    auto drag = std::make_shared<std::pair<bool, double>>(false, 0.0);  // dragging, offset of the pointer from the edge
+    auto weakGrid = winrt::make_weak(grid);
+    auto edgeOf = [weakGrid](double pointerX) {
+        auto g = weakGrid.get();
+        return g ? g.ActualWidth() - g.ColumnDefinitions().GetAt(2).ActualWidth() : 0.0;
+    };
+    Keep(handle, handle.PointerPressed(winrt::auto_revoke, [drag, weakGrid, edgeOf](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+        if (auto g = weakGrid.get()) {
+            drag->first = true;
+            drag->second = args.GetCurrentPoint(g).Position().X - edgeOf(0);
+            sender.as<mux::UIElement>().CapturePointer(args.Pointer());
+            args.Handled(true);
+        }
+    }));
+    Keep(handle, handle.PointerMoved(winrt::auto_revoke, [drag, weakGrid](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+        if (drag->first) {
+            if (auto g = weakGrid.get()) {
+                double edge = args.GetCurrentPoint(g).Position().X - drag->second;
+                ToolbarApplySearch(g.ActualWidth() - edge);
+            }
+        }
+    }));
+    auto finish = [drag, weakGrid](bool keep) {
+        if (!drag->first) {
+            return;
+        }
+        drag->first = false;
+        if (auto g = weakGrid.get(); g && keep) {
+            double width = g.ColumnDefinitions().GetAt(2).Width().Value;
+            if (g.ColumnDefinitions().GetAt(2).Width().GridUnitType == mux::GridUnitType::Pixel && width > 0) {
+                Wh_SetIntValue(L"ui.searchWidth", (int)std::lround(width));
+                Wh_SetIntValue(L"ui.searchBase", g_searchWidth);
+            }
+        }
+    };
+    Keep(handle, handle.PointerReleased(winrt::auto_revoke, [finish](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+        sender.as<mux::UIElement>().ReleasePointerCapture(args.Pointer());
+        finish(true);
+    }));
+    Keep(handle, handle.PointerCanceled(winrt::auto_revoke, [finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        finish(true);
+    }));
+    Keep(handle, handle.DoubleTapped(winrt::auto_revoke, [](Inspectable const&, mux::Input::DoubleTappedRoutedEventArgs const& args) {
+        Wh_SetIntValue(L"ui.searchWidth", 0);
+        ToolbarApplySearch();
+        args.Handled(true);
+    }));
+    // A narrower window keeps the address bar's room.
+    Keep(grid, grid.SizeChanged(winrt::auto_revoke, [](Inspectable const&, mux::SizeChangedEventArgs const&) {
+        if (!g_unloading) {
+            ToolbarApplySearch();
+        }
+    }));
+    grid.Children().Append(handle);
+    t_toolbar.searchHandle = winrt::make_weak(handle);
+}
+
+void ToolbarApplyRadius() {
+    if (!t_toolbar.known) {
+        return;
+    }
+    try {
+        if (auto box = t_toolbar.address.get()) {
+            double r = ToolbarRadius(t_toolbar.addressOriginal.TopLeft, g_addressRadius, g_toolbar);
+            box.CornerRadius(mux::CornerRadius{r, r, r, r});
+        }
+        {
+            double r = ToolbarRadius(t_toolbar.addressTextOriginal.TopLeft, g_addressRadius, g_toolbar);
+            if (auto text = t_toolbar.addressText.get()) {
+                text.CornerRadius(mux::CornerRadius{r, r, r, r});
+            }
+            double rb = ToolbarRadius(t_toolbar.addressBorderOriginal.TopLeft, g_addressRadius, g_toolbar);
+            if (auto border = t_toolbar.addressBorder.get()) {
+                border.CornerRadius(mux::CornerRadius{rb, rb, rb, rb});
+            }
+            for (int i = 0; i < 2; i++) {
+                if (auto grid = t_toolbar.addressGrid[i].get()) {
+                    double rg = ToolbarRadius(t_toolbar.addressGridOriginal[i].TopLeft, g_addressRadius, g_toolbar);
+                    grid.CornerRadius(mux::CornerRadius{rg, rg, rg, rg});
+                }
+            }
+        }
+        if (auto box = t_toolbar.search.get()) {
+            double r = ToolbarRadius(t_toolbar.searchOriginal2.TopLeft, g_searchRadius, g_toolbar);
+            box.CornerRadius(mux::CornerRadius{r, r, r, r});
+        }
+    } catch (...) {
+    }
+}
+
 // Puts the margins for the current setting (or Explorer's own when the area is off).
 void ToolbarApplyNow() {
+    ToolbarApplyRadius();
+    ToolbarApplySearch();
+    if (t_toolbar.known) {
+        ToolbarApplyCommandBar();
+    }
     if (t_toolbar.known) {
         if (auto grid = t_toolbar.contentRoot.get()) {
             try {
@@ -22442,7 +22752,7 @@ void ToolbarApplyNow() {
     for (int i = 0; i < 4 && t_toolbar.known; i++) {
         if (auto element = t_toolbar.button[i].get()) {
             try {
-                element.Margin(g_toolbar ? ToolbarMarginFor(t_toolbar.original[i], i, 4, (double)g_navGap) : t_toolbar.original[i]);
+                element.Margin(g_toolbar ? ToolbarMarginFor(t_toolbar.original[i], i, 4, (double)g_navGap, (double)g_addressGap) : t_toolbar.original[i]);
             } catch (...) {
             }
         }
@@ -22454,6 +22764,8 @@ void ToolbarApplyNow() {
 // Settings changed: every window's buttons take the new gap (or go back to Explorer's), each on its own thread.
 void ToolbarSettingsChanged() {
     std::lock_guard<std::mutex> lock(g_statesMutex);
+    LogVerbose(L"TOOLBAR settings changed: on=%d navGap=%d commandGap=%d, %d windows", g_toolbar.load() ? 1 : 0, g_navGap.load(),
+               g_cmdGap.load(), (int)g_states.size());
     for (auto& state : g_states) {
         if (state->queue) {
             state->queue.TryEnqueue([]() {
@@ -22467,6 +22779,50 @@ void ToolbarSettingsChanged() {
 
 // At unload, on each thread that holds buttons: Explorer's margins are put back.
 void ToolbarRestoreThread() {
+    try {
+        if (t_toolbar.known) {
+            if (auto box = t_toolbar.address.get()) {
+                box.CornerRadius(t_toolbar.addressOriginal);
+            }
+            if (auto text = t_toolbar.addressText.get()) {
+                text.CornerRadius(t_toolbar.addressTextOriginal);
+            }
+            if (auto border = t_toolbar.addressBorder.get()) {
+                border.CornerRadius(t_toolbar.addressBorderOriginal);
+            }
+            for (int i = 0; i < 2; i++) {
+                if (auto grid = t_toolbar.addressGrid[i].get()) {
+                    grid.CornerRadius(t_toolbar.addressGridOriginal[i]);
+                }
+            }
+            if (auto box = t_toolbar.search.get()) {
+                box.CornerRadius(t_toolbar.searchOriginal2);
+            }
+        }
+    } catch (...) {
+    }
+    try {
+        if (auto grid = t_toolbar.navGrid.get(); grid && t_toolbar.known) {
+            if (grid.ColumnDefinitions().Size() >= 3) {
+                grid.ColumnDefinitions().GetAt(2).Width(t_toolbar.searchOriginal);
+            }
+            if (auto handle = t_toolbar.searchHandle.get()) {
+                uint32_t at = 0;
+                if (grid.Children().IndexOf(handle, at)) {
+                    grid.Children().RemoveAt(at);
+                }
+            }
+        }
+    } catch (...) {
+    }
+    try {
+        for (auto& entry : t_toolbar.command) {
+            if (auto element = entry.button.get()) {
+                element.Margin(entry.original);
+            }
+        }
+    } catch (...) {
+    }
     if (auto grid = t_toolbar.contentRoot.get()) {
         try {
             if (t_toolbar.known && grid.ColumnDefinitions().Size() >= 2) {
@@ -22525,12 +22881,94 @@ bool ToolbarTick(WindowState* state) {
         }
         up = mux::Media::VisualTreeHelper::GetParent(up);
     }
+    // The command bar's buttons.
+    auto commandBar = ToolbarFindById(root, L"FileExplorerCommandBar", 0);
+    if (!commandBar) {
+        LogVerbose(L"TOOLBAR the command bar is not there yet");
+        return false;
+    }
+    auto items = ToolbarFindById(commandBar, L"PrimaryItemsControl", 0);
+    muxc::Panel stack{nullptr};
+    if (items) {
+        std::function<muxc::Panel(mux::DependencyObject const&, int)> firstPanel = [&](mux::DependencyObject const& node, int depth) -> muxc::Panel {
+            if (depth > 6) {
+                return nullptr;
+            }
+            if (auto panel = node.try_as<muxc::StackPanel>()) {
+                return panel;
+            }
+            int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+            for (int i = 0; i < count; i++) {
+                if (auto found = firstPanel(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1)) {
+                    return found;
+                }
+            }
+            return nullptr;
+        };
+        stack = firstPanel(items, 0);
+    }
+    if (!stack) {
+        LogVerbose(L"TOOLBAR the command bar's stack is not there yet");
+        return false;
+    }
+    found.commandStack = winrt::make_weak(stack);
+    Keep(stack, stack.LayoutUpdated(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) {
+             if (!g_unloading) {
+                 ToolbarApplyCommandBar();
+             }
+         }));
+    for (mux::DependencyObject at = buttons[0]; at; at = mux::Media::VisualTreeHelper::GetParent(at)) {
+        if (auto grid = at.try_as<muxc::Grid>(); grid && grid.Name() == L"NavigationBarControlGrid" && grid.ColumnDefinitions().Size() >= 3) {
+            found.navGrid = winrt::make_weak(grid);
+            found.searchOriginal = grid.ColumnDefinitions().GetAt(2).Width();
+            break;
+        }
+    }
+    if (auto box = ToolbarFindById(root, L"PART_AutoSuggestBox", 0).try_as<muxc::Control>()) {
+        found.address = winrt::make_weak(box);
+        found.addressOriginal = box.CornerRadius();
+        if (auto text = ToolbarFindById(box, L"TextBox", 0).try_as<muxc::Control>()) {
+            found.addressText = winrt::make_weak(text);
+            found.addressTextOriginal = text.CornerRadius();
+        }
+        if (auto border = ToolbarFindById(box, L"BorderElement", 0).try_as<muxc::Border>()) {
+            found.addressBorder = winrt::make_weak(border);
+            found.addressBorderOriginal = border.CornerRadius();
+        }
+        // PART_LayoutRoot (the parent of the box) and NormalModeGrid (the breadcrumbs, its sibling).
+        mux::DependencyObject parent = mux::Media::VisualTreeHelper::GetParent(box);
+        if (auto layoutRoot = parent.try_as<muxc::Grid>()) {
+            found.addressGrid[0] = winrt::make_weak(layoutRoot);
+            found.addressGridOriginal[0] = layoutRoot.CornerRadius();
+        }
+        if (auto normal = ToolbarFindById(parent, L"NormalModeGrid", 0).try_as<muxc::Grid>()) {
+            found.addressGrid[1] = winrt::make_weak(normal);
+            found.addressGridOriginal[1] = normal.CornerRadius();
+        }
+        LogVerbose(L"TOOLBAR address radius: box %.1f text %.1f border %.1f", found.addressOriginal.TopLeft,
+                   found.addressTextOriginal.TopLeft, found.addressBorderOriginal.TopLeft);
+    }
+    if (auto box = ToolbarFindById(root, L"FileExplorerSearchBox", 0).try_as<muxc::Control>()) {
+        found.search = winrt::make_weak(box);
+        found.searchOriginal2 = box.CornerRadius();
+    }
     found.known = true;
     t_toolbar = found;
+    if (auto grid = t_toolbar.navGrid.get()) {
+        ToolbarMakeHandle(grid);
+    }
     ToolbarApplyNow();
     LogVerbose(L"TOOLBAR gap %d applied to the four buttons, window=%p, contentRoot found=%d", g_navGap.load(),
                (void*)state->topLevel, t_toolbar.contentRoot.get() ? 1 : 0);
 #ifdef EXTRAS_VERBOSE
+    {
+        static bool dumped = false;
+        if (!dumped) {
+            dumped = true;
+            int budget = 700;
+            ToolbarTreeDump(root, 0, budget);
+        }
+    }
     // The sizes after the change, once the layout has run: the grids above the buttons.
     {
         mux::DependencyObject up = buttons[3];
@@ -22568,19 +23006,34 @@ void ToolbarSelfTest() {
     // Explorer gives each of the four buttons the margin 8,8,8,0: a gap of 16 between two of them, and 8 at each end.
     // The ends take the gap too (never more than Explorer's own), so the address bar gets the room.
     const mux::Thickness original{8, 8, 8, 0};
-    auto first = ToolbarMarginFor(original, 0, 4, 0);
-    auto second = ToolbarMarginFor(original, 1, 4, 0);
-    auto last = ToolbarMarginFor(original, 3, 4, 0);
+    auto first = ToolbarMarginFor(original, 0, 4, 0, 0);
+    auto second = ToolbarMarginFor(original, 1, 4, 0, 0);
+    auto last = ToolbarMarginFor(original, 3, 4, 0, 0);
     expect(first.Left == 0 && first.Right == 0 && first.Top == 8 && first.Bottom == 0, L"gap 0: the first button has no margin");
     expect(second.Left == 0 && second.Right == 0, L"gap 0: a middle button has no margin");
     expect(last.Left == 0 && last.Right == 0, L"gap 0: the last button has no margin");
-    auto spaced = ToolbarMarginFor(original, 1, 4, 2);
+    auto spaced = ToolbarMarginFor(original, 1, 4, 2, 2);
     expect(spaced.Left == 0 && spaced.Right == 2, L"the gap is the right margin of every button but the last");
-    expect(ToolbarMarginFor(original, 0, 4, 2).Left == 2 && ToolbarMarginFor(original, 3, 4, 2).Right == 2, L"the ends take the gap");
-    expect(ToolbarMarginFor(original, 0, 4, 16).Left == 8 && ToolbarMarginFor(original, 3, 4, 16).Right == 8,
-           L"the ends never grow past Explorer's own margin");
-    auto single = ToolbarMarginFor(original, 0, 1, 7);
-    expect(single.Left == 7 && single.Right == 7, L"a lone button has the gap on both sides");
+    expect(ToolbarMarginFor(original, 0, 4, 2, 5).Left == 2, L"the first button's left margin is the gap");
+    expect(ToolbarMarginFor(original, 3, 4, 2, 5).Right == 5, L"the last button's right margin is the gap to the address bar");
+    expect(ToolbarMarginFor(original, 0, 4, 16, 16).Left == 8, L"the left end never grows past Explorer's own margin");
+    expect(ToolbarMarginFor(original, 3, 4, 2, 12).Right == 12, L"the gap to the address bar can be wider than Explorer's");
+    auto single = ToolbarMarginFor(original, 0, 1, 7, 3);
+    expect(single.Left == 7 && single.Right == 3, L"a lone button has the gap on the left and the address bar gap on the right");
+    // The command bar: Explorer's AppBarButtons have 4 or 2 on each side; the gap is shared by the two sides of a neighbour pair.
+    auto cmd = ToolbarCommandMargin(mux::Thickness{4, 0, 4, 0}, 2);
+    expect(cmd.Left == 1 && cmd.Right == 1 && cmd.Top == 0 && cmd.Bottom == 0, L"command bar: a gap of 2 is 1 on each side");
+    expect(ToolbarCommandMargin(mux::Thickness{2, 0, 2, 0}, 16).Left == 2, L"command bar: never more than Explorer's own margin");
+    expect(ToolbarCommandMargin(mux::Thickness{4, 0, 4, 0}, 0).Right == 0, L"command bar: a gap of 0 touches");
+    // The search box's width: wanted, kept between 160 and what leaves the address bar 240 beside the navigation buttons.
+    expect(ToolbarSearchWidth(300, 1100, 148) == 300, L"search width: a width inside the limits is kept");
+    expect(ToolbarSearchWidth(50, 1100, 148) == 160, L"search width: not narrower than 160");
+    expect(ToolbarSearchWidth(5000, 1100, 148) == 712, L"search width: not wider than the grid minus buttons minus 240");
+    expect(ToolbarSearchWidth(300, 300, 148) == 160, L"search width: a tiny window gets the minimum, never a negative width");
+    // The corner radius of the address bar and the search box: the setting when the area is on, Explorer's own when it is off.
+    expect(ToolbarRadius(4, 12, true) == 12, L"radius: the setting is used when the area is on");
+    expect(ToolbarRadius(4, 12, false) == 4, L"radius: Explorer's own comes back when the area is off");
+    expect(ToolbarRadius(4, 99, true) == 16 && ToolbarRadius(4, -3, true) == 0, L"radius: kept between 0 and 16");
     if (failure.empty()) {
         Wh_Log(L"TOOLBAR SELFTEST pass");
     } else {
@@ -23336,6 +23789,12 @@ void LoadSettings() {
     LabelsLoadSettings();
     g_toolbar = SettingBool(L"toolbarOn");
     g_navGap = SettingInt(L"navGap");
+    g_addressGap = SettingInt(L"addressGap");
+    g_cmdGap = SettingInt(L"commandGap");
+    g_addressRadius = SettingInt(L"addressRadius");
+    g_searchRadius = SettingInt(L"searchRadius");
+    g_searchResize = SettingBool(L"searchResize");
+    g_searchWidth = SettingInt(L"searchWidth");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");

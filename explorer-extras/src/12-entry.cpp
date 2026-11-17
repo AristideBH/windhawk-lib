@@ -50,6 +50,12 @@ void LoadSettings() {
     LabelsLoadSettings();
     g_toolbar = SettingBool(L"toolbarOn");
     g_navGap = SettingInt(L"navGap");
+    g_addressGap = SettingInt(L"addressGap");
+    g_cmdGap = SettingInt(L"commandGap");
+    g_addressRadius = SettingInt(L"addressRadius");
+    g_searchRadius = SettingInt(L"searchRadius");
+    g_searchResize = SettingBool(L"searchResize");
+    g_searchWidth = SettingInt(L"searchWidth");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
