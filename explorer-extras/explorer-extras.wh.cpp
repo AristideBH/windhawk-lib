@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns) and a details and preview pane for PDF, text, Markdown, images, video and sound.
-// @version         0.74.3
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
+// @version         0.75.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -43,6 +43,16 @@ One pane in place of Explorer's Details and Preview panes, in Columns and in eve
 - Each kind of preview can be switched off, and has a size limit, in the settings (Limits).
 
 Works with QuickLook.
+
+## Labels
+
+Colour labels, like the tags of macOS, on files and folders. A label is a coloured dot with an optional name, from a palette of seven colours and a neutral gray, and an item can have up to 16.
+
+- **Where they show.** As a dot after the name, stacked when there are several, in every view of Explorer's own list (Details, List, Tiles, Content and the icon sizes) and in Columns. They follow the light and dark theme.
+- **How you set them.** In the **Tags** section of the details pane (badges that wrap, and an **Add a tag** link), and in the right-click menu, both in Explorer's own list and in Columns: a **Tags** entry with the colours, **Add tag** and **Clear tags**.
+- **Where they live.** In a named stream of the file itself, so they follow it when it is copied or moved on an NTFS drive. They need NTFS: the menu entry and the pane say so when a drive cannot keep them. The file's dates are not changed.
+- **Your own meanings.** Each colour has a name you can edit on Windhawk's page (Labels, Colour names), such as "Red = Urgent".
+- Switch them off with **Show labels**.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
@@ -154,9 +164,6 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
   - labelsOn: true
     $name: Show labels
     $description: Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive.
-  - labelsDim: true
-    $name: Dim items that do not match the tag filter
-    $description: When a tag filter is on, the other items fade in File Explorer’s own list. Columns hides them instead.
   - names:
     - colourName0: Gray
       $name: Name of the neutral gray
@@ -657,7 +664,6 @@ constexpr SettingInfo kSettings[] = {
     {L"previewImages", L"details.previews.previewImages", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewMedia", L"details.previews.previewMedia", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"labelsOn", L"labels.labelsOn", SettingKind::Bool, 1, L"", 0, 0, false},
-    {L"labelsDim", L"labels.labelsDim", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"colourName0", L"labels.names.colourName0", SettingKind::String, 0, L"Gray", 0, 0, false},
     {L"colourName1", L"labels.names.colourName1", SettingKind::String, 0, L"Red", 0, 0, false},
     {L"colourName2", L"labels.names.colourName2", SettingKind::String, 0, L"Orange", 0, 0, false},
@@ -1911,7 +1917,6 @@ constexpr wchar_t kLabelsStream[] = L":ExplorerExtras.Labels";
 enum class LabelsWrite { Ok, Unsupported, ReadOnly, Locked, Failed };
 
 std::atomic<bool> g_labels{true};     // Labels on or off.
-std::atomic<bool> g_labelsDim{true};  // Dim the items that do not match the tag filter.
 
 namespace {
 
@@ -2126,7 +2131,6 @@ std::wstring LabelsColourName(int colour) {
 
 void LabelsLoadSettings() {
     g_labels = SettingBool(L"labelsOn");
-    g_labelsDim = SettingBool(L"labelsDim");
     std::lock_guard<std::mutex> lock(g_labelNamesMutex);
     for (int i = 0; i < 8; i++) {
         g_labelNames[i] = LabelsClip(SettingText((std::wstring(L"colourName") + std::to_wstring(i)).c_str()));
@@ -20308,12 +20312,13 @@ std::wstring LabelsThreadFolder() {
     return path;
 }
 
-// The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI), measured on `dc`.
-int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi) {
-    [[clang::no_destroy]] thread_local std::map<UINT, HFONT> fonts;
-    HFONT& font = fonts[dpi];
+// The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI; the Content view's secondary lines are
+// about 11), measured on `dc`.
+int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi, int fontPx = 13) {
+    [[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> fonts;
+    HFONT& font = fonts[{dpi, fontPx}];
     if (!font) {
-        font = CreateFontW(-MulDiv(13, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+        font = CreateFontW(-MulDiv(fontPx, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
     }
     if (!font) {
@@ -20376,6 +20381,7 @@ struct LabelsRowContext {
     RECT row = {};
     RECT block = {};  // The text block of Tiles and Icons rows, in the device context's coordinates.
     RECT name = {};   // The name line of a Content row, once it has been painted.
+    int nameTextLeft = 0;  // Where its text starts.
     bool haveName = false;
     bool folder = false;
     std::wstring typeName;  // The text of the type line of a Content row, from the cache.
@@ -20683,9 +20689,10 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
             if (!nameLine) {
                 return;
             }
-            in.cell = {rect->left, rect->top + row.lineHeight, row.block.right, rect->top + 2 * row.lineHeight};
-            in.textLeft = rect->left;
-            in.textRight = rect->left - 1;
+            int nameLeft = scanned ? textLeft : rect->left + 4;  // The name's text edge, not its element's.
+            in.cell = {nameLeft, rect->top + row.lineHeight, row.block.right, rect->top + 2 * row.lineHeight};
+            in.textLeft = nameLeft;
+            in.textRight = nameLeft - 1;
         } else if (LabelsIsLastLine(rect->bottom, row.block.bottom, row.lineHeight) && (lines <= 1 || !nameLine)) {
             // The last detail line: after its text.
             in.cell = {rect->left, rect->top, row.block.right, rect->bottom};
@@ -20699,22 +20706,23 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
         bool leftBlock = rect->left < row.row.left + (row.row.right - row.row.left) * 45 / 100;
         bool secondLine = rect->top - row.row.top > (row.row.bottom - row.row.top) * 35 / 100;
         if (leftBlock && secondLine) {
-            t_contentTextOffset = rect->left - row.row.left;
+            t_contentTextOffset = rect->left + 4 - row.row.left;
             in.cell = *rect;
             in.textLeft = textLeft;
             in.textRight = scanned ? textRight : rect->left - 1;
             if (!scanned && !row.typeName.empty()) {
                 // The type line paints its text in children, after this element: its width is measured instead.
                 in.textLeft = rect->left + 4;
-                in.textRight = in.textLeft + LabelsTextWidth(dc, LabelsAccName(self) + L" : " + row.typeName, row.dpi);
+                in.textRight = in.textLeft + LabelsTextWidth(dc, LabelsAccName(self) + L" : " + row.typeName, row.dpi, 11);
             }
         } else if (leftBlock) {
             row.name = *rect;
+            row.nameTextLeft = scanned ? textLeft : rect->left + 4;
             row.haveName = true;
             return;
         } else {
             // The first column on the right: the row has no type line, the dot goes at the start of the line below the name.
-            int left = row.haveName ? row.name.left : (t_contentTextOffset >= 0 ? row.row.left + t_contentTextOffset : -1);
+            int left = row.haveName ? row.nameTextLeft : (t_contentTextOffset >= 0 ? row.row.left + t_contentTextOffset : -1);
             if (left < 0) {
                 return;
             }
@@ -20755,7 +20763,7 @@ void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
     // Before the child paints: is it part of a row that the filter dims, and what colour is behind it?
     bool dim = false;
     COLORREF behind = 0;
-    if (usable && g_labelsDim) {
+    if (usable) {
         try {
             LabelsKind own = LabelsKindOf(self);
             if (own == kImage || own == kProperty || own == kSmartProperty || own == kElement || own == kTilesCollection ||
@@ -22586,7 +22594,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.74.3 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.75.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

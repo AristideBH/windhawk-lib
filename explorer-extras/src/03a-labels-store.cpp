@@ -17,7 +17,6 @@ constexpr wchar_t kLabelsStream[] = L":ExplorerExtras.Labels";
 enum class LabelsWrite { Ok, Unsupported, ReadOnly, Locked, Failed };
 
 std::atomic<bool> g_labels{true};     // Labels on or off.
-std::atomic<bool> g_labelsDim{true};  // Dim the items that do not match the tag filter.
 
 namespace {
 
@@ -232,7 +231,6 @@ std::wstring LabelsColourName(int colour) {
 
 void LabelsLoadSettings() {
     g_labels = SettingBool(L"labelsOn");
-    g_labelsDim = SettingBool(L"labelsDim");
     std::lock_guard<std::mutex> lock(g_labelNamesMutex);
     for (int i = 0; i < 8; i++) {
         g_labelNames[i] = LabelsClip(SettingText((std::wstring(L"colourName") + std::to_wstring(i)).c_str()));

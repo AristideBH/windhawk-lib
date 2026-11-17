@@ -299,15 +299,6 @@
       "needs": "now"
     },
     {
-      "id": "labelsDim",
-      "group": "labels",
-      "type": "bool",
-      "default": true,
-      "name": "Dim items that do not match the tag filter",
-      "description": "When a tag filter is on, the other items fade in File Explorer’s own list. Columns hides them instead.",
-      "needs": "now"
-    },
-    {
       "id": "colourName0",
       "group": "labels",
       "sub": "names",

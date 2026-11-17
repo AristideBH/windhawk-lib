@@ -105,7 +105,7 @@ The animation mod hooks, with fallbacks marked optional:
 
 It draws its transition on a DirectComposition surface placed over the list, using D3D11, and hands the real content back when done. So covering or replacing the content area smoothly is possible. It also falls back to plain behavior on builds where a symbol is missing, which is the right model.
 
-Nothing here draws custom content per file item. Per-item drawing inside DirectUI is unconfirmed territory.
+Per-item drawing inside DirectUI works: Explorer Extras 0.70 to 0.75 draws label dots on every row from a hook on the exported `Element::PaintContent`, see "Drawing on file list rows" and "Labels, as built" below.
 
 On Ari's laptop the symbol hooks above can't be resolved for now. Microsoft's server had no symbol files for the System32 modules shipped by the update of 2026-11-10, see the symbol section of the core skill. Recheck before assuming it still holds. The route still open is `dui70.dll`'s exported functions, which need no symbol file. Which exports paint a file list item is unconfirmed.
 
@@ -169,7 +169,7 @@ Storage options, none tested here:
 Display options:
 
 - Shell icon overlays. Windows supports a small fixed number of overlay handlers across all programs, and cloud sync clients usually fill them. An overlay handler is also a shell extension, which a Windhawk mod is not well placed to provide.
-- Drawing a dot or tint in the file list. That is per-item drawing in DirectUI, listed above as unconfirmed.
+- Drawing a dot or tint in the file list. Done, from a hook on `dui70.dll`'s `PaintContent`, see "Labels, as built".
 - A column or group in the existing views, if property storage works.
 
 Ask Ari which storage trade-off he accepts before testing display. The display test depends on the file list result above.
@@ -188,7 +188,7 @@ Feasibility tests, with their state on 2026-11-12:
 | --- | --- | --- |
 | Native "Columns" entry in the View menu | A mod can add a clickable item to the View flyout | Proved |
 | Miller columns | A real folder view can be stripped down to a plain list, or a custom list can host shell drag and drop and context menus | Not started |
-| File labels | A mark can be drawn on one item in the DirectUI file list | Symbol hooks unavailable until Microsoft publishes symbols for the 2026-11 update, `dui70.dll` exports untested |
+| File labels | A mark can be drawn on one item in the DirectUI file list | Built in explorer-extras 0.75 (dots in every view and in Columns, Tags in the pane and in the right-click menu) |
 | Desktop grouping | Icons can be clustered and stacked by position | Positioning proved, stacking untested |
 
 ## Reaching a window as it opens, confirmed
@@ -334,3 +334,16 @@ Windows 11 24H2 build 26100, ARM64, French. First-hand facts, from probes and fr
 - **A selectable group header.** In a grouped ListView a group header is a selectable row that is no file. Comparing "which entries are selected" skips it, so Invert selection and Select none left a header selected; compare the selected row count too.
 - **A preview scrolls without a hook.** With `IPreviewHandler::SetFocus` on hover, the wheel and the keys reach a handler's window by themselves: a low-level mouse hook to forward the wheel was never needed.
 - **The `.ts` extension** is a video or TypeScript: an MPEG transport stream has byte 0x47 at offsets 0 and 188.
+
+## Labels, as built (explorer-extras 0.70 to 0.75, 2026-11-17)
+
+Design and plan: `docs/superpowers/specs/2026-11-17-labels-design.md` and `docs/superpowers/plans/2026-11-17-labels.md`. Ari's labels are a name (optional) plus a palette colour, many per item, kept in a named NTFS stream `ExplorerExtras.Labels` on the item.
+
+- **Storage.** `03a-labels-store.cpp`: a text of `v1`, then a colour digit, a tab and the name per line. Writing the stream resets the file's and folder's last-write time unless the writing handle is told not to: `SetFileTime(handle, nullptr, nullptr, &{0xFFFFFFFF, 0xFFFFFFFF})` before the write. Copies and moves keep the stream. `FILE_NAMED_STREAMS` from `GetVolumeInformationW` says whether a drive can hold it.
+- **Cache.** `04b-labels-cache.cpp`: a mod thread reads a folder's streams, keyed by the displayed name (the text `Element::GetAccName` gives for a row). Two items that show one name (hidden extensions) are "ambiguous" and get no dot. The paint hook only reads the cache.
+- **Drawing.** One hook, `Element::PaintContent` (exported by `dui70.dll`, no symbol file). Children paint after their parent, and a text is drawn by the element that owns it: the dot is placed from the geometry of the row and drawn from the hook of the element that paints the name. The kinds seen: `UIItem` (a row), `UIProperty`, `UISmartProperty`, `UIImage`, `UIBase`, `UICheckbox`, `Element`, `UIDetailsPropertyCollection`, `UITilesPropertyCollection`, `UISmartPropertyCollection`. The view is told from the row's children: a details collection is Details, a smart collection is Content, a property with an image is List, two elements with a check box are Tiles, two elements without are Icons. In Tiles and Content, a folder has an empty second line (the cache keeps which items are folders), and a Type line paints its text in children, so its width is measured from the shell's type text.
+- **Dimming** a row: fade each child toward the colour sampled with `GetPixel` before it paints, then `AlphaBlend` about 60 percent. Clean on hover and selection. The filter that would switch it on has no UI (Ari did not see the point), the code is dormant.
+- **Right-click menu.** `MenuFlyoutControl::AppendMenuItem(CommandBarFlyout&, MenuItem const&)` in `FileExplorerExtensions.dll`, hooked with the other hooks of that module. The first call for a flyout puts a handler on its `Opening` event (the flyout is reused, and its commands are appended again each time). At `Opening` an `AppBarButton` with a `Flyout` (a `MenuFlyout`) is inserted in `SecondaryCommands()`, before the command with the Shift+F10 accelerator ("Show more options"). The hook does not receive the selected items: they are read from the window's `IShellBrowser`.
+- **A thread can have no `WindowState`.** A window that was open before the mod loaded has none, and `StateForThisThread(false)` is null: find the `CabinetWClass` window of the thread with `EnumThreadWindows` instead.
+- **Theme.** The apps' theme is `AppsUseLightTheme` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`. A dot in the light theme is the palette colour softened 45 percent toward white (about a badge's colour); the rim is darker in the dark theme and lighter in the light one.
+- **Not done:** drag onto a sidebar tag, an index and a "Tagged" view across folders, a list of tag presets (a Windhawk settings repeater), the exact placement in Content view.

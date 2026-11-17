@@ -69,6 +69,25 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Preview images | on | Shows pictures at full size in the pane, with zoom and pan. |
 | Preview video and sound | on | Plays video and sound files in the pane. |
 
+## Labels
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Show labels | on | Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive. |
+
+### Colour names
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Name of the neutral gray | Gray | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 2 | Red | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 3 | Orange | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 4 | Yellow | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 5 | Green | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 6 | Teal | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 7 | Blue | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+| Name of colour 8 | Purple | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+
 ## Limits
 
 | Setting | Default | What it does |

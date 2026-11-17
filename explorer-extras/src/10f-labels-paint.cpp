@@ -377,12 +377,13 @@ std::wstring LabelsThreadFolder() {
     return path;
 }
 
-// The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI), measured on `dc`.
-int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi) {
-    [[clang::no_destroy]] thread_local std::map<UINT, HFONT> fonts;
-    HFONT& font = fonts[dpi];
+// The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI; the Content view's secondary lines are
+// about 11), measured on `dc`.
+int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi, int fontPx = 13) {
+    [[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> fonts;
+    HFONT& font = fonts[{dpi, fontPx}];
     if (!font) {
-        font = CreateFontW(-MulDiv(13, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+        font = CreateFontW(-MulDiv(fontPx, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
     }
     if (!font) {
@@ -445,6 +446,7 @@ struct LabelsRowContext {
     RECT row = {};
     RECT block = {};  // The text block of Tiles and Icons rows, in the device context's coordinates.
     RECT name = {};   // The name line of a Content row, once it has been painted.
+    int nameTextLeft = 0;  // Where its text starts.
     bool haveName = false;
     bool folder = false;
     std::wstring typeName;  // The text of the type line of a Content row, from the cache.
@@ -752,9 +754,10 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
             if (!nameLine) {
                 return;
             }
-            in.cell = {rect->left, rect->top + row.lineHeight, row.block.right, rect->top + 2 * row.lineHeight};
-            in.textLeft = rect->left;
-            in.textRight = rect->left - 1;
+            int nameLeft = scanned ? textLeft : rect->left + 4;  // The name's text edge, not its element's.
+            in.cell = {nameLeft, rect->top + row.lineHeight, row.block.right, rect->top + 2 * row.lineHeight};
+            in.textLeft = nameLeft;
+            in.textRight = nameLeft - 1;
         } else if (LabelsIsLastLine(rect->bottom, row.block.bottom, row.lineHeight) && (lines <= 1 || !nameLine)) {
             // The last detail line: after its text.
             in.cell = {rect->left, rect->top, row.block.right, rect->bottom};
@@ -768,22 +771,23 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
         bool leftBlock = rect->left < row.row.left + (row.row.right - row.row.left) * 45 / 100;
         bool secondLine = rect->top - row.row.top > (row.row.bottom - row.row.top) * 35 / 100;
         if (leftBlock && secondLine) {
-            t_contentTextOffset = rect->left - row.row.left;
+            t_contentTextOffset = rect->left + 4 - row.row.left;
             in.cell = *rect;
             in.textLeft = textLeft;
             in.textRight = scanned ? textRight : rect->left - 1;
             if (!scanned && !row.typeName.empty()) {
                 // The type line paints its text in children, after this element: its width is measured instead.
                 in.textLeft = rect->left + 4;
-                in.textRight = in.textLeft + LabelsTextWidth(dc, LabelsAccName(self) + L" : " + row.typeName, row.dpi);
+                in.textRight = in.textLeft + LabelsTextWidth(dc, LabelsAccName(self) + L" : " + row.typeName, row.dpi, 11);
             }
         } else if (leftBlock) {
             row.name = *rect;
+            row.nameTextLeft = scanned ? textLeft : rect->left + 4;
             row.haveName = true;
             return;
         } else {
             // The first column on the right: the row has no type line, the dot goes at the start of the line below the name.
-            int left = row.haveName ? row.name.left : (t_contentTextOffset >= 0 ? row.row.left + t_contentTextOffset : -1);
+            int left = row.haveName ? row.nameTextLeft : (t_contentTextOffset >= 0 ? row.row.left + t_contentTextOffset : -1);
             if (left < 0) {
                 return;
             }
@@ -824,7 +828,7 @@ void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
     // Before the child paints: is it part of a row that the filter dims, and what colour is behind it?
     bool dim = false;
     COLORREF behind = 0;
-    if (usable && g_labelsDim) {
+    if (usable) {
         try {
             LabelsKind own = LabelsKindOf(self);
             if (own == kImage || own == kProperty || own == kSmartProperty || own == kElement || own == kTilesCollection ||

@@ -154,7 +154,7 @@ border handle, connected selection). 0.18.7 was the housekeeping.
 | 0.55 to 0.66 | The catalog review rounds (2026-11-16): unload safety (a registry of threads joined at unload, every XAML handler a revoker, a release on window close, a drain, a guard for the mod's modal loops and touch-drag coroutines), no injected keys or global keyboard hook, a command-bar hook that places the entries with no click, adaptive timers, the log and `%TEMP%` files removed, folder memory per value, smaller fixes; the settings window removed (0.66) and Windhawk's page regrouped; tooling: `tools/deploy-explorer-extras.ps1`, the smoke test and crash-analysis scripts. All tested by Ari on ARM64. 0.67 and 0.68 (2026-11-17): archives and renames with hidden extensions, a linear selection sync, the wheel hook removed, and a setting that counts folder sizes by itself (off by default, a Calculate button otherwise). To do: test on x86-64. |
 | 1.0 candidates | The pull request to windhawk-mods (done on the device 2026-11-16: the x86-64 build compiled and ran, and a reload and uninstall walk left no crash). A donate link (Ko-fi) is in the mod tags and the README. |
 | 1.0 | The pull request to windhawk-mods, skills updated one last time. |
-| later | Labels, toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options (crossed off 2026-11-16: Windows has its own option, Folder Options > View > Show status bar). |
+| later | toolbar customization, Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Space preview, and as other mods: sidebar overhaul (Ari has one), preview and details pane, status bar options (crossed off 2026-11-16: Windows has its own option, Folder Options > View > Show status bar). |
 
 ## Plan for the next versions, drawn up 2026-11-13
 
@@ -176,7 +176,7 @@ last and are not scheduled.
 | 0.12 | Done and tested: drag and drop between columns (0.12.3), three toggles for the per-folder memory (`rememberSort`, `rememberWidth`, `rememberLayout`). | | |
 | 0.13 | Drag out of the panel with the shell's drag, setting `dragOut` (off by default). Works onto the desktop for move and copy (0.13.6). Does not work onto the navigation pane. | | |
 | 1.0 | Release: strings in a table for translation, settings cleaned of test options, README, the pull request to windhawk-mods. | medium | low |
-| later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, Labels, toolbar customization, (the odd/even row background in the Columns views was done in 0.42). | | |
+| later | Home page overhaul, details columns auto-fit, GPU Explorer view compatibility, toolbar customization, (the odd/even row background in the Columns views was done in 0.42). | | |
 
 Why this order: the keys and multi-rename are cheap and used all day. The
 source split costs a day and makes every change after it easier to review.
@@ -344,7 +344,7 @@ Structure and polish:
 
 ## Feature backlog, order open
 
-- [ ] Labels, macOS style
+- [x] Labels, macOS style (0.75: dots in every view and in Columns, the Tags section of the pane, the right-click entry; later: drag onto a sidebar tag, an index and a cross-folder Tagged view, tag presets, Content view placement)
 - [ ] Home page overhaul
 - [ ] Option to show only real Desktop items, hiding the virtual ones (This
       PC, Recycle Bin, Control Panel, Libraries and so on). The toggle's form

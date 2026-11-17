@@ -443,3 +443,12 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - **Settings table in two languages.** `settings.schema.json` holds the English texts and an `fr` block; `build.py` writes both into the mod, and a `Str()` lookup picks the French table when Windows' display language is French. Windhawk's own settings page stays English.
 - **Check Windows first.** A switch that edits a Windows setting persistently (the status bar) is a reason to look in Folder Options before building it.
 - **Release hygiene.** `python explorer-extras/build.py --check` before every commit, Windhawk's clang for syntax, a link check with the real library flags (`-lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys`), and a copy to the editor workspace.
+
+## Lessons from the labels build (explorer-extras 0.69 to 0.75)
+
+- **Self-tests inside the mod.** With no unit test runner, a pure part of the mod (a text format, a placement rule, a merge of tags) is tested by a function in a part that only exists in the debug build (`#ifdef EXTRAS_VERBOSE`), called when the mod loads, that writes one line, `LABELS ... SELFTEST pass` or `FAIL <what>`. `tools/smoke-test-explorer-extras.ps1` reads the last such line. Write the test first and see it fail: a test that names a function that does not exist fails to compile (the deploy script stops), a test of new behaviour fails at the next load with the `FAIL` line. A test that waits (a reader thread) runs on a mod thread, not in `Wh_ModInit`.
+- **A deploy can silently not happen.** The elevated step may be cancelled, and the output then lacks the `Deployed local@... <version>` line. Check for that line, and that the log says `explorer-extras v<version> start` after it, before reading a test result. A result from the old build looks exactly like "nothing changed".
+- **Windows open before the mod loaded** have no `WindowState`. A hook that finds its window by `StateForThisThread(false)` does nothing there: look the window up by class on the thread.
+- **Write files for Explorer with PowerShell, not Bash.** A control file written from the Bash tool into `%LOCALAPPDATA%` was never seen by Explorer; one written by the PowerShell tool was.
+- **Pasting Python into a heredoc mangles backslashes and quotes.** Write the script with the Write tool and run it.
+- **Keep one probe per question** (`probes/`), compile and deploy it with `tools/windhawk-build/build.ps1 -Source ...`, and disable it in Windhawk when the answer is in.

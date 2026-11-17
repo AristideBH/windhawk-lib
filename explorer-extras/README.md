@@ -12,7 +12,8 @@ Tested daily on Windows 11 build 26100 (24H2) on ARM64, in French and English; x
 | --- | --- |
 | **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
 | **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
-| **Settings** | On the mod's page in Windhawk, in groups: Columns (Behaviour, Content, Layout, Memory), Details pane (Pane, Previews) and Limits. They apply at once. |
+| **Labels** | Colour labels, like the tags of macOS, on files and folders: dots in every view and in Columns, a Tags section in the details pane and a Tags entry in the right-click menu. They are kept in the file itself, on NTFS. |
+| **Settings** | On the mod's page in Windhawk, in groups: Columns (Behaviour, Content, Layout, Memory), Details pane (Pane, Previews), Labels (Colour names) and Limits. They apply at once. |
 
 **Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does in any other view.
 
@@ -31,6 +32,13 @@ https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 - A fanned stack of thumbnails when several items are selected.
 - Replaces Explorer's Details and Preview panes: Alt+P, the View menu and the toolbar button show and hide it.
 - Each kind of preview can be switched off, and has a size limit, in the settings.
+
+## Labels
+
+- A label is a coloured dot with an optional name: seven colours and a neutral gray, up to 16 on an item. Dots show after the name, stacked when there are several, in every view of Explorer's list and in Columns, and follow the light and dark theme.
+- Set them in the **Tags** section of the details pane, or in the right-click menu (a **Tags** entry with the colours, **Add tag** and **Clear tags**), in Explorer's own list and in Columns.
+- They are kept in a named stream of the file, so they follow it when it is copied or moved on an NTFS drive, and the file's dates do not change. A drive that is not NTFS cannot keep them, and the pane and the menu say so.
+- Each colour has a name you can edit on Windhawk's page, such as "Red = Urgent". Switch labels off with **Show labels**.
 
 ## Install
 

@@ -2,6 +2,18 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.75 (2026-11-17)
+
+### Added
+- **Labels**, a new area: colour labels, like the tags of macOS, on files and folders. A label is a coloured dot with an optional name, from seven colours and a neutral gray, up to 16 on an item.
+- The dots show after the name in every view of Explorer's own list (Details, List, Tiles, Content, and the icon sizes) and in Columns, stacked when there are several and with a small plus when there are more than four. They follow the light and dark theme.
+- A **Tags** section in the details pane: the labels of the selection as badges that wrap, an **Add a tag** link (the colours and an optional name), and a menu on each badge to remove it. With several items selected, a label on only some of them is dimmed, and its menu can add it to all.
+- A **Tags** entry in the right-click menu, in Explorer's own list and in Columns: the colours as checkable items, **Add tag** and **Clear tags**.
+- Labels are kept in a named stream of the file itself, so they follow it on NTFS when it is copied or moved. The file's dates are not changed. A drive that is not NTFS, a read-only file or a file in use is told to you, not guessed at.
+- A **Labels** group on Windhawk's page: **Show labels**, and a name for each colour ("Red = Urgent").
+- Window threads that the mod never saw being created (a window open before the mod loaded) are found by class, so labels work in them too.
+- 0.74.x: the hook on Explorer's right-click menu; 0.73: Columns; 0.72: the pane; 0.70 to 0.71: the dots on the list.
+
 ## 0.68 (2026-11-17)
 
 ### Changed
