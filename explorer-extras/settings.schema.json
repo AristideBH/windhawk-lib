@@ -454,7 +454,8 @@
     "labels.menu": "Tags",
     "labels.addtag": "Add tag…",
     "labels.clear": "Clear tags",
-    "labels.ambiguous": "Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart."
+    "labels.ambiguous": "Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart.",
+    "labels.menu.ntfs": "Tags (needs an NTFS drive)"
   },
   "fr": {
     "strings": {
@@ -499,7 +500,8 @@
       "labels.menu": "Étiquettes",
       "labels.addtag": "Ajouter une étiquette…",
       "labels.clear": "Effacer les étiquettes",
-      "labels.ambiguous": "Un autre élément porte le même nom affiché, donc aucun point n’est montré. Affichez les extensions de nom de fichier pour les distinguer."
+      "labels.ambiguous": "Un autre élément porte le même nom affiché, donc aucun point n’est montré. Affichez les extensions de nom de fichier pour les distinguer.",
+      "labels.menu.ntfs": "Étiquettes (disque NTFS requis)"
     }
   }
 }

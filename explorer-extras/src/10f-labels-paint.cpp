@@ -392,10 +392,26 @@ std::wstring LabelsThreadFolder() {
 
 // The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI; the Content view's secondary lines are
 // about 11), measured on `dc`.
+[[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> t_labelsFonts;
+
+int LabelsFontCount() {
+    return (int)t_labelsFonts.size();
+}
+
+// Frees the fonts of this thread. At unload each thread does it for itself (RevokeKeptThreads).
+void LabelsReleaseFonts() {
+    for (auto& entry : t_labelsFonts) {
+        if (entry.second) {
+            DeleteObject(entry.second);
+        }
+    }
+    t_labelsFonts.clear();
+}
+
 int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi, int fontPx = 13) {
-    [[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> fonts;
-    HFONT& font = fonts[{dpi, fontPx}];
+    HFONT& font = t_labelsFonts[{dpi, fontPx}];
     if (!font) {
+        RegisterKeepThread();  // This thread will be asked to free its fonts at unload.
         font = CreateFontW(-MulDiv(fontPx, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
     }

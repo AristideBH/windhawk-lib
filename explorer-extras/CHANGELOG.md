@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.76.2 (2026-11-17)
+
+### Fixed, the smaller findings of the Labels review
+- Writing a tag no longer cuts the stream before the new text is written, so a write that fails cannot leave an item with no tags, and a hidden or system item can be tagged again.
+- A file that is in use, or that you have no access to, is no longer reported as having tags "this version cannot read": the pane and the menus say it is in use or read-only.
+- Hidden items are read for labels only when Explorer shows hidden items, so a hidden file can no longer take the dot away from a visible one with the same displayed name.
+- On a drive that cannot keep labels, the Tags entry of both right-click menus is greyed, with "needs an NTFS drive" in its name, instead of missing.
+- The fonts and flyouts that labels keep on each window thread are released at unload.
+
 ## 0.76 (2026-11-17)
 
 ### Fixed, from a review of the whole Labels work

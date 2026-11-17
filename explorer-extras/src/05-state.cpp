@@ -28,22 +28,28 @@ std::mutex g_keepThreadsMutex;
 [[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
 thread_local bool t_keepRegistered = false;
 
+// Records this thread and its queue, once: at unload it is asked to release what it holds.
+void RegisterKeepThread() {
+    if (t_keepRegistered) {
+        return;
+    }
+    t_keepRegistered = true;
+    try {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        if (queue) {
+            std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+            KeepThread entry;
+            entry.id = GetCurrentThreadId();
+            entry.queue = queue;
+            g_keepThreads.push_back(std::move(entry));
+        }
+    } catch (...) {
+    }
+}
+
 template <typename Element, typename Revoker>
 void Keep(Element const& element, Revoker&& revoker) {
-    if (!t_keepRegistered) {
-        t_keepRegistered = true;
-        try {
-            auto queue = mud::DispatcherQueue::GetForCurrentThread();
-            if (queue) {
-                std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
-                KeepThread entry;
-                entry.id = GetCurrentThreadId();
-                entry.queue = queue;
-                g_keepThreads.push_back(std::move(entry));
-            }
-        } catch (...) {
-        }
-    }
+    RegisterKeepThread();
     // The handlers of elements that are gone are dropped now and then, so the list stays short.
     if (++t_handlersSince >= 256) {
         t_handlersSince = 0;
@@ -89,6 +95,8 @@ void RevokeAllHandlers() {
 }
 // Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
 // by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
+void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
+
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
     {
@@ -99,6 +107,7 @@ void RevokeKeptThreads() {
     for (auto& thread : threads) {
         if (thread.id == self) {
             RevokeAllHandlers();
+            LabelsReleaseThreadObjects();
             continue;
         }
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -109,6 +118,7 @@ void RevokeKeptThreads() {
         try {
             queued = thread.queue.TryEnqueue([done]() {
                 RevokeAllHandlers();
+                LabelsReleaseThreadObjects();
                 SetEvent(done);
             });
         } catch (...) {

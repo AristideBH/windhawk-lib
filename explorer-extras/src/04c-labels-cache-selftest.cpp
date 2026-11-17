@@ -81,6 +81,10 @@ void CacheSelfTestRun() {
     CreateDirectoryW(folder.c_str(), nullptr);
     LabelsExpect(LabelsWriteFile(tagged, {LabelTag{1, L"Urgent"}}) == LabelsWrite::Ok, L"tag the file");
     LabelsExpect(LabelsWriteFile(folder, {LabelTag{5, L""}}) == LabelsWrite::Ok, L"tag the folder");
+    std::wstring hidden = dir + L"\\hid.txt";
+    CacheTouch(hidden);
+    LabelsWriteFile(hidden, {LabelTag{2, L""}});
+    SetFileAttributesW(hidden.c_str(), FILE_ATTRIBUTE_HIDDEN);
 
     auto first = LabelsFolderFor(dir);
     CacheExpect(!first->complete, L"the first call returns an entry that is not complete yet");
@@ -92,6 +96,8 @@ void CacheSelfTestRun() {
         CacheExpect(file && data->byName.count(L"sub") == 1, L"both tagged items are in the cache");
         CacheExpect(!data->byName.count(L"a.txt") && !data->byName.count(L"a"), L"the untagged item is not");
         CacheExpect(data->folders.count(L"sub") == 1, L"a read folder lists its subfolders");
+        bool hiddenSeen = data->byName.count(L"hid.txt") || data->byName.count(L"hid");
+        CacheExpect(hiddenSeen == ShowHiddenFiles(), L"a hidden item is read only when Explorer shows hidden items");
         bool typed = (data->typeNames.count(L"b.txt") && !data->typeNames.at(L"b.txt").empty()) ||
                      (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
         CacheExpect(typed, L"a tagged file has its type text");
@@ -154,6 +160,9 @@ void CacheSelfTestRun() {
         DeleteFileW((big + L"\\f" + std::to_wstring(i) + L".txt").c_str());
     }
     RemoveDirectoryW(big.c_str());
+    SetFileAttributesW(hidden.c_str(), FILE_ATTRIBUTE_NORMAL);
+    DeleteFileW((hidden + kLabelsStream).c_str());
+    DeleteFileW(hidden.c_str());
     DeleteFileW((tagged + kLabelsStream).c_str());
     DeleteFileW(tagged.c_str());
     DeleteFileW((dir + L"\\a.txt").c_str());

@@ -65,6 +65,20 @@ struct LabelsApplyResult {
     bool unreadable = false;               // An item's stream is corrupt or from a newer version: left alone.
 };
 
+// What a failed read means for the report: a stream that cannot be understood, a file in use, no access to it.
+void LabelsNoteReadFailure(LabelsApplyResult* result, LabelsReadResult read, std::wstring const& fileName) {
+    result->failedName = fileName;
+    if (read == LabelsReadResult::Locked) {
+        result->worst = LabelsWrite::Locked;
+    } else if (read == LabelsReadResult::NoAccess) {
+        result->worst = LabelsWrite::ReadOnly;
+    } else if (read == LabelsReadResult::Failed) {
+        result->worst = LabelsWrite::Failed;
+    } else {
+        result->unreadable = true;  // Corrupt, or from a newer version: left alone.
+    }
+}
+
 // Adds or removes one tag on every item. Items whose tags would not change are not written. The cache and the
 // list are told.
 LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths, LabelTag const& tag, bool add) {
@@ -72,9 +86,9 @@ LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths,
     for (auto const& path : paths) {
         std::vector<LabelTag> tags;
         std::wstring fileName = PathFindFileNameW(path.c_str());
-        if (!LabelsReadFile(path, &tags)) {
-            result.unreadable = true;
-            result.failedName = fileName;
+        LabelsReadResult read = LabelsReadFileEx(path, &tags);
+        if (read != LabelsReadResult::Ok) {
+            LabelsNoteReadFailure(&result, read, fileName);
             continue;
         }
         std::wstring before = LabelsSerialize(tags);
@@ -111,9 +125,9 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
     for (auto const& path : paths) {
         std::vector<LabelTag> tags;
         std::wstring fileName = PathFindFileNameW(path.c_str());
-        if (!LabelsReadFile(path, &tags)) {
-            result.unreadable = true;
-            result.failedName = fileName;
+        LabelsReadResult read = LabelsReadFileEx(path, &tags);
+        if (read != LabelsReadResult::Ok) {
+            LabelsNoteReadFailure(&result, read, fileName);
             continue;
         }
         if (tags.empty()) {
@@ -347,16 +361,17 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
-    std::wstring unreadableName;
+    LabelsApplyResult unreadableWhy;  // The first item that could not be read, and why.
     bool ambiguous = false;
     if (supported) {
         // The first 100 items give the badges (a bigger selection is not read item by item on every change).
         std::shared_ptr<const LabelsFolder> data;
         for (size_t i = 0; i < paths->size() && i < 100; i++) {
             std::vector<LabelTag> tags;
-            if (!LabelsReadFile((*paths)[i], &tags)) {
+            LabelsReadResult read = LabelsReadFileEx((*paths)[i], &tags);
+            if (read != LabelsReadResult::Ok) {
                 if (!unreadable) {
-                    unreadableName = PathFindFileNameW((*paths)[i].c_str());
+                    LabelsNoteReadFailure(&unreadableWhy, read, PathFindFileNameW((*paths)[i].c_str()));
                 }
                 unreadable = true;
                 tags.clear();
@@ -446,10 +461,7 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
 
     std::wstring line = message;
     if (line.empty() && unreadable) {
-        LabelsApplyResult shown;
-        shown.unreadable = true;
-        shown.failedName = unreadableName;
-        line = LabelsFailText(shown);
+        line = LabelsFailText(unreadableWhy);
     }
     if (!line.empty()) {
         host.Children().Append(MakeText(line, 12, false, true));

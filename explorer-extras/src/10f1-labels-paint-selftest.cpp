@@ -15,6 +15,15 @@ void PlaceExpect(bool ok, const wchar_t* what) {
 }  // namespace
 
 void LabelsPlaceSelfTest() {
+    // The fonts of a thread are made on use and released explicitly (they are thread-local).
+    {
+        HDC screen = GetDC(nullptr);
+        int width = LabelsTextWidth(screen, L"abc", 96);
+        ReleaseDC(nullptr, screen);
+        PlaceExpect(width > 0 && LabelsFontCount() >= 1, L"measuring a text makes a font");
+        LabelsReleaseFonts();
+        PlaceExpect(LabelsFontCount() == 0, L"the fonts of a thread are released");
+    }
     PlaceExpect(LabelsBlockWidth(1, false, 8) == 8, L"one dot is one side wide");
     PlaceExpect(LabelsBlockWidth(3, false, 8) == 20, L"three stacked dots, each 6 px after the one before");
     PlaceExpect(LabelsBlockWidth(4, true, 8) == 35, L"four stacked dots, then a 4 px gap and a 5 px plus");

@@ -110,7 +110,7 @@ struct LabelsSlot {
 std::mutex g_labelsCacheMutex;
 [[clang::no_destroy]] std::map<std::wstring, LabelsSlot> g_labelsCache;
 std::atomic<int> g_labelsReadsRunning{0};
-void (*g_labelsLoaded)(std::wstring const& folderPath) = nullptr;
+std::atomic<void (*)(std::wstring const& folderPath)> g_labelsLoaded{nullptr};
 constexpr size_t kLabelsCachedFolders = 16;
 
 // Reads one folder on a thread of the mod. Gives up as soon as `cancel` is set or the mod unloads.
@@ -127,7 +127,12 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
     } else if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl &&
                SUCCEEDED(SHBindToObject(nullptr, pidl, nullptr, IID_PPV_ARGS(&folder))) && folder) {
         IEnumIDList* list = nullptr;
-        if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &list) == S_OK && list) {
+        // Hidden items are read when Explorer shows them: one that is not shown must not make a visible name ambiguous.
+        SHCONTF flags = SHCONTF_FOLDERS | SHCONTF_NONFOLDERS;
+        if (ShowHiddenFiles()) {
+            flags |= SHCONTF_INCLUDEHIDDEN;
+        }
+        if (folder->EnumObjects(nullptr, flags, &list) == S_OK && list) {
             finished = true;
             PITEMID_CHILD child = nullptr;
             int count = 0;
@@ -191,8 +196,9 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
         }
     }
     g_labelsReadsRunning--;
-    if (publish && g_labelsLoaded && !g_unloading) {
-        g_labelsLoaded(path);
+    auto loaded = g_labelsLoaded.load();
+    if (publish && loaded && !g_unloading) {
+        loaded(path);
     }
 }
 

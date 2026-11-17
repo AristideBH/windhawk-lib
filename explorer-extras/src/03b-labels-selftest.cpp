@@ -122,6 +122,39 @@ void LabelsSelfTest() {
     LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::ReadOnly, L"a read-only file is refused");
     SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
 
+    // A shorter list replaces a longer one, and a hidden file can be written again.
+    std::vector<LabelTag> longer = {{1, L"aaaaaaaaaaaaaaaaaaaa"}, {2, L"bbbbbbbbbbbbbbbbbbbb"}, {3, L"cccccccccccccccccccc"}};
+    LabelsExpect(LabelsWriteFile(file, longer) == LabelsWrite::Ok && LabelsWriteFile(file, {LabelTag{4, L"x"}}) == LabelsWrite::Ok &&
+                     LabelsReadFile(file, &back) && back.size() == 1 && back[0].colour == 4,
+                 L"a shorter list replaces a longer one");
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::Ok && LabelsWriteFile(file, longer) == LabelsWrite::Ok,
+                 L"a hidden file can be written twice");
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+    // Reading says why it cannot.
+    {
+        std::wstring stream = file + kLabelsStream;
+        HANDLE raw = CreateFileW(stream.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (raw != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(raw, "v9\n1\tX", 6, &written, nullptr);
+            CloseHandle(raw);
+        }
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Corrupt, L"a newer version reads as corrupt");
+        HANDLE hold = CreateFileW(stream.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        LabelsExpect(hold != INVALID_HANDLE_VALUE && LabelsReadFileEx(file, &back) == LabelsReadResult::Locked,
+                     L"a stream held open by another program reads as locked");
+        if (hold != INVALID_HANDLE_VALUE) {
+            CloseHandle(hold);
+        }
+        LabelsExpect(LabelsReadFileEx(dir + L"\\missing.txt", &back) == LabelsReadResult::Failed, L"a missing file fails");
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Corrupt && !LabelsReadFile(file, &back),
+                     L"the plain read is false for what the long read calls corrupt");
+        LabelsWriteFile(file, {});
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Ok, L"no stream reads as ok");
+    }
+
     DeleteFileW(file.c_str());
     RemoveDirectoryW(folder.c_str());
     RemoveDirectoryW(dir.c_str());

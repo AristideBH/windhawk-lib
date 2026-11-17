@@ -2542,8 +2542,13 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                         labelPaths.push_back(path);
                     }
                 }
-                if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
-                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; }), L"");
+                if (labelPaths.size() == picked.size()) {
+                    // A drive that cannot keep the stream gets the entry greyed, with the reason in its name.
+                    bool keeps = LabelsVolumeSupportsStreams(labelPaths[0]);
+                    addRow(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"), L"\uE8EC", L"", keeps, nullptr,
+                           keeps ? LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; })
+                                 : muxc::MenuFlyout{nullptr},
+                           L"");
                 }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {

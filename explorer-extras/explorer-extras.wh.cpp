@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
-// @version         0.76.1
+// @version         0.76.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -720,6 +720,7 @@ constexpr StringInfo kStrings[] = {
     {L"labels.addtag", L"Add tag\u2026"},
     {L"labels.clear", L"Clear tags"},
     {L"labels.ambiguous", L"Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart."},
+    {L"labels.menu.ntfs", L"Tags (needs an NTFS drive)"},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -765,6 +766,7 @@ constexpr StringInfo kStringsFr[] = {
     {L"labels.addtag", L"Ajouter une \u00E9tiquette\u2026"},
     {L"labels.clear", L"Effacer les \u00E9tiquettes"},
     {L"labels.ambiguous", L"Un autre \u00E9l\u00E9ment porte le m\u00EAme nom affich\u00E9, donc aucun point n\u2019est montr\u00E9. Affichez les extensions de nom de fichier pour les distinguer."},
+    {L"labels.menu.ntfs", L"\u00C9tiquettes (disque NTFS requis)"},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -1918,6 +1920,10 @@ constexpr wchar_t kLabelsStream[] = L":ExplorerExtras.Labels";
 
 enum class LabelsWrite { Ok, Unsupported, ReadOnly, Locked, Failed };
 
+// Why a read gave nothing: a stream that is corrupt or from a newer version, a file in use, no access to it, or
+// anything else (the file is gone, a network error).
+enum class LabelsReadResult { Ok, Corrupt, Locked, NoAccess, Failed };
+
 std::atomic<bool> g_labels{true};     // Labels on or off.
 
 namespace {
@@ -2054,35 +2060,49 @@ bool LabelsVolumeSupportsStreams(std::wstring const& path) {
     return (flags & FILE_NAMED_STREAMS) != 0;
 }
 
-// True with an empty list when the item has no stream. False when the item cannot be read, or its stream is
-// corrupt or from a newer version (the caller must then not overwrite it).
-bool LabelsReadFile(std::wstring const& path, std::vector<LabelTag>* out) {
+// Ok with an empty list when the item has no stream. Otherwise why the tags could not be read: the caller must then
+// not overwrite them.
+LabelsReadResult LabelsReadFileEx(std::wstring const& path, std::vector<LabelTag>* out) {
     out->clear();
     HANDLE file = CreateFileW((path + kLabelsStream).c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                               FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
-        bool noStream = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
-        return noStream && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES ? LabelsReadResult::Ok : LabelsReadResult::Failed;
+        }
+        if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) {
+            return LabelsReadResult::Locked;
+        }
+        return error == ERROR_ACCESS_DENIED ? LabelsReadResult::NoAccess : LabelsReadResult::Failed;
     }
     char buffer[8192];
     DWORD read = 0;
     BOOL ok = ReadFile(file, buffer, sizeof(buffer), &read, nullptr);
     DWORD size = GetFileSize(file, nullptr);
     CloseHandle(file);
-    if (!ok || size > sizeof(buffer)) {
-        return false;
+    if (!ok) {
+        return LabelsReadResult::Failed;
+    }
+    if (size > sizeof(buffer)) {
+        return LabelsReadResult::Corrupt;
     }
     int wide = read ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, nullptr, 0) : 0;
     if (read && wide <= 0) {
-        return false;
+        return LabelsReadResult::Corrupt;
     }
     std::wstring text(wide, L'\0');
     if (wide) {
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, text.data(), wide);
     }
-    return text.empty() || LabelsParse(text, out);
+    return text.empty() || LabelsParse(text, out) ? LabelsReadResult::Ok : LabelsReadResult::Corrupt;
+}
+
+// True with an empty list when the item has no stream. False when the item cannot be read, or its stream is
+// corrupt or from a newer version (the caller must then not overwrite it).
+bool LabelsReadFile(std::wstring const& path, std::vector<LabelTag>* out) {
+    return LabelsReadFileEx(path, out) == LabelsReadResult::Ok;
 }
 
 // An empty list removes the stream. The item's times are never changed.
@@ -2112,15 +2132,21 @@ LabelsWrite LabelsWriteFile(std::wstring const& path, std::vector<LabelTag> cons
     std::string utf8(bytes, '\0');
     WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), utf8.data(), bytes, nullptr, nullptr);
     HANDLE file = CreateFileW(stream.c_str(), GENERIC_WRITE | FILE_WRITE_ATTRIBUTES,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                               FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return LabelsMapError(GetLastError());
     }
     LabelsKeepTimes(file);
+    // Not CREATE_ALWAYS: that truncates before the write (a write that fails would leave an empty stream, and a hidden or
+    // system item refuses it). The new text is written over the old one, and the end is cut after.
     DWORD written = 0;
     BOOL ok = WriteFile(file, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
     DWORD error = GetLastError();
+    if (ok && written == utf8.size()) {
+        ok = SetEndOfFile(file);
+        error = GetLastError();
+    }
     CloseHandle(file);
     return ok && written == utf8.size() ? LabelsWrite::Ok : LabelsMapError(error);
 }
@@ -2261,6 +2287,39 @@ void LabelsSelfTest() {
     SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_READONLY);
     LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::ReadOnly, L"a read-only file is refused");
     SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+    // A shorter list replaces a longer one, and a hidden file can be written again.
+    std::vector<LabelTag> longer = {{1, L"aaaaaaaaaaaaaaaaaaaa"}, {2, L"bbbbbbbbbbbbbbbbbbbb"}, {3, L"cccccccccccccccccccc"}};
+    LabelsExpect(LabelsWriteFile(file, longer) == LabelsWrite::Ok && LabelsWriteFile(file, {LabelTag{4, L"x"}}) == LabelsWrite::Ok &&
+                     LabelsReadFile(file, &back) && back.size() == 1 && back[0].colour == 4,
+                 L"a shorter list replaces a longer one");
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    LabelsExpect(LabelsWriteFile(file, mine) == LabelsWrite::Ok && LabelsWriteFile(file, longer) == LabelsWrite::Ok,
+                 L"a hidden file can be written twice");
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+    // Reading says why it cannot.
+    {
+        std::wstring stream = file + kLabelsStream;
+        HANDLE raw = CreateFileW(stream.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (raw != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(raw, "v9\n1\tX", 6, &written, nullptr);
+            CloseHandle(raw);
+        }
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Corrupt, L"a newer version reads as corrupt");
+        HANDLE hold = CreateFileW(stream.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        LabelsExpect(hold != INVALID_HANDLE_VALUE && LabelsReadFileEx(file, &back) == LabelsReadResult::Locked,
+                     L"a stream held open by another program reads as locked");
+        if (hold != INVALID_HANDLE_VALUE) {
+            CloseHandle(hold);
+        }
+        LabelsExpect(LabelsReadFileEx(dir + L"\\missing.txt", &back) == LabelsReadResult::Failed, L"a missing file fails");
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Corrupt && !LabelsReadFile(file, &back),
+                     L"the plain read is false for what the long read calls corrupt");
+        LabelsWriteFile(file, {});
+        LabelsExpect(LabelsReadFileEx(file, &back) == LabelsReadResult::Ok, L"no stream reads as ok");
+    }
 
     DeleteFileW(file.c_str());
     RemoveDirectoryW(folder.c_str());
@@ -2773,7 +2832,7 @@ struct LabelsSlot {
 std::mutex g_labelsCacheMutex;
 [[clang::no_destroy]] std::map<std::wstring, LabelsSlot> g_labelsCache;
 std::atomic<int> g_labelsReadsRunning{0};
-void (*g_labelsLoaded)(std::wstring const& folderPath) = nullptr;
+std::atomic<void (*)(std::wstring const& folderPath)> g_labelsLoaded{nullptr};
 constexpr size_t kLabelsCachedFolders = 16;
 
 // Reads one folder on a thread of the mod. Gives up as soon as `cancel` is set or the mod unloads.
@@ -2790,7 +2849,12 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
     } else if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl &&
                SUCCEEDED(SHBindToObject(nullptr, pidl, nullptr, IID_PPV_ARGS(&folder))) && folder) {
         IEnumIDList* list = nullptr;
-        if (folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &list) == S_OK && list) {
+        // Hidden items are read when Explorer shows them: one that is not shown must not make a visible name ambiguous.
+        SHCONTF flags = SHCONTF_FOLDERS | SHCONTF_NONFOLDERS;
+        if (ShowHiddenFiles()) {
+            flags |= SHCONTF_INCLUDEHIDDEN;
+        }
+        if (folder->EnumObjects(nullptr, flags, &list) == S_OK && list) {
             finished = true;
             PITEMID_CHILD child = nullptr;
             int count = 0;
@@ -2854,8 +2918,9 @@ void LabelsRead(std::wstring path, std::shared_ptr<std::atomic<bool>> cancel) {
         }
     }
     g_labelsReadsRunning--;
-    if (publish && g_labelsLoaded && !g_unloading) {
-        g_labelsLoaded(path);
+    auto loaded = g_labelsLoaded.load();
+    if (publish && loaded && !g_unloading) {
+        loaded(path);
     }
 }
 
@@ -3076,6 +3141,10 @@ void CacheSelfTestRun() {
     CreateDirectoryW(folder.c_str(), nullptr);
     LabelsExpect(LabelsWriteFile(tagged, {LabelTag{1, L"Urgent"}}) == LabelsWrite::Ok, L"tag the file");
     LabelsExpect(LabelsWriteFile(folder, {LabelTag{5, L""}}) == LabelsWrite::Ok, L"tag the folder");
+    std::wstring hidden = dir + L"\\hid.txt";
+    CacheTouch(hidden);
+    LabelsWriteFile(hidden, {LabelTag{2, L""}});
+    SetFileAttributesW(hidden.c_str(), FILE_ATTRIBUTE_HIDDEN);
 
     auto first = LabelsFolderFor(dir);
     CacheExpect(!first->complete, L"the first call returns an entry that is not complete yet");
@@ -3087,6 +3156,8 @@ void CacheSelfTestRun() {
         CacheExpect(file && data->byName.count(L"sub") == 1, L"both tagged items are in the cache");
         CacheExpect(!data->byName.count(L"a.txt") && !data->byName.count(L"a"), L"the untagged item is not");
         CacheExpect(data->folders.count(L"sub") == 1, L"a read folder lists its subfolders");
+        bool hiddenSeen = data->byName.count(L"hid.txt") || data->byName.count(L"hid");
+        CacheExpect(hiddenSeen == ShowHiddenFiles(), L"a hidden item is read only when Explorer shows hidden items");
         bool typed = (data->typeNames.count(L"b.txt") && !data->typeNames.at(L"b.txt").empty()) ||
                      (data->typeNames.count(L"b") && !data->typeNames.at(L"b").empty());
         CacheExpect(typed, L"a tagged file has its type text");
@@ -3149,6 +3220,9 @@ void CacheSelfTestRun() {
         DeleteFileW((big + L"\\f" + std::to_wstring(i) + L".txt").c_str());
     }
     RemoveDirectoryW(big.c_str());
+    SetFileAttributesW(hidden.c_str(), FILE_ATTRIBUTE_NORMAL);
+    DeleteFileW((hidden + kLabelsStream).c_str());
+    DeleteFileW(hidden.c_str());
     DeleteFileW((tagged + kLabelsStream).c_str());
     DeleteFileW(tagged.c_str());
     DeleteFileW((dir + L"\\a.txt").c_str());
@@ -3198,22 +3272,28 @@ std::mutex g_keepThreadsMutex;
 [[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
 thread_local bool t_keepRegistered = false;
 
+// Records this thread and its queue, once: at unload it is asked to release what it holds.
+void RegisterKeepThread() {
+    if (t_keepRegistered) {
+        return;
+    }
+    t_keepRegistered = true;
+    try {
+        auto queue = mud::DispatcherQueue::GetForCurrentThread();
+        if (queue) {
+            std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+            KeepThread entry;
+            entry.id = GetCurrentThreadId();
+            entry.queue = queue;
+            g_keepThreads.push_back(std::move(entry));
+        }
+    } catch (...) {
+    }
+}
+
 template <typename Element, typename Revoker>
 void Keep(Element const& element, Revoker&& revoker) {
-    if (!t_keepRegistered) {
-        t_keepRegistered = true;
-        try {
-            auto queue = mud::DispatcherQueue::GetForCurrentThread();
-            if (queue) {
-                std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
-                KeepThread entry;
-                entry.id = GetCurrentThreadId();
-                entry.queue = queue;
-                g_keepThreads.push_back(std::move(entry));
-            }
-        } catch (...) {
-        }
-    }
+    RegisterKeepThread();
     // The handlers of elements that are gone are dropped now and then, so the list stays short.
     if (++t_handlersSince >= 256) {
         t_handlersSince = 0;
@@ -3259,6 +3339,8 @@ void RevokeAllHandlers() {
 }
 // Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
 // by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
+void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
+
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
     {
@@ -3269,6 +3351,7 @@ void RevokeKeptThreads() {
     for (auto& thread : threads) {
         if (thread.id == self) {
             RevokeAllHandlers();
+            LabelsReleaseThreadObjects();
             continue;
         }
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -3279,6 +3362,7 @@ void RevokeKeptThreads() {
         try {
             queued = thread.queue.TryEnqueue([done]() {
                 RevokeAllHandlers();
+                LabelsReleaseThreadObjects();
                 SetEvent(done);
             });
         } catch (...) {
@@ -9797,8 +9881,13 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                         labelPaths.push_back(path);
                     }
                 }
-                if (labelPaths.size() == picked.size() && LabelsVolumeSupportsStreams(labelPaths[0])) {
-                    addRow(Str(L"labels.menu"), L"\uE8EC", L"", true, nullptr, LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; }), L"");
+                if (labelPaths.size() == picked.size()) {
+                    // A drive that cannot keep the stream gets the entry greyed, with the reason in its name.
+                    bool keeps = LabelsVolumeSupportsStreams(labelPaths[0]);
+                    addRow(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"), L"\uE8EC", L"", keeps, nullptr,
+                           keeps ? LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; })
+                                 : muxc::MenuFlyout{nullptr},
+                           L"");
                 }
             }
             if (MenuRow* row = findRow(L"copyaspath")) {
@@ -20486,10 +20575,26 @@ std::wstring LabelsThreadFolder() {
 
 // The width of a text in the list's font (Segoe UI, about 13 px at 96 DPI; the Content view's secondary lines are
 // about 11), measured on `dc`.
+[[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> t_labelsFonts;
+
+int LabelsFontCount() {
+    return (int)t_labelsFonts.size();
+}
+
+// Frees the fonts of this thread. At unload each thread does it for itself (RevokeKeptThreads).
+void LabelsReleaseFonts() {
+    for (auto& entry : t_labelsFonts) {
+        if (entry.second) {
+            DeleteObject(entry.second);
+        }
+    }
+    t_labelsFonts.clear();
+}
+
 int LabelsTextWidth(HDC dc, std::wstring const& text, UINT dpi, int fontPx = 13) {
-    [[clang::no_destroy]] thread_local std::map<std::pair<UINT, int>, HFONT> fonts;
-    HFONT& font = fonts[{dpi, fontPx}];
+    HFONT& font = t_labelsFonts[{dpi, fontPx}];
     if (!font) {
+        RegisterKeepThread();  // This thread will be asked to free its fonts at unload.
         font = CreateFontW(-MulDiv(fontPx, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
     }
@@ -21055,6 +21160,15 @@ void PlaceExpect(bool ok, const wchar_t* what) {
 }  // namespace
 
 void LabelsPlaceSelfTest() {
+    // The fonts of a thread are made on use and released explicitly (they are thread-local).
+    {
+        HDC screen = GetDC(nullptr);
+        int width = LabelsTextWidth(screen, L"abc", 96);
+        ReleaseDC(nullptr, screen);
+        PlaceExpect(width > 0 && LabelsFontCount() >= 1, L"measuring a text makes a font");
+        LabelsReleaseFonts();
+        PlaceExpect(LabelsFontCount() == 0, L"the fonts of a thread are released");
+    }
     PlaceExpect(LabelsBlockWidth(1, false, 8) == 8, L"one dot is one side wide");
     PlaceExpect(LabelsBlockWidth(3, false, 8) == 20, L"three stacked dots, each 6 px after the one before");
     PlaceExpect(LabelsBlockWidth(4, true, 8) == 35, L"four stacked dots, then a 4 px gap and a 5 px plus");
@@ -21213,6 +21327,20 @@ struct LabelsApplyResult {
     bool unreadable = false;               // An item's stream is corrupt or from a newer version: left alone.
 };
 
+// What a failed read means for the report: a stream that cannot be understood, a file in use, no access to it.
+void LabelsNoteReadFailure(LabelsApplyResult* result, LabelsReadResult read, std::wstring const& fileName) {
+    result->failedName = fileName;
+    if (read == LabelsReadResult::Locked) {
+        result->worst = LabelsWrite::Locked;
+    } else if (read == LabelsReadResult::NoAccess) {
+        result->worst = LabelsWrite::ReadOnly;
+    } else if (read == LabelsReadResult::Failed) {
+        result->worst = LabelsWrite::Failed;
+    } else {
+        result->unreadable = true;  // Corrupt, or from a newer version: left alone.
+    }
+}
+
 // Adds or removes one tag on every item. Items whose tags would not change are not written. The cache and the
 // list are told.
 LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths, LabelTag const& tag, bool add) {
@@ -21220,9 +21348,9 @@ LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths,
     for (auto const& path : paths) {
         std::vector<LabelTag> tags;
         std::wstring fileName = PathFindFileNameW(path.c_str());
-        if (!LabelsReadFile(path, &tags)) {
-            result.unreadable = true;
-            result.failedName = fileName;
+        LabelsReadResult read = LabelsReadFileEx(path, &tags);
+        if (read != LabelsReadResult::Ok) {
+            LabelsNoteReadFailure(&result, read, fileName);
             continue;
         }
         std::wstring before = LabelsSerialize(tags);
@@ -21259,9 +21387,9 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
     for (auto const& path : paths) {
         std::vector<LabelTag> tags;
         std::wstring fileName = PathFindFileNameW(path.c_str());
-        if (!LabelsReadFile(path, &tags)) {
-            result.unreadable = true;
-            result.failedName = fileName;
+        LabelsReadResult read = LabelsReadFileEx(path, &tags);
+        if (read != LabelsReadResult::Ok) {
+            LabelsNoteReadFailure(&result, read, fileName);
             continue;
         }
         if (tags.empty()) {
@@ -21495,16 +21623,17 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
-    std::wstring unreadableName;
+    LabelsApplyResult unreadableWhy;  // The first item that could not be read, and why.
     bool ambiguous = false;
     if (supported) {
         // The first 100 items give the badges (a bigger selection is not read item by item on every change).
         std::shared_ptr<const LabelsFolder> data;
         for (size_t i = 0; i < paths->size() && i < 100; i++) {
             std::vector<LabelTag> tags;
-            if (!LabelsReadFile((*paths)[i], &tags)) {
+            LabelsReadResult read = LabelsReadFileEx((*paths)[i], &tags);
+            if (read != LabelsReadResult::Ok) {
                 if (!unreadable) {
-                    unreadableName = PathFindFileNameW((*paths)[i].c_str());
+                    LabelsNoteReadFailure(&unreadableWhy, read, PathFindFileNameW((*paths)[i].c_str()));
                 }
                 unreadable = true;
                 tags.clear();
@@ -21594,10 +21723,7 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
 
     std::wstring line = message;
     if (line.empty() && unreadable) {
-        LabelsApplyResult shown;
-        shown.unreadable = true;
-        shown.failedName = unreadableName;
-        line = LabelsFailText(shown);
+        line = LabelsFailText(unreadableWhy);
     }
     if (!line.empty()) {
         host.Children().Append(MakeText(line, 12, false, true));
@@ -21969,6 +22095,14 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     menu.Items().Append(clear);
     return menu;
 }
+
+// Called on each UI thread that holds label objects, at unload: its flyouts, its notice and its fonts.
+void LabelsReleaseThreadObjects() {
+    t_labelsMenuFlyout = nullptr;
+    t_labelsNotice = nullptr;
+    t_labelsSection = LabelsSectionRef();
+    LabelsReleaseFonts();
+}
 // Labels in File Explorer's own right-click menu. The menu is a CommandBarFlyout that FileExplorerExtensions.dll fills
 // one command at a time through MenuFlyoutControl::AppendMenuItem. The first time a flyout is seen there, a handler
 // is put on its Opening event; when the menu opens, a "Tags" entry with a submenu is added to its secondary commands
@@ -22070,22 +22204,26 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
     }
 #endif
     std::vector<std::wstring> paths = LabelsSelectedPaths();
-    if (paths.empty() || !LabelsVolumeSupportsStreams(paths[0])) {
+    if (paths.empty()) {
         LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());
         return;
     }
+    bool keeps = LabelsVolumeSupportsStreams(paths[0]);
     muxc::AppBarButton button;
-    button.Label(Str(L"labels.menu"));
+    button.Label(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"));  // A drive that cannot keep the stream: greyed.
+    button.IsEnabled(keeps);
     button.Tag(winrt::box_value(winrt::hstring{L"ee-labels"}));
     muxc::FontIcon icon;
     icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
     icon.Glyph(L"");
     button.Icon(icon);
     auto weakBar = winrt::make_weak(bar);
-    button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
-        auto shown = weakBar.get();
-        return shown ? shown.Target() : mux::FrameworkElement{nullptr};
-    }));
+    if (keeps) {
+        button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
+            auto shown = weakBar.get();
+            return shown ? shown.Target() : mux::FrameworkElement{nullptr};
+        }));
+    }
     // Before "Show more options" (the command with Shift+F10) when it is there, else at the end.
     uint32_t at = secondary.Size();
     for (uint32_t i = 0; i < secondary.Size(); i++) {
@@ -22945,7 +23083,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.76.1 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.76.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 

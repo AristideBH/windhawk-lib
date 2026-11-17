@@ -99,22 +99,26 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
     }
 #endif
     std::vector<std::wstring> paths = LabelsSelectedPaths();
-    if (paths.empty() || !LabelsVolumeSupportsStreams(paths[0])) {
+    if (paths.empty()) {
         LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());
         return;
     }
+    bool keeps = LabelsVolumeSupportsStreams(paths[0]);
     muxc::AppBarButton button;
-    button.Label(Str(L"labels.menu"));
+    button.Label(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"));  // A drive that cannot keep the stream: greyed.
+    button.IsEnabled(keeps);
     button.Tag(winrt::box_value(winrt::hstring{L"ee-labels"}));
     muxc::FontIcon icon;
     icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
     icon.Glyph(L"");
     button.Icon(icon);
     auto weakBar = winrt::make_weak(bar);
-    button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
-        auto shown = weakBar.get();
-        return shown ? shown.Target() : mux::FrameworkElement{nullptr};
-    }));
+    if (keeps) {
+        button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
+            auto shown = weakBar.get();
+            return shown ? shown.Target() : mux::FrameworkElement{nullptr};
+        }));
+    }
     // Before "Show more options" (the command with Shift+F10) when it is there, else at the end.
     uint32_t at = secondary.Size();
     for (uint32_t i = 0; i < secondary.Size(); i++) {

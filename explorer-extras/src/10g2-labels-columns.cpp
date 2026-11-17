@@ -183,3 +183,11 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     menu.Items().Append(clear);
     return menu;
 }
+
+// Called on each UI thread that holds label objects, at unload: its flyouts, its notice and its fonts.
+void LabelsReleaseThreadObjects() {
+    t_labelsMenuFlyout = nullptr;
+    t_labelsNotice = nullptr;
+    t_labelsSection = LabelsSectionRef();
+    LabelsReleaseFonts();
+}

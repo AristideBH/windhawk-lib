@@ -16,6 +16,10 @@ constexpr wchar_t kLabelsStream[] = L":ExplorerExtras.Labels";
 
 enum class LabelsWrite { Ok, Unsupported, ReadOnly, Locked, Failed };
 
+// Why a read gave nothing: a stream that is corrupt or from a newer version, a file in use, no access to it, or
+// anything else (the file is gone, a network error).
+enum class LabelsReadResult { Ok, Corrupt, Locked, NoAccess, Failed };
+
 std::atomic<bool> g_labels{true};     // Labels on or off.
 
 namespace {
@@ -152,35 +156,49 @@ bool LabelsVolumeSupportsStreams(std::wstring const& path) {
     return (flags & FILE_NAMED_STREAMS) != 0;
 }
 
-// True with an empty list when the item has no stream. False when the item cannot be read, or its stream is
-// corrupt or from a newer version (the caller must then not overwrite it).
-bool LabelsReadFile(std::wstring const& path, std::vector<LabelTag>* out) {
+// Ok with an empty list when the item has no stream. Otherwise why the tags could not be read: the caller must then
+// not overwrite them.
+LabelsReadResult LabelsReadFileEx(std::wstring const& path, std::vector<LabelTag>* out) {
     out->clear();
     HANDLE file = CreateFileW((path + kLabelsStream).c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                               FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
-        bool noStream = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
-        return noStream && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES ? LabelsReadResult::Ok : LabelsReadResult::Failed;
+        }
+        if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) {
+            return LabelsReadResult::Locked;
+        }
+        return error == ERROR_ACCESS_DENIED ? LabelsReadResult::NoAccess : LabelsReadResult::Failed;
     }
     char buffer[8192];
     DWORD read = 0;
     BOOL ok = ReadFile(file, buffer, sizeof(buffer), &read, nullptr);
     DWORD size = GetFileSize(file, nullptr);
     CloseHandle(file);
-    if (!ok || size > sizeof(buffer)) {
-        return false;
+    if (!ok) {
+        return LabelsReadResult::Failed;
+    }
+    if (size > sizeof(buffer)) {
+        return LabelsReadResult::Corrupt;
     }
     int wide = read ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, nullptr, 0) : 0;
     if (read && wide <= 0) {
-        return false;
+        return LabelsReadResult::Corrupt;
     }
     std::wstring text(wide, L'\0');
     if (wide) {
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, (int)read, text.data(), wide);
     }
-    return text.empty() || LabelsParse(text, out);
+    return text.empty() || LabelsParse(text, out) ? LabelsReadResult::Ok : LabelsReadResult::Corrupt;
+}
+
+// True with an empty list when the item has no stream. False when the item cannot be read, or its stream is
+// corrupt or from a newer version (the caller must then not overwrite it).
+bool LabelsReadFile(std::wstring const& path, std::vector<LabelTag>* out) {
+    return LabelsReadFileEx(path, out) == LabelsReadResult::Ok;
 }
 
 // An empty list removes the stream. The item's times are never changed.
@@ -210,15 +228,21 @@ LabelsWrite LabelsWriteFile(std::wstring const& path, std::vector<LabelTag> cons
     std::string utf8(bytes, '\0');
     WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), utf8.data(), bytes, nullptr, nullptr);
     HANDLE file = CreateFileW(stream.c_str(), GENERIC_WRITE | FILE_WRITE_ATTRIBUTES,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                               FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return LabelsMapError(GetLastError());
     }
     LabelsKeepTimes(file);
+    // Not CREATE_ALWAYS: that truncates before the write (a write that fails would leave an empty stream, and a hidden or
+    // system item refuses it). The new text is written over the old one, and the end is cut after.
     DWORD written = 0;
     BOOL ok = WriteFile(file, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
     DWORD error = GetLastError();
+    if (ok && written == utf8.size()) {
+        ok = SetEndOfFile(file);
+        error = GetLastError();
+    }
     CloseHandle(file);
     return ok && written == utf8.size() ? LabelsWrite::Ok : LabelsMapError(error);
 }
