@@ -95,6 +95,8 @@ $placeLine = $lines | Select-String 'LABELS PLACE SELFTEST' | Select-Object -Las
 Check 'labels placement self-test passed' ($placeLine -and $placeLine.Line -match 'LABELS PLACE SELFTEST pass') ($(if ($placeLine) { $placeLine.Line } else { 'no LABELS PLACE SELFTEST line in the log' }))
 $paneLabelsLine = $lines | Select-String 'LABELS PANE SELFTEST' | Select-Object -Last 1
 Check 'labels pane self-test passed' ($paneLabelsLine -and $paneLabelsLine.Line -match 'LABELS PANE SELFTEST pass') ($(if ($paneLabelsLine) { $paneLabelsLine.Line } else { 'no LABELS PANE SELFTEST line in the log' }))
+$toolbarLine = $lines | Select-String 'TOOLBAR SELFTEST' | Select-Object -Last 1
+Check 'toolbar self-test passed' ($toolbarLine -and $toolbarLine.Line -match 'TOOLBAR SELFTEST pass') ($(if ($toolbarLine) { $toolbarLine.Line } else { 'no TOOLBAR SELFTEST line in the log' }))
 Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object -First 2 | ForEach-Object { $_.Line })
 $dumps = @(Get-ChildItem $dumpDir -Filter 'explorer.exe.*.dmp' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $began })
 Check 'no new crash dump of explorer.exe' ($dumps.Count -eq 0) ($dumps | ForEach-Object { $_.Name })

@@ -17,14 +17,14 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Open new windows in Columns | on | New Explorer windows open in Columns if it was your last layout. Picking another layout turns this off. |
 | Keep columns after choosing a file | on | Columns to the right stay, dimmed, when you choose a file or several items. Off closes them. |
 | Keyboard on group headers | off | Arrow keys reach group headers. Left, Right and Enter collapse and expand them. |
-| Double-click empty space to go up | off | Goes up one folder. In the first column, the parent folder is added in front. |
+| Double-click empty space to go up | on | Goes up one folder. In the first column, the parent folder is added in front. |
 
 ### Content
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Folders first | on | Folders are listed before files in each column, whatever the sort. |
-| Desktop column shows real items only | off | Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column. |
+| Desktop column shows real items only | on | Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column. |
 
 ### Layout
 
@@ -33,10 +33,10 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Minimum column width | 160 | Columns fit their longest name, but not below this width (in pixels). (80 to 800) |
 | Maximum column width | 420 | Columns fit their longest name up to this width (in pixels). Longer names are shortened. (80 to 1200) |
 | Shift + double-click to even widths | on | Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone. |
-| Show the focus outline | on | Draws an outline around the item under the keyboard cursor. The selection highlight always shows. |
-| Panel background | Explorer colour | Explorer uses its own file list colour. Theme uses the standard dark or light colour. |
-| Accent badge on the path chevron | on | The chevron of the folder you came from sits in a round accent badge, instead of a muted one. |
-| Alternate row shading | off | Every other row is a shade apart, to follow a line across a wide column. |
+| Show the focus outline | off | Draws an outline around the item under the keyboard cursor. The selection highlight always shows. |
+| Panel background | Theme colour | Explorer uses its own file list colour. Theme uses the standard dark or light colour. |
+| Accent badge on the path chevron | off | The chevron of the folder you came from sits in a round accent badge, instead of a muted one. |
+| Alternate row shading | on | Every other row is a shade apart, to follow a line across a wide column. |
 
 ### Memory
 
@@ -87,6 +87,13 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Name of colour 6 | Teal | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
 | Name of colour 7 | Blue | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
 | Name of colour 8 | Purple | What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC. |
+
+## Toolbar
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Tighten the navigation buttons | on | Changes the gap between Back, Forward, Up and Refresh, in front of the address bar. Off leaves Explorer’s own spacing. |
+| Gap between the navigation buttons | 4 | In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16. (0 to 16) |
 
 ## Limits
 

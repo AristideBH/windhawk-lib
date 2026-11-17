@@ -48,6 +48,8 @@ void LoadSettings() {
     g_autoPreview = SettingBool(L"autoPreview");
     g_autoFolderSize = SettingBool(L"autoFolderSize");
     LabelsLoadSettings();
+    g_toolbar = SettingBool(L"toolbarOn");
+    g_navGap = SettingInt(L"navGap");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -86,7 +88,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.76.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.77.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -96,6 +98,7 @@ BOOL Wh_ModInit() {
     LabelsCacheSelfTest();
     LabelsPlaceSelfTest();
     LabelsPaneSelfTest();
+    ToolbarSelfTest();
 #endif
 
     LabelsInstallPaintHooks();
@@ -125,6 +128,7 @@ BOOL Wh_ModInit() {
 void Wh_ModSettingsChanged() {
     LoadSettings();
     LabelsSettingsChanged();  // Show labels on or off, or a colour name changed.
+    ToolbarSettingsChanged();
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {

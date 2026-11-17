@@ -99,6 +99,8 @@ void ReleaseEntry(WindowState* state) {
 // Every 50 ms after the window is built: put the Columns entry into the View
 // menu, then, if Columns was the last layout chosen, turn it on once the file
 // list is visible.
+bool ToolbarTick(WindowState* state);  // 10i
+
 void EntryTick() {
     if (g_unloading) {
         return;
@@ -112,6 +114,9 @@ void EntryTick() {
         if (!state->topLevel || !IsWindow(state->topLevel)) {
             StopEntry(state);
             return;
+        }
+        if (!state->toolbarDone) {
+            state->toolbarDone = ToolbarTick(state);
         }
         if (!state->menuItem) {
             int visited = 0;
@@ -300,7 +305,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();

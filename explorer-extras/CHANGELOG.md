@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.77 (2026-11-17)
+
+### Added
+- **Toolbar**, a new area: the Back, Forward, Up and Refresh buttons in front of the address bar sit closer together. Explorer gave each of them a margin of 8 on every side but the bottom, so two buttons were 16 apart; the mod sets the margin of each button, and the address bar, which takes what is left, grows. A **Toolbar** group on Windhawk's page: **Tighten the navigation buttons** (on) and **Gap between the navigation buttons** (4 pixels by default, 0 to 16; the gap is also the space at the two ends). Switching it off, or unloading the mod, puts Explorer's margins back.
+- The space between Refresh and the address bar is the gap too: the command bar's spare column of 6 pixels after the buttons is taken away, so it was 17 pixels and is now about 7.
+
+### Changed
+- New defaults, from the author's own settings: double-click on empty space goes up one column (on), only real Desktop items (on), no focus outline (off), the theme's colour as the panel background (instead of Explorer's), no accent on stale columns (off), alternate row shading (on).
+
 ## 0.76.2 (2026-11-17)
 
 ### Fixed, the smaller findings of the Labels review

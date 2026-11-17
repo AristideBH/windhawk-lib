@@ -23,6 +23,9 @@
         "names": "Colour names"
       }
     },
+    "toolbar": {
+      "name": "Toolbar"
+    },
     "limits": {
       "name": "Limits"
     }
@@ -70,7 +73,7 @@
       "id": "doubleClickUp",
       "group": "columns",
       "type": "bool",
-      "default": false,
+      "default": true,
       "name": "Double-click empty space to go up",
       "description": "Goes up one folder. In the first column, the parent folder is added in front.",
       "needs": "now",
@@ -90,7 +93,7 @@
       "id": "desktopRealOnly",
       "group": "columns",
       "type": "bool",
-      "default": false,
+      "default": true,
       "name": "Desktop column shows real items only",
       "description": "Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.",
       "needs": "rebuild",
@@ -134,7 +137,7 @@
       "id": "focusRect",
       "group": "columns",
       "type": "bool",
-      "default": true,
+      "default": false,
       "name": "Show the focus outline",
       "description": "Draws an outline around the item under the keyboard cursor. The selection highlight always shows.",
       "needs": "rebuild",
@@ -144,7 +147,7 @@
       "id": "background",
       "group": "columns",
       "type": "enum",
-      "default": "explorer",
+      "default": "theme",
       "options": [
         {
           "value": "explorer",
@@ -164,7 +167,7 @@
       "id": "staleAccent",
       "group": "columns",
       "type": "bool",
-      "default": true,
+      "default": false,
       "name": "Accent badge on the path chevron",
       "description": "The chevron of the folder you came from sits in a round accent badge, instead of a muted one.",
       "needs": "rebuild",
@@ -174,7 +177,7 @@
       "id": "oddRows",
       "group": "columns",
       "type": "bool",
-      "default": false,
+      "default": true,
       "name": "Alternate row shading",
       "description": "Every other row is a shade apart, to follow a line across a wide column.",
       "needs": "rebuild",
@@ -376,6 +379,26 @@
       "default": "Purple",
       "name": "Name of colour 8",
       "description": "What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.",
+      "needs": "now"
+    },
+    {
+      "id": "toolbarOn",
+      "group": "toolbar",
+      "type": "bool",
+      "default": true,
+      "name": "Tighten the navigation buttons",
+      "description": "Changes the gap between Back, Forward, Up and Refresh, in front of the address bar. Off leaves Explorer’s own spacing.",
+      "needs": "now"
+    },
+    {
+      "id": "navGap",
+      "group": "toolbar",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 16,
+      "name": "Gap between the navigation buttons",
+      "description": "In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16.",
       "needs": "now"
     },
     {

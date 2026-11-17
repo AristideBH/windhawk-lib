@@ -96,6 +96,7 @@ void RevokeAllHandlers() {
 // Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
 // by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
 void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
+void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation buttons
 
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
@@ -108,6 +109,7 @@ void RevokeKeptThreads() {
         if (thread.id == self) {
             RevokeAllHandlers();
             LabelsReleaseThreadObjects();
+            ToolbarRestoreThread();
             continue;
         }
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -119,6 +121,7 @@ void RevokeKeptThreads() {
             queued = thread.queue.TryEnqueue([done]() {
                 RevokeAllHandlers();
                 LabelsReleaseThreadObjects();
+                ToolbarRestoreThread();
                 SetEvent(done);
             });
         } catch (...) {
@@ -462,6 +465,7 @@ struct WindowState {
     muxc::Border bandBox{nullptr};
     mud::DispatcherQueueTimer fadeTimer{nullptr};
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
+    bool toolbarDone = false;   // The toolbar's buttons were found and handled.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};

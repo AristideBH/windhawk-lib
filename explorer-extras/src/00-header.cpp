@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
-// @version         0.76.2
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tighter toolbar.
+// @version         0.77.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -53,6 +53,10 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 - **Where they live.** In a named stream of the file itself, so they follow it when it is copied or moved on an NTFS drive. They need NTFS: the menu entry and the pane say so when a drive cannot keep them. The file's dates are not changed.
 - **Your own meanings.** Each colour has a name you can edit on Windhawk's page (Labels, Colour names), such as "Red = Urgent".
 - Switch them off with **Show labels**.
+
+## Toolbar
+
+The row before the address bar: **Back**, **Forward**, **Up** and **Refresh** sit closer together, and the address bar takes the room that frees. The gap is a setting (Toolbar, 4 pixels by default, 0 to 16; Explorer's own is 16). Switch the area off and Explorer's spacing comes back.
 
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 

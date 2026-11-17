@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, and colour labels (tags) on files and folders.
-// @version         0.76.2
+// @description     Beta. Additions for File Explorer, one switch per area: a Columns layout (Miller columns), a details and preview pane for PDF, text, Markdown, images, video and sound, colour labels (tags) on files and folders, and a tighter toolbar.
+// @version         0.77.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -54,6 +54,10 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 - **Your own meanings.** Each colour has a name you can edit on Windhawk's page (Labels, Colour names), such as "Red = Urgent".
 - Switch them off with **Show labels**.
 
+## Toolbar
+
+The row before the address bar: **Back**, **Forward**, **Up** and **Refresh** sit closer together, and the address bar takes the room that frees. The gap is a setting (Toolbar, 4 pixels by default, 0 to 16; Explorer's own is 16). Switch the area off and Explorer's spacing comes back.
+
 A short video tour: https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 
 Tested daily on Windows 11 24H2 on ARM64, in French and English; x86-64 was tested up to 0.55. Needs Windhawk to download the symbols of FileExplorerExtensions.dll.
@@ -80,7 +84,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - headerKeyboard: false
       $name: Keyboard on group headers
       $description: Arrow keys reach group headers. Left, Right and Enter collapse and expand them.
-    - doubleClickUp: false
+    - doubleClickUp: true
       $name: Double-click empty space to go up
       $description: Goes up one folder. In the first column, the parent folder is added in front.
     $name: Behaviour
@@ -88,7 +92,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - foldersFirst: true
       $name: Folders first
       $description: Folders are listed before files in each column, whatever the sort.
-    - desktopRealOnly: false
+    - desktopRealOnly: true
       $name: Desktop column shows real items only
       $description: Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.
     $name: Content
@@ -102,19 +106,19 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - harmonizeWidths: true
       $name: Shift + double-click to even widths
       $description: Shift + double-click a column border gives all columns the same width. They stay so until a border is double-clicked alone.
-    - focusRect: true
+    - focusRect: false
       $name: Show the focus outline
       $description: Draws an outline around the item under the keyboard cursor. The selection highlight always shows.
-    - background: explorer
+    - background: theme
       $name: Panel background
       $description: Explorer uses its own file list colour. Theme uses the standard dark or light colour.
       $options:
       - explorer: Explorer colour
       - theme: Theme colour
-    - staleAccent: true
+    - staleAccent: false
       $name: Accent badge on the path chevron
       $description: The chevron of the folder you came from sits in a round accent badge, instead of a muted one.
-    - oddRows: false
+    - oddRows: true
       $name: Alternate row shading
       $description: Every other row is a shade apart, to follow a line across a wide column.
     $name: Layout
@@ -191,6 +195,14 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
       $description: What this colour means to you. It is shown for tags that have no name of their own, and it stays on this PC.
     $name: Colour names
   $name: Labels
+- toolbar:
+  - toolbarOn: true
+    $name: Tighten the navigation buttons
+    $description: Changes the gap between Back, Forward, Up and Refresh, in front of the address bar. Off leaves Explorer’s own spacing.
+  - navGap: 4
+    $name: Gap between the navigation buttons
+    $description: In pixels, between the buttons and at their two ends, so the address bar grows. Explorer’s own gap is 16.
+  $name: Toolbar
 - limits:
   - maxItems: 5000
     $name: Maximum items per column
@@ -642,16 +654,16 @@ constexpr SettingInfo kSettings[] = {
     {L"restoreOnOpen", L"columns.behaviour.restoreOnOpen", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"keepStale", L"columns.behaviour.keepStale", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"headerKeyboard", L"columns.behaviour.headerKeyboard", SettingKind::Bool, 0, L"", 0, 0, false},
-    {L"doubleClickUp", L"columns.behaviour.doubleClickUp", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"doubleClickUp", L"columns.behaviour.doubleClickUp", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"foldersFirst", L"columns.content.foldersFirst", SettingKind::Bool, 1, L"", 0, 0, true},
-    {L"desktopRealOnly", L"columns.content.desktopRealOnly", SettingKind::Bool, 0, L"", 0, 0, true},
+    {L"desktopRealOnly", L"columns.content.desktopRealOnly", SettingKind::Bool, 1, L"", 0, 0, true},
     {L"minWidth", L"columns.layout.minWidth", SettingKind::Int, 160, L"", 80, 800, true},
     {L"maxWidth", L"columns.layout.maxWidth", SettingKind::Int, 420, L"", 80, 1200, true},
     {L"harmonizeWidths", L"columns.layout.harmonizeWidths", SettingKind::Bool, 1, L"", 0, 0, true},
-    {L"focusRect", L"columns.layout.focusRect", SettingKind::Bool, 1, L"", 0, 0, true},
-    {L"background", L"columns.layout.background", SettingKind::Enum, 0, L"explorer", 0, 0, true},
-    {L"staleAccent", L"columns.layout.staleAccent", SettingKind::Bool, 1, L"", 0, 0, true},
-    {L"oddRows", L"columns.layout.oddRows", SettingKind::Bool, 0, L"", 0, 0, true},
+    {L"focusRect", L"columns.layout.focusRect", SettingKind::Bool, 0, L"", 0, 0, true},
+    {L"background", L"columns.layout.background", SettingKind::Enum, 0, L"theme", 0, 0, true},
+    {L"staleAccent", L"columns.layout.staleAccent", SettingKind::Bool, 0, L"", 0, 0, true},
+    {L"oddRows", L"columns.layout.oddRows", SettingKind::Bool, 1, L"", 0, 0, true},
     {L"rememberSort", L"columns.memory.rememberSort", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"rememberWidth", L"columns.memory.rememberWidth", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"rememberLayout", L"columns.memory.rememberLayout", SettingKind::Bool, 1, L"", 0, 0, false},
@@ -672,6 +684,8 @@ constexpr SettingInfo kSettings[] = {
     {L"colourName5", L"labels.names.colourName5", SettingKind::String, 0, L"Teal", 0, 0, false},
     {L"colourName6", L"labels.names.colourName6", SettingKind::String, 0, L"Blue", 0, 0, false},
     {L"colourName7", L"labels.names.colourName7", SettingKind::String, 0, L"Purple", 0, 0, false},
+    {L"toolbarOn", L"toolbar.toolbarOn", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"navGap", L"toolbar.navGap", SettingKind::Int, 4, L"", 0, 16, false},
     {L"maxItems", L"limits.maxItems", SettingKind::Int, 5000, L"", 50, 20000, true},
     {L"previewMaxMb", L"limits.previewMaxMb", SettingKind::Int, 60, L"", 1, 1024, false},
     {L"previewMaxMp", L"limits.previewMaxMp", SettingKind::Int, 40, L"", 4, 400, false},
@@ -3340,6 +3354,7 @@ void RevokeAllHandlers() {
 // Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
 // by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
 void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
+void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation buttons
 
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
@@ -3352,6 +3367,7 @@ void RevokeKeptThreads() {
         if (thread.id == self) {
             RevokeAllHandlers();
             LabelsReleaseThreadObjects();
+            ToolbarRestoreThread();
             continue;
         }
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -3363,6 +3379,7 @@ void RevokeKeptThreads() {
             queued = thread.queue.TryEnqueue([done]() {
                 RevokeAllHandlers();
                 LabelsReleaseThreadObjects();
+                ToolbarRestoreThread();
                 SetEvent(done);
             });
         } catch (...) {
@@ -3706,6 +3723,7 @@ struct WindowState {
     muxc::Border bandBox{nullptr};
     mud::DispatcherQueueTimer fadeTimer{nullptr};
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
+    bool toolbarDone = false;   // The toolbar's buttons were found and handled.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
@@ -22305,6 +22323,272 @@ void LabelsSettingsChanged() {
         }
     }
 }
+// The toolbar of File Explorer: the row with Back, Forward, Up and Refresh before the address bar. Explorer puts the four
+// AppBarButtons (x:Name backButton, forwardButton, upButton, refreshButton) in the "NavigationCommands" CommandBar, each
+// with the margin 8,8,8,0, so two of them are 16 apart. The gap is set through the margin of each button: between two
+// buttons it is the gap, and at the two ends it is the gap too (never more than Explorer's own 8), so the address bar,
+// which takes what is left, grows. The margins Explorer gave are
+// kept and put back when the setting goes off and when the mod unloads.
+
+std::atomic<bool> g_toolbar{true};  // Change the navigation buttons.
+std::atomic<int> g_navGap{0};       // The gap between them, in pixels (DIP).
+
+// The margin of button `index` of `count`, for a gap, from the margin Explorer gave it. Pure.
+mux::Thickness ToolbarMarginFor(mux::Thickness original, size_t index, size_t count, double gap) {
+    mux::Thickness margin = original;
+    margin.Left = index == 0 ? std::min(original.Left, gap) : 0;
+    margin.Right = index + 1 == count ? std::min(original.Right, gap) : gap;
+    return margin;
+}
+
+namespace {
+
+std::wstring ToolbarClassOf(Inspectable const& object) {
+    try {
+        return std::wstring(winrt::get_class_name(object));
+    } catch (...) {
+        return L"?";
+    }
+}
+
+mux::FrameworkElement ToolbarFindById(mux::DependencyObject const& node, const wchar_t* id, int depth) {
+    if (depth > 30) {
+        return nullptr;
+    }
+    if (auto element = node.try_as<mux::FrameworkElement>()) {
+        // The automation id of these buttons is their x:Name.
+        if (element.Name() == id) {
+            return element;
+        }
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = ToolbarFindById(mux::Media::VisualTreeHelper::GetChild(node, i), id, depth + 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+#ifdef EXTRAS_VERBOSE
+// What a button sits in, level by level, for the log: class, name, margin, size, spacing, grid columns.
+void ToolbarDump(const wchar_t* id, mux::FrameworkElement const& button) {
+    mux::DependencyObject at = button;
+    for (int level = 0; level < 9 && at; level++) {
+        auto element = at.try_as<mux::FrameworkElement>();
+        if (element) {
+            auto margin = element.Margin();
+            std::wstring extra;
+            if (auto stack = element.try_as<muxc::StackPanel>()) {
+                wchar_t text[120];
+                swprintf_s(text, L" spacing=%.1f orientation=%d", stack.Spacing(), (int)stack.Orientation());
+                extra += text;
+            }
+            if (auto grid = element.try_as<muxc::Grid>()) {
+                wchar_t text[120];
+                swprintf_s(text, L" columns=%u rows=%u colSpacing=%.1f", grid.ColumnDefinitions().Size(), grid.RowDefinitions().Size(),
+                           grid.ColumnSpacing());
+                extra += text;
+                for (auto const& column : grid.ColumnDefinitions()) {
+                    swprintf_s(text, L" [col w=%.1f unit=%d actual=%.1f]", column.Width().Value, (int)column.Width().GridUnitType,
+                               column.ActualWidth());
+                    extra += text;
+                }
+            }
+            if (auto control = element.try_as<muxc::Control>()) {
+                auto padding = control.Padding();
+                wchar_t text[120];
+                swprintf_s(text, L" padding=%.1f,%.1f,%.1f,%.1f", padding.Left, padding.Top, padding.Right, padding.Bottom);
+                extra += text;
+            }
+            LogVerbose(L"TOOLBAR %s L%d %s name='%s' margin=%.1f,%.1f,%.1f,%.1f w=%.1f actual=%.1fx%.1f col=%d minw=%.1f halign=%d%s", id,
+                       level, ToolbarClassOf(element).c_str(), std::wstring(element.Name()).c_str(), margin.Left, margin.Top,
+                       margin.Right, margin.Bottom, element.Width(), element.ActualWidth(), element.ActualHeight(),
+                       (int)muxc::Grid::GetColumn(element), element.MinWidth(), (int)element.HorizontalAlignment(), extra.c_str());
+        }
+        at = mux::Media::VisualTreeHelper::GetParent(at);
+    }
+}
+#endif
+
+const wchar_t* const kToolbarIds[] = {L"backButton", L"forwardButton", L"upButton", L"refreshButton"};
+
+struct ToolbarButtons {
+    winrt::weak_ref<mux::FrameworkElement> button[4];
+    mux::Thickness original[4] = {};
+    winrt::weak_ref<muxc::Grid> contentRoot;  // The grid of the command bar: its second column is a spare of 6 DIP.
+    mux::GridLength spare = {0, mux::GridUnitType::Auto};
+    double spareMin = 0;  // The column also has a minimum width of its own.
+    bool known = false;
+};
+[[clang::no_destroy]] thread_local ToolbarButtons t_toolbar;  // Weak: the buttons belong to the window.
+
+// Puts the margins for the current setting (or Explorer's own when the area is off).
+void ToolbarApplyNow() {
+    if (t_toolbar.known) {
+        if (auto grid = t_toolbar.contentRoot.get()) {
+            try {
+                if (grid.ColumnDefinitions().Size() >= 2) {
+                    // The spare column after the buttons (6 DIP, for the overflow button) is taken away with the setting on:
+                    // what is left between Refresh and the address bar is the end margin.
+                    auto column = grid.ColumnDefinitions().GetAt(1);
+                    column.Width(g_toolbar ? mux::GridLength{0, mux::GridUnitType::Pixel} : t_toolbar.spare);
+                    column.MinWidth(g_toolbar ? 0 : t_toolbar.spareMin);
+                }
+            } catch (...) {
+            }
+        }
+    }
+    for (int i = 0; i < 4 && t_toolbar.known; i++) {
+        if (auto element = t_toolbar.button[i].get()) {
+            try {
+                element.Margin(g_toolbar ? ToolbarMarginFor(t_toolbar.original[i], i, 4, (double)g_navGap) : t_toolbar.original[i]);
+            } catch (...) {
+            }
+        }
+    }
+}
+
+}  // namespace
+
+// Settings changed: every window's buttons take the new gap (or go back to Explorer's), each on its own thread.
+void ToolbarSettingsChanged() {
+    std::lock_guard<std::mutex> lock(g_statesMutex);
+    for (auto& state : g_states) {
+        if (state->queue) {
+            state->queue.TryEnqueue([]() {
+                if (!g_unloading) {
+                    ToolbarApplyNow();
+                }
+            });
+        }
+    }
+}
+
+// At unload, on each thread that holds buttons: Explorer's margins are put back.
+void ToolbarRestoreThread() {
+    if (auto grid = t_toolbar.contentRoot.get()) {
+        try {
+            if (t_toolbar.known && grid.ColumnDefinitions().Size() >= 2) {
+                grid.ColumnDefinitions().GetAt(1).Width(t_toolbar.spare);
+                grid.ColumnDefinitions().GetAt(1).MinWidth(t_toolbar.spareMin);
+            }
+        } catch (...) {
+        }
+    }
+    for (int i = 0; i < 4 && t_toolbar.known; i++) {
+        if (auto element = t_toolbar.button[i].get()) {
+            try {
+                element.Margin(t_toolbar.original[i]);
+            } catch (...) {
+            }
+        }
+    }
+    t_toolbar = ToolbarButtons();
+}
+
+// Called on every tick of a new window until it returns true (the buttons were found and handled).
+bool ToolbarTick(WindowState* state) {
+    auto content = state->xamlRoot ? state->xamlRoot.Content() : nullptr;
+    auto root = content ? content.try_as<mux::DependencyObject>() : nullptr;
+    if (!root) {
+        return false;
+    }
+    std::vector<mux::FrameworkElement> buttons;
+    for (auto id : kToolbarIds) {
+        auto found = ToolbarFindById(root, id, 0);
+        if (!found) {
+            LogVerbose(L"TOOLBAR not found yet: %s", id);
+            return false;
+        }
+        buttons.push_back(found);
+    }
+#ifdef EXTRAS_VERBOSE
+    for (size_t i = 0; i < buttons.size(); i++) {
+        ToolbarDump(kToolbarIds[i], buttons[i]);
+    }
+#endif
+    RegisterKeepThread();  // This thread restores Explorer's margins at unload.
+    ToolbarButtons found;
+    for (int i = 0; i < 4; i++) {
+        found.button[i] = winrt::make_weak(buttons[i]);
+        found.original[i] = buttons[i].Margin();
+    }
+    // The grid named ContentRoot above the buttons.
+    mux::DependencyObject up = buttons[3];
+    for (int level = 0; level < 10 && up; level++) {
+        if (auto grid = up.try_as<muxc::Grid>(); grid && grid.Name() == L"ContentRoot" && grid.ColumnDefinitions().Size() >= 2) {
+            found.contentRoot = winrt::make_weak(grid);
+            found.spare = grid.ColumnDefinitions().GetAt(1).Width();
+            found.spareMin = grid.ColumnDefinitions().GetAt(1).MinWidth();
+            break;
+        }
+        up = mux::Media::VisualTreeHelper::GetParent(up);
+    }
+    found.known = true;
+    t_toolbar = found;
+    ToolbarApplyNow();
+    LogVerbose(L"TOOLBAR gap %d applied to the four buttons, window=%p, contentRoot found=%d", g_navGap.load(),
+               (void*)state->topLevel, t_toolbar.contentRoot.get() ? 1 : 0);
+#ifdef EXTRAS_VERBOSE
+    // The sizes after the change, once the layout has run: the grids above the buttons.
+    {
+        mux::DependencyObject up = buttons[3];
+        for (int level = 0; level < 10 && up; level++) {
+            if (auto element = up.try_as<mux::FrameworkElement>()) {
+                element.UpdateLayout();
+                wchar_t extra[200] = L"";
+                if (auto grid = up.try_as<muxc::Grid>()) {
+                    int at = 0;
+                    for (auto const& column : grid.ColumnDefinitions()) {
+                        at += swprintf_s(extra + at, 200 - at, L" [col w=%.1f actual=%.1f]", column.Width().Value, column.ActualWidth());
+                    }
+                }
+                LogVerbose(L"TOOLBAR after L%d %s name='%s' actual=%.1fx%.1f margin=%.1f,%.1f,%.1f,%.1f%s", level,
+                           ToolbarClassOf(element).c_str(), std::wstring(element.Name()).c_str(), element.ActualWidth(),
+                           element.ActualHeight(), element.Margin().Left, element.Margin().Top, element.Margin().Right,
+                           element.Margin().Bottom, extra);
+            }
+            up = mux::Media::VisualTreeHelper::GetParent(up);
+        }
+    }
+#endif
+    return true;
+}
+// The self-test of the toolbar's margins (debug build only): "TOOLBAR SELFTEST pass" or "TOOLBAR SELFTEST FAIL <what>".
+#ifdef EXTRAS_VERBOSE
+
+void ToolbarSelfTest() {
+    std::wstring failure;
+    auto expect = [&](bool ok, const wchar_t* what) {
+        if (!ok && failure.empty()) {
+            failure = what;
+        }
+    };
+    // Explorer gives each of the four buttons the margin 8,8,8,0: a gap of 16 between two of them, and 8 at each end.
+    // The ends take the gap too (never more than Explorer's own), so the address bar gets the room.
+    const mux::Thickness original{8, 8, 8, 0};
+    auto first = ToolbarMarginFor(original, 0, 4, 0);
+    auto second = ToolbarMarginFor(original, 1, 4, 0);
+    auto last = ToolbarMarginFor(original, 3, 4, 0);
+    expect(first.Left == 0 && first.Right == 0 && first.Top == 8 && first.Bottom == 0, L"gap 0: the first button has no margin");
+    expect(second.Left == 0 && second.Right == 0, L"gap 0: a middle button has no margin");
+    expect(last.Left == 0 && last.Right == 0, L"gap 0: the last button has no margin");
+    auto spaced = ToolbarMarginFor(original, 1, 4, 2);
+    expect(spaced.Left == 0 && spaced.Right == 2, L"the gap is the right margin of every button but the last");
+    expect(ToolbarMarginFor(original, 0, 4, 2).Left == 2 && ToolbarMarginFor(original, 3, 4, 2).Right == 2, L"the ends take the gap");
+    expect(ToolbarMarginFor(original, 0, 4, 16).Left == 8 && ToolbarMarginFor(original, 3, 4, 16).Right == 8,
+           L"the ends never grow past Explorer's own margin");
+    auto single = ToolbarMarginFor(original, 0, 1, 7);
+    expect(single.Left == 7 && single.Right == 7, L"a lone button has the gap on both sides");
+    if (failure.empty()) {
+        Wh_Log(L"TOOLBAR SELFTEST pass");
+    } else {
+        Wh_Log(L"TOOLBAR SELFTEST FAIL %s", failure.c_str());
+    }
+}
+
+#endif  // EXTRAS_VERBOSE
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -22406,6 +22690,8 @@ void ReleaseEntry(WindowState* state) {
 // Every 50 ms after the window is built: put the Columns entry into the View
 // menu, then, if Columns was the last layout chosen, turn it on once the file
 // list is visible.
+bool ToolbarTick(WindowState* state);  // 10i
+
 void EntryTick() {
     if (g_unloading) {
         return;
@@ -22419,6 +22705,9 @@ void EntryTick() {
         if (!state->topLevel || !IsWindow(state->topLevel)) {
             StopEntry(state);
             return;
+        }
+        if (!state->toolbarDone) {
+            state->toolbarDone = ToolbarTick(state);
         }
         if (!state->menuItem) {
             int visited = 0;
@@ -22607,7 +22896,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -23045,6 +23334,8 @@ void LoadSettings() {
     g_autoPreview = SettingBool(L"autoPreview");
     g_autoFolderSize = SettingBool(L"autoFolderSize");
     LabelsLoadSettings();
+    g_toolbar = SettingBool(L"toolbarOn");
+    g_navGap = SettingInt(L"navGap");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -23083,7 +23374,7 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.76.2 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+    Wh_Log(L"explorer-extras v0.77.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
         arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
@@ -23093,6 +23384,7 @@ BOOL Wh_ModInit() {
     LabelsCacheSelfTest();
     LabelsPlaceSelfTest();
     LabelsPaneSelfTest();
+    ToolbarSelfTest();
 #endif
 
     LabelsInstallPaintHooks();
@@ -23122,6 +23414,7 @@ BOOL Wh_ModInit() {
 void Wh_ModSettingsChanged() {
     LoadSettings();
     LabelsSettingsChanged();  // Show labels on or off, or a colour name changed.
+    ToolbarSettingsChanged();
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
