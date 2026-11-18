@@ -33,9 +33,11 @@ The tags you gave a name lately (the last eight, with their colour) are listed u
 
 In a named stream of the file itself (`ExplorerExtras.Labels`), so a label follows the file when it is copied or moved on an NTFS drive, and the file's dates do not change. This needs NTFS: on another file system, or when a file is read-only or in use, the pane and the menu say so and write nothing. A zip, an email or a cloud service may drop the stream.
 
+**They stay in the files.** The stream stays in the file after the mod is disabled or uninstalled. It is also written on a network share that supports named streams. To take the labels off, use **Clear tags** (in the pane or the right-click menu) while the mod is still running.
+
 ## Switching them off
 
-**Show labels** on the mod's page. Off, nothing is drawn and the entries are gone; the labels stay in the files.
+**Show labels** on the mod's page. Off, nothing is drawn and the entries are gone; the labels stay in the files (use **Clear tags** to remove them).
 
 ## For developers
 

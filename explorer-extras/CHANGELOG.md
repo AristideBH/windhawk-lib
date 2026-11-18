@@ -4,6 +4,9 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 
 ## 0.79 (2026-11-18)
 
+### Documented
+- Labels stay in the files after the mod is disabled or uninstalled, also on network shares that support named streams; **Clear tags** removes them while the mod runs. Said in the README, the labels page and the mod's own readme.
+
 ### Changed
 - Content and Tiles views: the dots after the text sit on the line of that text (in Content they were about 3 pixels too low, in Tiles 2), and in Content a little further from it (4 pixels more at 100 percent).
 
