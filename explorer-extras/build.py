@@ -166,7 +166,38 @@ def strip_no_winrt(data):
     return b'\n'.join(out)
 
 
+def strip_verbose(data):
+    """The catalog file leaves out what exists only in a test build: every #ifdef EXTRAS_VERBOSE block (the self-tests and
+    their files), keeping the #else branch when there is one."""
+    out = []
+    state = 0  # 0 outside, 1 inside #ifdef EXTRAS_VERBOSE (dropped), 2 inside its #else (kept)
+    depth = 0
+    for line in data.split(bytes([10])):
+        text = line.strip()
+        if state == 0:
+            if text == b'#ifdef EXTRAS_VERBOSE':
+                state, depth = 1, 0
+                continue
+            out.append(line)
+            continue
+        if text.startswith((b'#if', b'#ifdef', b'#ifndef')):
+            depth += 1
+        elif text.startswith(b'#endif'):
+            if depth == 0:
+                state = 0
+                continue
+            depth -= 1
+        elif depth == 0 and text.startswith(b'#else'):
+            state = 2
+            continue
+        if state == 2:
+            out.append(line)
+    return bytes([10]).join(out)
+
+
 joined = strip_no_winrt(joined)
+if '--debug' not in sys.argv:
+    joined = strip_verbose(joined)
 target = os.path.join(here, 'explorer-extras.wh.cpp')
 
 # A test build (build.py --debug <file>) also appends every log line to that file, so a crash can be

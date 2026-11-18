@@ -350,7 +350,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);

@@ -3,6 +3,9 @@
 // Explorer can start this mod before it has loaded the module the mod hooks.
 // In that case, wait for the module and hook it when it arrives.
 std::atomic<bool> g_extensionsHooked{false};
+// The same for dui70.dll, which comes with the first folder view when the mod starts with Explorer: the labels' paint hook
+// is installed when it arrives.
+std::atomic<bool> g_labelsWaitDui{false};
 
 using LoadLibraryExW_t = HMODULE(WINAPI*)(LPCWSTR, HANDLE, DWORD);
 LoadLibraryExW_t LoadLibraryExW_Original;
@@ -11,6 +14,14 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR name, HANDLE file, DWORD flags) {
     const DWORD dataOnly = LOAD_LIBRARY_AS_DATAFILE |
                            LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE |
                            LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if (module && !(flags & dataOnly) && g_labelsWaitDui && !g_unloading && GetModuleHandleW(L"dui70.dll")) {
+        if (g_labelsWaitDui.exchange(false)) {
+            Wh_Log(L"dui70.dll has loaded, installing the labels' paint hook now");
+            if (LabelsInstallPaintHooks()) {
+                Wh_ApplyHookOperations();
+            }
+        }
+    }
     if (module && !(flags & dataOnly) && !g_extensionsHooked && !g_unloading) {
         HMODULE extensions = GetModuleHandleW(L"FileExplorerExtensions.dll");
         if (extensions && !g_extensionsHooked.exchange(true)) {
@@ -94,8 +105,8 @@ BOOL Wh_ModInit() {
 #else
     const wchar_t* arch = L"x86";
 #endif
-    Wh_Log(L"explorer-extras v0.77.7 start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
-        arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
+    Wh_Log(L"explorer-extras v%s start, compiled as %s, pid=%lu, columns=%d width=%d..%d follow=%d",
+        WH_MOD_VERSION, arch, GetCurrentProcessId(), g_enabled ? 1 : 0, g_minWidth.load(),
         g_maxWidth.load(), g_follow ? 1 : 0);
 
 #ifdef EXTRAS_VERBOSE
@@ -107,19 +118,23 @@ BOOL Wh_ModInit() {
     ToolbarSelfTest();
 #endif
 
-    LabelsInstallPaintHooks();
+    if (!LabelsInstallPaintHooks() && !GetModuleHandleW(L"dui70.dll")) {
+        g_labelsWaitDui = true;
+    }
 
     HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
-    if (!module) {
+    if (!module || g_labelsWaitDui) {
         HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
         auto loadLibrary = kernelBase
             ? (decltype(&LoadLibraryExW))GetProcAddress(kernelBase, "LoadLibraryExW")
             : nullptr;
         BOOL waiting = loadLibrary &&
             WindhawkUtils::SetFunctionHook(loadLibrary, LoadLibraryExW_Hook, &LoadLibraryExW_Original);
-        Wh_Log(L"FileExplorerExtensions.dll isn't loaded yet, waiting for it: %d",
-            waiting ? 1 : 0);
-        return TRUE;
+        Wh_Log(L"waiting for FileExplorerExtensions.dll (%d) or dui70.dll (%d): %d", module ? 0 : 1,
+            g_labelsWaitDui ? 1 : 0, waiting ? 1 : 0);
+        if (!module) {
+            return TRUE;
+        }
     }
     g_extensionsHooked = true;
     HookExtensions(module);

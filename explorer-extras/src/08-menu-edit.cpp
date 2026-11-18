@@ -2544,7 +2544,18 @@ void ShowItemFlyout(WindowState* state, Column* column, muxc::ListView const& li
                 }
                 if (labelPaths.size() == picked.size()) {
                     // A drive that cannot keep the stream gets the entry greyed, with the reason in its name.
-                    bool keeps = LabelsVolumeSupportsStreams(labelPaths[0]);
+                    // From the folder's cache, which a mod thread filled: asking the drive here could freeze the window on a
+                    // slow share. A folder not read yet is assumed to keep it; a write that cannot says so.
+                    bool keeps = true;
+                    {
+                        std::wstring parent = labelPaths[0];
+                        PathRemoveFileSpecW(parent.data());
+                        parent.resize(wcslen(parent.c_str()));
+                        auto cached = LabelsFolderFor(parent);
+                        if (cached->complete) {
+                            keeps = cached->streamsSupported;
+                        }
+                    }
                     addRow(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"), L"\uE8EC", L"", keeps, nullptr,
                            keeps ? LabelsTagsSubmenu(labelPaths, [list]() -> mux::FrameworkElement { return list; })
                                  : muxc::MenuFlyout{nullptr},

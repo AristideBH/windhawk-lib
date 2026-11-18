@@ -344,29 +344,29 @@ void ToolbarApplyRadius() {
         return;
     }
     try {
+        auto radiusFor = [](mux::CornerRadius original, int wanted) {
+            // The setting when the area is on; Explorer's own corners, each as they were, when it is off.
+            double r = ToolbarRadius(original.TopLeft, wanted, g_toolbar);
+            return g_toolbar ? mux::CornerRadius{r, r, r, r} : original;
+        };
         if (auto box = t_toolbar.address.get()) {
-            double r = ToolbarRadius(t_toolbar.addressOriginal.TopLeft, g_addressRadius, g_toolbar);
-            box.CornerRadius(mux::CornerRadius{r, r, r, r});
+            box.CornerRadius(radiusFor(t_toolbar.addressOriginal, g_addressRadius));
         }
         {
-            double r = ToolbarRadius(t_toolbar.addressTextOriginal.TopLeft, g_addressRadius, g_toolbar);
             if (auto text = t_toolbar.addressText.get()) {
-                text.CornerRadius(mux::CornerRadius{r, r, r, r});
+                text.CornerRadius(radiusFor(t_toolbar.addressTextOriginal, g_addressRadius));
             }
-            double rb = ToolbarRadius(t_toolbar.addressBorderOriginal.TopLeft, g_addressRadius, g_toolbar);
             if (auto border = t_toolbar.addressBorder.get()) {
-                border.CornerRadius(mux::CornerRadius{rb, rb, rb, rb});
+                border.CornerRadius(radiusFor(t_toolbar.addressBorderOriginal, g_addressRadius));
             }
             for (int i = 0; i < 2; i++) {
                 if (auto grid = t_toolbar.addressGrid[i].get()) {
-                    double rg = ToolbarRadius(t_toolbar.addressGridOriginal[i].TopLeft, g_addressRadius, g_toolbar);
-                    grid.CornerRadius(mux::CornerRadius{rg, rg, rg, rg});
+                    grid.CornerRadius(radiusFor(t_toolbar.addressGridOriginal[i], g_addressRadius));
                 }
             }
         }
         if (auto box = t_toolbar.search.get()) {
-            double r = ToolbarRadius(t_toolbar.searchOriginal2.TopLeft, g_searchRadius, g_toolbar);
-            box.CornerRadius(mux::CornerRadius{r, r, r, r});
+            box.CornerRadius(radiusFor(t_toolbar.searchOriginal2, g_searchRadius));
         }
     } catch (...) {
     }
@@ -407,18 +407,27 @@ void ToolbarApplyNow() {
 
 // Settings changed: every window's buttons take the new gap (or go back to Explorer's), each on its own thread.
 void ToolbarSettingsChanged() {
-    std::lock_guard<std::mutex> lock(g_statesMutex);
-    LogVerbose(L"TOOLBAR settings changed: on=%d navGap=%d commandGap=%d, %d windows", g_toolbar.load() ? 1 : 0, g_navGap.load(),
-               g_cmdGap.load(), (int)g_states.size());
-    for (auto& state : g_states) {
-        if (state->queue) {
-            state->queue.TryEnqueue([]() {
+    // Every thread that holds toolbar state (registered when its buttons were found), also when no window has a WindowState
+    // any more: Columns and the details pane off drops the states.
+    std::vector<mud::DispatcherQueue> queues;
+    {
+        std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+        for (auto& thread : g_keepThreads) {
+            queues.push_back(thread.queue);
+        }
+    }
+    for (auto& queue : queues) {
+        try {
+            queue.TryEnqueue([]() {
                 if (!g_unloading) {
                     ToolbarApplyNow();
                 }
             });
+        } catch (...) {
         }
     }
+    LogVerbose(L"TOOLBAR settings changed: on=%d navGap=%d commandGap=%d, %d threads", g_toolbar.load() ? 1 : 0, g_navGap.load(),
+               g_cmdGap.load(), (int)queues.size());
 }
 
 // At unload, on each thread that holds buttons: Explorer's margins are put back.

@@ -55,7 +55,6 @@ void CacheSelfTestRun() {
     CacheExpect(tagged2.byName.count(L"solo") == 1 && tagged2.typeNames[L"solo"] == L"Text file",
                 L"a newly tagged item keeps its tags and its type text");
     CacheExpect(LabelsFolderWithTags(tagged2, L"solo", {}, L"").byName.empty(), L"clearing the tags of an item");
-    CacheExpect(LabelsShouldRefresh(1000, 21000) && !LabelsShouldRefresh(1000, 20999), L"a folder is read again after 20 seconds");
 
     // The tag filter.
     LabelsFilter off;

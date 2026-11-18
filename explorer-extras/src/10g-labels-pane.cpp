@@ -148,6 +148,32 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
     return result;
 }
 
+// Reads from the disk on a mod thread and hands the result to `apply` on this UI thread, so a slow or offline share never
+// freezes the window. `apply` must hold weak references only: it is copied and freed on the mod thread. False when the mod is
+// unloading, and then `apply` never runs.
+template <typename T>
+bool LabelsReadAsync(std::function<T()> read, std::function<void(T const&)> apply) {
+    auto queue = mud::DispatcherQueue::GetForCurrentThread();
+    return StartModThread([queue, read, apply]() {
+        HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        auto result = std::make_shared<T>(read());
+        if (SUCCEEDED(init)) {
+            CoUninitialize();
+        }
+        if (g_unloading) {
+            return;
+        }
+        try {
+            queue.TryEnqueue([result, apply]() {
+                if (!g_unloading) {
+                    apply(*result);
+                }
+            });
+        } catch (...) {
+        }
+    });
+}
+
 // Runs `work` on a mod thread and hands its result to `done`, on that thread. False when the mod is unloading.
 bool LabelsRunAsync(std::function<LabelsApplyResult()> work, std::function<void(LabelsApplyResult const&)> done) {
     return StartModThread([work, done]() {
@@ -281,13 +307,12 @@ void LabelsAfterChange(winrt::weak_ref<muxc::StackPanel> const& weakHost, Labels
     }
 }
 
-// Applies one change. A few items are written here; many are written on a mod thread, so the window does not wait
-// for the disk.
+// Applies one change. It is written on a mod thread, so the window does not wait for the disk.
 void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths const& paths, LabelTag const& tag, bool add) {
     if (g_unloading) {
         return;
     }
-    if (paths->size() > 16) {
+    {
         auto queue = mud::DispatcherQueue::GetForCurrentThread();
         bool started = LabelsRunAsync([paths, tag, add]() { return LabelsApplyToSelection(*paths, tag, add); },
                                       [queue, weakHost, paths](LabelsApplyResult const& result) {
@@ -353,42 +378,59 @@ muxc::Flyout LabelsMakeFlyout(winrt::weak_ref<muxc::StackPanel> const& weakHost,
     return flyout;
 }
 
-// Builds the section: the title, the tags as badges that wrap like text, with the "Add a tag" link after the last
-// one, and the line of a failed write. A click on a badge opens a small menu (remove, or add to all).
-void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message) {
-    host.Children().Clear();
-    auto weakHost = winrt::make_weak(host);
-    bool supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
+// What the Tags section shows, read from the disk (any thread).
+struct LabelsSectionRead {
+    bool supported = false;
     std::vector<std::vector<LabelTag>> perItem;
     bool unreadable = false;
     LabelsApplyResult unreadableWhy;  // The first item that could not be read, and why.
     bool ambiguous = false;
-    if (supported) {
-        // The first 100 items give the badges (a bigger selection is not read item by item on every change).
-        std::shared_ptr<const LabelsFolder> data;
-        for (size_t i = 0; i < paths->size() && i < 100; i++) {
-            std::vector<LabelTag> tags;
-            LabelsReadResult read = LabelsReadFileEx((*paths)[i], &tags);
-            if (read != LabelsReadResult::Ok) {
-                if (!unreadable) {
-                    LabelsNoteReadFailure(&unreadableWhy, read, PathFindFileNameW((*paths)[i].c_str()));
-                }
-                unreadable = true;
-                tags.clear();
+};
+
+LabelsSectionRead LabelsReadSection(LabelsPaths const& paths) {
+    LabelsSectionRead out;
+    out.supported = !paths->empty() && LabelsVolumeSupportsStreams((*paths)[0]);
+    if (!out.supported) {
+        return out;
+    }
+    // The first 100 items give the badges (a bigger selection is not read item by item on every change).
+    std::shared_ptr<const LabelsFolder> data;
+    for (size_t i = 0; i < paths->size() && i < 100; i++) {
+        std::vector<LabelTag> tags;
+        LabelsReadResult read = LabelsReadFileEx((*paths)[i], &tags);
+        if (read != LabelsReadResult::Ok) {
+            if (!out.unreadable) {
+                LabelsNoteReadFailure(&out.unreadableWhy, read, PathFindFileNameW((*paths)[i].c_str()));
             }
-            perItem.push_back(std::move(tags));
-            if (i < 20 && !ambiguous) {
-                // An item that shares its displayed name with another one has no dot: the pane says so.
-                if (!data) {
-                    std::wstring folder = (*paths)[i];
-                    PathRemoveFileSpecW(folder.data());
-                    folder.resize(wcslen(folder.c_str()));
-                    data = LabelsFolderFor(folder);
-                }
-                ambiguous = data->complete && data->ambiguous.count(LabelsDisplayNameOf((*paths)[i])) != 0;
+            out.unreadable = true;
+            tags.clear();
+        }
+        out.perItem.push_back(std::move(tags));
+        if (i < 20 && !out.ambiguous) {
+            // An item that shares its displayed name with another one has no dot: the pane says so.
+            if (!data) {
+                std::wstring folder = (*paths)[i];
+                PathRemoveFileSpecW(folder.data());
+                folder.resize(wcslen(folder.c_str()));
+                data = LabelsFolderFor(folder);
             }
+            out.ambiguous = data->complete && data->ambiguous.count(LabelsDisplayNameOf((*paths)[i])) != 0;
         }
     }
+    return out;
+}
+
+// Builds the section: the title, the tags as badges that wrap like text, with the "Add a tag" link after the last
+// one, and the line of a failed write. A click on a badge opens a small menu (remove, or add to all).
+void LabelsBuildSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message,
+                        LabelsSectionRead const& read) {
+    host.Children().Clear();
+    auto weakHost = winrt::make_weak(host);
+    bool supported = read.supported;
+    std::vector<std::vector<LabelTag>> const& perItem = read.perItem;
+    bool unreadable = read.unreadable;
+    LabelsApplyResult unreadableWhy = read.unreadableWhy;
+    bool ambiguous = read.ambiguous;
     LabelsMerged merged = LabelsMerge(perItem);
     host.Children().Append(MakeText(Str(L"labels.tags"), 13, true, false));
     if (!supported) {
@@ -471,6 +513,25 @@ void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, s
     }
 }
 
+[[clang::no_destroy]] thread_local uint64_t t_labelsFillSeq = 0;  // The newest fill of the section; an older read is dropped.
+
+// Fills the section: the tags are read on a mod thread and the badges built here when they come. What was on show stays
+// until then. A newer fill makes an older one obsolete.
+void LabelsFillSection(muxc::StackPanel const& host, LabelsPaths const& paths, std::wstring const& message) {
+    uint64_t seq = ++t_labelsFillSeq;
+    auto weakHost = winrt::make_weak(host);
+    LabelsReadAsync<LabelsSectionRead>(
+        [paths]() { return LabelsReadSection(paths); },
+        [weakHost, paths, message, seq](LabelsSectionRead const& read) {
+            if (seq != t_labelsFillSeq) {
+                return;
+            }
+            if (auto shown = weakHost.get()) {
+                LabelsBuildSection(shown, paths, message, read);
+            }
+        });
+}
+
 }  // namespace
 
 // The Tags section for the page of the details pane. Empty (collapsed) when labels are off or the selection has
@@ -503,14 +564,14 @@ void LabelsAfterMenuChange(LabelsApplyResult const& result, std::function<mux::F
     LabelsAfterChange(t_labelsSection.host, t_labelsSection.paths, result, anchor);
 }
 
-// A change from a menu, with the same rule as the pane's: many items are written on a mod thread.
+// A change from a menu, with the same rule as the pane's: written on a mod thread.
 void LabelsFromMenu(LabelsPaths const& paths, LabelTag const& tag, bool add, bool clear,
                     std::function<mux::FrameworkElement()> const& anchor) {
     if (g_unloading) {
         return;
     }
     auto work = [paths, tag, add, clear]() { return clear ? LabelsClearSelection(*paths) : LabelsApplyToSelection(*paths, tag, add); };
-    if (paths->size() > 16) {
+    {
         auto queue = mud::DispatcherQueue::GetForCurrentThread();
         bool started = LabelsRunAsync(work, [queue, anchor](LabelsApplyResult const& result) {
             queue.TryEnqueue([result, anchor]() { LabelsAfterMenuChange(result, anchor); });

@@ -103,22 +103,35 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
         LogVerbose(L"LABELS MENU no entry, selection=%d", (int)paths.size());
         return;
     }
-    bool keeps = LabelsVolumeSupportsStreams(paths[0]);
+    // The entry is there at once, disabled; whether the drive keeps the stream is asked on a mod thread (a share may be slow).
     muxc::AppBarButton button;
-    button.Label(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"));  // A drive that cannot keep the stream: greyed.
-    button.IsEnabled(keeps);
+    button.Label(Str(L"labels.menu"));
+    button.IsEnabled(false);
     button.Tag(winrt::box_value(winrt::hstring{L"ee-labels"}));
     muxc::FontIcon icon;
     icon.FontFamily(mux::Media::FontFamily(L"Segoe Fluent Icons"));
-    icon.Glyph(L"");
+    icon.Glyph(L"");
     button.Icon(icon);
     auto weakBar = winrt::make_weak(bar);
-    if (keeps) {
-        button.Flyout(LabelsTagsSubmenu(paths, [weakBar]() -> mux::FrameworkElement {
-            auto shown = weakBar.get();
-            return shown ? shown.Target() : mux::FrameworkElement{nullptr};
-        }));
-    }
+    auto weakButton = winrt::make_weak(button);
+    auto shared = std::make_shared<std::vector<std::wstring>>(paths);
+    LabelsReadAsync<bool>(
+        [shared]() { return LabelsVolumeSupportsStreams((*shared)[0]); },
+        [weakButton, weakBar, shared](bool const& keeps) {
+            auto shown = weakButton.get();
+            if (!shown) {
+                return;
+            }
+            if (!keeps) {
+                shown.Label(Str(L"labels.menu.ntfs"));  // A drive that cannot keep the stream: greyed.
+                return;
+            }
+            shown.Flyout(LabelsTagsSubmenu(*shared, [weakBar]() -> mux::FrameworkElement {
+                auto bar = weakBar.get();
+                return bar ? bar.Target() : mux::FrameworkElement{nullptr};
+            }));
+            shown.IsEnabled(true);
+        });
     // Before "Show more options" (the command with Shift+F10) when it is there, else at the end.
     uint32_t at = secondary.Size();
     for (uint32_t i = 0; i < secondary.Size(); i++) {
@@ -137,6 +150,28 @@ void LabelsOnMenuOpening(Inspectable const& sender) {
 }
 
 }  // namespace
+
+// At unload, on each thread that hooked a flyout: the "Tags" entries are taken out of Explorer's reused menus, since the handler
+// that would remove them at the next opening is revoked.
+void LabelsRemoveMenuEntries() {
+    for (auto& hooked : t_labelsFlyouts) {
+        auto bar = hooked.flyout.get();
+        if (!bar) {
+            continue;
+        }
+        try {
+            auto secondary = bar.SecondaryCommands();
+            for (uint32_t i = secondary.Size(); i-- > 0;) {
+                auto old = secondary.GetAt(i).try_as<muxc::AppBarButton>();
+                if (old && LabelsIsOurs(old)) {
+                    secondary.RemoveAt(i);
+                }
+            }
+        } catch (...) {
+        }
+    }
+    t_labelsFlyouts.clear();
+}
 
 using LabelsAppendMenuItem_t = void(WINAPI*)(void* self, void* flyout, void* menuItem);
 LabelsAppendMenuItem_t LabelsAppendMenuItem_Original;

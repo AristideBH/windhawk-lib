@@ -98,6 +98,8 @@ void RevokeAllHandlers() {
 void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
 void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation buttons
 
+void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work);  // 11
+
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
     {
@@ -118,19 +120,24 @@ void RevokeKeptThreads() {
         }
         bool queued = false;
         try {
-            queued = thread.queue.TryEnqueue([done]() {
+            // Outside a message loop of the mod's own (a dialog or a drag), as the window cleanup is.
+            auto work = std::make_shared<std::function<void()>>([done]() {
                 RevokeAllHandlers();
                 LabelsReleaseThreadObjects();
                 ToolbarRestoreThread();
                 SetEvent(done);
             });
+            mud::DispatcherQueue queue = thread.queue;
+            queued = queue.TryEnqueue([queue, work]() { RunOutsideModal(queue, work); });
         } catch (...) {
         }
-        if (queued && WaitForSingleObject(done, 1500) == WAIT_OBJECT_0) {
-            CloseHandle(done);  // After a time out the handle is left: the thread may still use it.
-        } else if (!queued) {
-            CloseHandle(done);
+        if (queued) {
+            // The work runs on the window's own thread. Stopping the wait early would leave it queued for after the
+            // mod is unmapped, so it is waited for as long as it takes.
+            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
+            }
         }
+        CloseHandle(done);
     }
     threads.clear();
 }

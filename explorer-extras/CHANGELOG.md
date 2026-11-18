@@ -4,6 +4,16 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 
 ## 0.77 (2026-11-17)
 
+### Fixed, from the second AI review of the catalog pull request
+- Unloading the mod waits for every window's thread with no time limit, and outside a dialog or drag of the mod, so a busy window can no longer run the cleanup after the mod is gone.
+- No more `IsBadReadPtr` in the labels' DirectUI code: a `VirtualQuery` check, and a null check in the paint hook.
+- Labels work when the mod starts with Explorer: the paint hook is installed when `dui70.dll` loads, which can be after the mod.
+- The **Tags** entry is taken out of Explorer's right-click menus when the mod unloads.
+- Toolbar: switching the area off gives back Explorer's own corners exactly, a settings change reaches every window even when Columns and the details pane are off, and a window gets the toolbar when only the toolbar is on.
+- The paint hook no longer takes the lock on the window states for each element it paints.
+- Labels never wait for the disk on the window's thread: the pane's Tags section, the **Tags** submenu and the check that a drive keeps the tag stream are read on a mod thread (the items are there at once, disabled, until the read is done), and every tag is written on a mod thread, whatever the number of items. A slow or offline network share no longer freezes the window.
+- The catalog file leaves out the debug-only self-tests, and the start line shows the real version.
+
 ### Added
 - **Toolbar**, a new area, with its own **Toolbar** group on Windhawk's page. Every part is a setting, and switching the area off, or unloading the mod, puts Explorer's own values back.
   - **Navigation buttons.** Explorer gave Back, Forward, Up and Refresh a margin of 8 on each side, so two buttons were 16 apart and the address bar sat 17 away from Refresh. **Gap between the navigation buttons** (4 pixels by default, 0 to 16) and **Gap between the navigation buttons and the address bar** (4, 0 to 16, Explorer's is 8). The address bar takes the room that frees.
@@ -27,7 +37,7 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 
 ### Fixed, from a review of the whole Labels work
 - The handlers that the right-click menu gave to Explorer's elements are taken off at unload in every window, also in one that was open before the mod loaded (such a window has no state of its own, so nothing took them off before). This could have crashed Explorer after the mod was disabled or updated.
-- A folder is read again when you show it, and when it has been on show for 20 seconds, so a rename, a file tagged by another program or a file copied in shows its dot. The read of a folder you leave is cancelled. Before, a folder read once kept its dots until Explorer restarted.
+- A folder is read again when you show it, so a rename, a file tagged by another program or a file copied in shows its dot (0.77.23: no longer every 20 seconds while it is on show, which was a lot of reading on a network folder). The read of a folder you leave is cancelled. Before, a folder read once kept its dots until Explorer restarted.
 - Tagging one of two items that show the same name (hidden extensions) no longer puts the dot on both, and a newly tagged item no longer has its dot on top of the type text in Content.
 - The pane says when an item has no dot because another item shows the same name.
 - A tag name such as `{wip}` or with unusual characters can no longer stop the pane from showing a file.

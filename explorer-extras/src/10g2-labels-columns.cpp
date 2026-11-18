@@ -118,33 +118,18 @@ namespace {
 muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, std::function<mux::FrameworkElement()> anchor) {
     muxc::MenuFlyout menu;
     auto paths = std::make_shared<std::vector<std::wstring>>(pathList);
-    std::vector<std::vector<LabelTag>> perItem;
-    bool unreadable = false;
-    // The first 30 items tell which colours are on all of them: a big selection is not read when the menu is built.
-    for (size_t i = 0; i < paths->size() && i < 30; i++) {
-        std::vector<LabelTag> tags;
-        if (!LabelsReadFile((*paths)[i], &tags)) {
-            unreadable = true;
-            tags.clear();
-        }
-        perItem.push_back(std::move(tags));
-    }
+    // The items are there at once, disabled; the first 30 items are read on a mod thread (a big selection is not read when
+    // the menu is built) and tell which colours are on all of them. Until then no click can act on a wrong state.
+    auto everywhere = std::make_shared<std::array<bool, 8>>();
+    everywhere->fill(false);
+    std::vector<winrt::weak_ref<muxc::ToggleMenuFlyoutItem>> toggles;
     bool dark = LabelsDarkTheme();
     for (int colour = 0; colour < 8; colour++) {
         LabelTag tag{(uint8_t)colour, L""};
-        bool everywhere = !perItem.empty();
-        for (auto const& item : perItem) {
-            bool has = false;
-            for (auto const& existing : item) {
-                has = has || (existing.colour == colour && existing.name.empty());
-            }
-            everywhere = everywhere && has;
-        }
         muxc::ToggleMenuFlyoutItem item;
         std::wstring name = LabelsColourName(colour);
         item.Text(name.empty() ? std::wstring(L"…") : name);
-        item.IsChecked(everywhere);
-        item.IsEnabled(!unreadable);
+        item.IsEnabled(false);
         muxc::FontIcon dot;
         dot.FontFamily(mux::Media::FontFamily(L"Segoe UI"));
         dot.Glyph(L"●");
@@ -152,15 +137,16 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
         dot.Foreground(mux::Media::SolidColorBrush(
             winrt::Windows::UI::ColorHelper::FromArgb(255, GetRValue(fill), GetGValue(fill), GetBValue(fill))));
         item.Icon(dot);
-        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
-            LabelsFromMenu(paths, tag, !everywhere, false, anchor);
+        Keep(item, item.Click(winrt::auto_revoke, [paths, tag, everywhere, colour, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
+            LabelsFromMenu(paths, tag, !(*everywhere)[colour], false, anchor);
         }));
+        toggles.push_back(winrt::make_weak(item));
         menu.Items().Append(item);
     }
     menu.Items().Append(muxc::MenuFlyoutSeparator());
     muxc::MenuFlyoutItem add;
     add.Text(Str(L"labels.addtag"));
-    add.IsEnabled(!unreadable);
+    add.IsEnabled(false);
     Keep(add, add.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
         mux::FrameworkElement target = g_unloading ? mux::FrameworkElement{nullptr} : anchor();
         if (!target) {
@@ -176,16 +162,61 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
     menu.Items().Append(add);
     muxc::MenuFlyoutItem clear;
     clear.Text(Str(L"labels.clear"));
-    clear.IsEnabled(!unreadable);
+    clear.IsEnabled(false);
     Keep(clear, clear.Click(winrt::auto_revoke, [paths, anchor](Inspectable const&, mux::RoutedEventArgs const&) {
         LabelsFromMenu(paths, LabelTag{}, false, true, anchor);
     }));
     menu.Items().Append(clear);
+    struct Read {
+        std::vector<std::vector<LabelTag>> perItem;
+        bool unreadable = false;
+    };
+    auto weakAdd = winrt::make_weak(add);
+    auto weakClear = winrt::make_weak(clear);
+    LabelsReadAsync<Read>(
+        [paths]() {
+            Read out;
+            for (size_t i = 0; i < paths->size() && i < 30; i++) {
+                std::vector<LabelTag> tags;
+                if (!LabelsReadFile((*paths)[i], &tags)) {
+                    out.unreadable = true;
+                    tags.clear();
+                }
+                out.perItem.push_back(std::move(tags));
+            }
+            return out;
+        },
+        [toggles, everywhere, weakAdd, weakClear](Read const& read) {
+            for (int colour = 0; colour < 8; colour++) {
+                bool all = !read.perItem.empty();
+                for (auto const& item : read.perItem) {
+                    bool has = false;
+                    for (auto const& existing : item) {
+                        has = has || (existing.colour == colour && existing.name.empty());
+                    }
+                    all = all && has;
+                }
+                (*everywhere)[colour] = all;
+                if (auto item = toggles[colour].get()) {
+                    item.IsChecked(all);
+                    item.IsEnabled(!read.unreadable);
+                }
+            }
+            if (auto add = weakAdd.get()) {
+                add.IsEnabled(!read.unreadable);
+            }
+            if (auto clear = weakClear.get()) {
+                clear.IsEnabled(!read.unreadable);
+            }
+        });
     return menu;
 }
 
 // Called on each UI thread that holds label objects, at unload: its flyouts, its notice and its fonts.
+void LabelsRemoveMenuEntries();  // 10h
+
 void LabelsReleaseThreadObjects() {
+    LabelsRemoveMenuEntries();
     t_labelsMenuFlyout = nullptr;
     t_labelsNotice = nullptr;
     t_labelsSection = LabelsSectionRef();

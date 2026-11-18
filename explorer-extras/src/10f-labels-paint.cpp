@@ -165,13 +165,25 @@ void* LabelsExport(HMODULE module, const char* prefix) {
     return nullptr;
 }
 
+// Is [p, p + size) committed memory that can be read? VirtualQuery, which neither raises nor swallows a guard page.
+bool LabelsReadable(const void* p, size_t size) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!p || !VirtualQuery(p, &info, sizeof(info))) {
+        return false;
+    }
+    if (info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || info.Protect == 0) {
+        return false;
+    }
+    return (const char*)p + size <= (const char*)info.BaseAddress + info.RegionSize;
+}
+
 int LabelsFindSlot(void* vtable, void* function) {
     if (!vtable || !function) {
         return -1;
     }
     void** slots = (void**)vtable;
     for (int i = 0; i < 120; i++) {
-        if (IsBadReadPtr(&slots[i], sizeof(void*))) {
+        if (!LabelsReadable(&slots[i], sizeof(void*))) {
             break;
         }
         if (slots[i] == function) {
@@ -195,7 +207,7 @@ LabelsKind LabelsKindOf(void* element) {
     void** table = (void**)vtable;
     using GetClassInfo_t = void* (*)(void*);
     void* classInfo = ((GetClassInfo_t)table[g_labelsClassSlot])(element);
-    if (classInfo && !IsBadReadPtr(classInfo, sizeof(void*))) {
+    if (classInfo && LabelsReadable(classInfo, sizeof(void*))) {
         void** infoTable = *(void***)classInfo;
         using GetName_t = const wchar_t* (*)(void*);
         const wchar_t* name = ((GetName_t)infoTable[g_labelsNameSlot])(classInfo);
@@ -231,10 +243,6 @@ std::wstring LabelsAccName(void* element) {
         LabelsValueRelease(value);
     }
     return result;
-}
-
-bool LabelsReadable(const void* p, size_t n) {
-    return p && !IsBadReadPtr(p, n);
 }
 
 // The elements of a DynamicArray<Element*>: a data pointer and a count are searched for among its first words.
@@ -384,8 +392,6 @@ std::wstring LabelsThreadFolder() {
         if (!path.empty()) {
             LabelsInvalidate(path);
         }
-    } else if (!path.empty()) {
-        LabelsRefreshIfStale(path);
     }
     return path;
 }
@@ -524,6 +530,14 @@ void LabelsFitDots(LabelsRowContext* row, int available) {
 // The filter of this thread's window, or null when it has none. A debug build also reads
 // %LOCALAPPDATA%\\ExplorerExtras\\labels-filter.txt ("colour=3" or "name=Urgent", empty or missing for none), about
 // twice a second, so the dimming can be tried before the pane that sets the filter exists.
+// Is any window filtered? The paint hook asks this first, so a paint does not take the lock on the window states for nothing.
+// A source of a filter (the debug build's file, or a pane later) must set it.
+#ifdef EXTRAS_VERBOSE
+std::atomic<bool> g_labelsFilterAny{true};  // The debug build polls a file for a filter.
+#else
+std::atomic<bool> g_labelsFilterAny{false};
+#endif
+
 LabelsFilter* LabelsFilterOfThread() {
     WindowState* state = StateForThisThread(false);
     if (!state) {
@@ -853,7 +867,7 @@ void LabelsOnChild(void* self, LabelsKind kind, HDC dc, const RECT* rect) {
 }
 
 void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
-    bool usable = g_labels && !g_unloading && g_labelsPaintOk && self && rect && !IsBadReadPtr(rect, sizeof(RECT));
+    bool usable = g_labels && !g_unloading && g_labelsPaintOk && self && rect;  // rect is PaintContent's own argument
     // Before the child paints: is it part of a row that the filter dims, and what colour is behind it?
     bool dim = false;
     COLORREF behind = 0;
@@ -862,7 +876,7 @@ void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
             LabelsKind own = LabelsKindOf(self);
             if (own == kImage || own == kProperty || own == kSmartProperty || own == kElement || own == kTilesCollection ||
                 own == kSmartCollection || own == kDetailsCollection || own == kBase) {
-                LabelsFilter* filter = LabelsFilterOfThread();
+                LabelsFilter* filter = g_labelsFilterAny ? LabelsFilterOfThread() : nullptr;
                 if (filter) {
                     void* item = LabelsGetParent(self);
                     for (int up = 0; item && up < 4 && LabelsKindOf(item) != kItem; up++) {

@@ -72,11 +72,6 @@ LabelsFolder LabelsFolderWithTags(LabelsFolder base, std::wstring const& name, s
     return base;
 }
 
-// A folder that was read is read again after this long, when it is on show (a tag set by another program, a rename).
-bool LabelsShouldRefresh(ULONGLONG readAt, ULONGLONG now) {
-    return now - readAt >= 20000;
-}
-
 // The tag a window filters its list by. A colour-only filter (no name) matches any tag of that colour, a named
 // one matches the name, whatever the case and the colour.
 struct LabelsFilter {
@@ -308,15 +303,6 @@ void LabelsCancelFolder(std::wstring const& folderPath) {
 }
 
 // A folder on show that was read a while ago is read again, on a thread, and the old data is used meanwhile.
-void LabelsRefreshIfStale(std::wstring const& folderPath) {
-    std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
-    auto found = g_labelsCache.find(folderPath);
-    if (found != g_labelsCache.end() && found->second.data->complete && !found->second.cancel &&
-        LabelsShouldRefresh(found->second.readAt, GetTickCount64())) {
-        LabelsStartRead(folderPath, found->second);
-    }
-}
-
 // Every read that is running gives up. Called first when the mod unloads, before its threads are joined.
 void LabelsCancelAll() {
     std::lock_guard<std::mutex> lock(g_labelsCacheMutex);
