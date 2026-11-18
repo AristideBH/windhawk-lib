@@ -1551,7 +1551,12 @@ muxc::StackPanel PaneMarkdown(std::wstring const& markdown) {
     bool inCode = false;
     std::wstring code;
     size_t pos = 0;
+    bool shortened = false;
     while (pos <= markdown.size()) {
+        if (page.Children().Size() >= 600) {
+            shortened = true;  // A very long document: the page is not built whole.
+            break;
+        }
         size_t end = markdown.find(L'\n', pos);
         std::wstring line = markdown.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
         pos = end == std::wstring::npos ? markdown.size() + 1 : end + 1;
@@ -1683,10 +1688,13 @@ muxc::StackPanel PaneMarkdown(std::wstring const& markdown) {
         }
         paragraph += (paragraph.empty() ? L"" : L" ") + trimmed;
     }
-    if (inCode) {
+    if (inCode && !shortened) {
         codeBlock(code);
     }
     endParagraph();
+    if (shortened) {
+        page.Children().Append(PaneMdText(L"…", 13, false));
+    }
     return page;
 }
 
@@ -2584,7 +2592,7 @@ void PaneSyncPanel(WindowState* state) {
     if (!state->on || !state->bridge) {
         return;
     }
-    HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+    HWND fileList = FindVisibleChildCached(&state->paneFileList, state->topLevel, L"SHELLDLL_DefView");
     RECT rect;
     if (fileList && FileListRect(state->topLevel, fileList, &rect) && !EqualRect(&rect, &state->lastRect)) {
         state->lastRect = rect;
@@ -3241,8 +3249,8 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     // Explorer's Preview pane is on when the file view stops well short of the right edge of the
     // frame and the Details pane's window is not there to fill the gap. (The Preview pane has no
     // window of its own when the file has nothing to preview, so its window cannot be looked for.)
-    HWND view = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
-    HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+    HWND view = FindVisibleChildCached(&state->paneView, state->topLevel, L"SHELLDLL_DefView");
+    HWND tab = FindVisibleChildCached(&state->paneTab, state->topLevel, L"ShellTabWindowClass");
     bool previewOn = false;
     if (view && tab) {
         RECT v, t;
@@ -3395,7 +3403,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             }
         }
     }
-    HWND host = g_detailsPane ? FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
+    HWND host = g_detailsPane ? FindVisibleChildCached(&state->paneHost, state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
     RECT r = {};
     bool gone = !host;
     if (host) {

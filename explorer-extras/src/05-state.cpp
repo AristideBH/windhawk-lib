@@ -397,6 +397,7 @@ struct WindowState {
     HWND currentTab = nullptr;
     HWND tickFileList = nullptr;  // The windows OnTick found last time (see FindVisibleChildCached).
     HWND tickTab = nullptr;
+    HWND paneView = nullptr, paneTab = nullptr, paneHost = nullptr, paneFileList = nullptr;  // The same for the details pane's step.
     ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
     std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
     std::vector<TabSnapshot> tabSnapshots;

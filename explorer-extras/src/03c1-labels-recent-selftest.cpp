@@ -32,6 +32,14 @@ void LabelsRecentSelfTest() {
     }
     expect(many.size() == kLabelsRecentMax && many.front().name == L"t11" && many.back().name == L"t4",
            L"only the newest few are kept");
+    // One stored value per tag: a colour, a bar, the name with its line breaks escaped, so the value is a single line.
+    std::wstring line = LabelsRecentEntry(LabelTag{3, L"Two\nlines | and a bar"});
+    expect(line.find(L'\n') == std::wstring::npos && line.find(L'\r') == std::wstring::npos && line.rfind(L"3|", 0) == 0,
+           L"a stored entry is one line that starts with the colour and a bar");
+    LabelTag back;
+    expect(LabelsRecentParse(line, &back) && back.colour == 3 && back.name == L"Two\nlines | and a bar", L"an entry reads back as it was");
+    expect(!LabelsRecentParse(L"", &back) && !LabelsRecentParse(L"9|x", &back) && !LabelsRecentParse(L"v1", &back),
+           L"an entry that is not one is refused");
     if (failure.empty()) {
         Wh_Log(L"LABELS RECENT SELFTEST pass");
     } else {

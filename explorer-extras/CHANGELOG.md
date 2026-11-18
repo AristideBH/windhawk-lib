@@ -4,6 +4,12 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 
 ## 0.79 (2026-11-18)
 
+### Fixed, from the fourth AI review of the catalog pull request
+- The recent tags are kept as one single-line value per tag (`labels.recent.0` and so on, with a count), not as one text with line breaks: portable Windhawk keeps its storage in an INI file, which cannot hold a line break, so the list was lost at every restart there. The list you had is empty after this update.
+- A write of Tags through the hooked property store reads the item's own stream to know which labels to take out, instead of asking the folder cache, which may have dropped the folder since the editor showed the list.
+- A very long Markdown file is previewed up to 600 blocks, then a "…", instead of building the whole page.
+- The details pane's timer step keeps the file list, tab and details host windows it found, like Columns does, instead of searching the window tree each time.
+
 ### Documented
 - Labels stay in the files after the mod is disabled or uninstalled, also on network shares that support named streams; **Clear tags** removes them while the mod runs. Said in the README, the labels page and the mod's own readme.
 

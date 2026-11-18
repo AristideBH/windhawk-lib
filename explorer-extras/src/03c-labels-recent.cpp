@@ -20,6 +20,25 @@ std::vector<LabelTag> LabelsRecentPush(std::vector<LabelTag> recent, LabelTag co
     return recent;
 }
 
+// One stored value of a recent tag: the colour, a bar, the name with its line breaks escaped. Portable Windhawk keeps the storage in
+// an INI file, where a value cannot hold a line break, so each tag is its own single-line value.
+std::wstring LabelsRecentEntry(LabelTag const& tag) {
+    return std::to_wstring(std::min<int>(tag.colour, 7)) + L"|" + LabelsEscape(tag.name);
+}
+
+bool LabelsRecentParse(std::wstring_view text, LabelTag* out) {
+    if (text.size() < 2 || text[0] < L'0' || text[0] > L'7' || text[1] != L'|') {
+        return false;
+    }
+    LabelTag tag;
+    tag.colour = (uint8_t)(text[0] - L'0');
+    if (!LabelsUnescape(text.substr(2), &tag.name) || tag.name.empty()) {
+        return false;
+    }
+    *out = std::move(tag);
+    return true;
+}
+
 namespace {
 
 [[clang::no_destroy]] std::mutex g_labelsRecentMutex;
@@ -31,12 +50,15 @@ void LabelsRecentLoad() {  // The caller holds the lock.
         return;
     }
     g_labelsRecentLoaded = true;
-    std::vector<wchar_t> buffer(4000);
-    size_t length = Wh_GetStringValue(L"labels.recent", buffer.data(), buffer.size());
-    if (length > 0 && length < buffer.size()) {
-        std::vector<LabelTag> parsed;
-        if (LabelsParse(std::wstring_view(buffer.data(), length), &parsed)) {
-            g_labelsRecent = std::move(parsed);
+    int count = Wh_GetIntValue(L"labels.recent.count", 0);
+    for (int i = 0; i < count && i < (int)kLabelsRecentMax; i++) {
+        wchar_t name[40];
+        swprintf_s(name, L"labels.recent.%d", i);
+        std::vector<wchar_t> buffer(200);
+        size_t length = Wh_GetStringValue(name, buffer.data(), buffer.size());
+        LabelTag tag;
+        if (length > 0 && length < buffer.size() && LabelsRecentParse(std::wstring_view(buffer.data(), length), &tag)) {
+            g_labelsRecent.push_back(std::move(tag));
         }
     }
 }
@@ -56,5 +78,14 @@ void LabelsRecentRemember(LabelTag const& tag) {
     std::lock_guard<std::mutex> lock(g_labelsRecentMutex);
     LabelsRecentLoad();
     g_labelsRecent = LabelsRecentPush(g_labelsRecent, tag);
-    Wh_SetStringValue(L"labels.recent", LabelsSerialize(g_labelsRecent).c_str());
+    for (size_t i = 0; i < kLabelsRecentMax; i++) {
+        wchar_t name[40];
+        swprintf_s(name, L"labels.recent.%d", (int)i);
+        if (i < g_labelsRecent.size()) {
+            Wh_SetStringValue(name, LabelsRecentEntry(g_labelsRecent[i]).c_str());
+        } else {
+            Wh_DeleteValue(name);
+        }
+    }
+    Wh_SetIntValue(L"labels.recent.count", (int)g_labelsRecent.size());
 }

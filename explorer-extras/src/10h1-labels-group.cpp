@@ -127,13 +127,25 @@ std::wstring LabelsStoreText(void* store, REFPROPERTYKEY key) {
 
 // The label names of the item of `store`, as Keywords values. Empty when it has none, is not a file system item, or its folder is not
 // read yet (then `*waiting` is set and the folder remembered, to be read again by Explorer when it is).
-std::vector<std::wstring> LabelsNamesOfStore(void* store, bool* waiting) {
+std::vector<std::wstring> LabelsNamesOfStore(void* store, bool* waiting, bool fromStream = false) {
     std::vector<std::wstring> labels;
     *waiting = false;
     std::wstring path = LabelsStoreText(store, PKEY_ParsingPath);
     std::wstring name = LabelsStoreText(store, PKEY_ItemNameDisplay);
     if (path.size() < 4 || path[1] != L':' || name.empty()) {
         return labels;  // Not a file system item.
+    }
+    if (fromStream) {
+        // A write is rare and the editor showed what the list was, so the item's own stream is read: the folder cache may have
+        // dropped the folder since (16 folders), and the labels would then not be taken out.
+        std::vector<LabelTag> tags;
+        if (LabelsReadFile(path, &tags)) {
+            for (auto const& tag : tags) {
+                std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
+                labels.push_back(shown.empty() ? std::wstring(L"Gray") : shown);
+            }
+        }
+        return labels;
     }
     std::wstring folder = path;
     PathRemoveFileSpecW(folder.data());
@@ -217,7 +229,7 @@ HRESULT STDMETHODCALLTYPE LabelsSetValue_Hook(void* store, REFPROPERTYKEY key, R
         (value.vt == (VT_VECTOR | VT_LPWSTR) || value.vt == VT_LPWSTR)) {
         try {
             bool waiting = false;
-            std::vector<std::wstring> labels = LabelsNamesOfStore(store, &waiting);
+            std::vector<std::wstring> labels = LabelsNamesOfStore(store, &waiting, true);
             if (!labels.empty()) {
                 PROPVARIANT current;
                 PropVariantInit(&current);
