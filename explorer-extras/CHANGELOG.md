@@ -4,6 +4,9 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 
 ## 0.79 (2026-11-18)
 
+### Changed
+- Content and Tiles views: the dots after the text sit on the line of that text (in Content they were about 3 pixels too low, in Tiles 2), and in Content a little further from it (4 pixels more at 100 percent).
+
 ### Added
 - **Recent tags.** The **Add a tag** flyout (in the details pane and from the right-click menu) lists, under **Recent**, the last eight named tags you used, with their colours: one click gives one to the selection, so a name is typed once. They are kept between sessions in the mod's storage.
 

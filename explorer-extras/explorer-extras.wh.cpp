@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         0.79.1
+// @version         0.79.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -19895,14 +19895,15 @@ LabelsPlace LabelsPlaceFor(LabelsPlaceInput const& in) {
             break;
         case LabelsView::Tiles:
             place.x = in.textRight >= in.textLeft ? in.textRight + gap : in.cell.left;
-            place.centreY = (in.cell.top + in.cell.bottom) / 2 + in.lineHeight / 8;  // A little below the middle: the text sits low.
+            place.centreY = (in.cell.top + in.cell.bottom) / 2 - in.lineHeight / 8 + 2 * std::max(1, in.side / 8);  // On the text line, a pixel lower than Content.
             place.corner = place.x + in.blockWidth > in.cell.right;
             break;
         case LabelsView::Content:
             if (in.textRight >= in.textLeft) {
-                // The cell is the type line: after its text.
-                place.x = in.textRight + gap;
-                place.centreY = (in.cell.top + in.cell.bottom) / 2 + in.lineHeight / 8;
+                // The cell is the type line: after its text, a little further than elsewhere (the width of the type text is
+                // measured, and ends close to the dot), on the line of the text.
+                place.x = in.textRight + gap + in.side / 2;
+                place.centreY = (in.cell.top + in.cell.bottom) / 2 - in.lineHeight / 8 + std::max(1, in.side / 8);
             } else {
                 // The cell is the name line: at the start of the line below it.
                 place.x = in.cell.left;

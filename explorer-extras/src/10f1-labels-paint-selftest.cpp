@@ -71,7 +71,7 @@ void LabelsPlaceSelfTest() {
     in.textLeft = 55;
     in.textRight = 100;
     place = LabelsPlaceFor(in);
-    PlaceExpect(place.x == 106 && place.centreY == 26 && !place.corner, L"Tiles: after the detail text, a little below the middle of the line");
+    PlaceExpect(place.x == 106 && place.centreY == 24 && !place.corner, L"Tiles: after the detail text, on the text line (2 px above where it was)");
     in.textRight = in.textLeft - 1;
     PlaceExpect(LabelsPlaceFor(in).x == 55, L"Tiles: at the start of an empty line");
 
@@ -84,7 +84,8 @@ void LabelsPlaceSelfTest() {
     in.textLeft = 123;
     in.textRight = 255;
     place = LabelsPlaceFor(in);
-    PlaceExpect(place.x == 261 && place.centreY == 37, L"Content: after the type text when there is one");
+    PlaceExpect(place.x == 265 && place.centreY == 34,
+                L"Content: after the type text with a gap of 4 more, on the text line (not 4 px below it)");
     in.textLeft = 0;
     in.textRight = -1;
 
