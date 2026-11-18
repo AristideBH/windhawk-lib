@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         0.78.10
+// @version         0.79.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -51,6 +51,7 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 - **Where they show.** As a dot after the name, stacked when there are several, in every view of Explorer's own list (Details, List, Tiles, Content and the icon sizes) and in Columns. They follow the light and dark theme.
 - **How you set them.** In the **Tags** section of the details pane (badges that wrap, and an **Add a tag** link), and in the right-click menu, both in Explorer's own list and in Columns: a **Tags** entry with the colours, **Add tag** and **Clear tags**.
 - **Where they live.** In a named stream of the file itself, so they follow it when it is copied or moved on an NTFS drive. They need NTFS: the menu entry and the pane say so when a drive cannot keep them. The file's dates are not changed.
+- **Recent tags.** The **Add a tag** flyout lists the last eight tags you named, so a name is typed once.
 - **Sort and group.** Explorer's own **Sort by**, **Group by** and the **Tags** column use them: choose **Tags** (the entry is renamed to the mod's name, **Étiquettes** in French: in **Group by**, and under **More** in **Sort by**), in Explorer's list and in Columns, and the items are grouped by label, an item with two labels in both groups, the tags a file already has kept. A label shows by its name, or by its colour's name. Switch it off with **Sort and group by tags**.
 - **Your own meanings.** Each colour has a name you can edit on Windhawk's page (Labels, Colour names), such as "Red = Urgent".
 - Switch them off with **Show labels**.

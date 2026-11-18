@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.79 (2026-11-18)
+
+### Added
+- **Recent tags.** The **Add a tag** flyout (in the details pane and from the right-click menu) lists, under **Recent**, the last eight named tags you used, with their colours: one click gives one to the selection, so a name is typed once. They are kept between sessions in the mod's storage.
+
 ## 0.78 (2026-11-18)
 
 ### Fixed, from the third AI review of the catalog pull request

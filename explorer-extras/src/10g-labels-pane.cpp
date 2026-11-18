@@ -312,6 +312,9 @@ void LabelsDo(winrt::weak_ref<muxc::StackPanel> const& weakHost, LabelsPaths con
     if (g_unloading) {
         return;
     }
+    if (add) {
+        LabelsRecentRemember(tag);  // A named tag is offered again in the Add a tag flyout.
+    }
     {
         auto queue = mud::DispatcherQueue::GetForCurrentThread();
         bool started = LabelsRunAsync([paths, tag, add]() { return LabelsApplyToSelection(*paths, tag, add); },
@@ -374,6 +377,32 @@ muxc::Flyout LabelsMakeFlyout(winrt::weak_ref<muxc::StackPanel> const& weakHost,
     }));
     content.Children().Append(colours);
     content.Children().Append(box);
+    // The tags named lately: one click puts the colour and the name.
+    auto recent = LabelsRecentGet();
+    if (!recent.empty()) {
+        content.Children().Append(MakeText(Str(L"labels.recent"), 12, false, true));
+        muxc::StackPanel list;
+        list.Spacing(2);
+        for (auto const& tag : recent) {
+            auto button = LoadXaml(std::wstring(L"<Button ") + kXamlNs +
+                                   L" HorizontalAlignment='Stretch' HorizontalContentAlignment='Left' Padding='6,3' MinHeight='0' "
+                                   L"MinWidth='0' Background='Transparent' BorderThickness='0'/>").as<muxc::Button>();
+            muxc::StackPanel row;
+            row.Orientation(muxc::Orientation::Horizontal);
+            row.Spacing(8);
+            row.Children().Append(LabelsDotElement(tag.colour, 12));
+            row.Children().Append(MakeText(tag.name, 13, false, false));
+            button.Content(row);
+            Keep(button, button.Click(winrt::auto_revoke, [weakHost, paths, weakFlyout, tag](Inspectable const&, mux::RoutedEventArgs const&) {
+                if (auto shown = weakFlyout.get()) {
+                    shown.Hide();
+                }
+                LabelsDo(weakHost, paths, tag, true);
+            }));
+            list.Children().Append(button);
+        }
+        content.Children().Append(list);
+    }
     flyout.Content(content);
     return flyout;
 }

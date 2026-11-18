@@ -117,6 +117,7 @@ BOOL Wh_ModInit() {
     LabelsPlaceSelfTest();
     LabelsPaneSelfTest();
     LabelsGroupSelfTest();
+    LabelsRecentSelfTest();
     ToolbarSelfTest();
 #endif
 

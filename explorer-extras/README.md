@@ -39,6 +39,7 @@ https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
 - A label is a coloured dot with an optional name: seven colours and a neutral gray, up to 16 on an item. Dots show after the name, stacked when there are several, in every view of Explorer's list and in Columns, and follow the light and dark theme.
 - Set them in the **Tags** section of the details pane, or in the right-click menu (a **Tags** entry with the colours, **Add tag** and **Clear tags**), in Explorer's own list and in Columns.
 - They are kept in a named stream of the file, so they follow it when it is copied or moved on an NTFS drive, and the file's dates do not change. A drive that is not NTFS cannot keep them, and the pane and the menu say so.
+- The **Add a tag** flyout lists your recent named tags, so a name is typed once.
 - Explorer's own **Sort by**, **Group by** and **Tags** column use the labels: group a folder by Tags and each label is a group (an item with two labels is in both). Switch it off with **Sort and group by tags**.
 - Each colour has a name you can edit on Windhawk's page, such as "Red = Urgent". Switch labels off with **Show labels**.
 

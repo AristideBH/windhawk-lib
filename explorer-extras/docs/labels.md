@@ -25,6 +25,10 @@ Explorer's own **Sort by**, **Group by** and the **Tags** column of the Details 
 
 A folder is read once when it is shown; when it was not read yet the first time Explorer asks, Explorer is told to read it again as soon as it is. After a label is set, the item moves to its new group. Switch this off with **Sort and group by tags** on Windhawk's page (it takes effect when a folder is shown again).
 
+## Recent tags
+
+The tags you gave a name lately (the last eight, with their colour) are listed under **Recent** in the **Add a tag** flyout, in the details pane and in the right-click menu, so a name is typed once: click one to give it to the selection. They are kept between sessions in the mod's storage, and a colour with no name is never listed since the colours are always there.
+
 ## Where they are kept
 
 In a named stream of the file itself (`ExplorerExtras.Labels`), so a label follows the file when it is copied or moved on an NTFS drive, and the file's dates do not change. This needs NTFS: on another file system, or when a file is read-only or in use, the pane and the menu say so and write nothing. A zip, an email or a cloud service may drop the stream.
