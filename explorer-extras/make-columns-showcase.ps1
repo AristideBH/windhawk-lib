@@ -1,4 +1,4 @@
-# Builds "Columns Showcase" on the Desktop: a believable working folder of a
+# Builds the showcase folder, C:\Showcase by default (a path without a user name, for screenshots and GIFs): a believable working folder of a
 # freelance designer and developer, for a video of Explorer Extras and for the
 # tests (Columns, and the details pane in "Edge cases\Pane previews"). About 900 items, real pictures, real PDFs, Word and Excel files, playable
 # tones, real zip archives, shortcuts, a junction, dated over five years, and every
@@ -6,16 +6,26 @@
 #
 #   pwsh explorer-extras\make-columns-showcase.ps1            (refuses if it exists)
 #   pwsh explorer-extras\make-columns-showcase.ps1 -Force     (deletes and rebuilds)
+#   -Lite           the folders for screenshots only (no "Edge cases", no huge folder): a few seconds
+#   -Root D:\Demo   another place (default C:\Showcase)
+#   -Remove         deletes the showcase folder and stops
+#
+# It also puts colour labels (the tags of Explorer Extras) on a believable set of items, in "Design review" and a few
+# other folders: they are the NTFS stream ExplorerExtras.Labels, the mod does not need to be running to write them.
 #   -Huge 3000      the size of "Huge folder" (default 1500)
 #   -Stress         also a folder with 6000 files, over the mod's default limit of 5000
 
-param([switch]$Force, [int]$Huge = 1500, [switch]$Stress)
+param([switch]$Force, [int]$Huge = 1500, [switch]$Stress, [string]$Root = 'C:\Showcase', [switch]$Lite, [switch]$Remove)
 $ErrorActionPreference = 'Stop'
 $started = Get-Date
 
-$root = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Columns Showcase'
+$root = $Root
+if ($Remove -and -not (Test-Path -LiteralPath $root)) {
+    Write-Host "Nothing to remove: $root"
+    exit 0
+}
 if (Test-Path -LiteralPath $root) {
-    if (-not $Force) {
+    if (-not $Force -and -not $Remove) {
         Write-Host "Already there: $root  (use -Force to rebuild)"
         exit 1
     }
@@ -23,8 +33,17 @@ if (Test-Path -LiteralPath $root) {
     Get-ChildItem -LiteralPath $root -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue |
         ForEach-Object { cmd /c rmdir "`"$($_.FullName)`"" 2>$null | Out-Null }
     Remove-Item -LiteralPath $root -Recurse -Force
+    if ($Remove) {
+        Write-Host "Removed $root"
+        exit 0
+    }
 }
-New-Item -ItemType Directory -Path $root | Out-Null
+try {
+    New-Item -ItemType Directory -Path $root | Out-Null
+} catch {
+    Write-Host "Could not create $root ($($_.Exception.Message)). Run PowerShell as administrator, or give another place with -Root."
+    exit 1
+}
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.IO.Compression
@@ -290,9 +309,47 @@ function Svg($rel, [string]$word, [int]$hue, [double]$days = -1) {
 
 $month = @('January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December')
 
+# A named stream on a file or a folder (a folder needs the backup semantics flag, which Set-Content does not give).
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LabelStream {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool WriteFile(IntPtr file, byte[] data, uint count, out uint written, IntPtr overlapped);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    public static void Write(string path, byte[] data) {
+        IntPtr file = CreateFileW(path, 0x40000000, 7, IntPtr.Zero, 2, 0x02000000, IntPtr.Zero);  // GENERIC_WRITE, CREATE_ALWAYS, BACKUP_SEMANTICS
+        if (file == (IntPtr)(-1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        uint written;
+        WriteFile(file, data, (uint)data.Length, out written, IntPtr.Zero);
+        CloseHandle(file);
+    }
+}
+'@
+
+# Colour labels, the stream Explorer Extras keeps. $tags is @(@(colour, 'name'), ...): the colours are 0 gray, 1 red, 2 orange,
+# 3 yellow, 4 green, 5 teal, 6 blue, 7 purple, and an empty name shows the colour's own name. The dates are put back after the write.
+function Tag($rel, $tags) {
+    $path = Full $rel
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    $item = Get-Item -LiteralPath $path -Force
+    $written = $item.LastWriteTime
+    $created = $item.CreationTime
+    if ($tags[0] -isnot [array]) { $tags = , $tags }  # One tag given as @(colour, name) is not a list of tags.
+    $text = "v1`n"
+    foreach ($tag in $tags) { $text += ('{0}{1}{2}{3}' -f $tag[0], "`t", $tag[1], "`n") }
+    [LabelStream]::Write($path + ':ExplorerExtras.Labels', $utf8.GetBytes($text))
+    $item = Get-Item -LiteralPath $path -Force
+    $item.CreationTime = $created
+    $item.LastWriteTime = $written
+}
+
 # ---------------------------------------------------------------- the top
 
-Put 'Welcome.md' "# Columns Showcase`n`nA working folder, as a freelance designer and developer keeps it.`n`n- **Clients**, **Projects**, **Photos**, **Music**, **Documents**, **Videos**`n- **Inbox** is the mess that builds up, **Archive** is what was zipped away`n- **Drop zones** are folders to drag things into`n- **Edge cases** is for the tests`n" -days 1 | Out-Null
+Put 'Welcome.md' "# Showcase`n`nA working folder, as a freelance designer and developer keeps it.`n`n- **Clients**, **Projects**, **Photos**, **Music**, **Documents**, **Videos**`n- **Inbox** is the mess that builds up, **Archive** is what was zipped away`n- **Drop zones** are folders to drag things into`n- **Edge cases** is for the tests`n" -days 1 | Out-Null
 
 # ---------------------------------------------------------------- Clients
 
@@ -505,6 +562,41 @@ MakeDir 'Drop zones\Copy here (empty)'
 Put 'Drop zones\Locked\Do not overwrite.txt' "Read-only file for the overwrite dialog.`n" -days 30 | Out-Null
 (Get-Item -LiteralPath (Full 'Drop zones\Locked\Do not overwrite.txt')).Attributes = 'ReadOnly'
 
+# ---------------------------------------------------------------- Design review, with labels
+
+$dr = 'Design review'
+Pdf "$dr\Brief - Atelier Lumière.pdf" 'Brief, Atelier Lumière' @('Rebrand of the shop and the web site.', 'First round due on Friday.') -days 2
+Photo "$dr\Hero banner v3.jpg" 1600 900 31 -days 3
+Photo "$dr\Hero banner v2.jpg" 1600 900 32 -days 9
+Photo "$dr\Moodboard.jpg" 1600 1000 33 -days 12
+Docx "$dr\Meeting notes.docx" @('Meeting notes', 'Atelier Lumière, kick-off', 'The logo stays, the palette changes.') -days 4
+Xlsx "$dr\Budget.xlsx" @(@('Item', 'Days', 'Rate'), @('Brand guide', 6, 520), @('Web site', 12, 520), @('Print', 3, 480)) -days 5
+Svg "$dr\Logo draft.svg" 'Lumière' 28 -days 6
+Put "$dr\Copy deck.md" "# Copy deck`n`nHeadline, subhead and the three promises.`n" -days 7 | Out-Null
+Pdf "$dr\Invoice 2025-021.pdf" 'Invoice 2025-021' @('Brand guide, first part.') -days 8
+Pdf "$dr\Contract.pdf" 'Contract' @('Signed by both sides.') -days 20
+Put "$dr\Receipt - printer.txt" "Printer, 3 proofs.`n" -days 10 | Out-Null
+
+# The labels: named ones, colour-only ones, two on some items. They stay in the files.
+Tag "$dr\Brief - Atelier Lumière.pdf" @(@(1, 'Urgent'), @(6, 'Client'))
+Tag "$dr\Hero banner v3.jpg" @(@(4, 'Approved'), @(6, 'Client'))
+Tag "$dr\Hero banner v2.jpg" @(@(3, 'Draft'))
+Tag "$dr\Moodboard.jpg" @(@(4, 'Approved'))
+Tag "$dr\Meeting notes.docx" @(@(2, 'To review'))
+Tag "$dr\Budget.xlsx" @(@(1, 'Urgent'))
+Tag "$dr\Logo draft.svg" @(@(3, 'Draft'), @(7, 'Print'))
+Tag "$dr\Copy deck.md" @(@(2, 'To review'), @(6, 'Client'))
+Tag "$dr\Invoice 2025-021.pdf" @(@(1, ''))
+Tag "$dr\Contract.pdf" @(@(4, ''))
+Tag "$dr\Receipt - printer.txt" @(@(3, ''))
+Tag $dr @(@(2, ''))
+Tag 'Clients\Atelier Lumière' @(@(6, 'Client'))
+Tag 'Projects\aurora-site' @(@(2, ''), @(7, 'Print'))
+Tag 'Photos\2024\Lisbon' @(@(5, 'Personal'))
+Tag 'Documents\Receipts' @(@(3, ''))
+Tag 'Welcome.md' @(@(7, ''))
+
+if (-not $Lite) {
 # ---------------------------------------------------------------- Edge cases
 
 $edge = 'Edge cases'
@@ -665,6 +757,8 @@ foreach ($n in 1..$Huge) { Put ("$edge\Huge folder ($Huge files)\photo-{0:D4}.jp
 if ($Stress) {
     foreach ($n in 1..6000) { Put ("$edge\Over the limit (6000 files)\item-{0:D4}.txt" -f $n) "x" -days ($n % 900 + 1) | Out-Null }
 }
+
+}  # -not $Lite
 
 # ---------------------------------------------------------------- done
 

@@ -1,6 +1,6 @@
 # Columns Showcase, a folder for the video and for the tests
 
-`make-columns-showcase.ps1` builds `Columns Showcase` on the Desktop: a working
+`make-columns-showcase.ps1` builds `C:\Showcase` (a path without a user name, good for screenshots; `-Root` changes it, `-Lite` skips the edge cases and the big folders, `-Remove` deletes it): a working
 folder as a freelance designer and developer keeps it, about 1 900 files and 625 MB
 (most of it zero-filled video and size samples), with real pictures, PDFs, Word and
 Excel files, playable tones and real zip archives. Dates run from this hour back five
@@ -11,6 +11,8 @@ small test folder.
     pwsh explorer-extras\make-columns-showcase.ps1 -Force -Stress   (adds 6000 files)
 
 Years in names (2024, 2025) are fixed; dates are relative to the day it runs.
+
+It also puts colour labels on a believable set of items, mainly in `Design review` (Urgent, Client, Approved, Draft, To review, Print, and colour-only dots), plus a few folders: `Clients\Atelier Lumière`, `Projects\aurora-site`, `Photos\2024\Lisbon`, `Documents\Receipts` and `Welcome.md`.
 
 ## What to show in the video
 
