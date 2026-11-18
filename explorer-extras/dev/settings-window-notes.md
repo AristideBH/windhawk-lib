@@ -5,7 +5,7 @@ in 0.66 for the catalog review: two places to change the same settings (the wind
 page could show values that were not in effect), about 1,350 lines, and a second XAML island with its own unload
 risks. This note keeps what was learned, so it can be rebuilt if it is wanted again.
 
-**The code:** commit `ab3852a` (0.65.0). `git show ab3852a:explorer-extras/src/10b-settings-window.cpp`, and the
+**The code:** commit `ab3852a` (0.65.0). `git show ab3852a:explorer-extras/dev/src/10b-settings-window.cpp`, and the
 override layer in `src/02a-settings.cpp`. The page, card and French text tables came from `settings.schema.json`
 (`cards`, `whatsNew`, `fr.cards`, `fr.settings`, and the `page`, `card`, `needs` fields of each setting).
 

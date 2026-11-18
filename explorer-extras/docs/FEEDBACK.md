@@ -25,21 +25,21 @@ Questions go in an issue too (label `type: question`). Reports about the other m
 | Received | `status: needs triage` | Not looked at yet. Added by the form. |
 | Asked for more | `status: needs info` | The version, steps or log are missing. Closed after two weeks without an answer. |
 | Accepted | `status: confirmed` | Reproduced, or a clear idea worth doing. |
-| Scheduled | `status: planned` | On the [roadmap](../ROADMAP.md). |
+| Scheduled | `status: planned` | On the [roadmap](../../ROADMAP.md). |
 | Underway | `status: in progress` | A branch is open. |
 | Done | `status: fixed in next` | Fixed on `main`, in the next release. Closed when released. |
 | Declined | `status: wontfix` | With the reason in the thread (for example, Windows already has an option for it). |
 
-Every issue carries `mod: explorer-extras`, an `area:` label (`columns`, `details-pane`, `settings`, `new`) and a `type:` label (`bug`, `crash`, `idea`, `question`). The labels are listed in [`../.github/labels.yml`](../.github/labels.yml).
+Every issue carries `mod: explorer-extras`, an `area:` label (`columns`, `details-pane`, `settings`, `new`) and a `type:` label (`bug`, `crash`, `idea`, `question`). The labels are listed in [`../.github/labels.yml`](../../.github/labels.yml).
 
 ## How an issue is worked on
 
 1. Read it, add the labels, ask for what is missing.
 2. Reproduce from the log, or from the steps on a test folder (`make-columns-showcase.ps1` builds one).
 3. Branch `fix/explorer-extras-<number>-<short-name>` (or `feat/...`).
-4. Change the parts under `src/`, bump `@version`, run `python explorer-extras/build.py`, and the syntax check in [`HANDOFF.md`](HANDOFF.md).
+4. Change the parts under `src/`, bump `@version`, run `python explorer-extras/dev/build.py`, and the syntax check in [`HANDOFF.md`](../dev/HANDOFF.md).
 5. Try it on a device. Say in the issue what was tried, and on which Windows build and processor.
-6. Add a line to [`CHANGELOG.md`](CHANGELOG.md), open a pull request titled `[explorer-extras] ...` with `Fixes #<number>`.
+6. Add a line to [`CHANGELOG.md`](../CHANGELOG.md), open a pull request titled `[explorer-extras] ...` with `Fixes #<number>`.
 7. After the merge the issue is labelled `status: fixed in next`, and closed with the release.
 
 ## Telling Explorer Extras apart from the other mods
@@ -50,7 +50,7 @@ The repository holds several mods. Explorer Extras is the one that is released. 
 - Pull requests and commits: the title starts with `[explorer-extras]`.
 - Releases: tags are `explorer-extras-v<version>`, for example `explorer-extras-v0.55.0`. A tag of another mod starts with that mod's folder name.
 - Notes: this mod's changes are in `explorer-extras/CHANGELOG.md`, nowhere else.
-- The root [README](../README.md) lists every mod with its status: Released, Prototype or Planned. Only Released mods take bug reports.
+- The root [README](../../README.md) lists every mod with its status: Released, Prototype or Planned. Only Released mods take bug reports.
 
 ## Releases
 

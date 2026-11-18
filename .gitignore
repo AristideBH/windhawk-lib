@@ -3,3 +3,4 @@ probes/logs/
 probes/.wtest
 
 explorer-extras/explorer-extras.debug.wh.cpp
+.preview-tmp/

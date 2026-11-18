@@ -4,8 +4,8 @@
 # tones, real zip archives, shortcuts, a junction, dated over five years, and every
 # edge case the mod meets, in the folder "Edge cases" (see SHOWCASE-TESTS.md).
 #
-#   pwsh explorer-extras\make-columns-showcase.ps1            (refuses if it exists)
-#   pwsh explorer-extras\make-columns-showcase.ps1 -Force     (deletes and rebuilds)
+#   pwsh explorer-extras\dev\make-columns-showcase.ps1            (refuses if it exists)
+#   pwsh explorer-extras\dev\make-columns-showcase.ps1 -Force     (deletes and rebuilds)
 #   -Lite           the folders for screenshots only (no "Edge cases", no huge folder): a few seconds
 #   -Root D:\Demo   another place (default C:\Showcase)
 #   -Remove         deletes the showcase folder and stops

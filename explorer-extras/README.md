@@ -89,7 +89,7 @@ The mod's page in Windhawk has a group per feature, and the first setting of eac
 
 ## Feedback
 
-Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (Windhawk, the mod's **Advanced** tab, logging). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
+Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (Windhawk, the mod's **Advanced** tab, logging). How reports are handled is in [`FEEDBACK.md`](docs/FEEDBACK.md).
 
 ## Support
 
@@ -97,19 +97,19 @@ Explorer Extras is free. If you like it, you can [support the work on Ko-fi](htt
 
 ## For developers
 
-The mod is one file for Windhawk but is kept in parts under `src/`, joined by a script:
+The mod is one file for Windhawk but is kept in parts under `dev/src/`, joined by a script:
 
 ```
-python explorer-extras/build.py            # writes explorer-extras.wh.cpp
-python explorer-extras/build.py --check    # exits 1 if the generated file is out of date
+python explorer-extras/dev/build.py            # writes explorer-extras.wh.cpp
+python explorer-extras/dev/build.py --check    # exits 1 if the generated file is out of date
 ```
 
-Edit the parts, never the generated file. `tools/deploy-explorer-extras.ps1` builds a test version that also writes a log file, compiles it with Windhawk's own compiler and deploys it (one administrator prompt), and `tools/smoke-test-explorer-extras.ps1` then opens a window and checks what the mod must have placed. `tools/crash-analysis/` reads an Explorer crash dump without a debugger.
+Edit the parts, never the generated file. `tools/deploy-explorer-extras.ps1` builds a test version that also writes a log file, compiles it with Windhawk's own compiler and deploys it (one administrator prompt), and `tools/smoke-test-explorer-extras.ps1` then opens a window and checks what the mod must have placed. `tools/crash-analysis/` (at the root of the repository) reads an Explorer crash dump without a debugger.
 
 - [`CHANGELOG.md`](CHANGELOG.md): what changed in each release.
-- [`FEEDBACK.md`](FEEDBACK.md): how issues and suggestions are handled.
-- [`HANDOFF.md`](HANDOFF.md): how the work is run, the architecture, and what costs time.
-- [`PLAN.md`](PLAN.md): findings from the probes and the decisions behind the design.
+- [`FEEDBACK.md`](docs/FEEDBACK.md): how issues and suggestions are handled.
+- [`HANDOFF.md`](dev/HANDOFF.md): how the work is run, the architecture, and what costs time.
+- [`PLAN.md`](dev/PLAN.md): findings from the probes and the decisions behind the design.
 - [`../ROADMAP.md`](../ROADMAP.md): what is done, tested and open.
 
 ## License

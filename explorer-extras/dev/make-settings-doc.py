@@ -5,9 +5,9 @@
 import json
 import os
 
-here = os.path.dirname(os.path.abspath(__file__))
+here = os.path.dirname(os.path.abspath(__file__))  # explorer-extras/dev
 root = os.path.dirname(here)
-schema = json.load(open(os.path.join(root, 'settings.schema.json'), encoding='utf-8'))
+schema = json.load(open(os.path.join(here, 'settings.schema.json'), encoding='utf-8'))
 
 out = [
     '# Explorer Extras, all settings',
@@ -47,5 +47,5 @@ out.append(
     "device items, opening a folder held under a drag, and a click in the navigation pane making its folder the first "
     "column are always on."
 )
-open(os.path.join(here, 'settings.md'), 'w', encoding='utf-8').write('\n'.join(out) + '\n')
+open(os.path.join(root, 'docs', 'settings.md'), 'w', encoding='utf-8').write('\n'.join(out) + '\n')
 print('wrote docs/settings.md')

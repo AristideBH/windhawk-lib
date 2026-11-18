@@ -212,7 +212,7 @@ Learned building explorer-extras, 0.1 to 0.7:
 - The first column's name can be a library name (`Téléchargements`), not a path. Never find a parent column by comparing display names to a path.
 - A verb or property sheet on an item inside an archive crashed Explorer. Offer Copy only there.
 - A `$name` or `$description` in the settings block must not contain a colon followed by a space ("Off: all columns" broke the whole block, twice). Scan every description for `: ` before a handover.
-- A mod of several thousand lines is kept in numbered parts and joined by a script into the one file Windhawk takes (`explorer-extras/src/*.cpp`, `explorer-extras/build.py`). Edit the parts, never the generated file, and check with `build.py --check`.
+- A mod of several thousand lines is kept in numbered parts and joined by a script into the one file Windhawk takes (`explorer-extras/dev/src/*.cpp`, `explorer-extras/dev/build.py`). Edit the parts, never the generated file, and check with `build.py --check`.
 - Replacing a mod while an Explorer window has its panel can hang or crash that window (a callback of the old DLL), and the first start after a reload is slow. After a reload, test in a new window.
 - When a drag, a menu or a dialog hangs the host, add a log line before each blocking call, so the next log shows the last step reached. Do not guess from a log that has nothing after the event.
 - A shell target that did a move reports effect 0. Do not read it as a failure.
@@ -310,12 +310,12 @@ A crash can also hide other evidence. "No log line appeared" proves nothing if t
 
 Ari tests on his own Windows machine (ARM64 here, with Windhawk 2). You build, he enables the mod and uses it, you read what it wrote.
 
-**Build.** `python explorer-extras/build.py` joins the parts. `python explorer-extras/build.py --debug <logfile>` writes `explorer-extras.debug.wh.cpp` instead (git-ignored): the same mod, and every `Wh_Log` line is also appended to that file, because Windhawk 2 keeps the log only in its live panel and you cannot read it. Use the debug build for every test, and the plain one for the commit.
+**Build.** `python explorer-extras/dev/build.py` joins the parts. `python explorer-extras/dev/build.py --debug <logfile>` writes `explorer-extras.debug.wh.cpp` instead (git-ignored): the same mod, and every `Wh_Log` line is also appended to that file, because Windhawk 2 keeps the log only in its live panel and you cannot read it. Use the debug build for every test, and the plain one for the commit.
 
 **Check.** Run Windhawk's clang over the file and count the errors, so a failed check cannot look clean:
 
 - The compiler is `C:/Program Files/Windhawk/Compiler/bin/clang++.exe`, not on PATH. Call the full path and count matches (`grep -c error`), or read the exit code.
-- The flags are in `explorer-extras/HANDOFF.md`, "Compile check without the Windhawk editor". Without `-include windhawk_api.h` and the `-D` flags you get dozens of false errors (`Wh_SetFunctionHook` undeclared).
+- The flags are in `explorer-extras/dev/HANDOFF.md`, "Compile check without the Windhawk editor". Without `-include windhawk_api.h` and the `-D` flags you get dozens of false errors (`Wh_SetFunctionHook` undeclared).
 - A script that patches a file from a Bash heredoc halves backslashes. Write the script with the Write tool, or build a backslash with `chr(92)`. Check the patched lines afterwards. Files here are CRLF: read, normalise to LF, edit, and write back with the original ending.
 
 **Version.** Every build that goes to Ari bumps `@version` and the version in the start log line, test builds included. Ari tells builds apart by the version in the log, and a fix rebuilt under the same number looks like the old one.
@@ -442,7 +442,7 @@ Pull requests to ramensoftware/windhawk-mods go through an automated review firs
 - **Hooks.** A low-level hook belongs to the thread that installed it and runs in its message loop. Install it from each window's UI thread, check the foreground window inside it, keep it fast, and remove it at teardown.
 - **Settings table in two languages.** `settings.schema.json` holds the English texts and an `fr` block; `build.py` writes both into the mod, and a `Str()` lookup picks the French table when Windows' display language is French. Windhawk's own settings page stays English.
 - **Check Windows first.** A switch that edits a Windows setting persistently (the status bar) is a reason to look in Folder Options before building it.
-- **Release hygiene.** `python explorer-extras/build.py --check` before every commit, Windhawk's clang for syntax, a link check with the real library flags (`-lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys`), and a copy to the editor workspace.
+- **Release hygiene.** `python explorer-extras/dev/build.py --check` before every commit, Windhawk's clang for syntax, a link check with the real library flags (`-lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -luuid -ladvapi32 -lgdi32 -lcomctl32 -lpropsys`), and a copy to the editor workspace.
 
 ## Lessons from the labels build (explorer-extras 0.69 to 0.75)
 

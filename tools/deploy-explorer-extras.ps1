@@ -4,8 +4,8 @@
     deploys it to the installed Windhawk. One command, one UAC prompt.
 
 .DESCRIPTION
-    1. python explorer-extras/build.py            (the file for the commit; --check keeps it current)
-    2. python explorer-extras/build.py --debug    (explorer-extras.debug.wh.cpp: every Wh_Log line is
+    1. python explorer-extras/dev/build.py            (the file for the commit; --check keeps it current)
+    2. python explorer-extras/dev/build.py --debug    (explorer-extras.debug.wh.cpp: every Wh_Log line is
                                                    also appended to the log file)
     3. tools/windhawk-build/build.ps1 -Source ... (compiles x86-64 and arm64, then deploys; the deploy
                                                    asks for administrator rights once)
@@ -32,11 +32,11 @@ $pwsh = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'p
 New-Item -ItemType Directory -Force (Split-Path -Parent $Log) | Out-Null
 
 Write-Host "1/3 joining the parts"
-python (Join-Path $mod 'build.py')
+python (Join-Path $mod 'dev\build.py')
 if ($LASTEXITCODE -ne 0) { throw 'build.py failed' }
 
 Write-Host "2/3 debug build, log: $Log"
-python (Join-Path $mod 'build.py') --debug $Log
+python (Join-Path $mod 'dev\build.py') --debug $Log
 if ($LASTEXITCODE -ne 0) { throw 'build.py --debug failed' }
 $source = Join-Path $mod 'explorer-extras.debug.wh.cpp'
 $version = (Select-String -Path $source -Pattern '^// @version\s+(\S+)').Matches[0].Groups[1].Value

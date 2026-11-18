@@ -2,8 +2,8 @@
 # Extras tests use: about 90 items, six levels deep, several file types, five
 # real pictures, a folder of 40 files, long names, an empty folder.
 #
-#   pwsh explorer-extras\make-columns-demo.ps1            (refuses if it exists)
-#   pwsh explorer-extras\make-columns-demo.ps1 -Force     (deletes and rebuilds)
+#   pwsh explorer-extras\dev\make-columns-demo.ps1            (refuses if it exists)
+#   pwsh explorer-extras\dev\make-columns-demo.ps1 -Force     (deletes and rebuilds)
 
 param([switch]$Force)
 

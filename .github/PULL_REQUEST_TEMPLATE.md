@@ -7,7 +7,7 @@ Fixes #
 **What changed, in a line or two:**
 
 **Checked:**
-- [ ] `python explorer-extras/build.py --check` passes (for Explorer Extras)
+- [ ] `python explorer-extras/dev/build.py --check` passes (for Explorer Extras)
 - [ ] Windhawk's clang syntax check is clean
 - [ ] Tried on a device, on: Windows build / processor
 - [ ] CHANGELOG entry added

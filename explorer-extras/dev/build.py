@@ -1,4 +1,4 @@
-"""Joins explorer-extras/src/*.cpp into explorer-extras/explorer-extras.wh.cpp.
+"""Joins explorer-extras/dev/src/*.cpp into explorer-extras/explorer-extras.wh.cpp.
 
 Windhawk takes one file, so the source is kept in parts and joined here. Edit the
 parts, run this, and never edit the generated file by hand.
@@ -9,8 +9,8 @@ is declared once (see SPEC-settings-shell.md):
     @@SETTINGS_BLOCK@@   the settings block Windhawk reads, in 00-header.cpp
     @@SETTINGS_TABLE@@   the C++ table of the settings, in 02a-settings.cpp
 
-    python explorer-extras/build.py            write the generated file
-    python explorer-extras/build.py --check    exit 1 if it is out of date
+    python explorer-extras/dev/build.py            write the generated file
+    python explorer-extras/dev/build.py --check    exit 1 if it is out of date
 """
 import glob
 import json
@@ -245,7 +245,8 @@ joined = strip_no_winrt(joined)
 if '--debug' not in sys.argv:
     joined = strip_verbose(joined)
     joined = strip_log_verbose(joined)
-target = os.path.join(here, 'explorer-extras.wh.cpp')
+root = os.path.dirname(here)  # explorer-extras/: the generated file is kept there, beside the README
+target = os.path.join(root, 'explorer-extras.wh.cpp')
 
 # A test build (build.py --debug <file>) also appends every log line to that file, so a crash can be
 # read afterwards. It is written beside the mod, never to the catalog file.
@@ -255,7 +256,7 @@ if '--debug' in sys.argv:
     shim = shim.replace(b'@@LOG_PATH@@', log_path.encode('utf8'))
     at = joined.index(b'namespace {')
     joined = joined[:at] + shim + joined[at:]
-    target = os.path.join(here, 'explorer-extras.debug.wh.cpp')
+    target = os.path.join(root, 'explorer-extras.debug.wh.cpp')
 
 if '--check' in sys.argv:
     current = open(target, 'rb').read() if os.path.exists(target) else b''

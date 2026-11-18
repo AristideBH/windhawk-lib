@@ -7,8 +7,8 @@ Excel files, playable tones and real zip archives. Dates run from this hour back
 years, so the date groups are all there. `Columns Demo` (the older script) stays the
 small test folder.
 
-    pwsh explorer-extras\make-columns-showcase.ps1 -Force
-    pwsh explorer-extras\make-columns-showcase.ps1 -Force -Stress   (adds 6000 files)
+    pwsh explorer-extras\dev\make-columns-showcase.ps1 -Force
+    pwsh explorer-extras\dev\make-columns-showcase.ps1 -Force -Stress   (adds 6000 files)
 
 Years in names (2024, 2025) are fixed; dates are relative to the day it runs.
 

@@ -79,7 +79,7 @@ extraction flow, toolbar customization, small tweaks.
   section with an `enabled` switch, using Windhawk's nested settings.
 - One shared core: hooks into FileExplorerExtensions.dll, the per-window state,
   shell helpers, logging.
-- Source kept as one file per feature under `explorer-extras/src/`, joined into a
+- Source kept as one file per feature under `explorer-extras/dev/src/`, joined into a
   single `.wh.cpp` by a small script, since Windhawk compiles one file.
 - Cost: a crash in one feature takes the others down. Each feature guards its
   entry points and can be switched off without a recompile.

@@ -5,6 +5,7 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 ## 1.0.3 (2026-11-18)
 
 ### Changed
+- The mod folder is tidier: it holds the README, the changelog, the mod file (`explorer-extras.wh.cpp`), `assets/` and `docs/`. The parts, the build script, the settings schema and the developer notes moved to `dev/`; the feedback notes to `docs/`. The mod file itself is unchanged.
 - The README has a 40-second video tour at the top and three captures (Columns, the details pane, Labels). The mod's own readme shows the first frame of the video as its picture.
 
 ## 1.0.1 (2026-11-18)

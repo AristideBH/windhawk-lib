@@ -55,7 +55,7 @@ remembers its size, position and last page; no search box.
 
 ## The schema
 
-`explorer-extras/settings.schema.json`, one entry per setting, grouped by feature:
+`explorer-extras/dev/settings.schema.json`, one entry per setting, grouped by feature:
 
 ```
 feature   columns | labels | sidebar | preview | statusbar
