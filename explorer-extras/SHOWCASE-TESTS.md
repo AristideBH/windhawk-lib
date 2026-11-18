@@ -12,7 +12,7 @@ small test folder.
 
 Years in names (2024, 2025) are fixed; dates are relative to the day it runs.
 
-It also puts colour labels on a believable set of items, mainly in `Design review` (Urgent, Client, Approved, Draft, To review, Print, and colour-only dots), plus a few folders: `Clients\Atelier Lumière`, `Projects\aurora-site`, `Photos\2024\Lisbon`, `Documents\Receipts` and `Welcome.md`.
+It also puts colour labels all through the folder: about a third of the files and half of the folders, each kind of work with its own habits (Clients: Client, Urgent, Approved; Projects: Draft, To review; Photos: Personal; and so on), one label mostly and two or three now and then, with named ones (Urgent, Client, Approved, Draft, To review, Print, Personal) and plain colour dots. `Design review` is hand-labelled for the Group by Tags shot. The big generated folders and the links are left alone.
 
 ## What to show in the video
 

@@ -84,6 +84,7 @@ $now = Get-Date
 $rng = [Random]::new(2026)
 $utf8 = [Text.UTF8Encoding]::new($false)
 $script:Count = 0
+$script:Tagged = @{}  # The items that have their labels already.
 
 # ---------------------------------------------------------------- helpers
 
@@ -339,6 +340,7 @@ function Tag($rel, $tags) {
     $written = $item.LastWriteTime
     $created = $item.CreationTime
     if ($tags[0] -isnot [array]) { $tags = , $tags }  # One tag given as @(colour, name) is not a list of tags.
+    $script:Tagged[$rel] = $true
     $text = "v1`n"
     foreach ($tag in $tags) { $text += ('{0}{1}{2}{3}' -f $tag[0], "`t", $tag[1], "`n") }
     [LabelStream]::Write($path + ':ExplorerExtras.Labels', $utf8.GetBytes($text))
@@ -759,6 +761,43 @@ if ($Stress) {
 }
 
 }  # -not $Lite
+
+# ---------------------------------------------------------------- labels all through the folder
+
+# Every folder of the showcase gets its share of labels, each kind of work its own habits: about a third of the files and half of the
+# folders, one label mostly, two or three now and then. The big generated folders and the links are left alone.
+$pools = @{
+    'Clients'   = @(@(6, 'Client'), @(1, 'Urgent'), @(4, 'Approved'), @(2, 'To review'), @(6, ''))
+    'Projects'  = @(@(3, 'Draft'), @(2, 'To review'), @(4, 'Approved'), @(5, ''), @(7, 'Print'))
+    'Photos'    = @(@(5, 'Personal'), @(4, 'Approved'), @(3, ''), @(2, ''), @(7, ''))
+    'Music'     = @(@(7, ''), @(4, ''), @(5, 'Personal'), @(3, ''))
+    'Documents' = @(@(1, 'Urgent'), @(7, 'Print'), @(3, ''), @(6, 'Client'), @(4, 'Approved'))
+    'Inbox'     = @(@(2, 'To review'), @(1, 'Urgent'), @(0, ''), @(3, 'Draft'))
+    'Archive'   = @(@(0, ''), @(4, 'Approved'), @(6, ''))
+    'Videos'    = @(@(3, 'Draft'), @(6, 'Client'), @(4, 'Approved'), @(7, ''))
+}
+$general = @(@(1, 'Urgent'), @(2, 'To review'), @(3, 'Draft'), @(4, 'Approved'), @(5, 'Personal'), @(6, 'Client'), @(7, 'Print'), @(0, ''))
+$skip = @('*\Huge folder*', '*\Over the limit*', '*Junction to Music*', '*\Pane previews\Folder to size*')
+$labelled = 0
+foreach ($entry in (Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue)) {
+    if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+    $rel = $entry.FullName.Substring($root.Length).TrimStart('\')
+    if ($script:Tagged.ContainsKey($rel)) { continue }
+    $skipIt = $false
+    foreach ($pattern in $skip) { if ($entry.FullName -like $pattern) { $skipIt = $true } }
+    if ($skipIt) { continue }
+    $chance = if ($entry.PSIsContainer) { 0.5 } else { 0.32 }
+    if ($rng.NextDouble() -ge $chance) { continue }
+    $pool = $pools[($rel -split '\\')[0]]
+    if (-not $pool) { $pool = $general }
+    $roll = $rng.NextDouble()
+    $howMany = if ($roll -lt 0.72) { 1 } elseif ($roll -lt 0.94) { 2 } else { 3 }
+    $picked = @()
+    $order = $pool | Sort-Object { $rng.Next() }
+    foreach ($tag in ($order | Select-Object -First $howMany)) { $picked += , $tag }
+    try { Tag $rel $picked; $labelled++ } catch { }
+}
+Write-Host "Labels put on $labelled more items."
 
 # ---------------------------------------------------------------- done
 
