@@ -204,8 +204,11 @@ bool LabelsInstallGroupHook() {
     if (SUCCEEDED(init)) {
         CoUninitialize();
     }
-    Wh_Log(ok ? L"labels: Sort by and Group by tags are on (property store hook installed)"
-              : L"labels: the property store hook could not be set, Sort by and Group by tags are off");
+    if (ok) {
+        Wh_Log(L"labels: Sort by and Group by tags are on (property store hook installed)");
+    } else {
+        Wh_Log(L"labels: the property store hook could not be set, Sort by and Group by tags are off");
+    }
     return ok;
 }
 
