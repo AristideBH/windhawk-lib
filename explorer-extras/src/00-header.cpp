@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.2
+// @version         1.0.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -18,7 +18,9 @@
 
 **Extra features for File Explorer on Windows 11, one switch per feature.**
 
-![Explorer Extras: the Columns layout, the details pane and colour labels in File Explorer](https://raw.githubusercontent.com/AristideBH/windhawk-lib/3422bd28aa32f126030284b602fe06e1ddfceceb/explorer-extras/assets/captures/hero.png)
+![Explorer Extras: the Columns layout, the details pane and colour labels in File Explorer](https://raw.githubusercontent.com/AristideBH/windhawk-lib/main/explorer-extras/assets/captures/hero.png)
+
+A 40-second tour is at the top of the project page: https://github.com/AristideBH/windhawk-lib/tree/main/explorer-extras#readme
 
 Explorer Extras adds four independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
 

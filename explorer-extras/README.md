@@ -2,8 +2,9 @@
 
 **Extra features for File Explorer on Windows 11, one switch per feature.**
 
-![Explorer Extras: the Columns layout, the details pane and colour labels in File Explorer](assets/captures/hero.png)
-<!-- hero: replace with assets/captures/hero.gif when it is recorded -->
+<video src="https://github.com/AristideBH/windhawk-lib/raw/main/explorer-extras/assets/captures/hero.mp4" poster="assets/captures/hero.png" controls muted loop playsinline width="100%"></video>
+
+*A 40-second tour. If the video does not play here, [watch it directly](https://github.com/AristideBH/windhawk-lib/raw/main/explorer-extras/assets/captures/hero.mp4).*
 
 Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
 
@@ -16,7 +17,9 @@ Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independ
 
 ## Columns
 
-<!-- capture: ![Columns](assets/captures/columns.png) -->
+![Columns: one column per folder level, with label dots on the rows](assets/captures/columns.png)
+
+*One column per folder level. The dots after the names are labels.*
 
 Browse folders the way you do on a Mac: one column per folder level, side by side. Open the **View** menu of a File Explorer window and choose **Columns**.
 
@@ -28,7 +31,9 @@ Browse folders the way you do on a Mac: one column per folder level, side by sid
 
 ## Details pane
 
-<!-- capture: ![The details pane](assets/captures/details-pane.png) -->
+![The details pane next to Explorer's own list: a preview, the details and the labels of the selected file](assets/captures/details-pane.png)
+
+*The details pane beside Explorer's own list: a preview, the labels of the selected file and its details.*
 
 One pane that replaces Explorer's Details and Preview panes, in Columns and in every view. Press **Alt+P**, or use the View menu or the toolbar button, to show or hide it.
 
@@ -39,7 +44,9 @@ One pane that replaces Explorer's Details and Preview panes, in Columns and in e
 
 ## Labels
 
-<!-- capture: ![Labels](assets/captures/labels.png) and ![Group by Tags](assets/captures/labels-group.png) -->
+![Labels: a Columns view grouped by label, the Tags entry of the right-click menu and the Tags section of the pane](assets/captures/labels.png)
+
+*Columns grouped by label, the **Tags** entry (**Étiquettes** in French) of the right-click menu, and the Tags section of the pane.*
 
 Colour labels, like the tags of macOS, on files and folders.
 
