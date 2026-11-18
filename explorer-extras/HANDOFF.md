@@ -12,7 +12,7 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.79.0,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 1.0.0,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
   2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).

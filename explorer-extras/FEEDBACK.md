@@ -50,11 +50,11 @@ The repository holds several mods. Explorer Extras is the one that is released. 
 - Pull requests and commits: the title starts with `[explorer-extras]`.
 - Releases: tags are `explorer-extras-v<version>`, for example `explorer-extras-v0.55.0`. A tag of another mod starts with that mod's folder name.
 - Notes: this mod's changes are in `explorer-extras/CHANGELOG.md`, nowhere else.
-- The root [README](../README.md) lists every mod with its status: Released, Beta, Prototype or Planned. Only Released and Beta mods take bug reports.
+- The root [README](../README.md) lists every mod with its status: Released, Prototype or Planned. Only Released mods take bug reports.
 
 ## Releases
 
-A release is a tag `explorer-extras-v<version>` with the changelog entry as its notes and the generated `explorer-extras.wh.cpp` attached. The Windhawk catalog is a separate step: a pull request to the windhawk-mods repository, made when the beta has settled.
+A release is a tag `explorer-extras-v<version>` with the changelog entry as its notes and the generated `explorer-extras.wh.cpp` attached. The Windhawk catalog is a separate step: a pull request to the windhawk-mods repository, made when a version has settled.
 
 ## What will not be built
 

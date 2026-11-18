@@ -1,78 +1,94 @@
 # Explorer Extras
 
-A [Windhawk](https://windhawk.net) mod that adds to File Explorer on Windows 11. It is one mod with several areas, each with its own section and switch on the mod's page in Windhawk. Switch on what you want; the rest stays out of the way.
+**Extra features for File Explorer on Windows 11, one switch per feature.**
 
-> **Beta, and vibe-coded.** Explorer Extras is in public beta, in daily use by its author, submitted to the Windhawk catalog and under review. It is built largely with AI assistance and tested by hand, without an independent code audit. Use it at your own judgment, and please report anything odd.
+![Explorer Extras: the Columns layout, the details pane and colour labels in File Explorer](assets/captures/hero.png)
+<!-- hero: replace with assets/captures/hero.gif when it is recorded -->
 
-Tested daily on Windows 11 build 26100 (24H2) on ARM64, in French and English; x86-64 was tested up to 0.55. Removing the mod leaves Explorer as it was.
+Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
 
-## Areas
-
-| Area | What it does |
+| Feature | In one line |
 | --- | --- |
-| **Columns** | A Columns layout in the View menu: Miller columns, one per folder level, with drag and drop, touch, a restyled context menu and per folder memory. [More](docs/columns.md) |
-| **Details pane** | One pane in place of Explorer's Details and Preview panes: a real preview (PDF, text, Markdown, images, video, sound) and the details, in every view. |
-| **Labels** | Colour labels, like the tags of macOS, on files and folders: dots in every view and in Columns, a Tags section in the details pane, a Tags entry in the right-click menu, and Explorer's own Sort and Group by Tags. They are kept in the file itself, on NTFS. [More](docs/labels.md) |
-| **Toolbar** | Tighter navigation and command bar buttons, a search box you resize by dragging its edge (mouse, touch or pen), and round corners for the address bar and the search box. Each is a setting. |
-| **Settings** | On the mod's page in Windhawk, in groups: Columns (Behaviour, Content, Layout, Memory), Details pane (Pane, Previews), Labels (Colour names), Toolbar and Limits. They apply at once. |
+| [**Columns**](#columns) | Miller columns in the View menu, with drag and drop, touch and per-folder memory. |
+| [**Details pane**](#details-pane) | One pane for details and real previews of PDF, text, Markdown, images, video and sound. |
+| [**Labels**](#labels) | Colour tags on files and folders, usable in Explorer's own Sort by and Group by. |
+| [**Toolbar**](#toolbar) | Tighter buttons, a search box you drag to resize, and round corners. |
 
-**Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does in any other view.
+## Columns
 
-More areas will come; see [`../ROADMAP.md`](../ROADMAP.md) for what is planned.
+<!-- capture: ![Columns](assets/captures/columns.png) -->
 
-![Columns, the View menu and the details pane in File Explorer](assets/captures/hero.png)
+Browse folders the way you do on a Mac: one column per folder level, side by side. Open the **View** menu of a File Explorer window and choose **Columns**.
 
-A short tour:
-
-https://github.com/user-attachments/assets/14dddb22-8866-4082-aede-a6f5ed995bea
+- **It feels like Explorer.** Sorting, grouping, icons, thumbnails and the right-click menu all come from Windows itself. The menu is tidied up: quick actions on top, "Show more options" for the full list.
+- **Keyboard, selection and undo.** Arrow keys, type to jump, F2 (also for several items at once), Delete, copy and paste, a rubber band, and Ctrl+Z to take back a delete, a rename or a new folder.
+- **Drag and drop, and touch.** Between columns, into the navigation pane, to other windows and apps, and back. Tap, hold, drag and select with a finger.
+- **Tabs and memory.** Each tab keeps its own columns, and each folder remembers its sort, its grouping, its column widths and whether you showed it in Columns.
+- **Archives.** Zip, 7z, rar and tar files open like folders.
 
 ## Details pane
 
-- Previews of PDF, text and code, Markdown, images (zoom, pan, animated GIF), video and sound.
-- The details of what is selected, by type. A folder's size and contents are counted when you press **Calculate**, or by themselves if you turn that on in the settings.
-- A fanned stack of thumbnails when several items are selected.
-- Replaces Explorer's Details and Preview panes: Alt+P, the View menu and the toolbar button show and hide it.
-- Each kind of preview can be switched off, and has a size limit, in the settings.
+<!-- capture: ![The details pane](assets/captures/details-pane.png) -->
+
+One pane that replaces Explorer's Details and Preview panes, in Columns and in every view. Press **Alt+P**, or use the View menu or the toolbar button, to show or hide it.
+
+- **Real previews.** PDF, text and code, Markdown, images (zoom, pan, animated GIF), video and sound.
+- **Details by type.** A folder's size and contents are counted when you press **Calculate**, or by themselves if you turn that on.
+- **Several files at once.** A fanned stack of thumbnails.
+- **You stay in control.** Each kind of preview can be switched off, and has a size limit.
 
 ## Labels
 
-- A label is a coloured dot with an optional name: seven colours and a neutral gray, up to 16 on an item. Dots show after the name, stacked when there are several, in every view of Explorer's list and in Columns, and follow the light and dark theme.
-- Set them in the **Tags** section of the details pane, or in the right-click menu (a **Tags** entry with the colours, **Add tag** and **Clear tags**), in Explorer's own list and in Columns.
-- They are kept in a named stream of the file, so they follow it when it is copied or moved on an NTFS drive, and the file's dates do not change. A drive that is not NTFS cannot keep them, and the pane and the menu say so.
-- **Good to know:** Labels are written into the files themselves, so they stay there after the mod is disabled or uninstalled. They are also written on a network share that supports named streams. To take them off, use **Clear tags** (in the pane or the right-click menu) while the mod is still running.
-- The **Add a tag** flyout lists your recent named tags, so a name is typed once.
-- Explorer's own **Sort by**, **Group by** and **Tags** column use the labels: group a folder by Tags and each label is a group (an item with two labels is in both). Switch it off with **Sort and group by tags**.
-- Each colour has a name you can edit on Windhawk's page, such as "Red = Urgent". Switch labels off with **Show labels**.
+<!-- capture: ![Labels](assets/captures/labels.png) and ![Group by Tags](assets/captures/labels-group.png) -->
+
+Colour labels, like the tags of macOS, on files and folders.
+
+- **Colours and names.** Seven colours and a neutral gray, an optional name, up to 16 on an item. Give each colour a meaning in the settings, such as "Red = Urgent".
+- **Seen everywhere.** A dot after the name, in every view of Explorer's list and in Columns, in step with the light or dark theme.
+- **Easy to set.** In the **Tags** section of the details pane, or from the right-click menu: a **Tags** entry with the colours, **Add tag** and **Clear tags**. The last eight names you typed are listed, so you type each one once.
+- **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
+- **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
 
 ## Toolbar
 
-- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together (4 pixels by default, Explorer's is 16), and the address bar sits closer to them (4, Explorer's is 8); the address bar takes the room that frees.
-- **Command bar.** The gap between New, Cut, Copy, Paste and the rest is a setting (4 pixels by default, Explorer's is 8).
-- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings; a width you drag is kept until you change that setting.
-- **Corners.** A corner radius for the address bar and one for the search box, 0 to 16 (16 makes the ends round).
-- **Switch it off** with **Change the toolbar**, and Explorer's own spacing, search box and corners come back.
+Tidy the top of the window. Each part is a setting, and one switch gives Explorer's own look back.
+
+- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together, and the address bar sits closer to them.
+- **Command bar.** New, Cut, Copy, Paste and the rest sit closer together.
+- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings.
+- **Round corners.** A corner radius for the address bar and one for the search box, up to fully round.
 
 ## Install
 
 1. Install [Windhawk](https://windhawk.net).
-2. In Windhawk choose **Create a new mod**, replace the code with the contents of `explorer-extras.wh.cpp`, and compile it (Ctrl+B).
-3. Enable the mod. For Columns, open the View menu of a File Explorer window and choose **Columns**. The details pane is on by default: it shows in place of Explorer's Details pane (Alt+P, the toolbar button or the View menu).
+2. In Windhawk, open **Explore**, search for **Explorer Extras** and click **Install**. The mod is also on its catalog page: https://windhawk.net/mods/explorer-extras
+3. Enable the mod, then open a File Explorer window. For Columns, use the **View** menu and choose **Columns**. The details pane replaces Explorer's own Details pane: press **Alt+P**.
 
-The mod hooks `FileExplorerExtensions.dll`. Windhawk must be able to download Microsoft's symbols for it, which has worked on every build tested. If symbols are missing right after a Windows update, the mod waits and logs it.
+Not in the catalog yet, or you want to build it yourself? In Windhawk choose **Create a new mod**, replace the code with the contents of [`explorer-extras.wh.cpp`](explorer-extras.wh.cpp), and compile it (Ctrl+B).
+
+The mod needs Windhawk to download the symbols of `FileExplorerExtensions.dll`, which has worked on every Windows build tested. If symbols are missing right after a Windows update, the mod waits and logs it.
 
 ## Settings
 
-The mod's page in Windhawk has a group per area, and the first setting of each is its off switch, so you can use only the part you like. A **Limits** group holds the largest folder a column lists, the largest document to preview, and the largest image to open at once. The full list is in [`docs/settings.md`](docs/settings.md). Settings apply at once, with no restart. A few behaviours are not options: following the active column, dragging items out, browsing archives, the marks of cloud, network and device items, and a click in the navigation pane making its folder the first column.
+The mod's page in Windhawk has a group per feature, and the first setting of each is its off switch. A **Limits** group holds the largest folder a column lists, the largest document to preview and the largest image to open at once. Settings apply at once, with no restart. The full list is in [`docs/settings.md`](docs/settings.md).
+
+## Good to know
+
+- **Labels stay in your files.** They are written into the files themselves (an NTFS stream), so they stay there after the mod is disabled or uninstalled, and also on a network share that supports named streams. To take them off, use **Clear tags** (in the pane or the right-click menu) while the mod is still running.
+- **Removing the mod** leaves Explorer as it was, apart from those labels.
+- **Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does anywhere else.
+- **Tested** daily on Windows 11 24H2 (build 26100) on ARM64, in French and English. x86-64 was tested up to version 0.55.
+- **Built with AI assistance** (Claude Code) under the author's direction, and tested by hand. It has not had an independent code audit, so please report anything odd.
 
 ## Feedback
 
-Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (Windhawk, the mod's Advanced tab, logging). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
+Found a bug, or have an idea? Open an issue: [bug report](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-bug.yml) or [feature suggestion](https://github.com/AristideBH/windhawk-lib/issues/new?template=explorer-extras-feature.yml). A bug report is easiest to follow with the mod's version, your Windows build and the log (Windhawk, the mod's **Advanced** tab, logging). How reports are handled is in [`FEEDBACK.md`](FEEDBACK.md).
 
 ## Support
 
 Explorer Extras is free. If you like it, you can [support the work on Ko-fi](https://ko-fi.com/aristidebh).
 
-## Build from source
+## For developers
 
 The mod is one file for Windhawk but is kept in parts under `src/`, joined by a script:
 
@@ -81,9 +97,7 @@ python explorer-extras/build.py            # writes explorer-extras.wh.cpp
 python explorer-extras/build.py --check    # exits 1 if the generated file is out of date
 ```
 
-Edit the parts, never the generated file. `tools/deploy-explorer-extras.ps1` builds a test version that also writes a log file, compiles it with Windhawk's own compiler and deploys it (one administrator prompt), and `tools/smoke-test-explorer-extras.ps1` then opens a window and checks what the mod must have placed. `tools/crash-analysis/` reads an Explorer crash dump without a debugger. The workflow is in [`HANDOFF.md`](HANDOFF.md).
-
-## More
+Edit the parts, never the generated file. `tools/deploy-explorer-extras.ps1` builds a test version that also writes a log file, compiles it with Windhawk's own compiler and deploys it (one administrator prompt), and `tools/smoke-test-explorer-extras.ps1` then opens a window and checks what the mod must have placed. `tools/crash-analysis/` reads an Explorer crash dump without a debugger.
 
 - [`CHANGELOG.md`](CHANGELOG.md): what changed in each release.
 - [`FEEDBACK.md`](FEEDBACK.md): how issues and suggestions are handled.

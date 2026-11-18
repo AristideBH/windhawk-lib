@@ -5,7 +5,7 @@ compiled and tested by Ari. Details live in `explorer-extras/PLAN.md` and
 the `SPEC` files next to it. The history below is kept as it was written; the
 boxes were reconciled on 2026-11-17.
 
-## Where we are, 2026-11-17 (version 0.78.0, built, tested on test folders)
+## Where we are, 2026-11-17 (version 1.0.0, in the catalog review)
 
 Explorer Extras has three areas: **Columns** (Miller columns), the **details
 and preview pane**, and **Labels** (colour tags, new in 0.69 to 0.75). Settings

@@ -2,6 +2,13 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.0 (2026-11-18)
+
+The first stable release. The mod is no longer called a beta.
+
+### Changed
+- The README and the mod's own readme are rewritten, with the same text for the four features (Columns, Details pane, Labels, Toolbar), a short "Good to know" part (labels stay in the files, QuickLook, what was tested, built with AI assistance) and an Install part that starts from Windhawk's catalog.
+
 ## 0.79 (2026-11-18)
 
 ### Fixed, from the fourth AI review of the catalog pull request
