@@ -19,6 +19,15 @@ void LabelsGroupSelfTest() {
     expect(LabelsKeywordValues({}, {}).empty(), L"nothing and nothing is nothing");
     expect(LabelsKeywordValues({}, {L"Red", L"red", L"Red"}) == V({L"Red"}), L"the same label twice is served once");
     expect(LabelsKeywordValues({}, {L"", L"Blue"}) == V({L"Blue"}), L"an empty name is dropped");
+    // A write of Keywords never keeps a label that the file did not have as a keyword: the editor showed the merged list.
+    expect(LabelsKeywordsToWrite({L"Holiday", L"Red", L"Urgent", L"Beach"}, {L"Holiday"}, {L"Red", L"Urgent"}) == V({L"Holiday", L"Beach"}),
+           L"the labels are taken out of what an editor writes back");
+    expect(LabelsKeywordsToWrite({L"Holiday", L"Red"}, {L"Holiday", L"Red"}, {L"Red"}) == V({L"Holiday", L"Red"}),
+           L"a label that is also a real keyword stays");
+    expect(LabelsKeywordsToWrite({L"Holiday"}, {L"Holiday", L"red"}, {L"Red"}) == V({L"Holiday"}),
+           L"a real keyword the user removed stays removed, even when it has a label's name");
+    expect(LabelsKeywordsToWrite({L"Beach"}, {}, {}) == V({L"Beach"}), L"a file with no labels is written as it is");
+    expect(LabelsKeywordsToWrite({L"URGENT", L"x"}, {}, {L"Urgent"}) == V({L"x"}), L"the labels are taken out whatever their case");
     // The groups of Columns: one per label, an item in the group of each of its labels, the items with none last.
     std::vector<V> entries = {{L"Red"}, {L"Red", L"Urgent"}, {}, {L"Blue"}};
     auto plan = LabelsPlanGroups(entries, true, L"None");
