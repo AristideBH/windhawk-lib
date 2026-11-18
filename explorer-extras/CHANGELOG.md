@@ -5,6 +5,10 @@ Versions are the `@version` of the mod. The newest is first. Dates are when the 
 ## 0.78 (2026-11-18)
 
 ### Fixed, from the third AI review of the catalog pull request
+- The Sort by and Group by entry that the mod renames (Windows calls it Keywords, **Mots clés** in French) gets Windows' own name back when the mod unloads.
+- Hooks that were set with raw casts (the paint hook, the property store) are set with typed pointers, and the catalog file leaves out the log statements that only a test build writes.
+- A folder on a network share is never asked whether it still exists, from the window's thread: an offline share could freeze the window for half a minute. The columns of a deleted network folder are therefore not pruned by that check.
+- A timer tick of Columns no longer walks the window tree twice: the file list and tab windows it found are kept while they are still shown.
 - A label served as a Tags value is never written into a file's own metadata: a write of Keywords through the hooked property store takes out the label names the file did not already have as keywords (a real keyword with a label's name stays). Checked by hand with Properties, Details on a JPEG with the keyword Holiday and two labels: adding a tag wrote only "Holiday;Beach". That dialog uses a store the hook does not touch, so the guard is a second line of defence.
 
 ### Added

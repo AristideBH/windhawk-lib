@@ -1476,11 +1476,21 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG 
 void SetActiveColumn(WindowState* state, int index, bool ensureVisible);
 
 // A folder on disk that is no longer there: deleted, renamed or moved.
-// Folders that aren't on disk (This PC, Control Panel) are never "gone" here.
+// Folders that aren't on disk (This PC, Control Panel) are never "gone" here, and neither are those on a network: asking an
+// offline share can take half a minute, on the window's own thread, so its answer is not waited for.
 bool FolderGone(PCIDLIST_ABSOLUTE folder) {
     wchar_t path[MAX_PATH] = L"";
     if (!folder || ILIsEmpty(folder) || !SHGetPathFromIDListW(folder, path) || !path[0]) {
         return false;
+    }
+    if (PathIsUNCW(path)) {
+        return false;
+    }
+    if (path[1] == L':') {
+        wchar_t root[4] = {path[0], L':', L'\\', 0};
+        if (GetDriveTypeW(root) == DRIVE_REMOTE) {
+            return false;
+        }
     }
     return !PathFileExistsW(path);
 }

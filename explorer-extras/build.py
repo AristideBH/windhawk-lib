@@ -195,9 +195,56 @@ def strip_verbose(data):
     return bytes([10]).join(out)
 
 
+def strip_log_verbose(data):
+    """LogVerbose is a no-op outside a test build, so the catalog file leaves its statements out. A statement is dropped only
+    when it starts a line that follows a line ending in { } ; or :, so a call that is the body of an if without braces stays."""
+    out = []
+    lines = data.split(bytes([10]))
+    i = 0
+    previous = b''
+    while i < len(lines):
+        text = lines[i].strip()
+        if text.startswith(b'LogVerbose(') and previous[-1:] in (b'{', b'}', b';', b':'):
+            depth, in_string, escape, quote, j = 0, False, False, b'', i
+            done = False
+            while j < len(lines) and not done:
+                line = lines[j]
+                k = 0
+                while k < len(line):
+                    ch = line[k:k + 1]
+                    if in_string:
+                        if escape:
+                            escape = False
+                        elif ch == bytes([92]):
+                            escape = True
+                        elif ch == quote:
+                            in_string = False
+                    elif ch in (b'"', b"'"):
+                        in_string, quote = True, ch
+                    elif ch == b'(':
+                        depth += 1
+                    elif ch == b')':
+                        depth -= 1
+                        if depth == 0:
+                            done = True
+                            break
+                    k += 1
+                j += 1
+            # the statement ends with ); on its last line
+            if done and lines[j - 1].rstrip().endswith(b');'):
+                i = j
+                continue
+        out.append(lines[i])
+        if text and not text.startswith(b'//'):
+            previous = text
+        i += 1
+    return bytes([10]).join(out)
+
+
 joined = strip_no_winrt(joined)
 if '--debug' not in sys.argv:
     joined = strip_verbose(joined)
+    joined = strip_log_verbose(joined)
 target = os.path.join(here, 'explorer-extras.wh.cpp')
 
 # A test build (build.py --debug <file>) also appends every log line to that file, so a crash can be

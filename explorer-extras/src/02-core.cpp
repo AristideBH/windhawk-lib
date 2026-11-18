@@ -183,11 +183,23 @@ BOOL CALLBACK FindVisibleChildProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
+// The same, from a cache kept by the caller: a window that is still there, visible and a child of `parent` is the answer, so a
+// timer tick does not walk the whole window tree each time. Another tab coming to the front hides this one, and the walk is done.
+HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className);
+
 HWND FindVisibleChild(HWND parent, const wchar_t* className) {
     FindContext context;
     context.className = className;
     EnumChildWindows(parent, FindVisibleChildProc, (LPARAM)&context);
     return context.found;
+}
+
+HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className) {
+    if (*cache && IsWindow(*cache) && IsWindowVisible(*cache) && IsChild(parent, *cache)) {
+        return *cache;
+    }
+    *cache = FindVisibleChild(parent, className);
+    return *cache;
 }
 
 BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {
@@ -328,4 +340,3 @@ struct Entry {
     // A shortcut to a folder: it opens as that folder, in the next column.
     Pidl linkTarget;
 };
-

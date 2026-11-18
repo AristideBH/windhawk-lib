@@ -271,9 +271,9 @@ bool LabelsInstallGroupHook() {
                     IPropertyStore* store = nullptr;
                     if (SUCCEEDED(item->GetPropertyStore(GPS_DEFAULT, IID_PPV_ARGS(&store))) && store) {
                         void* target = (*(void***)store)[5];  // IPropertyStore: 3 GetCount, 4 GetAt, 5 GetValue.
-                        ok = Wh_SetFunctionHook(target, (void*)LabelsGetValue_Hook, (void**)&LabelsGetValue_Original) != FALSE;
+                        ok = WindhawkUtils::SetFunctionHook((LabelsGetValue_t)target, LabelsGetValue_Hook, &LabelsGetValue_Original) != FALSE;
                         void* setter = (*(void***)store)[6];  // 6 SetValue.
-                        if (ok && !Wh_SetFunctionHook(setter, (void*)LabelsSetValue_Hook, (void**)&LabelsSetValue_Original)) {
+                        if (ok && !WindhawkUtils::SetFunctionHook((LabelsSetValue_t)setter, LabelsSetValue_Hook, &LabelsSetValue_Original)) {
                             Wh_Log(L"labels: the SetValue hook could not be set");
                         }
                         store->Release();

@@ -395,6 +395,8 @@ struct WindowState {
     // Columns per tab: the tab that is showing, and the stacks of the others.
     DragState drag;
     HWND currentTab = nullptr;
+    HWND tickFileList = nullptr;  // The windows OnTick found last time (see FindVisibleChildCached).
+    HWND tickTab = nullptr;
     ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
     std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
     std::vector<TabSnapshot> tabSnapshots;

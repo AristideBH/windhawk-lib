@@ -30,7 +30,7 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
     for (auto const& base : items) {
         if (auto radio = base.try_as<muxc::RadioMenuFlyoutItem>()) {
             std::wstring text = std::wstring(radio.Text());
-            bool on = g_labels && g_labelsGroup;
+            bool on = g_labels && g_labelsGroup && !g_unloading;  // At unload the entry gets Windows' own name back.
             if (on && text == original) {
                 LogVerbose(L"SORTMENU renamed '%s' to '%s'", text.c_str(), ours.c_str());
                 radio.Text(ours);
@@ -42,6 +42,8 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
         }
     }
 }
+
+[[clang::no_destroy]] thread_local winrt::weak_ref<muxc::MenuFlyout> t_labelsSortMenu;  // This window's Sort and group menu.
 
 void LabelsOnSortMenuOpening(Inspectable const& sender) {
     if (g_unloading) {
@@ -72,7 +74,19 @@ bool LabelsSortMenuTick(WindowState* state) {
     if (!menu) {
         return false;
     }
+    t_labelsSortMenu = winrt::make_weak(menu);
     Keep(menu, menu.Opening(winrt::auto_revoke, [](Inspectable const& sender, Inspectable const&) { LabelsOnSortMenuOpening(sender); }));
     LabelsRenameKeywords(menu.Items());
     return true;
+}
+
+// At unload, on each thread that renamed the entry: Windows' own name is put back (the handler that would do it is revoked).
+void LabelsRestoreSortMenu() {
+    try {
+        if (auto menu = t_labelsSortMenu.get()) {
+            LabelsRenameKeywords(menu.Items());
+        }
+    } catch (...) {
+    }
+    t_labelsSortMenu = nullptr;
 }

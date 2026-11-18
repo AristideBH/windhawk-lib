@@ -963,7 +963,7 @@ bool LabelsInstallPaintHooks() {
                g_labelsClassSlot, g_labelsNameSlot);
         return false;
     }
-    if (!Wh_SetFunctionHook(paintContent, (void*)LabelsPaintContent_Hook, (void**)&LabelsPaintContent_Original)) {
+    if (!WindhawkUtils::SetFunctionHook((LabelsPaintContent_t)paintContent, LabelsPaintContent_Hook, &LabelsPaintContent_Original)) {
         Wh_Log(L"labels: the PaintContent hook could not be set, labels are off");
         return false;
     }

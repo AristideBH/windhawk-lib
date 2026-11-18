@@ -214,9 +214,11 @@ muxc::MenuFlyout LabelsTagsSubmenu(std::vector<std::wstring> const& pathList, st
 
 // Called on each UI thread that holds label objects, at unload: its flyouts, its notice and its fonts.
 void LabelsRemoveMenuEntries();  // 10h
+void LabelsRestoreSortMenu();    // 10i2
 
 void LabelsReleaseThreadObjects() {
     LabelsRemoveMenuEntries();
+    LabelsRestoreSortMenu();
     t_labelsMenuFlyout = nullptr;
     t_labelsNotice = nullptr;
     t_labelsSection = LabelsSectionRef();
