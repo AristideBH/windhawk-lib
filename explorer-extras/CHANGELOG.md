@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 0.78 (2026-11-18)
+
+### Added
+- **Sort and group by tags.** Explorer's own **Sort by**, **Group by** and **Tags** column use the labels: in **Group by** choose **Tags** (**Mots clés** in French; under **More** in **Sort by**), and each label is a group (an item with two labels is in both). The tags a file already has are kept, and the labels added to them. Done by serving the labels as the `System.Keywords` property from a hook on the property store of Explorer's file system items, found with a probe, so no schema is registered and no admin rights are needed. A folder not read yet when Explorer first asks is read again by Explorer as soon as it is, and an item moves to its group when its label is set. Columns groups by Tags too (each label is a group, an item in each of its labels), and the entry Windows calls Keywords (**Mots clés** in French) is renamed to the mod's own **Étiquettes** / **Tags** in the Sort by and Group by menus. A setting, **Sort and group by tags** (on), in the Labels group.
+
 ## 0.77 (2026-11-17)
 
 ### Fixed, from the second AI review of the catalog pull request

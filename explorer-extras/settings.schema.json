@@ -302,6 +302,15 @@
       "needs": "now"
     },
     {
+      "id": "labelsGroup",
+      "group": "labels",
+      "type": "bool",
+      "default": true,
+      "name": "Sort and group by tags",
+      "description": "Adds the labels to Explorer’s own Tags property, so Sort by, Group by and the Tags column use them. The tags a file already has are kept. Takes effect when a folder is shown again.",
+      "needs": "now"
+    },
+    {
       "id": "colourName0",
       "group": "labels",
       "sub": "names",

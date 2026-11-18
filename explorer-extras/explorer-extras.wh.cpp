@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Beta. Additions for File Explorer, one switch per area: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         0.77.25
+// @version         0.78.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -51,6 +51,7 @@ Colour labels, like the tags of macOS, on files and folders. A label is a colour
 - **Where they show.** As a dot after the name, stacked when there are several, in every view of Explorer's own list (Details, List, Tiles, Content and the icon sizes) and in Columns. They follow the light and dark theme.
 - **How you set them.** In the **Tags** section of the details pane (badges that wrap, and an **Add a tag** link), and in the right-click menu, both in Explorer's own list and in Columns: a **Tags** entry with the colours, **Add tag** and **Clear tags**.
 - **Where they live.** In a named stream of the file itself, so they follow it when it is copied or moved on an NTFS drive. They need NTFS: the menu entry and the pane say so when a drive cannot keep them. The file's dates are not changed.
+- **Sort and group.** Explorer's own **Sort by**, **Group by** and the **Tags** column use them: choose **Tags** (the entry is renamed to the mod's name, **Étiquettes** in French: in **Group by**, and under **More** in **Sort by**), in Explorer's list and in Columns, and the items are grouped by label, an item with two labels in both groups, the tags a file already has kept. A label shows by its name, or by its colour's name. Switch it off with **Sort and group by tags**.
 - **Your own meanings.** Each colour has a name you can edit on Windhawk's page (Labels, Colour names), such as "Red = Urgent".
 - Switch them off with **Show labels**.
 
@@ -175,6 +176,9 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
   - labelsOn: true
     $name: Show labels
     $description: Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive.
+  - labelsGroup: true
+    $name: Sort and group by tags
+    $description: Adds the labels to Explorer’s own Tags property, so Sort by, Group by and the Tags column use them. The tags a file already has are kept. Takes effect when a folder is shown again.
   - names:
     - colourName0: Gray
       $name: Name of the neutral gray
@@ -253,6 +257,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 #undef GetCurrentTime
 
 #include <propkey.h>
+#include <propvarutil.h>
 #include <propsys.h>
 
 #include <algorithm>
@@ -697,6 +702,7 @@ constexpr SettingInfo kSettings[] = {
     {L"previewImages", L"details.previews.previewImages", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"previewMedia", L"details.previews.previewMedia", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"labelsOn", L"labels.labelsOn", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"labelsGroup", L"labels.labelsGroup", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"colourName0", L"labels.names.colourName0", SettingKind::String, 0, L"Gray", 0, 0, false},
     {L"colourName1", L"labels.names.colourName1", SettingKind::String, 0, L"Red", 0, 0, false},
     {L"colourName2", L"labels.names.colourName2", SettingKind::String, 0, L"Orange", 0, 0, false},
@@ -1584,11 +1590,15 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
 
 // Splits the sorted entries into groups for `spec.groupKey`: the shell's own
 // categorizer when the folder offers one, the fallback above otherwise.
-void GroupEntries(IShellFolder* folder, const SortSpec& spec,
-                  FolderResult* result) {
+bool LabelsGroupEntries(std::wstring const& folderPath, SortSpec const& spec, FolderResult* result);  // 10h1
+
+void GroupEntries(IShellFolder* folder, const SortSpec& spec, FolderResult* result, std::wstring const& folderPath) {
     size_t count = result->entries.size();
     if (!spec.grouped || count == 0) {
         return;
+    }
+    if (LabelsGroupEntries(folderPath, spec, result)) {
+        return;  // Grouped by Tags: each label is a group.
     }
     ICategorizer* categorizer = nullptr;
     ICategoryProvider* provider = nullptr;
@@ -1848,7 +1858,11 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         result->truncated = true;
     }
 
-    GroupEntries(folder, spec, result);
+    wchar_t folderPath[MAX_PATH] = L"";
+    if (!ILIsEmpty(folderPidl)) {
+        SHGetPathFromIDListW(folderPidl, folderPath);
+    }
+    GroupEntries(folder, spec, result, folderPath);
     folder->Release();
 }
 
@@ -2867,7 +2881,14 @@ std::wstring LabelsDisplayNameOf(std::wstring const& itemPath) {
 }
 
 // The cache entry of the item's folder gets the item's new tags at once (after a successful write).
+void LabelsGroupNotifyItem(std::wstring const& itemPath);  // 10h1: Explorer reads the item again, for Sort and Group by tags
+void LabelsGroupFolderLoaded(std::wstring const& folderPath);  // 10h1: Explorer reads a folder again when its Keywords were asked early
+
 void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
+    struct Notify {
+        std::wstring path;
+        ~Notify() { LabelsGroupNotifyItem(path); }
+    } notify{itemPath};  // After the cache has the new tags (and its lock is let go).
     std::wstring folderPath = itemPath;
     PathRemoveFileSpecW(folderPath.data());
     folderPath.resize(wcslen(folderPath.c_str()));
@@ -3394,6 +3415,7 @@ struct WindowState {
     muxc::Border bandBox{nullptr};
     mud::DispatcherQueueTimer fadeTimer{nullptr};
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
+    bool sortMenuDone = false;  // The Sort and group menu has its handler (labels).
     bool toolbarDone = false;   // The toolbar's buttons were found and handled.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
@@ -20618,7 +20640,10 @@ void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
 }
 
 // A folder was read: the windows are painted again so the dots show.
-void LabelsRepaintWindows(std::wstring const&) {
+void LabelsRepaintWindows(std::wstring const& folderPath) {
+    if (!folderPath.empty()) {
+        LabelsGroupFolderLoaded(folderPath);
+    }
     EnumWindows([](HWND window, LPARAM) -> BOOL {
         DWORD pid = 0;
         wchar_t name[40];
@@ -21713,6 +21738,304 @@ void LabelsSettingsChanged() {
         }
     }
 }
+// Labels in Explorer's own Sort by and Group by. Explorer reads the value of a property for every item through
+// IPropertyStore::GetValue, and Group by Tags (System.Keywords, the native Tags column) takes its groups from there, so
+// serving the labels' names as Keywords makes the native menu work with no schema and no extra code in Explorer: an item
+// with two labels is in both groups. Found with probes/probe-sort-group.wh.cpp (see the surfaces skill). The tags the file
+// already has (a photo's keywords) are kept, and the labels added to them.
+//
+// The store of an item has no item identity, but it answers System.ParsingPath and System.ItemNameDisplay itself: the folder
+// cache (04b) is looked up with those. A folder that is not read yet serves nothing and is remembered, and when its read ends
+// Explorer is told the folder changed, so the groups are made again. After a tag is written Explorer is told the item changed.
+
+std::atomic<bool> g_labelsGroup{true};  // Serve the labels as Keywords.
+
+// The values of Keywords for an item: the keywords it has, then the label names that are not among them (any case), each once,
+// empty names dropped. Pure.
+std::vector<std::wstring> LabelsKeywordValues(std::vector<std::wstring> const& existing, std::vector<std::wstring> const& labels) {
+    std::vector<std::wstring> values;
+    auto has = [&values](std::wstring const& text) {
+        for (auto const& value : values) {
+            if (_wcsicmp(value.c_str(), text.c_str()) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (auto const& keyword : existing) {
+        if (!keyword.empty()) {
+            values.push_back(keyword);
+        }
+    }
+    for (auto const& label : labels) {
+        if (!label.empty() && !has(label)) {
+            values.push_back(label);
+        }
+    }
+    return values;
+}
+
+// The groups of a folder in Columns: each label is a group, an item is in the group of each of its labels (like Explorer's own
+// Group by Tags), and the items with no label are in a last group. `perEntry` is the label names of each item. Pure.
+struct LabelsGroupPlan {
+    std::vector<std::wstring> names;
+    std::vector<std::vector<size_t>> members;  // The items of each group, in their order.
+};
+
+LabelsGroupPlan LabelsPlanGroups(std::vector<std::vector<std::wstring>> const& perEntry, bool ascending, std::wstring const& none) {
+    LabelsGroupPlan plan;
+    std::vector<std::wstring> labels;  // The distinct labels (any case), as first seen.
+    std::vector<std::vector<size_t>> of;
+    std::vector<size_t> untagged;
+    for (size_t i = 0; i < perEntry.size(); i++) {
+        if (perEntry[i].empty()) {
+            untagged.push_back(i);
+        }
+        for (auto const& label : perEntry[i]) {
+            size_t at = 0;
+            while (at < labels.size() && _wcsicmp(labels[at].c_str(), label.c_str()) != 0) {
+                at++;
+            }
+            if (at == labels.size()) {
+                labels.push_back(label);
+                of.emplace_back();
+            }
+            if (of[at].empty() || of[at].back() != i) {
+                of[at].push_back(i);
+            }
+        }
+    }
+    std::vector<size_t> order(labels.size());
+    for (size_t i = 0; i < order.size(); i++) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        int cmp = StrCmpLogicalW(labels[a].c_str(), labels[b].c_str());
+        return ascending ? cmp < 0 : cmp > 0;
+    });
+    for (size_t i : order) {
+        plan.names.push_back(labels[i]);
+        plan.members.push_back(of[i]);
+    }
+    if (!untagged.empty()) {
+        plan.names.push_back(none);
+        plan.members.push_back(untagged);
+    }
+    return plan;
+}
+
+namespace {
+
+using LabelsGetValue_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFPROPERTYKEY, PROPVARIANT*);
+LabelsGetValue_t LabelsGetValue_Original = nullptr;
+[[clang::no_destroy]] std::mutex g_keywordsAskedMutex;
+[[clang::no_destroy]] std::set<std::wstring> g_keywordsAsked;  // Folders whose Keywords were asked before their labels were read.
+
+// A text property of the item through the same store, or empty.
+std::wstring LabelsStoreText(void* store, REFPROPERTYKEY key) {
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    std::wstring text;
+    if (SUCCEEDED(LabelsGetValue_Original(store, key, &value)) && value.vt == VT_LPWSTR && value.pwszVal) {
+        text = value.pwszVal;
+    }
+    PropVariantClear(&value);
+    return text;
+}
+
+HRESULT LabelsServeKeywords(void* store, HRESULT hr, PROPVARIANT* out) {
+    std::wstring path = LabelsStoreText(store, PKEY_ParsingPath);
+    std::wstring name = LabelsStoreText(store, PKEY_ItemNameDisplay);
+    if (path.size() < 4 || path[1] != L':' || name.empty()) {
+        return hr;  // Not a file system item.
+    }
+    std::wstring folder = path;
+    PathRemoveFileSpecW(folder.data());
+    folder.resize(wcslen(folder.c_str()));
+    auto data = LabelsFolderFor(folder);
+    if (!data->complete) {
+        std::lock_guard<std::mutex> lock(g_keywordsAskedMutex);
+        g_keywordsAsked.insert(folder);
+        return hr;
+    }
+    auto found = data->byName.find(name);
+    if (found == data->byName.end() || found->second.empty()) {
+        return hr;
+    }
+    std::vector<std::wstring> existing;
+    if (SUCCEEDED(hr) && out->vt == (VT_VECTOR | VT_LPWSTR)) {
+        for (ULONG i = 0; i < out->calpwstr.cElems; i++) {
+            if (out->calpwstr.pElems[i]) {
+                existing.push_back(out->calpwstr.pElems[i]);
+            }
+        }
+    } else if (SUCCEEDED(hr) && out->vt == VT_LPWSTR && out->pwszVal) {
+        existing.push_back(out->pwszVal);
+    }
+    std::vector<std::wstring> labels;
+    for (auto const& tag : found->second) {
+        std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
+        labels.push_back(shown.empty() ? std::wstring(L"Gray") : shown);
+    }
+    std::vector<std::wstring> values = LabelsKeywordValues(existing, labels);
+    std::vector<PCWSTR> pointers;
+    for (auto const& value : values) {
+        pointers.push_back(value.c_str());
+    }
+    PROPVARIANT served;
+    if (pointers.empty() || FAILED(InitPropVariantFromStringVector(pointers.data(), (ULONG)pointers.size(), &served))) {
+        return hr;
+    }
+    PropVariantClear(out);
+    *out = served;
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE LabelsGetValue_Hook(void* store, REFPROPERTYKEY key, PROPVARIANT* out) {
+    HRESULT hr = LabelsGetValue_Original(store, key, out);
+    if (!out || g_unloading || !g_labels || !g_labelsGroup || !IsEqualPropertyKey(key, PKEY_Keywords)) {
+        return hr;
+    }
+    try {
+        return LabelsServeKeywords(store, hr, out);
+    } catch (...) {
+        return hr;
+    }
+}
+
+}  // namespace
+
+// Hooks GetValue of the store that Explorer uses for the items of the file system: found from the store of one file of the
+// Windows folder (the class is the same for every file and folder, whatever its type). False, with a log line, when not.
+bool LabelsInstallGroupHook() {
+    HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool ok = false;
+    PIDLIST_ABSOLUTE folderId = nullptr;
+    IShellFolder* folder = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_Windows, 0, nullptr, &folderId)) && folderId &&
+        SUCCEEDED(SHBindToObject(nullptr, folderId, nullptr, IID_PPV_ARGS(&folder))) && folder) {
+        IEnumIDList* list = nullptr;
+        if (SUCCEEDED(folder->EnumObjects(nullptr, SHCONTF_NONFOLDERS, &list)) && list) {
+            PITEMID_CHILD child = nullptr;
+            if (list->Next(1, &child, nullptr) == S_OK && child) {
+                PIDLIST_ABSOLUTE full = ILCombine(folderId, child);
+                IShellItem2* item = nullptr;
+                if (full && SUCCEEDED(SHCreateItemFromIDList(full, IID_PPV_ARGS(&item))) && item) {
+                    IPropertyStore* store = nullptr;
+                    if (SUCCEEDED(item->GetPropertyStore(GPS_DEFAULT, IID_PPV_ARGS(&store))) && store) {
+                        void* target = (*(void***)store)[5];  // IPropertyStore: 3 GetCount, 4 GetAt, 5 GetValue.
+                        ok = Wh_SetFunctionHook(target, (void*)LabelsGetValue_Hook, (void**)&LabelsGetValue_Original) != FALSE;
+                        store->Release();
+                    }
+                    item->Release();
+                }
+                if (full) {
+                    ILFree(full);
+                }
+                ILFree(child);
+            }
+            list->Release();
+        }
+        folder->Release();
+    }
+    if (folderId) {
+        ILFree(folderId);
+    }
+    if (SUCCEEDED(init)) {
+        CoUninitialize();
+    }
+    Wh_Log(ok ? L"labels: Sort by and Group by tags are on (property store hook installed)"
+              : L"labels: the property store hook could not be set, Sort by and Group by tags are off");
+    return ok;
+}
+
+// After a tag was written: Explorer reads the item again, so its group changes.
+void LabelsGroupNotifyItem(std::wstring const& itemPath) {
+    if (g_labelsGroup && !g_unloading) {
+        SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, itemPath.c_str(), nullptr);
+        // Columns does not watch for an item's update (Explorer sends them all the time): its columns are read again, on each
+        // window's own thread, so a grouping by Tags puts the item in its new group.
+        std::lock_guard<std::mutex> lock(g_statesMutex);
+        for (auto& state : g_states) {
+            if (state->queue && state->on) {
+                try {
+                    state->queue.TryEnqueue([]() {
+                        WindowState* now = StateForThisThread(false);
+                        if (now && now->on && !g_unloading) {
+                            now->reloadDue = GetTickCount64() + 200;
+                        }
+                    });
+                } catch (...) {
+                }
+            }
+        }
+    }
+}
+
+// A folder was read: when Explorer asked for its Keywords before that, it reads the folder again.
+void LabelsGroupFolderLoaded(std::wstring const& folderPath) {
+    bool asked;
+    {
+        std::lock_guard<std::mutex> lock(g_keywordsAskedMutex);
+        asked = g_keywordsAsked.erase(folderPath) > 0;
+    }
+    if (asked && g_labelsGroup && !g_unloading) {
+        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, folderPath.c_str(), nullptr);
+    }
+}
+
+// Groups the entries of a folder by their labels, for Columns, when it is grouped by Tags (Keywords). False, and nothing changed,
+// when it is not that grouping, the feature is off, or the folder's labels are not read yet (the folder is then remembered, and
+// when its read ends Explorer is told it changed, which refreshes the column).
+bool LabelsGroupEntries(std::wstring const& folderPath, SortSpec const& spec, FolderResult* result) {
+    if (!spec.grouped || !IsEqualPropertyKey(spec.groupKey, PKEY_Keywords) || !g_labels || !g_labelsGroup || g_unloading ||
+        folderPath.empty() || result->entries.empty()) {
+        return false;
+    }
+    auto data = LabelsFolderFor(folderPath);
+    if (!data->complete) {
+        std::lock_guard<std::mutex> lock(g_keywordsAskedMutex);
+        g_keywordsAsked.insert(folderPath);
+        return false;
+    }
+    std::vector<std::vector<std::wstring>> perEntry;
+    for (auto const& entry : result->entries) {
+        std::vector<std::wstring> names;
+        auto found = data->byName.find(entry.name);
+        if (found != data->byName.end()) {
+            for (auto const& tag : found->second) {
+                std::wstring shown = tag.name.empty() ? LabelsColourName(tag.colour) : tag.name;
+                names.push_back(shown.empty() ? std::wstring(L"Gray") : shown);
+            }
+        }
+        perEntry.push_back(std::move(names));
+    }
+    LabelsGroupPlan plan = LabelsPlanGroups(perEntry, spec.groupAscending, L"Unspecified");
+    std::vector<Entry> regrouped;
+    result->groupOf.clear();
+    result->groupNames = plan.names;
+    for (size_t g = 0; g < plan.names.size(); g++) {
+        for (size_t i : plan.members[g]) {
+            Entry const& from = result->entries[i];
+            Entry copy;
+            copy.child.reset(ILClone(from.child.get()));
+            copy.name = from.name;
+            copy.folder = from.folder;
+            copy.launcher = from.launcher;
+            copy.archive = from.archive;
+            copy.remote = from.remote;
+            if (from.linkTarget) {
+                copy.linkTarget.reset(ILClone(from.linkTarget.get()));
+            }
+            regrouped.push_back(std::move(copy));
+            result->groupOf.push_back((int)g);
+        }
+    }
+    result->entries = std::move(regrouped);
+    return true;
+}
+// The self-test of the Tags values served to Explorer's Sort by and Group by (debug build only): "LABELS GROUP SELFTEST pass"
+// or "LABELS GROUP SELFTEST FAIL <what>".
 // The toolbar of File Explorer: the row with Back, Forward, Up and Refresh before the address bar. Explorer puts the four
 // AppBarButtons (x:Name backButton, forwardButton, upButton, refreshButton) in the "NavigationCommands" CommandBar, each
 // with the margin 8,8,8,0, so two of them are 16 apart. The gap is set through the margin of each button: between two
@@ -22250,6 +22573,84 @@ bool ToolbarTick(WindowState* state) {
     return true;
 }
 // The self-test of the toolbar's margins (debug build only): "TOOLBAR SELFTEST pass" or "TOOLBAR SELFTEST FAIL <what>".
+// The Sort and Group by menus of the command bar list the Tags property under Windows' own name for it ("Mots clés" in French,
+// "Tags" in English), where Explorer's other menus and this mod say "Étiquettes" / "Tags". Its entries are renamed to the mod's
+// name each time the menu opens. The menu is found from the button named SortAndGroupButton on the ticks of a new window.
+
+namespace {
+
+// The display name Windows gives System.Keywords, or empty.
+std::wstring LabelsKeywordsName() {
+    static std::wstring name;
+    if (name.empty()) {
+        IPropertyDescription* description = nullptr;
+        if (SUCCEEDED(PSGetPropertyDescription(PKEY_Keywords, IID_PPV_ARGS(&description))) && description) {
+            PWSTR text = nullptr;
+            if (SUCCEEDED(description->GetDisplayName(&text)) && text) {
+                name = text;
+                CoTaskMemFree(text);
+            }
+            description->Release();
+        }
+    }
+    return name;
+}
+
+void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase> const& items) {
+    std::wstring original = LabelsKeywordsName();
+    std::wstring ours = Str(L"labels.menu");
+    if (original.empty()) {
+        return;
+    }
+    for (auto const& base : items) {
+        if (auto radio = base.try_as<muxc::RadioMenuFlyoutItem>()) {
+            std::wstring text = std::wstring(radio.Text());
+            bool on = g_labels && g_labelsGroup;
+            if (on && text == original) {
+                LogVerbose(L"SORTMENU renamed '%s' to '%s'", text.c_str(), ours.c_str());
+                radio.Text(ours);
+            } else if (!on && text == ours) {
+                radio.Text(original);
+            }
+        } else if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
+            LabelsRenameKeywords(sub.Items());
+        }
+    }
+}
+
+void LabelsOnSortMenuOpening(Inspectable const& sender) {
+    if (g_unloading) {
+        return;
+    }
+    try {
+        if (auto menu = sender.try_as<muxc::MenuFlyout>()) {
+            LabelsRenameKeywords(menu.Items());
+        }
+    } catch (...) {
+    }
+}
+
+}  // namespace
+
+// Called on the ticks of a new window until it returns true: the Sort and group menu gets its handler.
+bool LabelsSortMenuTick(WindowState* state) {
+    auto content = state->xamlRoot ? state->xamlRoot.Content() : nullptr;
+    auto root = content ? content.try_as<mux::DependencyObject>() : nullptr;
+    if (!root) {
+        return false;
+    }
+    auto button = ToolbarFindById(root, L"SortAndGroupButton", 0).try_as<muxc::AppBarButton>();
+    if (!button) {
+        return false;
+    }
+    auto menu = button.Flyout().try_as<muxc::MenuFlyout>();
+    if (!menu) {
+        return false;
+    }
+    Keep(menu, menu.Opening(winrt::auto_revoke, [](Inspectable const& sender, Inspectable const&) { LabelsOnSortMenuOpening(sender); }));
+    LabelsRenameKeywords(menu.Items());
+    return true;
+}
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -22352,6 +22753,7 @@ void ReleaseEntry(WindowState* state) {
 // menu, then, if Columns was the last layout chosen, turn it on once the file
 // list is visible.
 bool ToolbarTick(WindowState* state);  // 10i
+bool LabelsSortMenuTick(WindowState* state);  // 10i2
 
 void EntryTick() {
     if (g_unloading) {
@@ -22369,6 +22771,9 @@ void EntryTick() {
         }
         if (!state->toolbarDone) {
             state->toolbarDone = ToolbarTick(state);
+        }
+        if (!state->sortMenuDone && g_labels && g_labelsGroup) {
+            state->sortMenuDone = LabelsSortMenuTick(state);
         }
         if (!state->menuItem) {
             int visited = 0;
@@ -22557,7 +22962,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -22602,7 +23007,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);
@@ -23006,6 +23411,7 @@ void LoadSettings() {
     g_autoPreview = SettingBool(L"autoPreview");
     g_autoFolderSize = SettingBool(L"autoFolderSize");
     LabelsLoadSettings();
+    g_labelsGroup = SettingBool(L"labelsGroup");
     g_toolbar = SettingBool(L"toolbarOn");
     g_navGap = SettingInt(L"navGap");
     g_addressGap = SettingInt(L"addressGap");
@@ -23057,6 +23463,7 @@ BOOL Wh_ModInit() {
         g_maxWidth.load(), g_follow ? 1 : 0);
 
 
+    LabelsInstallGroupHook();
     if (!LabelsInstallPaintHooks() && !GetModuleHandleW(L"dui70.dll")) {
         g_labelsWaitDui = true;
     }

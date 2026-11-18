@@ -100,6 +100,7 @@ void ReleaseEntry(WindowState* state) {
 // menu, then, if Columns was the last layout chosen, turn it on once the file
 // list is visible.
 bool ToolbarTick(WindowState* state);  // 10i
+bool LabelsSortMenuTick(WindowState* state);  // 10i2
 
 void EntryTick() {
     if (g_unloading) {
@@ -117,6 +118,9 @@ void EntryTick() {
         }
         if (!state->toolbarDone) {
             state->toolbarDone = ToolbarTick(state);
+        }
+        if (!state->sortMenuDone && g_labels && g_labelsGroup) {
+            state->sortMenuDone = LabelsSortMenuTick(state);
         }
         if (!state->menuItem) {
             int visited = 0;
@@ -305,7 +309,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -350,7 +354,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);

@@ -692,11 +692,15 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
 
 // Splits the sorted entries into groups for `spec.groupKey`: the shell's own
 // categorizer when the folder offers one, the fallback above otherwise.
-void GroupEntries(IShellFolder* folder, const SortSpec& spec,
-                  FolderResult* result) {
+bool LabelsGroupEntries(std::wstring const& folderPath, SortSpec const& spec, FolderResult* result);  // 10h1
+
+void GroupEntries(IShellFolder* folder, const SortSpec& spec, FolderResult* result, std::wstring const& folderPath) {
     size_t count = result->entries.size();
     if (!spec.grouped || count == 0) {
         return;
+    }
+    if (LabelsGroupEntries(folderPath, spec, result)) {
+        return;  // Grouped by Tags: each label is a group.
     }
     ICategorizer* categorizer = nullptr;
     ICategoryProvider* provider = nullptr;
@@ -956,7 +960,11 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
         result->truncated = true;
     }
 
-    GroupEntries(folder, spec, result);
+    wchar_t folderPath[MAX_PATH] = L"";
+    if (!ILIsEmpty(folderPidl)) {
+        SHGetPathFromIDListW(folderPidl, folderPath);
+    }
+    GroupEntries(folder, spec, result, folderPath);
     folder->Release();
 }
 

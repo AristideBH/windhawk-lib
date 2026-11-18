@@ -59,6 +59,7 @@ void LoadSettings() {
     g_autoPreview = SettingBool(L"autoPreview");
     g_autoFolderSize = SettingBool(L"autoFolderSize");
     LabelsLoadSettings();
+    g_labelsGroup = SettingBool(L"labelsGroup");
     g_toolbar = SettingBool(L"toolbarOn");
     g_navGap = SettingInt(L"navGap");
     g_addressGap = SettingInt(L"addressGap");
@@ -115,9 +116,11 @@ BOOL Wh_ModInit() {
     LabelsCacheSelfTest();
     LabelsPlaceSelfTest();
     LabelsPaneSelfTest();
+    LabelsGroupSelfTest();
     ToolbarSelfTest();
 #endif
 
+    LabelsInstallGroupHook();
     if (!LabelsInstallPaintHooks() && !GetModuleHandleW(L"dui70.dll")) {
         g_labelsWaitDui = true;
     }

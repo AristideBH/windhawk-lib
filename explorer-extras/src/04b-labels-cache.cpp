@@ -270,7 +270,14 @@ std::wstring LabelsDisplayNameOf(std::wstring const& itemPath) {
 }
 
 // The cache entry of the item's folder gets the item's new tags at once (after a successful write).
+void LabelsGroupNotifyItem(std::wstring const& itemPath);  // 10h1: Explorer reads the item again, for Sort and Group by tags
+void LabelsGroupFolderLoaded(std::wstring const& folderPath);  // 10h1: Explorer reads a folder again when its Keywords were asked early
+
 void LabelsSetTags(std::wstring const& itemPath, std::vector<LabelTag> const& tags) {
+    struct Notify {
+        std::wstring path;
+        ~Notify() { LabelsGroupNotifyItem(path); }
+    } notify{itemPath};  // After the cache has the new tags (and its lock is let go).
     std::wstring folderPath = itemPath;
     PathRemoveFileSpecW(folderPath.data());
     folderPath.resize(wcslen(folderPath.c_str()));

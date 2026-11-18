@@ -19,6 +19,12 @@ The dots follow the light and the dark theme.
 - **The details pane.** The **Tags** section shows the labels of the selection. Click **Add a tag** for the colours and an optional name; click a badge for a menu that removes it. With several items selected, a label that only some of them have is dimmed, and its menu can add it to all.
 - **The right-click menu**, in Explorer's own list and in Columns: a **Tags** entry with the colours as checkable items, **Add tag** and **Clear tags**. It acts on the selected items, and an empty space has no entry.
 
+## Sort and group
+
+Explorer's own **Sort by**, **Group by** and the **Tags** column of the Details view use the labels. In the **Group by** menu choose **Tags** (**Étiquettes** in French: the mod renames the entry Windows calls Keywords), and in the **Sort by** menu choose it under **More**. Columns groups the same way: each label is a group of the column, and an item is in the group of each of its labels. Each label is a group, named by its name (or its colour's name), and an item with two labels is in both groups, like macOS tags. The tags a file already has, such as a photo's keywords, are kept and the labels added to them. Items with no tag are in the group Explorer calls unspecified.
+
+A folder is read once when it is shown; when it was not read yet the first time Explorer asks, Explorer is told to read it again as soon as it is. After a label is set, the item moves to its new group. Switch this off with **Sort and group by tags** on Windhawk's page (it takes effect when a folder is shown again).
+
 ## Where they are kept
 
 In a named stream of the file itself (`ExplorerExtras.Labels`), so a label follows the file when it is copied or moved on an NTFS drive, and the file's dates do not change. This needs NTFS: on another file system, or when a file is read-only or in use, the pane and the menu say so and write nothing. A zip, an email or a cloud service may drop the stream.

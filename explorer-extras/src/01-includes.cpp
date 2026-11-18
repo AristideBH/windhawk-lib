@@ -9,6 +9,7 @@
 #undef GetCurrentTime
 
 #include <propkey.h>
+#include <propvarutil.h>
 #include <propsys.h>
 
 #include <algorithm>

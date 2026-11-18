@@ -74,6 +74,7 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Show labels | on | Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive. |
+| Sort and group by tags | on | Adds the labels to Explorer’s own Tags property, so Sort by, Group by and the Tags column use them. The tags a file already has are kept. Takes effect when a folder is shown again. |
 
 ### Colour names
 

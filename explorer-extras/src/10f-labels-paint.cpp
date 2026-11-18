@@ -913,7 +913,10 @@ void WINAPI LabelsPaintContent_Hook(void* self, HDC dc, const RECT* rect) {
 }
 
 // A folder was read: the windows are painted again so the dots show.
-void LabelsRepaintWindows(std::wstring const&) {
+void LabelsRepaintWindows(std::wstring const& folderPath) {
+    if (!folderPath.empty()) {
+        LabelsGroupFolderLoaded(folderPath);
+    }
     EnumWindows([](HWND window, LPARAM) -> BOOL {
         DWORD pid = 0;
         wchar_t name[40];

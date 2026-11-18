@@ -12,7 +12,7 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
 
 ## State
 
-- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.77.19,
+- Current file: `explorer-extras/explorer-extras.wh.cpp`, version 0.78.0,
   generated from `explorer-extras/src/`. Written and compiled by Ari up to
   2026-11-14 (evening). `ROADMAP.md` says what is done, tested and open.
   The version history is in `git log` (every handover is a commit).
@@ -30,6 +30,11 @@ For the next session, human or model. Written 2026-11-13, State updated 2026-11-
   `MenuFlyoutControl::AppendMenuItem` (a handler on the flyout's `Opening`) set and show them. The pure parts have
   self-tests that exist only in the debug build and write one `LABELS ... SELFTEST` line each; the smoke script reads them.
   Probes are in `probes/`. What each probe proved is in the `windhawk-explorer-surfaces` skill ("Labels, as built").
+- Sort and group by tags (0.78, `src/10h1-labels-group.cpp`, self-test `10h2`). A hook on `IPropertyStore::GetValue` (slot 5, found from
+  the store of one file in the Windows folder, the class is shared by all file system items) serves `System.Keywords`: the item's own
+  keywords plus the label names from the folder cache, looked up with `System.ParsingPath` and `System.ItemNameDisplay` asked from the
+  same store. A folder not complete in the cache is remembered, and `LabelsRepaintWindows` (the loaded callback) sends it
+  `SHCNE_UPDATEDIR`; `LabelsSetTags` sends `SHCNE_UPDATEITEM` after a write. Columns: `GroupEntries` (03-shell) asks `LabelsGroupEntries` first, which groups by label (`LabelsPlanGroups`, an entry copied into each of its labels' groups, unlabelled last). `src/10i2-labels-sortmenu.cpp` renames the Keywords entry of the Sort and group menu (found from `SortAndGroupButton`, on the menu's `Opening`). Setting `labelsGroup`. Probe: `probes/probe-sort-group.wh.cpp`.
 - Toolbar (0.77, `src/10i-toolbar.cpp`, self-test `10i1`). All of it is XAML properties of Explorer's own elements, found from
   `state->xamlRoot` on the ticks of `EntryTick`, kept in weak references with Explorer's original values and put back by
   `ToolbarRestoreThread` at unload (called by `RevokeKeptThreads`). Navigation buttons (`backButton` and three more, margin 8,8,8,0,
