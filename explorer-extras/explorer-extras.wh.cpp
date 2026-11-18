@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.0
+// @version         1.0.2
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -439,7 +439,7 @@ std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{true};   // Fixed: a click in the navigation pane makes its folder the first column.
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_doubleClickUp{false};
-std::atomic<bool> g_lastEdge{false};      // Fixed: no line on the right of the last column.
+std::atomic<bool> g_lastEdge{true};       // Fixed: the line on the right of the last column shows (not an option any more).
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};
@@ -6768,7 +6768,7 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
                         badge.HorizontalAlignment(mux::HorizontalAlignment::Right);
                         badge.VerticalAlignment(mux::VerticalAlignment::Center);
                         badge.IsHitTestVisible(false);
-                        muxc::Grid::SetColumn(badge, 3);
+                        muxc::Grid::SetColumn(badge, muxc::Grid::GetColumn(chevron));  // The chevron's own column (it moved when the labels' dots got one).
                         // It comes in: from a small, faint disc to its size (transitions are attached,
                         // and the end values set once the badge has been laid out).
                         bool animated = false;
@@ -15781,8 +15781,8 @@ void UpdateLastEdge(WindowState* state) {
             if (column->grip.Visibility() != wanted) {
                 column->grip.Visibility(wanted);
             }
-            // The last column has no separator line to its right (unless the setting asks for one);
-            // the handle to resize it still shows when the pointer is on the edge.
+            // The last column keeps its separator line to its right (g_lastEdge, fixed on); the handle to
+            // resize it shows when the pointer is on the edge.
             if (auto content = column->grip.Child().try_as<muxc::Panel>()) {
                 if (content.Children().Size() > 0) {
                     content.Children().GetAt(0).Opacity(last && !g_lastEdge ? 0.0 : 1.0);

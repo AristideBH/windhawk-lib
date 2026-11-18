@@ -2,6 +2,12 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.1 (2026-11-18)
+
+### Fixed
+- Columns: the last column has its line on the right again (it was fixed off in 0.66, with the option; it is now fixed on, and there is still no setting).
+- Columns: the round badge behind the chevron of the folder you came from is behind the chevron again. It had stayed in the column where the chevron was before the labels' dots got a column of their own.
+
 ## 1.0.0 (2026-11-18)
 
 The first stable release. The mod is no longer called a beta.

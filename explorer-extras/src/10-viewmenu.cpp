@@ -536,8 +536,8 @@ void UpdateLastEdge(WindowState* state) {
             if (column->grip.Visibility() != wanted) {
                 column->grip.Visibility(wanted);
             }
-            // The last column has no separator line to its right (unless the setting asks for one);
-            // the handle to resize it still shows when the pointer is on the edge.
+            // The last column keeps its separator line to its right (g_lastEdge, fixed on); the handle to
+            // resize it shows when the pointer is on the edge.
             if (auto content = column->grip.Child().try_as<muxc::Panel>()) {
                 if (content.Children().Size() > 0) {
                     content.Children().GetAt(0).Opacity(last && !g_lastEdge ? 0.0 : 1.0);

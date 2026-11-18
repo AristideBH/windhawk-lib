@@ -122,7 +122,7 @@ std::atomic<bool> g_restore{true};
 std::atomic<bool> g_sidebarRoot{true};   // Fixed: a click in the navigation pane makes its folder the first column.
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_doubleClickUp{false};
-std::atomic<bool> g_lastEdge{false};      // Fixed: no line on the right of the last column.
+std::atomic<bool> g_lastEdge{true};       // Fixed: the line on the right of the last column shows (not an option any more).
 std::atomic<bool> g_headerKeyboard{false};
 std::atomic<bool> g_keepStale{true};
 std::atomic<bool> g_foldersFirst{true};

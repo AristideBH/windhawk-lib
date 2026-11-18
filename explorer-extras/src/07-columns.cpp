@@ -2705,7 +2705,7 @@ void SetStaleHint(WindowState* state, int columnIndex, bool on) {
                         badge.HorizontalAlignment(mux::HorizontalAlignment::Right);
                         badge.VerticalAlignment(mux::VerticalAlignment::Center);
                         badge.IsHitTestVisible(false);
-                        muxc::Grid::SetColumn(badge, 3);
+                        muxc::Grid::SetColumn(badge, muxc::Grid::GetColumn(chevron));  // The chevron's own column (it moved when the labels' dots got one).
                         // It comes in: from a small, faint disc to its size (transitions are attached,
                         // and the end values set once the badge has been laid out).
                         bool animated = false;
