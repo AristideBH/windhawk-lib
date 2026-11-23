@@ -2,6 +2,17 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.24 (2026-11-23)
+
+Groundwork for the sidebar (design in `docs/superpowers/specs/2026-11-23-sidebar-design.md`); nothing in the interface changes yet.
+
+### Added
+- **A tag list** (`03d-tag-list.cpp`): the user's tags with name, colour, hidden and last-use time, kept as one value. The "Add a tag" flyout now reads its suggestions from it, and a tag added to a file is added to the list. The eight recent tags the first builds stored are taken in once.
+- **A tag index** (`04d-tag-index.cpp`): which files carry each tag, across the fixed local drives. One Explorer process walks the drives in the background and watches them for stream writes, the others read what it saved. It is started by the debug build only for now; the sidebar will start it. Rename, recolour and delete passes rewrite the tag on every file and keep the files' times.
+
+### Fixed
+- `build.py` reads the parts with Windows line endings, as a git worktree checks them out.
+
 ## 1.0.20 (2026-11-23)
 
 ### Fixed

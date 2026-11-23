@@ -108,6 +108,7 @@ LabelsApplyResult LabelsApplyToSelection(std::vector<std::wstring> const& paths,
         if (written == LabelsWrite::Ok) {
             result.done++;
             LabelsSetTags(path, tags);
+            TagIndexNoteWrite(path, tags);
         } else {
             result.worst = written;
             result.failedName = fileName;
@@ -137,6 +138,7 @@ LabelsApplyResult LabelsClearSelection(std::vector<std::wstring> const& paths) {
         if (written == LabelsWrite::Ok) {
             result.done++;
             LabelsSetTags(path, {});
+            TagIndexNoteWrite(path, {});
         } else {
             result.worst = written;
             result.failedName = fileName;

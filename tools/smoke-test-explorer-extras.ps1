@@ -95,6 +95,10 @@ $placeLine = $lines | Select-String 'LABELS PLACE SELFTEST' | Select-Object -Las
 Check 'labels placement self-test passed' ($placeLine -and $placeLine.Line -match 'LABELS PLACE SELFTEST pass') ($(if ($placeLine) { $placeLine.Line } else { 'no LABELS PLACE SELFTEST line in the log' }))
 $paneLabelsLine = $lines | Select-String 'LABELS PANE SELFTEST' | Select-Object -Last 1
 Check 'labels pane self-test passed' ($paneLabelsLine -and $paneLabelsLine.Line -match 'LABELS PANE SELFTEST pass') ($(if ($paneLabelsLine) { $paneLabelsLine.Line } else { 'no LABELS PANE SELFTEST line in the log' }))
+$tagsLine = $lines | Select-String 'TAGS SELFTEST' | Select-Object -Last 1
+Check 'tag list self-test passed' ($tagsLine -and $tagsLine.Line -match 'TAGS SELFTEST pass') ($(if ($tagsLine) { $tagsLine.Line } else { 'no TAGS SELFTEST line in the log' }))
+$indexLine = $lines | Select-String 'TAGINDEX SELFTEST' | Select-Object -Last 1
+Check 'tag index self-test passed' ($indexLine -and $indexLine.Line -match 'TAGINDEX SELFTEST pass') ($(if ($indexLine) { $indexLine.Line } else { 'no TAGINDEX SELFTEST line in the log' }))
 $toolbarLine = $lines | Select-String 'TOOLBAR SELFTEST' | Select-Object -Last 1
 Check 'toolbar self-test passed' ($toolbarLine -and $toolbarLine.Line -match 'TOOLBAR SELFTEST pass') ($(if ($toolbarLine) { $toolbarLine.Line } else { 'no TOOLBAR SELFTEST line in the log' }))
 Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object -First 2 | ForEach-Object { $_.Line })

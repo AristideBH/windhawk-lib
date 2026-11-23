@@ -39,17 +39,10 @@ bool LabelsRecentParse(std::wstring_view text, LabelTag* out) {
     return true;
 }
 
-namespace {
-
-std::mutex g_labelsRecentMutex;
-std::vector<LabelTag> g_labelsRecent;
-bool g_labelsRecentLoaded = false;
-
-void LabelsRecentLoad() {  // The caller holds the lock.
-    if (g_labelsRecentLoaded) {
-        return;
-    }
-    g_labelsRecentLoaded = true;
+// The recent tags now live in the tag list (03d-tag-list.cpp), which LabelsRecentGet and LabelsRecentRemember read and write
+// (defined there). This reads what the first builds stored, newest first, and deletes it, so the list can take it in once.
+std::vector<LabelTag> LabelsRecentLegacyTake() {
+    std::vector<LabelTag> found;
     int count = Wh_GetIntValue(L"labels.recent.count", 0);
     for (int i = 0; i < count && i < (int)kLabelsRecentMax; i++) {
         wchar_t name[40];
@@ -58,34 +51,10 @@ void LabelsRecentLoad() {  // The caller holds the lock.
         size_t length = Wh_GetStringValue(name, buffer.data(), buffer.size());
         LabelTag tag;
         if (length > 0 && length < buffer.size() && LabelsRecentParse(std::wstring_view(buffer.data(), length), &tag)) {
-            g_labelsRecent.push_back(std::move(tag));
+            found.push_back(std::move(tag));
         }
+        Wh_DeleteValue(name);
     }
-}
-
-}  // namespace
-
-std::vector<LabelTag> LabelsRecentGet() {
-    std::lock_guard<std::mutex> lock(g_labelsRecentMutex);
-    LabelsRecentLoad();
-    return g_labelsRecent;
-}
-
-void LabelsRecentRemember(LabelTag const& tag) {
-    if (tag.name.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_labelsRecentMutex);
-    LabelsRecentLoad();
-    g_labelsRecent = LabelsRecentPush(g_labelsRecent, tag);
-    for (size_t i = 0; i < kLabelsRecentMax; i++) {
-        wchar_t name[40];
-        swprintf_s(name, L"labels.recent.%d", (int)i);
-        if (i < g_labelsRecent.size()) {
-            Wh_SetStringValue(name, LabelsRecentEntry(g_labelsRecent[i]).c_str());
-        } else {
-            Wh_DeleteValue(name);
-        }
-    }
-    Wh_SetIntValue(L"labels.recent.count", (int)g_labelsRecent.size());
+    Wh_DeleteValue(L"labels.recent.count");
+    return found;
 }

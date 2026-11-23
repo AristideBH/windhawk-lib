@@ -119,7 +119,10 @@ BOOL Wh_ModInit() {
     LabelsPaneSelfTest();
     LabelsGroupSelfTest();
     LabelsRecentSelfTest();
+    TagListSelfTest();
+    TagIndexSelfTest();
     ToolbarSelfTest();
+    TagIndexStart();  // The debug build runs the index for real (the release build starts it with the sidebar, Task 4).
 #endif
 
     LabelsInstallGroupHook();
@@ -176,6 +179,7 @@ void Wh_ModBeforeUninit() {
     // Every thread of the mod ends first, so no result is queued after the windows are cleaned.
     LabelsRemovePaintHooks();
     LabelsCancelAll();
+    TagIndexStop();
     JoinModThreads();
     StopWorker();
     CloseEverything();
