@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.8 (2026-11-23)
+
+### Fixed
+- **Icons.** A picture the shell gave without an alpha channel showed on a black square (folders in the columns): the black that touches its edge is now transparent. An item whose thumbnail could not be made showed Fluent's default glyph (some PDFs, a folder): its type icon is asked for then.
+
 ## 1.0.7 (2026-11-23)
 
 ### Fixed

@@ -95,8 +95,40 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
         }
     }
     if (!anyAlpha) {
-        for (size_t i = 3; i < out->bgra.size(); i += 4) {
-            out->bgra[i] = 255;
+        // No alpha channel: the picture sits on black. The black that touches the edge is the background, and goes.
+        int w = out->width, h = out->height;
+        std::vector<char> seen((size_t)w * h, 0);
+        std::vector<int> stack;
+        auto black = [&](int x, int y) {
+            const unsigned char* px = &out->bgra[((size_t)y * w + x) * 4];
+            return !px[0] && !px[1] && !px[2];
+        };
+        auto push = [&](int x, int y) {
+            size_t at = (size_t)y * w + x;
+            if (!seen[at] && black(x, y)) {
+                seen[at] = 1;
+                stack.push_back((int)at);
+            }
+        };
+        for (int x = 0; x < w; x++) {
+            push(x, 0);
+            push(x, h - 1);
+        }
+        for (int y = 0; y < h; y++) {
+            push(0, y);
+            push(w - 1, y);
+        }
+        while (!stack.empty()) {
+            int at = stack.back();
+            stack.pop_back();
+            int x = at % w, y = at / w;
+            if (x > 0) push(x - 1, y);
+            if (x < w - 1) push(x + 1, y);
+            if (y > 0) push(x, y - 1);
+            if (y < h - 1) push(x, y + 1);
+        }
+        for (size_t i = 0; i < seen.size(); i++) {
+            out->bgra[i * 4 + 3] = seen[i] ? 0 : 255;
         }
     }
     return true;
@@ -148,6 +180,10 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
             LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
             HRESULT got = factory->GetImage(SIZE{side, side}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
+            if (FAILED(got) && !cachedOnly) {
+                // No thumbnail to be had: the icon of the type, which every item has.
+                got = factory->GetImage(SIZE{side, side}, SIIGBF_ICONONLY, &bitmap);
+            }
             if (SUCCEEDED(got) && bitmap) {
                 IconBits bits;
                 bits.index = indices[i];
