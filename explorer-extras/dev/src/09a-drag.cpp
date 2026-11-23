@@ -456,7 +456,7 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
 winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::touchPoint) point,
                                     std::vector<winrt::Windows::Storage::IStorageItem> items,
                                     std::shared_ptr<std::vector<uint8_t>> cida,
-                                    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture) {
+                                    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture, bool fromArchive) {
     CoroutineGuard counted;
     namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
     winrt::event_token token{};
@@ -468,7 +468,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
     bool dropHooked = false;
     bool dragWasOurs = false;
     try {
-        token = list.DragStarting([items, cida, picture](mux::UIElement const&, mux::DragStartingEventArgs const& args) {
+        token = list.DragStarting([items, cida, picture, fromArchive](mux::UIElement const&, mux::DragStartingEventArgs const& args) {
             if (picture) {
                 try {
                     args.DragUI().SetContentFromSoftwareBitmap(picture);
@@ -488,16 +488,17 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                     }
                 });
             }
-            // What the shell's targets take as the effect when no key says otherwise: a move.
-            // (0.31.3, to see whether the Copy/Move/Cancel menu of the navigation pane goes.)
-            args.Data().SetDataProvider(L"Preferred DropEffect", [](dt::DataProviderRequest const& request) {
+            // What the shell's targets take as the effect when no key says otherwise: a move, and a copy
+            // for items taken out of an archive (they cannot be moved).
+            args.Data().SetDataProvider(L"Preferred DropEffect", [fromArchive](dt::DataProviderRequest const& request) {
                 try {
-                    request.SetData(StreamOfBytes(std::vector<uint8_t>{2, 0, 0, 0}));
+                    request.SetData(StreamOfBytes(std::vector<uint8_t>{(uint8_t)(fromArchive ? 1 : 2), 0, 0, 0}));
                 } catch (...) {
                 }
             });
-            args.AllowedOperations(dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
-                                   dt::DataPackageOperation::Link);
+            args.AllowedOperations(fromArchive ? dt::DataPackageOperation::Copy
+                                               : (dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
+                                                  dt::DataPackageOperation::Link));
         });
         hooked = true;
         WindowState* state = StateForThisThread(false);
@@ -1081,7 +1082,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
             }
             LogVerbose(L"touch: moved after the hold, starting the system's drag");
             decltype(DragState::touchPoint) now = args.GetCurrentPoint(d.pressedRow);
-            TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture);
+            TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture, d.fromArchive);
             return true;
         }
         std::vector<size_t> picked = SelectedEntries(column, list);

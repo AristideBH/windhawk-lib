@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.10
+// @version         1.0.11
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -3149,6 +3149,33 @@ void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation
 
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work);  // 11
 
+// Waits for work queued to a UI thread, for as long as it takes, unless that thread ends first: then nothing will ever run it and
+// waiting would hang the unload. True when the work ran.
+bool WaitForThreadWork(HANDLE done, DWORD threadId) {
+    HANDLE thread = threadId ? OpenThread(SYNCHRONIZE, FALSE, threadId) : nullptr;
+    bool ran = false;
+    for (;;) {
+        HANDLE handles[2] = {done, thread};
+        DWORD wait = WaitForMultipleObjects(thread ? 2 : 1, handles, FALSE, 1000);
+        if (wait == WAIT_OBJECT_0) {
+            ran = true;
+            break;
+        }
+        if (wait == WAIT_OBJECT_0 + 1) {
+            // The thread is gone: its queue may have run the work a moment before it went.
+            ran = WaitForSingleObject(done, 0) == WAIT_OBJECT_0;
+            break;
+        }
+        if (wait != WAIT_TIMEOUT) {
+            break;
+        }
+    }
+    if (thread) {
+        CloseHandle(thread);
+    }
+    return ran;
+}
+
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
     {
@@ -3183,8 +3210,7 @@ void RevokeKeptThreads() {
         if (queued) {
             // The work runs on the window's own thread. Stopping the wait early would leave it queued for after the
             // mod is unmapped, so it is waited for as long as it takes.
-            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
-            }
+            WaitForThreadWork(done, thread.id);
         }
         CloseHandle(done);
     }
@@ -7384,9 +7410,24 @@ HRESULT RestoreFromRecycleBin(WindowState* state,
                 VariantClear(&value);
             }
             std::wstring joined = from.empty() ? L"" : from + L"\\" + name;
+            // The name shown has no extension when Explorer hides it: the bin item's own name, `$R….ext`, has it.
+            std::wstring joinedFull = joined;
+            {
+                STRRET text = {};
+                wchar_t buffer[MAX_PATH] = L"";
+                if (!from.empty() && SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_INFOLDER | SHGDN_FORPARSING, &text)) &&
+                    SUCCEEDED(StrRetToBufW(&text, child, buffer, MAX_PATH))) {
+                    const wchar_t* extension = PathFindExtensionW(buffer);
+                    size_t length = wcslen(extension);
+                    if (length > 1 && (name.size() < length || _wcsicmp(name.c_str() + name.size() - length, extension) != 0)) {
+                        joinedFull = joined + extension;
+                    }
+                }
+            }
             for (size_t k = 0; k < paths.size(); k++) {
                 if ((!normal.empty() && _wcsicmp(normal.c_str(), paths[k].c_str()) == 0) ||
-                    (!joined.empty() && _wcsicmp(joined.c_str(), paths[k].c_str()) == 0)) {
+                    (!joined.empty() && _wcsicmp(joined.c_str(), paths[k].c_str()) == 0) ||
+                    (!joinedFull.empty() && _wcsicmp(joinedFull.c_str(), paths[k].c_str()) == 0)) {
                     if (date >= bestDate[k]) {
                         bestDate[k] = date;
                         best[k].reset(ILClone(child));
@@ -13565,7 +13606,7 @@ winrt::fire_and_forget TouchDragPrepare(std::vector<std::wstring> paths, std::sh
 winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::touchPoint) point,
                                     std::vector<winrt::Windows::Storage::IStorageItem> items,
                                     std::shared_ptr<std::vector<uint8_t>> cida,
-                                    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture) {
+                                    winrt::Windows::Graphics::Imaging::SoftwareBitmap picture, bool fromArchive) {
     CoroutineGuard counted;
     namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
     winrt::event_token token{};
@@ -13577,7 +13618,7 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
     bool dropHooked = false;
     bool dragWasOurs = false;
     try {
-        token = list.DragStarting([items, cida, picture](mux::UIElement const&, mux::DragStartingEventArgs const& args) {
+        token = list.DragStarting([items, cida, picture, fromArchive](mux::UIElement const&, mux::DragStartingEventArgs const& args) {
             if (picture) {
                 try {
                     args.DragUI().SetContentFromSoftwareBitmap(picture);
@@ -13595,16 +13636,17 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                     }
                 });
             }
-            // What the shell's targets take as the effect when no key says otherwise: a move.
-            // (0.31.3, to see whether the Copy/Move/Cancel menu of the navigation pane goes.)
-            args.Data().SetDataProvider(L"Preferred DropEffect", [](dt::DataProviderRequest const& request) {
+            // What the shell's targets take as the effect when no key says otherwise: a move, and a copy
+            // for items taken out of an archive (they cannot be moved).
+            args.Data().SetDataProvider(L"Preferred DropEffect", [fromArchive](dt::DataProviderRequest const& request) {
                 try {
-                    request.SetData(StreamOfBytes(std::vector<uint8_t>{2, 0, 0, 0}));
+                    request.SetData(StreamOfBytes(std::vector<uint8_t>{(uint8_t)(fromArchive ? 1 : 2), 0, 0, 0}));
                 } catch (...) {
                 }
             });
-            args.AllowedOperations(dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
-                                   dt::DataPackageOperation::Link);
+            args.AllowedOperations(fromArchive ? dt::DataPackageOperation::Copy
+                                               : (dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
+                                                  dt::DataPackageOperation::Link));
         });
         hooked = true;
         WindowState* state = StateForThisThread(false);
@@ -14170,7 +14212,7 @@ bool OnDragMoved(WindowState* state, Column* column, muxc::ListView const& list,
                 return false;
             }
             decltype(DragState::touchPoint) now = args.GetCurrentPoint(d.pressedRow);
-            TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture);
+            TouchDragRun(d.pressedRow.as<mux::UIElement>(), now, g_touchPrep.items, g_touchPrep.cida, g_touchPrep.picture, d.fromArchive);
             return true;
         }
         std::vector<size_t> picked = SelectedEntries(column, list);
@@ -23658,6 +23700,7 @@ void CloseEverything() {
     }
     for (auto& owned : states) {
         WindowState* state = owned.release();
+        DWORD threadId = state->thread;
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         bool queued = false;
         try {
@@ -23696,14 +23739,9 @@ void CloseEverything() {
         if (queued && done) {
             // The cleanup runs on the window's own thread. Stopping the wait early would leave it queued
             // for after the mod is unmapped, so it is waited for as long as it takes.
-            DWORD wait = WAIT_TIMEOUT;
-            for (int tries = 0; wait == WAIT_TIMEOUT; tries++) {
-                wait = WaitForSingleObject(done, 1000);
-                if (wait == WAIT_TIMEOUT && tries == 10) {
-                    Wh_Log(L"window cleanup is still waiting for the window's thread");
-                }
-            }
-            Wh_Log(L"window cleanup %s", wait == WAIT_OBJECT_0 ? L"done" : L"failed");
+            // If the window's thread ends before it ran the work, the wait ends with it.
+            bool ran = WaitForThreadWork(done, threadId);
+            Wh_Log(L"window cleanup %s", ran ? L"done" : L"failed, the window's thread ended first");
             CloseHandle(done);
         } else {
             // The window's thread is gone. Its objects can't be released from
@@ -23719,16 +23757,18 @@ void CloseEverything() {
 // Columns is switched off while the details pane stays: the panel and the Columns entry go from every
 // window, and the windows' state, pane and entries stay.
 void ColumnsOffEverywhere() {
-    std::vector<mud::DispatcherQueue> queues;
+    std::vector<std::pair<mud::DispatcherQueue, DWORD>> queues;
     {
         std::lock_guard<std::mutex> lock(g_statesMutex);
         for (auto& state : g_states) {
             if (state->queue) {
-                queues.push_back(state->queue);
+                queues.push_back({state->queue, state->thread});
             }
         }
     }
-    for (auto& queue : queues) {
+    for (auto& entry : queues) {
+        mud::DispatcherQueue const& queue = entry.first;
+        DWORD threadId = entry.second;
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         bool queued = false;
         try {
@@ -23746,8 +23786,7 @@ void ColumnsOffEverywhere() {
             LogHresult(L"ColumnsOffEverywhere");
         }
         if (queued && done) {
-            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
-            }
+            WaitForThreadWork(done, threadId);
         }
         if (done) {
             CloseHandle(done);

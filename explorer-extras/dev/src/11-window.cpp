@@ -610,6 +610,7 @@ void CloseEverything() {
     }
     for (auto& owned : states) {
         WindowState* state = owned.release();
+        DWORD threadId = state->thread;
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         bool queued = false;
         try {
@@ -648,14 +649,9 @@ void CloseEverything() {
         if (queued && done) {
             // The cleanup runs on the window's own thread. Stopping the wait early would leave it queued
             // for after the mod is unmapped, so it is waited for as long as it takes.
-            DWORD wait = WAIT_TIMEOUT;
-            for (int tries = 0; wait == WAIT_TIMEOUT; tries++) {
-                wait = WaitForSingleObject(done, 1000);
-                if (wait == WAIT_TIMEOUT && tries == 10) {
-                    Wh_Log(L"window cleanup is still waiting for the window's thread");
-                }
-            }
-            Wh_Log(L"window cleanup %s", wait == WAIT_OBJECT_0 ? L"done" : L"failed");
+            // If the window's thread ends before it ran the work, the wait ends with it.
+            bool ran = WaitForThreadWork(done, threadId);
+            Wh_Log(L"window cleanup %s", ran ? L"done" : L"failed, the window's thread ended first");
             CloseHandle(done);
         } else {
             // The window's thread is gone. Its objects can't be released from
@@ -671,16 +667,18 @@ void CloseEverything() {
 // Columns is switched off while the details pane stays: the panel and the Columns entry go from every
 // window, and the windows' state, pane and entries stay.
 void ColumnsOffEverywhere() {
-    std::vector<mud::DispatcherQueue> queues;
+    std::vector<std::pair<mud::DispatcherQueue, DWORD>> queues;
     {
         std::lock_guard<std::mutex> lock(g_statesMutex);
         for (auto& state : g_states) {
             if (state->queue) {
-                queues.push_back(state->queue);
+                queues.push_back({state->queue, state->thread});
             }
         }
     }
-    for (auto& queue : queues) {
+    for (auto& entry : queues) {
+        mud::DispatcherQueue const& queue = entry.first;
+        DWORD threadId = entry.second;
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         bool queued = false;
         try {
@@ -698,8 +696,7 @@ void ColumnsOffEverywhere() {
             LogHresult(L"ColumnsOffEverywhere");
         }
         if (queued && done) {
-            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
-            }
+            WaitForThreadWork(done, threadId);
         }
         if (done) {
             CloseHandle(done);

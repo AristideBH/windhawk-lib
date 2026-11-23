@@ -110,6 +110,33 @@ void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation
 
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work);  // 11
 
+// Waits for work queued to a UI thread, for as long as it takes, unless that thread ends first: then nothing will ever run it and
+// waiting would hang the unload. True when the work ran.
+bool WaitForThreadWork(HANDLE done, DWORD threadId) {
+    HANDLE thread = threadId ? OpenThread(SYNCHRONIZE, FALSE, threadId) : nullptr;
+    bool ran = false;
+    for (;;) {
+        HANDLE handles[2] = {done, thread};
+        DWORD wait = WaitForMultipleObjects(thread ? 2 : 1, handles, FALSE, 1000);
+        if (wait == WAIT_OBJECT_0) {
+            ran = true;
+            break;
+        }
+        if (wait == WAIT_OBJECT_0 + 1) {
+            // The thread is gone: its queue may have run the work a moment before it went.
+            ran = WaitForSingleObject(done, 0) == WAIT_OBJECT_0;
+            break;
+        }
+        if (wait != WAIT_TIMEOUT) {
+            break;
+        }
+    }
+    if (thread) {
+        CloseHandle(thread);
+    }
+    return ran;
+}
+
 void RevokeKeptThreads() {
     std::vector<KeepThread> threads;
     {
@@ -144,8 +171,7 @@ void RevokeKeptThreads() {
         if (queued) {
             // The work runs on the window's own thread. Stopping the wait early would leave it queued for after the
             // mod is unmapped, so it is waited for as long as it takes.
-            while (WaitForSingleObject(done, 1000) == WAIT_TIMEOUT) {
-            }
+            WaitForThreadWork(done, thread.id);
         }
         CloseHandle(done);
     }

@@ -147,9 +147,24 @@ HRESULT RestoreFromRecycleBin(WindowState* state,
                 VariantClear(&value);
             }
             std::wstring joined = from.empty() ? L"" : from + L"\\" + name;
+            // The name shown has no extension when Explorer hides it: the bin item's own name, `$R….ext`, has it.
+            std::wstring joinedFull = joined;
+            {
+                STRRET text = {};
+                wchar_t buffer[MAX_PATH] = L"";
+                if (!from.empty() && SUCCEEDED(folder->GetDisplayNameOf(child, SHGDN_INFOLDER | SHGDN_FORPARSING, &text)) &&
+                    SUCCEEDED(StrRetToBufW(&text, child, buffer, MAX_PATH))) {
+                    const wchar_t* extension = PathFindExtensionW(buffer);
+                    size_t length = wcslen(extension);
+                    if (length > 1 && (name.size() < length || _wcsicmp(name.c_str() + name.size() - length, extension) != 0)) {
+                        joinedFull = joined + extension;
+                    }
+                }
+            }
             for (size_t k = 0; k < paths.size(); k++) {
                 if ((!normal.empty() && _wcsicmp(normal.c_str(), paths[k].c_str()) == 0) ||
-                    (!joined.empty() && _wcsicmp(joined.c_str(), paths[k].c_str()) == 0)) {
+                    (!joined.empty() && _wcsicmp(joined.c_str(), paths[k].c_str()) == 0) ||
+                    (!joinedFull.empty() && _wcsicmp(joinedFull.c_str(), paths[k].c_str()) == 0)) {
                     if (date >= bestDate[k]) {
                         bestDate[k] = date;
                         best[k].reset(ILClone(child));

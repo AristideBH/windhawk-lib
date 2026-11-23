@@ -2,6 +2,14 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.11 (2026-11-23)
+
+### Fixed
+- **Touch drag** of items taken out of an archive offers a copy only and prefers a copy (it forced a move).
+- **Unload** no longer waits for a window whose thread has ended before it ran the cleanup (the wait ends with the thread).
+- **Undo of a delete** finds the item in the Recycle Bin when Explorer hides file extensions.
+- Not changed: the navigation pane drop fallback. A drop is made after the button is up, so the keys it passes are right.
+
 ## 1.0.10 (2026-11-23)
 
 ### Fixed
