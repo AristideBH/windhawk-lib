@@ -1425,9 +1425,19 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
             return;
         }
     }
-    if (state->expected && ILIsEqual(current.get(), state->expected.get())) {
-        state->expected.reset();
-        return;
+    if (state->expected) {
+        bool same = ILIsEqual(current.get(), state->expected.get());
+        if (!same) {
+            // A folder opened from Home or Quick access is a link: Explorer reports the folder's own
+            // id, which names the same place on disk.
+            wchar_t wanted[MAX_PATH] = L"", got[MAX_PATH] = L"";
+            same = SHGetPathFromIDListW(state->expected.get(), wanted) && SHGetPathFromIDListW(current.get(), got) && wanted[0] &&
+                   _wcsicmp(wanted, got) == 0;
+        }
+        if (same) {
+            state->expected.reset();
+            return;
+        }
     }
     state->expected.reset();
     SyncToFolder(state, current);

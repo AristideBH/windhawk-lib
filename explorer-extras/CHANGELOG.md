@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.7 (2026-11-23)
+
+### Fixed
+- **First column reset by a click on a row.** In Home or Quick access a folder row is a link: Explorer reported the folder's own id, which did not match the one the mod had asked for, so the columns were rebuilt with that folder first. The two are now compared by their path on disk too.
+
 ## 1.0.6 (2026-11-23)
 
 ### Fixed

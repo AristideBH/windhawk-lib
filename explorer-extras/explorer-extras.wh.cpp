@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.6
+// @version         1.0.7
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -11871,9 +11871,19 @@ void OnExplorerFolderChanged(WindowState* state, Pidl const& current) {
             return;
         }
     }
-    if (state->expected && ILIsEqual(current.get(), state->expected.get())) {
-        state->expected.reset();
-        return;
+    if (state->expected) {
+        bool same = ILIsEqual(current.get(), state->expected.get());
+        if (!same) {
+            // A folder opened from Home or Quick access is a link: Explorer reports the folder's own
+            // id, which names the same place on disk.
+            wchar_t wanted[MAX_PATH] = L"", got[MAX_PATH] = L"";
+            same = SHGetPathFromIDListW(state->expected.get(), wanted) && SHGetPathFromIDListW(current.get(), got) && wanted[0] &&
+                   _wcsicmp(wanted, got) == 0;
+        }
+        if (same) {
+            state->expected.reset();
+            return;
+        }
     }
     state->expected.reset();
     SyncToFolder(state, current);
