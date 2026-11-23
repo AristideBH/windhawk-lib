@@ -41,8 +41,8 @@ bool LabelsRecentParse(std::wstring_view text, LabelTag* out) {
 
 namespace {
 
-[[clang::no_destroy]] std::mutex g_labelsRecentMutex;
-[[clang::no_destroy]] std::vector<LabelTag> g_labelsRecent;
+std::mutex g_labelsRecentMutex;
+std::vector<LabelTag> g_labelsRecent;
 bool g_labelsRecentLoaded = false;
 
 void LabelsRecentLoad() {  // The caller holds the lock.

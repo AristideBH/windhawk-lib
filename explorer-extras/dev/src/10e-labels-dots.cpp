@@ -27,8 +27,8 @@ constexpr LabelsPaletteEntry kLabelsPalette[8] = {
 std::atomic<ULONGLONG> g_labelsThemeChecked{0};
 std::atomic<bool> g_labelsDark{false};
 std::mutex g_labelDotMutex;
-[[clang::no_destroy]] std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
-[[clang::no_destroy]] std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
+std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
+std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
 
 BITMAPINFO LabelsDotInfo(int side) {
     BITMAPINFO info = {};

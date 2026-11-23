@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.17
+// @version         1.0.18
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -1782,8 +1782,8 @@ void LoadFolder(PCIDLIST_ABSOLUTE folderPidl, const SortSpec& spec,
             syncing += entry.remote == 6;
         }
         // One line per folder, again only when the numbers change.
-        [[clang::no_destroy]] static std::mutex lock;
-        [[clang::no_destroy]] static std::map<std::wstring, int> last;
+        static std::mutex lock;
+        static std::map<std::wstring, int> last;
         std::wstring key;
         PWSTR text = nullptr;
         if (SUCCEEDED(SHGetNameFromIDList(folderPidl, SIGDN_DESKTOPABSOLUTEPARSING, &text)) && text) {
@@ -2267,8 +2267,8 @@ bool LabelsRecentParse(std::wstring_view text, LabelTag* out) {
 
 namespace {
 
-[[clang::no_destroy]] std::mutex g_labelsRecentMutex;
-[[clang::no_destroy]] std::vector<LabelTag> g_labelsRecent;
+std::mutex g_labelsRecentMutex;
+std::vector<LabelTag> g_labelsRecent;
 bool g_labelsRecentLoaded = false;
 
 void LabelsRecentLoad() {  // The caller holds the lock.
@@ -2428,7 +2428,8 @@ void OpenItem(HWND owner, PCIDLIST_ABSOLUTE pidl) {
 //
 // Sort and group, the width of a column and whether the folder is shown in
 // Columns. Kept across restarts in one value of the mod's storage, as lines of
-// "path TAB sort TAB width TAB columns". The most recent 150 folders are kept.
+// "path TAB sort TAB width TAB columns". 150 folders are kept; when a new one comes in, the one used longest ago goes
+// (a folder is used when it is opened, not only when something about it changes).
 
 struct FolderMemory {
     bool hasSpec = false;
@@ -2439,7 +2440,9 @@ struct FolderMemory {
 
 std::mutex g_memoryMutex;
 std::map<std::wstring, FolderMemory> g_memory;
-std::vector<std::wstring> g_memoryOrder;  // Oldest first.
+std::map<std::wstring, size_t> g_memorySlot;       // Which numbered value holds each folder.
+std::map<std::wstring, unsigned long long> g_memoryUsed;  // When each folder was last used (this run; loaded ones by their slot).
+unsigned long long g_memoryClock = 0;
 bool g_memoryLoaded = false;
 constexpr size_t kMemoryLimit = 150;
 
@@ -2556,25 +2559,27 @@ std::wstring MemoryValueName(size_t index) {
     return L"folderMemory." + std::to_wstring(index);
 }
 
+// Writes the value of one slot (when it changed).
+void WriteMemorySlotLocked(size_t slot, std::wstring const& line) {
+    if (slot >= g_memoryWritten.size()) {
+        g_memoryWritten.resize(slot + 1);
+    }
+    if (g_memoryWritten[slot] != line) {
+        Wh_SetStringValue(MemoryValueName(slot).c_str(), line.c_str());
+        g_memoryWritten[slot] = line;
+    }
+    Wh_SetIntValue(L"folderMemory.count", (int)g_memoryWritten.size());
+}
+
+// Every slot, after the first load of the single value.
 void SaveFolderMemoryLocked() {
-    std::vector<std::wstring> lines;
-    for (auto& key : g_memoryOrder) {
-        auto found = g_memory.find(key);
+    for (auto const& entry : g_memorySlot) {
+        auto found = g_memory.find(entry.first);
         if (found != g_memory.end()) {
-            lines.push_back(MemoryLine(key, found->second));
+            WriteMemorySlotLocked(entry.second, MemoryLine(entry.first, found->second));
         }
     }
-    // Only the values that changed are written.
-    for (size_t i = 0; i < lines.size(); i++) {
-        if (i >= g_memoryWritten.size() || g_memoryWritten[i] != lines[i]) {
-            Wh_SetStringValue(MemoryValueName(i).c_str(), lines[i].c_str());
-        }
-    }
-    for (size_t i = lines.size(); i < g_memoryWritten.size(); i++) {
-        Wh_DeleteValue(MemoryValueName(i).c_str());
-    }
-    Wh_SetIntValue(L"folderMemory.count", (int)lines.size());
-    g_memoryWritten = std::move(lines);
+    Wh_SetIntValue(L"folderMemory.count", (int)g_memoryWritten.size());
 }
 
 void LoadFolderMemoryLocked() {
@@ -2599,9 +2604,11 @@ void LoadFolderMemoryLocked() {
             }
             std::wstring key;
             FolderMemory memory;
-            if (ParseMemoryLine(text.substr(start, end - start), L'\t', &key, &memory)) {
+            if (ParseMemoryLine(text.substr(start, end - start), L'\t', &key, &memory) && g_memorySlot.size() < kMemoryLimit) {
                 g_memory[key] = memory;
-                g_memoryOrder.push_back(key);
+                size_t slot = g_memorySlot.size();
+                g_memorySlot[key] = slot;
+                g_memoryUsed[key] = ++g_memoryClock;
             }
             start = end + 1;
         }
@@ -2617,7 +2624,8 @@ void LoadFolderMemoryLocked() {
         FolderMemory memory;
         if (length && ParseMemoryLine(line, L'|', &key, &memory)) {
             g_memory[key] = memory;
-            g_memoryOrder.push_back(key);
+            g_memorySlot[key] = (size_t)i;
+            g_memoryUsed[key] = ++g_memoryClock;
             g_memoryWritten.push_back(line);
         } else {
             g_memoryWritten.push_back(L"");
@@ -2628,8 +2636,12 @@ void LoadFolderMemoryLocked() {
 FolderMemory GetFolderMemory(std::wstring const& path) {
     std::lock_guard<std::mutex> lock(g_memoryMutex);
     LoadFolderMemoryLocked();
-    auto found = g_memory.find(MemoryKey(path));
+    std::wstring usedKey = MemoryKey(path);
+    auto found = g_memory.find(usedKey);
     FolderMemory memory = found == g_memory.end() ? FolderMemory() : found->second;
+    if (found != g_memory.end()) {
+        g_memoryUsed[usedKey] = ++g_memoryClock;  // Opened: it stays. Nothing is written for that.
+    }
     // What the settings turn off is not given out.
     if (!g_rememberSort) {
         memory.hasSpec = false;
@@ -2665,15 +2677,39 @@ void ChangeFolderMemory(std::wstring const& path, Change change) {
     if (same && found != g_memory.end()) {
         return;
     }
-    g_memory[key] = memory;
-    g_memoryOrder.erase(std::remove(g_memoryOrder.begin(), g_memoryOrder.end(), key),
-                        g_memoryOrder.end());
-    g_memoryOrder.push_back(key);
-    while (g_memoryOrder.size() > kMemoryLimit) {
-        g_memory.erase(g_memoryOrder.front());
-        g_memoryOrder.erase(g_memoryOrder.begin());
+    size_t slot;
+    auto held = g_memorySlot.find(key);
+    if (held != g_memorySlot.end()) {
+        slot = held->second;
+    } else if (g_memorySlot.size() < kMemoryLimit) {
+        // The slots are numbered from 0: the first free one is taken.
+        std::vector<char> taken(g_memorySlot.size() + 1, 0);
+        for (auto const& entry : g_memorySlot) {
+            if (entry.second < taken.size()) {
+                taken[entry.second] = 1;
+            }
+        }
+        slot = 0;
+        while (slot < taken.size() && taken[slot]) {
+            slot++;
+        }
+    } else {
+        // Full: the folder used longest ago gives up its slot, the only value written.
+        auto oldest = g_memoryUsed.end();
+        for (auto at = g_memoryUsed.begin(); at != g_memoryUsed.end(); ++at) {
+            if (oldest == g_memoryUsed.end() || at->second < oldest->second) {
+                oldest = at;
+            }
+        }
+        slot = g_memorySlot[oldest->first];
+        g_memorySlot.erase(oldest->first);
+        g_memory.erase(oldest->first);
+        g_memoryUsed.erase(oldest);
     }
-    SaveFolderMemoryLocked();
+    g_memory[key] = memory;
+    g_memorySlot[key] = slot;
+    g_memoryUsed[key] = ++g_memoryClock;
+    WriteMemorySlotLocked(slot, MemoryLine(key, memory));
 }
 
 void RememberFolderSpec(std::wstring const& path, SortSpec const& spec) {
@@ -3259,6 +3295,8 @@ struct Column {
     std::vector<size_t> iconWanted;  // Entries built since, waiting to be asked for.
     std::vector<char> built;       // Per entry: the row has its content.
     std::map<size_t, std::shared_ptr<IconBits>> pendingIcons;  // Icons that came before their row.
+    bool patchPending = false;  // Rows are fading out: the listing changes in a moment, and the icons of the new one wait for it.
+    std::vector<std::shared_ptr<IconBits>> heldIcons;
     muxc::ScrollViewer viewer{nullptr};  // The list's own scroller, watched for scrolling.
     winrt::event_token viewToken{};
     double rowHeight = 32;
@@ -5471,6 +5509,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
         }
         if (any) {
             unsigned generation = column->generation;
+            column->patchPending = true;
             try {
                 auto timer = state->queue.CreateTimer();
                 state->fadeTimer = timer;
@@ -5487,6 +5526,10 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                         known = known || c.get() == column;
                     }
                     if (!known || column->generation != generation) {
+                        if (known) {
+                            column->patchPending = false;
+                            column->heldIcons.clear();
+                        }
                         return;
                     }
                     ForgetColumnUsers(now, column, false);  // The rows move now: a menu opened during the fade keeps no row numbers.
@@ -5501,10 +5544,25 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                         LogHresult(L"the patch after the fade");
                     }
                     now->building = wasBuilding;
+                    // The icons that came for the new listing while the old rows faded: now they have their rows.
+                    column->patchPending = false;
+                    auto held = std::move(column->heldIcons);
+                    column->heldIcons.clear();
+                    for (auto const& icon : held) {
+                        if (icon->index >= column->iconHosts.size()) {
+                            continue;
+                        }
+                        if (!column->iconHosts[icon->index]) {
+                            column->pendingIcons[icon->index] = icon;
+                        } else {
+                            ApplyIconBits(column, *icon, icon->index);
+                        }
+                    }
                 }));
                 timer.Start();
                 return true;
             } catch (...) {
+                column->patchPending = false;
                 LogHresult(L"scheduling the patch after the fade");
             }
         }
@@ -5847,6 +5905,10 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
             continue;
         }
         for (auto& icon : batch->icons) {
+            if (column->patchPending) {
+                column->heldIcons.push_back(std::make_shared<IconBits>(icon));  // The rows of the old listing are still there.
+                continue;
+            }
             if (icon.index >= column->iconHosts.size()) {
                 continue;
             }
@@ -8936,10 +8998,11 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
     std::wstring base = !dir.empty() && dir.back() == L'\\' ? dir + L"." : dir;
     // "--" ends the options: a name that starts with a dash is a name, not an option.
     command += L"-f \"" + destination + L"\" -C \"" + base + L"\" --";
-    // ".\" in front of each name: bsdtar reads a name that starts with @ as an archive to append and one that starts with -C as a
-    // change of directory, even after "--".
+    // ".\" in front of a name that tar would take for something else: one that starts with @ (an archive to append) or - (a
+    // change of directory, even after "--"). The others are given as they are, so the archive holds plain names.
     for (auto& name : names) {
-        command += L" \".\\" + name + L"\"";
+        bool special = !name.empty() && (name[0] == L'@' || name[0] == L'-');
+        command += L" \"" + std::wstring(special ? L".\\" : L"") + name + L"\"";
     }
     if (command.size() > 30000) {
         // CreateProcess takes 32767 characters: say so instead of doing nothing.
@@ -19978,8 +20041,8 @@ constexpr LabelsPaletteEntry kLabelsPalette[8] = {
 std::atomic<ULONGLONG> g_labelsThemeChecked{0};
 std::atomic<bool> g_labelsDark{false};
 std::mutex g_labelDotMutex;
-[[clang::no_destroy]] std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
-[[clang::no_destroy]] std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
+std::map<unsigned long long, HBITMAP> g_labelDiscs;  // colour and side to the image.
+std::map<unsigned, HBITMAP> g_labelDots;  // colour, theme and side to the image.
 
 BITMAPINFO LabelsDotInfo(int side) {
     BITMAPINFO info = {};
@@ -22310,8 +22373,8 @@ namespace {
 
 using LabelsGetValue_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFPROPERTYKEY, PROPVARIANT*);
 LabelsGetValue_t LabelsGetValue_Original = nullptr;
-[[clang::no_destroy]] std::mutex g_keywordsAskedMutex;
-[[clang::no_destroy]] std::set<std::wstring> g_keywordsAsked;  // Folders whose Keywords were asked before their labels were read.
+std::mutex g_keywordsAskedMutex;
+std::set<std::wstring> g_keywordsAsked;  // Folders whose Keywords were asked before their labels were read.
 
 // A text property of the item through the same store, or empty.
 std::wstring LabelsStoreText(void* store, REFPROPERTYKEY key) {
@@ -22547,7 +22610,8 @@ void LabelsGroupFolderLoaded(std::wstring const& folderPath) {
         std::lock_guard<std::mutex> lock(g_keywordsAskedMutex);
         asked = g_keywordsAsked.erase(folderPath) > 0;
     }
-    if (asked && g_labelsGroup && !g_unloading) {
+    // Explorer was served no labels while the folder was being read: when it has none, there is nothing for it to read again.
+    if (asked && g_labelsGroup && !g_unloading && !LabelsFolderFor(folderPath)->byName.empty()) {
         SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, folderPath.c_str(), nullptr);
     }
 }

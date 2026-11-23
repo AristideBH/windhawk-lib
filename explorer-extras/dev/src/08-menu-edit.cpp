@@ -1659,10 +1659,11 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
     std::wstring base = !dir.empty() && dir.back() == L'\\' ? dir + L"." : dir;
     // "--" ends the options: a name that starts with a dash is a name, not an option.
     command += L"-f \"" + destination + L"\" -C \"" + base + L"\" --";
-    // ".\" in front of each name: bsdtar reads a name that starts with @ as an archive to append and one that starts with -C as a
-    // change of directory, even after "--".
+    // ".\" in front of a name that tar would take for something else: one that starts with @ (an archive to append) or - (a
+    // change of directory, even after "--"). The others are given as they are, so the archive holds plain names.
     for (auto& name : names) {
-        command += L" \".\\" + name + L"\"";
+        bool special = !name.empty() && (name[0] == L'@' || name[0] == L'-');
+        command += L" \"" + std::wstring(special ? L".\\" : L"") + name + L"\"";
     }
     if (command.size() > 30000) {
         // CreateProcess takes 32767 characters: say so instead of doing nothing.

@@ -222,6 +222,8 @@ struct Column {
     std::vector<size_t> iconWanted;  // Entries built since, waiting to be asked for.
     std::vector<char> built;       // Per entry: the row has its content.
     std::map<size_t, std::shared_ptr<IconBits>> pendingIcons;  // Icons that came before their row.
+    bool patchPending = false;  // Rows are fading out: the listing changes in a moment, and the icons of the new one wait for it.
+    std::vector<std::shared_ptr<IconBits>> heldIcons;
     muxc::ScrollViewer viewer{nullptr};  // The list's own scroller, watched for scrolling.
     winrt::event_token viewToken{};
     double rowHeight = 32;

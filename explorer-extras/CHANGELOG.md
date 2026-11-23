@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.18 (2026-11-23)
+
+### Fixed
+- **Per-folder memory** keeps the folders you open, not only those you change: the one used longest ago makes room for a new one, and only that one value is written (it rewrote all 150 on each eviction).
+- **Tags in Group by:** Explorer is told to read a folder again only when the folder has labels.
+- **Icons during a delete's fade:** the icons of the new listing wait for their rows, so no row keeps another file's icon.
+- **Compress** gives plain names in the archive. A name gets `.\` in front only when it starts with @ or -, which tar would take for an option.
+- Tidy: `no_destroy` is gone from the plain mutexes, maps and sets of the mod (the ones that hold WinRT objects keep it).
+
 ## 1.0.17 (2026-11-23)
 
 ### Fixed
@@ -25,7 +34,7 @@ From the sixth AI review:
 - Smaller ones: no more null queue in the unload's drain, the readers check the unload under their lock before a job is queued, Keywords are served as labels only when the write guard is in too, Extract here and Compress work on the Desktop, a window's drop registration is forgotten with the window, turning every area off then on again releases the labels' and the toolbar's objects.
 - **Details pane:** the shell's preview stays above the pane when the pane is raised, a change made with Alt+Shift+P counts as your choice for the other tabs, and with Preview redirect off the tabs are left alone.
 - **Thumbnails:** the black of a folder's picture goes, but a photo or a video frame keeps its black.
-- Left as they are: the `no_destroy` on plain mutexes and containers, the per-thread caches, the labels' streams and the overlap with other mods (the PR says why). Archive entries start with `./`, which bsdtar and 7-Zip read.
+- Left as they are: the labels' streams and the overlap with other mods (the PR says why).
 
 ## 1.0.14 (2026-11-23)
 

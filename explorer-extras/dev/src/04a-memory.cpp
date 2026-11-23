@@ -3,7 +3,8 @@
 //
 // Sort and group, the width of a column and whether the folder is shown in
 // Columns. Kept across restarts in one value of the mod's storage, as lines of
-// "path TAB sort TAB width TAB columns". The most recent 150 folders are kept.
+// "path TAB sort TAB width TAB columns". 150 folders are kept; when a new one comes in, the one used longest ago goes
+// (a folder is used when it is opened, not only when something about it changes).
 
 struct FolderMemory {
     bool hasSpec = false;
@@ -14,7 +15,9 @@ struct FolderMemory {
 
 std::mutex g_memoryMutex;
 std::map<std::wstring, FolderMemory> g_memory;
-std::vector<std::wstring> g_memoryOrder;  // Oldest first.
+std::map<std::wstring, size_t> g_memorySlot;       // Which numbered value holds each folder.
+std::map<std::wstring, unsigned long long> g_memoryUsed;  // When each folder was last used (this run; loaded ones by their slot).
+unsigned long long g_memoryClock = 0;
 bool g_memoryLoaded = false;
 constexpr size_t kMemoryLimit = 150;
 
@@ -131,25 +134,27 @@ std::wstring MemoryValueName(size_t index) {
     return L"folderMemory." + std::to_wstring(index);
 }
 
+// Writes the value of one slot (when it changed).
+void WriteMemorySlotLocked(size_t slot, std::wstring const& line) {
+    if (slot >= g_memoryWritten.size()) {
+        g_memoryWritten.resize(slot + 1);
+    }
+    if (g_memoryWritten[slot] != line) {
+        Wh_SetStringValue(MemoryValueName(slot).c_str(), line.c_str());
+        g_memoryWritten[slot] = line;
+    }
+    Wh_SetIntValue(L"folderMemory.count", (int)g_memoryWritten.size());
+}
+
+// Every slot, after the first load of the single value.
 void SaveFolderMemoryLocked() {
-    std::vector<std::wstring> lines;
-    for (auto& key : g_memoryOrder) {
-        auto found = g_memory.find(key);
+    for (auto const& entry : g_memorySlot) {
+        auto found = g_memory.find(entry.first);
         if (found != g_memory.end()) {
-            lines.push_back(MemoryLine(key, found->second));
+            WriteMemorySlotLocked(entry.second, MemoryLine(entry.first, found->second));
         }
     }
-    // Only the values that changed are written.
-    for (size_t i = 0; i < lines.size(); i++) {
-        if (i >= g_memoryWritten.size() || g_memoryWritten[i] != lines[i]) {
-            Wh_SetStringValue(MemoryValueName(i).c_str(), lines[i].c_str());
-        }
-    }
-    for (size_t i = lines.size(); i < g_memoryWritten.size(); i++) {
-        Wh_DeleteValue(MemoryValueName(i).c_str());
-    }
-    Wh_SetIntValue(L"folderMemory.count", (int)lines.size());
-    g_memoryWritten = std::move(lines);
+    Wh_SetIntValue(L"folderMemory.count", (int)g_memoryWritten.size());
 }
 
 void LoadFolderMemoryLocked() {
@@ -174,9 +179,11 @@ void LoadFolderMemoryLocked() {
             }
             std::wstring key;
             FolderMemory memory;
-            if (ParseMemoryLine(text.substr(start, end - start), L'\t', &key, &memory)) {
+            if (ParseMemoryLine(text.substr(start, end - start), L'\t', &key, &memory) && g_memorySlot.size() < kMemoryLimit) {
                 g_memory[key] = memory;
-                g_memoryOrder.push_back(key);
+                size_t slot = g_memorySlot.size();
+                g_memorySlot[key] = slot;
+                g_memoryUsed[key] = ++g_memoryClock;
             }
             start = end + 1;
         }
@@ -192,7 +199,8 @@ void LoadFolderMemoryLocked() {
         FolderMemory memory;
         if (length && ParseMemoryLine(line, L'|', &key, &memory)) {
             g_memory[key] = memory;
-            g_memoryOrder.push_back(key);
+            g_memorySlot[key] = (size_t)i;
+            g_memoryUsed[key] = ++g_memoryClock;
             g_memoryWritten.push_back(line);
         } else {
             g_memoryWritten.push_back(L"");
@@ -203,8 +211,12 @@ void LoadFolderMemoryLocked() {
 FolderMemory GetFolderMemory(std::wstring const& path) {
     std::lock_guard<std::mutex> lock(g_memoryMutex);
     LoadFolderMemoryLocked();
-    auto found = g_memory.find(MemoryKey(path));
+    std::wstring usedKey = MemoryKey(path);
+    auto found = g_memory.find(usedKey);
     FolderMemory memory = found == g_memory.end() ? FolderMemory() : found->second;
+    if (found != g_memory.end()) {
+        g_memoryUsed[usedKey] = ++g_memoryClock;  // Opened: it stays. Nothing is written for that.
+    }
     // What the settings turn off is not given out.
     if (!g_rememberSort) {
         memory.hasSpec = false;
@@ -240,15 +252,39 @@ void ChangeFolderMemory(std::wstring const& path, Change change) {
     if (same && found != g_memory.end()) {
         return;
     }
-    g_memory[key] = memory;
-    g_memoryOrder.erase(std::remove(g_memoryOrder.begin(), g_memoryOrder.end(), key),
-                        g_memoryOrder.end());
-    g_memoryOrder.push_back(key);
-    while (g_memoryOrder.size() > kMemoryLimit) {
-        g_memory.erase(g_memoryOrder.front());
-        g_memoryOrder.erase(g_memoryOrder.begin());
+    size_t slot;
+    auto held = g_memorySlot.find(key);
+    if (held != g_memorySlot.end()) {
+        slot = held->second;
+    } else if (g_memorySlot.size() < kMemoryLimit) {
+        // The slots are numbered from 0: the first free one is taken.
+        std::vector<char> taken(g_memorySlot.size() + 1, 0);
+        for (auto const& entry : g_memorySlot) {
+            if (entry.second < taken.size()) {
+                taken[entry.second] = 1;
+            }
+        }
+        slot = 0;
+        while (slot < taken.size() && taken[slot]) {
+            slot++;
+        }
+    } else {
+        // Full: the folder used longest ago gives up its slot, the only value written.
+        auto oldest = g_memoryUsed.end();
+        for (auto at = g_memoryUsed.begin(); at != g_memoryUsed.end(); ++at) {
+            if (oldest == g_memoryUsed.end() || at->second < oldest->second) {
+                oldest = at;
+            }
+        }
+        slot = g_memorySlot[oldest->first];
+        g_memorySlot.erase(oldest->first);
+        g_memory.erase(oldest->first);
+        g_memoryUsed.erase(oldest);
     }
-    SaveFolderMemoryLocked();
+    g_memory[key] = memory;
+    g_memorySlot[key] = slot;
+    g_memoryUsed[key] = ++g_memoryClock;
+    WriteMemorySlotLocked(slot, MemoryLine(key, memory));
 }
 
 void RememberFolderSpec(std::wstring const& path, SortSpec const& spec) {

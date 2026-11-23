@@ -1265,6 +1265,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
         }
         if (any) {
             unsigned generation = column->generation;
+            column->patchPending = true;
             try {
                 auto timer = state->queue.CreateTimer();
                 state->fadeTimer = timer;
@@ -1281,6 +1282,10 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                         known = known || c.get() == column;
                     }
                     if (!known || column->generation != generation) {
+                        if (known) {
+                            column->patchPending = false;
+                            column->heldIcons.clear();
+                        }
                         return;
                     }
                     ForgetColumnUsers(now, column, false);  // The rows move now: a menu opened during the fade keeps no row numbers.
@@ -1295,10 +1300,25 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                         LogHresult(L"the patch after the fade");
                     }
                     now->building = wasBuilding;
+                    // The icons that came for the new listing while the old rows faded: now they have their rows.
+                    column->patchPending = false;
+                    auto held = std::move(column->heldIcons);
+                    column->heldIcons.clear();
+                    for (auto const& icon : held) {
+                        if (icon->index >= column->iconHosts.size()) {
+                            continue;
+                        }
+                        if (!column->iconHosts[icon->index]) {
+                            column->pendingIcons[icon->index] = icon;
+                        } else {
+                            ApplyIconBits(column, *icon, icon->index);
+                        }
+                    }
                 }));
                 timer.Start();
                 return true;
             } catch (...) {
+                column->patchPending = false;
                 LogHresult(L"scheduling the patch after the fade");
             }
         }
@@ -1641,6 +1661,10 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
             continue;
         }
         for (auto& icon : batch->icons) {
+            if (column->patchPending) {
+                column->heldIcons.push_back(std::make_shared<IconBits>(icon));  // The rows of the old listing are still there.
+                continue;
+            }
             if (icon.index >= column->iconHosts.size()) {
                 continue;
             }

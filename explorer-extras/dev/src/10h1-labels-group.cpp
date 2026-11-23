@@ -110,8 +110,8 @@ namespace {
 
 using LabelsGetValue_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFPROPERTYKEY, PROPVARIANT*);
 LabelsGetValue_t LabelsGetValue_Original = nullptr;
-[[clang::no_destroy]] std::mutex g_keywordsAskedMutex;
-[[clang::no_destroy]] std::set<std::wstring> g_keywordsAsked;  // Folders whose Keywords were asked before their labels were read.
+std::mutex g_keywordsAskedMutex;
+std::set<std::wstring> g_keywordsAsked;  // Folders whose Keywords were asked before their labels were read.
 
 // A text property of the item through the same store, or empty.
 std::wstring LabelsStoreText(void* store, REFPROPERTYKEY key) {
@@ -349,7 +349,8 @@ void LabelsGroupFolderLoaded(std::wstring const& folderPath) {
         std::lock_guard<std::mutex> lock(g_keywordsAskedMutex);
         asked = g_keywordsAsked.erase(folderPath) > 0;
     }
-    if (asked && g_labelsGroup && !g_unloading) {
+    // Explorer was served no labels while the folder was being read: when it has none, there is nothing for it to read again.
+    if (asked && g_labelsGroup && !g_unloading && !LabelsFolderFor(folderPath)->byName.empty()) {
         SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, folderPath.c_str(), nullptr);
     }
 }
