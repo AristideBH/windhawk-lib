@@ -471,6 +471,17 @@ void SpringLoadTick(WindowState* state) {
         if (index < 0) {
             return;
         }
+        // Opening the folder removes the columns after it: not the one the drag comes from, and not the folder that is dragged.
+        if (d.active && d.column) {
+            for (size_t i = (size_t)index + 1; i < state->columns.size(); i++) {
+                if (state->columns[i].get() == d.column) {
+                    return;
+                }
+            }
+            if (d.column == column && std::find(d.entries.begin(), d.entries.end(), (size_t)entry) != d.entries.end()) {
+                return;
+            }
+        }
         Pidl folder = DragTargetFolder(column, entry);
         if (index + 1 < (int)state->columns.size() && folder &&
             ILIsEqual(state->columns[index + 1]->folder.get(), folder.get())) {

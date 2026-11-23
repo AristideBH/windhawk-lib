@@ -2,6 +2,13 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.14 (2026-11-23)
+
+### Fixed
+- **A folder held under a drag** no longer opens when that would remove the column the drag comes from, or the folder being dragged.
+- **Columns switched off** with the details pane off but labels or the toolbar on no longer takes their handlers with it.
+- Looked at and left as they are: the 400 ms follow-up timer (a running timer is owned by its queue), the touch drag operations and the type cache (both per thread, cancelled and freed by each window's own cleanup).
+
 ## 1.0.13 (2026-11-23)
 
 ### Fixed

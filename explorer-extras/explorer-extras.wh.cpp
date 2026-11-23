@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.13
+// @version         1.0.14
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -15430,6 +15430,17 @@ void SpringLoadTick(WindowState* state) {
         if (index < 0) {
             return;
         }
+        // Opening the folder removes the columns after it: not the one the drag comes from, and not the folder that is dragged.
+        if (d.active && d.column) {
+            for (size_t i = (size_t)index + 1; i < state->columns.size(); i++) {
+                if (state->columns[i].get() == d.column) {
+                    return;
+                }
+            }
+            if (d.column == column && std::find(d.entries.begin(), d.entries.end(), (size_t)entry) != d.entries.end()) {
+                return;
+            }
+        }
         Pidl folder = DragTargetFolder(column, entry);
         if (index + 1 < (int)state->columns.size() && folder &&
             ILIsEqual(state->columns[index + 1]->folder.get(), folder.get())) {
@@ -23961,8 +23972,9 @@ void Wh_ModSettingsChanged() {
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
-        // Off means gone: the Columns entry and the panel go from every window. The details pane stays.
-        if (g_detailsPane) {
+        // Off means gone: the Columns entry and the panel go from every window. The details pane, the labels and the toolbar
+        // stay: closing the windows' state would take their handlers with it.
+        if (g_detailsPane || g_labels || g_toolbar) {
             ColumnsOffEverywhere();
         } else {
             CloseEverything();

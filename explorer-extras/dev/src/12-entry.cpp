@@ -158,8 +158,9 @@ void Wh_ModSettingsChanged() {
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
-        // Off means gone: the Columns entry and the panel go from every window. The details pane stays.
-        if (g_detailsPane) {
+        // Off means gone: the Columns entry and the panel go from every window. The details pane, the labels and the toolbar
+        // stay: closing the windows' state would take their handlers with it.
+        if (g_detailsPane || g_labels || g_toolbar) {
             ColumnsOffEverywhere();
         } else {
             CloseEverything();
