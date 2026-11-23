@@ -3775,15 +3775,10 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
             break;
         }
     }
-    // A picture on black: no alpha channel at all, or the shell's own cache gave a folder icon with opaque black corners (it
-    // does for some folders, whatever Explorer shows). The black that touches the edge is the background, and goes.
-    auto cornerBlack = [&](int x, int y) {
-        const unsigned char* px = &out->bgra[((size_t)y * out->width + x) * 4];
-        return !px[0] && !px[1] && !px[2] && px[3] == 255;
-    };
-    int lastX = out->width - 1, lastY = out->height - 1;
-    if (!anyAlpha || (cornerBlack(0, 0) && cornerBlack(lastX, 0) && cornerBlack(0, lastY) && cornerBlack(lastX, lastY))) {
+    if (!anyAlpha) {
+        // No alpha channel: the picture sits on black. The black that touches the edge is the background, and goes.
         int w = out->width, h = out->height;
+
         std::vector<char> seen((size_t)w * h, 0);
         std::vector<int> stack;
         auto black = [&](int x, int y) {
@@ -3815,11 +3810,7 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
             if (y < h - 1) push(x, y + 1);
         }
         for (size_t i = 0; i < seen.size(); i++) {
-            if (seen[i]) {
-                out->bgra[i * 4 + 3] = 0;
-            } else if (!anyAlpha) {
-                out->bgra[i * 4 + 3] = 255;
-            }
+            out->bgra[i * 4 + 3] = seen[i] ? 0 : 255;
         }
     }
     return true;
@@ -3870,7 +3861,12 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
             // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
             LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
-            HRESULT got = factory->GetImage(SIZE{side, side}, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bitmap);
+            // A folder's thumbnail is a picture on opaque black for some folders, whatever the cache holds (the shell gives it so
+            // to anyone who asks): a folder gets its icon, which has its transparency.
+            SFGAOF attributes = SFGAO_FOLDER;
+            bool isFolder = SUCCEEDED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&children[i], &attributes)) && (attributes & SFGAO_FOLDER);
+            int kind = isFolder ? SIIGBF_ICONONLY : 0;
+            HRESULT got = factory->GetImage(SIZE{side, side}, kind | (cachedOnly ? SIIGBF_INCACHEONLY : 0), &bitmap);
             if (FAILED(got) && !cachedOnly) {
                 // No thumbnail to be had: the icon of the type, which every item has.
                 got = factory->GetImage(SIZE{side, side}, SIIGBF_ICONONLY, &bitmap);
