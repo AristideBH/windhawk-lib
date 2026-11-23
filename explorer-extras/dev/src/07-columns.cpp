@@ -1283,6 +1283,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                     if (!known || column->generation != generation) {
                         return;
                     }
+                    ForgetColumnUsers(now, column, false);  // The rows move now: a menu opened during the fade keeps no row numbers.
                     bool wasBuilding = now->building;
                     now->building = true;
                     try {

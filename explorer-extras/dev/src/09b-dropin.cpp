@@ -304,12 +304,17 @@ struct PanelDropTarget : IDropTarget {
             DWORD dropKeys = (keys & ~(DWORD)(MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) | (buttons ? buttons : MK_LBUTTON);
             DWORD result = wanted;
             ModalScope modal;
-            HRESULT hr = folder->Drop(data, dropKeys, pt, &result);
+            IDropTarget* target = folder;  // A reference of its own: the drop's menu runs a loop in which `folder` may be let go.
+            target->AddRef();
+            HRESULT hr = target->Drop(data, dropKeys, pt, &result);
+            target->Release();
             Wh_Log(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
                 (unsigned long)result, hr);
             *effect = result;
-            folder->Release();  // The drop ends the folder's part: no DragLeave.
-            folder = nullptr;
+            if (folder) {
+                folder->Release();  // The drop ends the folder's part: no DragLeave.
+                folder = nullptr;
+            }
             folderPidl.reset();
         } else {
             LeaveFolder();

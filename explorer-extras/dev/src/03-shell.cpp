@@ -118,10 +118,12 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
         }
         g_panePidl = ILClone((PCIDLIST_ABSOLUTE)pidl);
         g_paneAt = GetTickCount64();
+#ifdef EXTRAS_VERBOSE
         POINT where = {};
         GetCursorPos(&where);
-        LogVerbose(L"navigation pane click: \"%s\", cursor %ld,%ld, flags 0x%X", PathOf((PCIDLIST_ABSOLUTE)pidl).c_str(), where.x,
-            where.y, flags);
+        Wh_Log(L"navigation pane click: \"%s\", cursor %ld,%ld, flags 0x%X", PathOf((PCIDLIST_ABSOLUTE)pidl).c_str(), where.x, where.y,
+            flags);
+#endif
     }
     return BrowseObject_Original(self, pidl, flags);
 }

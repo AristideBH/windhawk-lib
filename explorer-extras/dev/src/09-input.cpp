@@ -1227,6 +1227,10 @@ void AbandonWindow(WindowState* state) {
     (void)state->rename.release();
     g_renaming = false;
     g_panelWindow = nullptr;
+    // The window's drop registration went with the window; the target is never freed, like the columns. A later window of this
+    // thread, which reuses the state, registers its own.
+    state->panelDrop = nullptr;
+    state->panelDropWindow = nullptr;
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -1780,6 +1784,9 @@ void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
         return;
+    }
+    if (t_modalDepth > 0) {
+        return;  // A dialog, a menu or a drag of the mod is open below this tick: what it uses stays where it is.
     }
     if (!IsWindow(state->topLevel)) {
         AbandonWindow(state);

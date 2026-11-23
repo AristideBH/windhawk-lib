@@ -268,6 +268,9 @@ HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, LPCWSTR className,
 // by the ticks and let go, as before.
 constexpr UINT_PTR kCloseSubclassId = 0x7A12;
 
+// The timers that wait: held here, since a timer nobody holds is dropped and never ticks.
+[[clang::no_destroy]] thread_local std::vector<mud::DispatcherQueueTimer> t_waitTimers;
+
 void ReleaseClosedWindow(WindowState* state) {
     Wh_Log(L"window closing, releasing its objects, window=%p", state->topLevel);
     RevokeAllHandlers();
@@ -276,7 +279,25 @@ void ReleaseClosedWindow(WindowState* state) {
     RemoveMenuEntry(state);
     ReleaseDetails(state);
     ReleaseEntry(state);
-    state->queue = nullptr;
+    // The templates and the timers of the restyled menu belong to this thread, which ends with the window.
+    g_rowTemplate = nullptr;
+    g_quickTemplate = nullptr;
+    g_presenterStyle = nullptr;
+    {
+        // The timer that ran this may be one of them: they are let go from the queue, after this call.
+        auto timers = std::make_shared<std::vector<mud::DispatcherQueueTimer>>(std::move(t_waitTimers));
+        t_waitTimers.clear();
+        try {
+            if (state->queue && !timers->empty()) {
+                state->queue.TryEnqueue([timers]() { timers->clear(); });
+            }
+        } catch (...) {
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);  // The mod's threads test and use the queue under this lock.
+        state->queue = nullptr;
+    }
     UnregisterKeepThread();
     // The state goes with its window; a later window of the thread gets a new one.
     std::unique_ptr<WindowState> owned;
@@ -299,7 +320,23 @@ LRESULT CALLBACK CloseSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         try {
             WindowState* state = StateForThisThread(false);
             if (state && state->topLevel == hwnd) {
-                ReleaseClosedWindow(state);
+                if (t_modalDepth == 0) {
+                    ReleaseClosedWindow(state);
+                } else if (state->queue) {
+                    // The close came inside a dialog, a preview call or a drag of the mod: the frames below still use the state.
+                    // It is released when none is left on the stack.
+                    Wh_Log(L"window closing inside a nested loop of the mod, its objects are released after it");
+                    auto work = std::make_shared<std::function<void()>>([state]() {
+                        if (g_unloading || StateForThisThread(false) != state) {
+                            return;
+                        }
+                        if (!IsWindow(state->topLevel)) {
+                            AbandonWindow(state);
+                        }
+                        ReleaseClosedWindow(state);
+                    });
+                    RunOutsideModal(state->queue, work);
+                }
             }
         } catch (...) {
             LogHresult(L"releasing a closed window");
@@ -528,6 +565,9 @@ void HookExtensions(HMODULE module) {
 // it frees have their code in the mod. The mod is unmapped right after the cleanup, so those turns
 // are run here: a marker is queued behind them, and the thread's messages are handled until it ran.
 void DrainUi(mud::DispatcherQueue const& queue) {
+    if (!queue) {
+        return;
+    }
     for (int round = 0; round < 2; round++) {
         auto ran = std::make_shared<std::atomic<bool>>(false);
         bool queued = false;
@@ -580,8 +620,6 @@ void WaitForCoroutines() {
 
 // Work for a window's thread that must not run inside a message loop of the mod's own (see ModalScope):
 // it waits, by a one-shot timer, until none is on the stack.
-// The timers that wait: held here, since a timer nobody holds is dropped and never ticks.
-[[clang::no_destroy]] thread_local std::vector<mud::DispatcherQueueTimer> t_waitTimers;
 
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work) {
     if (t_modalDepth == 0) {
@@ -616,12 +654,14 @@ void CloseEverything() {
         try {
             if (state->queue) {
                 mud::DispatcherQueue windowQueue = state->queue;
-                auto work = std::make_shared<std::function<void()>>([state, done]() {
-                    mud::DispatcherQueue queue = state->queue;
+                auto work = std::make_shared<std::function<void()>>([state, done, windowQueue]() {
+                    mud::DispatcherQueue queue = windowQueue;  // Not state->queue: a window that was closing has cleared it.
                     if (state->topLevel && IsWindow(state->topLevel)) {
                         RemoveWindowSubclass(state->topLevel, CloseSubclassProc, kCloseSubclassId);
                     }
                     RevokeAllHandlers();  // First: no delegate of the mod stays on an element.
+                    LabelsReleaseThreadObjects();
+                    ToolbarRestoreThread();
                     g_rowTemplate = nullptr;
                     g_quickTemplate = nullptr;
                     g_presenterStyle = nullptr;

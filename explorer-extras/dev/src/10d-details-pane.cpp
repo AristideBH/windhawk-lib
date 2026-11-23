@@ -132,6 +132,10 @@ struct DetailsPane {
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     HWND syncTab = nullptr;              // The tab and the foreground state the pane was last brought in line for.
     bool syncActive = false;
+    int syncTries = 0;
+    int syncCount = 0;
+    ULONGLONG syncWindowAt = 0;
+    int lastShown = -1;                  // Whether Explorer's pane was shown at the last step.
     ULONGLONG raiseUntil = 0;            // Until then the pane is kept in front of the tab's window.
     ULONGLONG syncAt = 0;                // The pane is brought in line with the user's last choice at this time.
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
@@ -202,8 +206,10 @@ void PaneReadImage(IShellItem* item, PaneData* data) {
     if (FAILED(item->QueryInterface(IID_PPV_ARGS(&factory))) || !factory) {
         return;
     }
+    SFGAOF attributes = 0;
+    bool isFolder = SUCCEEDED(item->GetAttributes(SFGAO_FOLDER, &attributes)) && (attributes & SFGAO_FOLDER);
     for (int size : {320, 128}) {
-        if (GetItemBits(factory, size, SIIGBF_BIGGERSIZEOK, &data->image)) {
+        if (GetItemBits(factory, size, SIIGBF_BIGGERSIZEOK, &data->image, isFolder)) {
             data->hasImage = true;
             break;
         }
@@ -903,7 +909,8 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                 frame.Child(image);
             }
         }
-        if (!stacked && g_panePreview && data.previewKind != 0) {
+        // Images, video and sound open in the card whatever the setting for documents says.
+        if (!stacked && data.previewKind != 0 && (g_panePreview || data.previewKind >= 4)) {
             // A plain spinner while the real preview loads (it is shown when it is ready).
             muxc::Grid layered;
             if (auto child = frame.Child()) {
@@ -1766,6 +1773,9 @@ void PaneRevealLayer(WindowState* state, DetailsPane* pane, mux::UIElement const
 }
 
 void PaneInstallLayer(WindowState* state, DetailsPane* pane, mux::UIElement const& view) {
+    if (!pane->layered) {
+        return;
+    }
     view.Opacity(0.0);
     uint32_t at = pane->layered.Children().Size() > 0 ? 1 : 0;
     pane->layered.Children().InsertAt(at, view);
@@ -2290,6 +2300,9 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
     }
     DWORD thread = GetCurrentThreadId();
     try {
+        if (!pane->layered) {
+            return;  // No card to put it in.
+        }
         if (data->previewKind == 4) {
             pane->loading = true;
             mux::Media::Imaging::BitmapImage bitmap;
@@ -3446,9 +3459,16 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         auto raise = [&]() {
             if (pane->visible && pane->bridge) {
                 SetWindowPos((HWND)pane->bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                // The shell's preview, when one is shown, stays above the pane's island.
+                if (pane->handler && pane->host && IsWindow(pane->host)) {
+                    SetWindowPos(pane->host, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
             }
         };
         if (tab != pane->syncTab || active != pane->syncActive) {
+            if (tab != pane->syncTab || !pane->syncActive) {
+                pane->syncTries = 0;  // A new tab, or the window coming to the front: a fresh start. Not a flicker of the focus.
+            }
             pane->syncTab = tab;
             pane->syncActive = active;
             pane->syncAt = active ? now + 500 : 0;  // Not before the tab has laid itself out.
@@ -3458,12 +3478,33 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         if (now < pane->raiseUntil) {
             raise();
         }
-        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving) {
+        // A change the user made in this tab by another way than the mod's toggle (Alt+Shift+P) is their choice too.
+        int shownNow = gone ? 0 : 1;
+        if (pane->lastShown != shownNow) {
+            if (pane->lastShown >= 0 && tab == pane->syncTab && now >= pane->raiseUntil && now >= pane->ownToggleUntil &&
+                !pane->shortcutAt && g_previewRedirect) {
+                g_paneWanted = shownNow;
+            }
+            pane->lastShown = shownNow;
+        }
+        // With the Preview pane left alone (previewRedirect off) there is no pane of ours to bring in line.
+        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving &&
+            g_previewRedirect) {
             pane->syncAt = 0;
             int wanted = g_paneWanted;
-            if (wanted >= 0 && wanted != (gone ? 0 : 1)) {
+            // At most four a window in ten seconds: if Explorer will not take it, the pane is left as it is.
+            if (now - pane->syncWindowAt > 10000) {
+                pane->syncWindowAt = now;
+                pane->syncCount = 0;
+            }
+            if (wanted >= 0 && wanted != (gone ? 0 : 1) && pane->syncCount < 4) {
+                pane->syncCount++;
                 Wh_Log(L"details pane: this tab follows the choice of the user, %s", wanted ? L"shown" : L"hidden");
                 PaneToggleNative(state);
+                // Explorer applies its own setting to a new tab a little later: looked at again, twice at most.
+                if (++pane->syncTries < 3) {
+                    pane->syncAt = GetTickCount64() + 1500;
+                }
             }
         }
     }

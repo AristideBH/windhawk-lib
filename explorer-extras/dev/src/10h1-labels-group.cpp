@@ -207,9 +207,11 @@ HRESULT LabelsServeKeywords(void* store, HRESULT hr, PROPVARIANT* out) {
     return S_OK;
 }
 
+std::atomic<bool> g_labelsBothHooks{false};  // Keywords are served as labels only when the SetValue guard is in too.
+
 HRESULT STDMETHODCALLTYPE LabelsGetValue_Hook(void* store, REFPROPERTYKEY key, PROPVARIANT* out) {
     HRESULT hr = LabelsGetValue_Original(store, key, out);
-    if (!out || g_unloading || !g_labels || !g_labelsGroup || !IsEqualPropertyKey(key, PKEY_Keywords)) {
+    if (!out || g_unloading || !g_labels || !g_labelsGroup || !g_labelsBothHooks || !IsEqualPropertyKey(key, PKEY_Keywords)) {
         return hr;
     }
     try {
@@ -286,7 +288,9 @@ bool LabelsInstallGroupHook() {
                         ok = WindhawkUtils::SetFunctionHook((LabelsGetValue_t)target, LabelsGetValue_Hook, &LabelsGetValue_Original) != FALSE;
                         void* setter = (*(void***)store)[6];  // 6 SetValue.
                         if (ok && !WindhawkUtils::SetFunctionHook((LabelsSetValue_t)setter, LabelsSetValue_Hook, &LabelsSetValue_Original)) {
-                            Wh_Log(L"labels: the SetValue hook could not be set");
+                            Wh_Log(L"labels: the SetValue hook could not be set, Keywords are not served as labels");
+                        } else {
+                            g_labelsBothHooks = ok;
                         }
                         store->Release();
                     }

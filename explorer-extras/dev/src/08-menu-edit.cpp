@@ -53,6 +53,15 @@ std::wstring ShownExtensionOf(Column* column, size_t entry) {
     return std::wstring();
 }
 
+// A folder's path on disk. PathOf gives a display name for a special folder (Bureau for the Desktop), which no API takes.
+std::wstring DiskPathOf(PCIDLIST_ABSOLUTE folder) {
+    wchar_t path[MAX_PATH] = L"";
+    if (folder && SHGetPathFromIDListW(folder, path) && path[0]) {
+        return path;
+    }
+    return PathOf(folder);
+}
+
 std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
     Pidl absolute(ILCombine(folder, child));
     wchar_t path[MAX_PATH] = L"";
@@ -348,6 +357,19 @@ void CopyAsPath(WindowState* state, Column* column, std::vector<size_t> const& e
     Wh_Log(L"copied %d path(s) as text", (int)entries.size());
 }
 
+// Whether `column` is still one of the window's columns (a loop run in a dialog can close it).
+bool ColumnIsOpen(WindowState* state, Column* column) {
+    if (StateForThisThread(false) != state) {
+        return false;
+    }
+    for (auto& open : state->columns) {
+        if (open.get() == column) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void CommitRename(WindowState* state) {
     if (!state->rename || state->rename->done) {
         return;
@@ -375,26 +397,41 @@ void CommitRename(WindowState* state) {
         if (FAILED(bound) || !parent) {
             return;
         }
-        UndoEntry undo;
-        int number = 0;
+        // The items are taken by their ids before the first rename: a dialog of SetNameOf runs a message loop, in which the
+        // listing can be read again and the row numbers point at other files.
+        struct Target {
+            Pidl child;
+            std::wstring name, extension, oldPath;
+        };
+        std::vector<Target> targets;
         for (size_t entry : together) {
             if (entry >= column->entries.size()) {
                 continue;
             }
+            Target target;
+            target.child.reset(ILClone(column->entries[entry].child.get()));
+            target.name = column->entries[entry].name;
+            target.extension = ShownExtensionOf(column, entry);
+            target.oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            if (target.child) {
+                targets.push_back(std::move(target));
+            }
+        }
+        Pidl folderPidl(ILClone(column->folder.get()));
+        UndoEntry undo;
+        int number = 0;
+        for (auto& target : targets) {
             number++;
-            std::wstring name = base + L" (" + std::to_wstring(number) + L")" +
-                                ShownExtensionOf(column, entry);
-            std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            std::wstring name = base + L" (" + std::to_wstring(number) + L")" + target.extension;
             PITEMID_CHILD renamed = nullptr;
             ModalScope modal;
-            HRESULT hr = parent->SetNameOf(state->topLevel, column->entries[entry].child.get(),
-                                           name.c_str(), SHGDN_INFOLDER, &renamed);
-            Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
-                column->entries[entry].name.c_str(), name.c_str(), hr);
+            HRESULT hr = parent->SetNameOf(state->topLevel, target.child.get(), name.c_str(), SHGDN_INFOLDER, &renamed);
+            Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)targets.size(), target.name.c_str(),
+                name.c_str(), hr);
             if (SUCCEEDED(hr) && renamed) {
-                std::wstring newPath = FilePathOf(column->folder.get(), renamed);
-                if (!oldPath.empty() && !newPath.empty()) {
-                    undo.renames.emplace_back(oldPath, newPath);
+                std::wstring newPath = FilePathOf(folderPidl.get(), renamed);
+                if (!target.oldPath.empty() && !newPath.empty()) {
+                    undo.renames.emplace_back(target.oldPath, newPath);
                 }
             }
             if (renamed) {
@@ -405,7 +442,9 @@ void CommitRename(WindowState* state) {
         if (!undo.renames.empty()) {
             PushUndo(state, std::move(undo));
         }
-        RequestLoad(state, column);
+        if (ColumnIsOpen(state, column)) {
+            RequestLoad(state, column);
+        }
         return;
     }
     if (newName.empty() || entryIndex >= column->entries.size() ||
@@ -423,30 +462,38 @@ void CommitRename(WindowState* state) {
     PITEMID_CHILD renamed = nullptr;
     std::wstring oldPath = FilePathOf(column->folder.get(),
                                       column->entries[entryIndex].child.get());
+    Pidl oldChild(ILClone(column->entries[entryIndex].child.get()));
+    Pidl folderPidl(ILClone(column->folder.get()));
+    std::wstring oldName = column->entries[entryIndex].name;
     ModalScope modal;
-    hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
-                           newName.c_str(), SHGDN_INFOLDER, &renamed);
-    Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX",
-        column->entries[entryIndex].name.c_str(), newName.c_str(), hr);
+    hr = parent->SetNameOf(state->topLevel, oldChild.get(), newName.c_str(), SHGDN_INFOLDER, &renamed);
+    Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX", oldName.c_str(), newName.c_str(), hr);
     parent->Release();
     if (SUCCEEDED(hr) && renamed) {
-        // Show the new name now, then read the folder again for the order.
-        std::wstring newPath = FilePathOf(column->folder.get(), renamed);
+        // A dialog of the rename may have run a loop in which the column was read again or closed: the item is found again by its id.
+        bool open = ColumnIsOpen(state, column);
+        std::wstring newPath = FilePathOf(folderPidl.get(), renamed);
         if (!oldPath.empty() && !newPath.empty()) {
             UndoEntry entry;
             entry.renamedFrom = oldPath;
             entry.renamedTo = newPath;
             PushUndo(state, std::move(entry));
         }
-        column->entries[entryIndex].name = newName;
-        column->entries[entryIndex].child.reset(renamed);
-        renamed = nullptr;
-        column->selectedChild.reset(ILClone(column->entries[entryIndex].child.get()));
-        if (entryIndex < column->texts.size() && column->texts[entryIndex]) {
-            column->texts[entryIndex].Text(
-                MiddleEllipsis(newName, NameCapacity(column)));
+        if (open) {
+            // Show the new name now, then read the folder again for the order.
+            for (size_t at = 0; at < column->entries.size(); at++) {
+                if (ILIsEqual(column->entries[at].child.get(), oldChild.get())) {
+                    column->entries[at].name = newName;
+                    column->entries[at].child.reset(ILClone(renamed));
+                    column->selectedChild.reset(ILClone(renamed));
+                    if (at < column->texts.size() && column->texts[at]) {
+                        column->texts[at].Text(MiddleEllipsis(newName, NameCapacity(column)));
+                    }
+                    break;
+                }
+            }
+            RequestLoad(state, column);
         }
-        RequestLoad(state, column);
     }
     if (renamed) {
         CoTaskMemFree(renamed);
@@ -1137,7 +1184,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             return;
         }
     } else {
-        target = PathOf(column->folder.get());  // Into the folder that holds the archive.
+        target = DiskPathOf(column->folder.get());  // Into the folder that holds the archive.
         if (target.empty()) {
             return;
         }
@@ -1661,7 +1708,7 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
                 }
                 const wchar_t* leaf = wcsrchr(destination.c_str(), L'\\');
                 for (auto& column : now->columns) {
-                    if (column && _wcsicmp(PathOf(column->folder.get()).c_str(), dir.c_str()) == 0) {
+                    if (column && _wcsicmp(DiskPathOf(column->folder.get()).c_str(), dir.c_str()) == 0) {
                         now->selectNames.assign(1, leaf ? leaf + 1 : destination.c_str());
                         now->selectNamesColumn = column.get();
                         RequestLoad(now, column.get());

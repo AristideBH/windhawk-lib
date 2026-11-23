@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.14
+// @version         1.0.17
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -1026,8 +1026,6 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
         }
         g_panePidl = ILClone((PCIDLIST_ABSOLUTE)pidl);
         g_paneAt = GetTickCount64();
-        POINT where = {};
-        GetCursorPos(&where);
     }
     return BrowseObject_Original(self, pidl, flags);
 }
@@ -3770,7 +3768,7 @@ constexpr size_t kMaxIcons = 120;
 constexpr size_t kIconBatch = 16;
 
 // Copies a shell bitmap's pixels. False if it can't be read.
-bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
+bool ReadBitmapBits(HBITMAP bitmap, IconBits* out, bool folder = false) {
     BITMAP info = {};
     if (!GetObjectW(bitmap, sizeof(info), &info) || info.bmWidth <= 0 ||
         info.bmHeight <= 0 || info.bmWidth > 512 || info.bmHeight > 512) {
@@ -3801,8 +3799,12 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
             break;
         }
     }
-    if (!anyAlpha) {
-        // No alpha channel: the picture sits on black. The black that touches the edge is the background, and goes.
+    if (!anyAlpha && !folder) {
+        for (size_t i = 3; i < out->bgra.size(); i += 4) {
+            out->bgra[i] = 255;  // A picture without alpha (a photo, a video frame) is opaque, black included.
+        }
+    } else if (!anyAlpha) {
+        // A folder's picture without an alpha channel sits on black. The black that touches the edge is the background, and goes.
         int w = out->width, h = out->height;
 
         std::vector<char> seen((size_t)w * h, 0);
@@ -3856,7 +3858,7 @@ bool HasBlackCorners(IconBits const& bits) {
 
 // The picture of an item, its thumbnail where the shell has one. A thumbnail on opaque black is given up for the icon, which has its
 // transparency. `flags` are the SIIGBF flags of the first try.
-bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits* bits, HRESULT* result = nullptr) {
+bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits* bits, bool folder, HRESULT* result = nullptr) {
     HBITMAP bitmap = nullptr;
     HRESULT got = factory->GetImage(SIZE{side, side}, flags, &bitmap);
     if (result) {
@@ -3864,13 +3866,13 @@ bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits
     }
     bool ok = false;
     if (SUCCEEDED(got) && bitmap) {
-        ok = ReadBitmapBits(bitmap, bits);
+        ok = ReadBitmapBits(bitmap, bits, folder);
         DeleteObject(bitmap);
-        if (ok && HasBlackCorners(*bits)) {
+        if (ok && folder && HasBlackCorners(*bits)) {
             HBITMAP plain = nullptr;
             if (SUCCEEDED(factory->GetImage(SIZE{side, side}, (flags & ~SIIGBF_INCACHEONLY) | SIIGBF_ICONONLY, &plain)) && plain) {
                 IconBits again;
-                if (ReadBitmapBits(plain, &again)) {
+                if (ReadBitmapBits(plain, &again, folder)) {
                     again.index = bits->index;
                     *bits = std::move(again);
                 }
@@ -3925,17 +3927,20 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
             // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
             LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
+            SFGAOF attributes = SFGAO_FOLDER;
+            PCUITEMID_CHILD one = children[i].get();
+            bool isFolder = SUCCEEDED(folder->GetAttributesOf(1, &one, &attributes)) && (attributes & SFGAO_FOLDER);
             IconBits bits;
             bits.index = indices[i];
             HRESULT got = S_OK;
-            if (GetItemBits(factory, side, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bits, &got)) {
+            if (GetItemBits(factory, side, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bits, isFolder, &got)) {
                 batch->icons.push_back(std::move(bits));
                 done = true;
             } else if (!cachedOnly) {
                 // No thumbnail to be had: the icon of the type, which every item has.
                 IconBits plain;
                 plain.index = indices[i];
-                if (GetItemBits(factory, side, SIIGBF_ICONONLY, &plain)) {
+                if (GetItemBits(factory, side, SIIGBF_ICONONLY, &plain, isFolder)) {
                     batch->icons.push_back(std::move(plain));
                 }
                 done = true;  // Asked in full: not again.
@@ -4160,6 +4165,10 @@ void RequestLoad(WindowState* state, Column* column) {
     job->maxItems = g_maxItems;
     job->queue = state->queue;
     job->cancel = column->cancel;
+    std::lock_guard<std::mutex> lock(g_workersMutex);  // StopWorker takes the workers out under it.
+    if (g_unloading) {
+        return;
+    }
     QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }
@@ -4187,6 +4196,10 @@ void RequestIcons(WindowState* state, Column* column) {
         }
     }
     column->iconWanted.erase(column->iconWanted.end() - take, column->iconWanted.end());
+    std::lock_guard<std::mutex> lock(g_workersMutex);  // StopWorker takes the workers out under it.
+    if (g_unloading) {
+        return;
+    }
     QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }
@@ -5476,6 +5489,7 @@ bool PatchColumn(WindowState* state, Column* column, std::shared_ptr<Loaded> con
                     if (!known || column->generation != generation) {
                         return;
                     }
+                    ForgetColumnUsers(now, column, false);  // The rows move now: a menu opened during the fade keeps no row numbers.
                     bool wasBuilding = now->building;
                     now->building = true;
                     try {
@@ -7316,6 +7330,15 @@ std::wstring ShownExtensionOf(Column* column, size_t entry) {
     return std::wstring();
 }
 
+// A folder's path on disk. PathOf gives a display name for a special folder (Bureau for the Desktop), which no API takes.
+std::wstring DiskPathOf(PCIDLIST_ABSOLUTE folder) {
+    wchar_t path[MAX_PATH] = L"";
+    if (folder && SHGetPathFromIDListW(folder, path) && path[0]) {
+        return path;
+    }
+    return PathOf(folder);
+}
+
 std::wstring FilePathOf(PCIDLIST_ABSOLUTE folder, PCUITEMID_CHILD child) {
     Pidl absolute(ILCombine(folder, child));
     wchar_t path[MAX_PATH] = L"";
@@ -7611,6 +7634,19 @@ void CopyAsPath(WindowState* state, Column* column, std::vector<size_t> const& e
     Wh_Log(L"copied %d path(s) as text", (int)entries.size());
 }
 
+// Whether `column` is still one of the window's columns (a loop run in a dialog can close it).
+bool ColumnIsOpen(WindowState* state, Column* column) {
+    if (StateForThisThread(false) != state) {
+        return false;
+    }
+    for (auto& open : state->columns) {
+        if (open.get() == column) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void CommitRename(WindowState* state) {
     if (!state->rename || state->rename->done) {
         return;
@@ -7638,26 +7674,41 @@ void CommitRename(WindowState* state) {
         if (FAILED(bound) || !parent) {
             return;
         }
-        UndoEntry undo;
-        int number = 0;
+        // The items are taken by their ids before the first rename: a dialog of SetNameOf runs a message loop, in which the
+        // listing can be read again and the row numbers point at other files.
+        struct Target {
+            Pidl child;
+            std::wstring name, extension, oldPath;
+        };
+        std::vector<Target> targets;
         for (size_t entry : together) {
             if (entry >= column->entries.size()) {
                 continue;
             }
+            Target target;
+            target.child.reset(ILClone(column->entries[entry].child.get()));
+            target.name = column->entries[entry].name;
+            target.extension = ShownExtensionOf(column, entry);
+            target.oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            if (target.child) {
+                targets.push_back(std::move(target));
+            }
+        }
+        Pidl folderPidl(ILClone(column->folder.get()));
+        UndoEntry undo;
+        int number = 0;
+        for (auto& target : targets) {
             number++;
-            std::wstring name = base + L" (" + std::to_wstring(number) + L")" +
-                                ShownExtensionOf(column, entry);
-            std::wstring oldPath = FilePathOf(column->folder.get(), column->entries[entry].child.get());
+            std::wstring name = base + L" (" + std::to_wstring(number) + L")" + target.extension;
             PITEMID_CHILD renamed = nullptr;
             ModalScope modal;
-            HRESULT hr = parent->SetNameOf(state->topLevel, column->entries[entry].child.get(),
-                                           name.c_str(), SHGDN_INFOLDER, &renamed);
-            Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)together.size(),
-                column->entries[entry].name.c_str(), name.c_str(), hr);
+            HRESULT hr = parent->SetNameOf(state->topLevel, target.child.get(), name.c_str(), SHGDN_INFOLDER, &renamed);
+            Wh_Log(L"rename %d of %d, \"%s\" to \"%s\": hr=0x%08lX", number, (int)targets.size(), target.name.c_str(),
+                name.c_str(), hr);
             if (SUCCEEDED(hr) && renamed) {
-                std::wstring newPath = FilePathOf(column->folder.get(), renamed);
-                if (!oldPath.empty() && !newPath.empty()) {
-                    undo.renames.emplace_back(oldPath, newPath);
+                std::wstring newPath = FilePathOf(folderPidl.get(), renamed);
+                if (!target.oldPath.empty() && !newPath.empty()) {
+                    undo.renames.emplace_back(target.oldPath, newPath);
                 }
             }
             if (renamed) {
@@ -7668,7 +7719,9 @@ void CommitRename(WindowState* state) {
         if (!undo.renames.empty()) {
             PushUndo(state, std::move(undo));
         }
-        RequestLoad(state, column);
+        if (ColumnIsOpen(state, column)) {
+            RequestLoad(state, column);
+        }
         return;
     }
     if (newName.empty() || entryIndex >= column->entries.size() ||
@@ -7686,30 +7739,38 @@ void CommitRename(WindowState* state) {
     PITEMID_CHILD renamed = nullptr;
     std::wstring oldPath = FilePathOf(column->folder.get(),
                                       column->entries[entryIndex].child.get());
+    Pidl oldChild(ILClone(column->entries[entryIndex].child.get()));
+    Pidl folderPidl(ILClone(column->folder.get()));
+    std::wstring oldName = column->entries[entryIndex].name;
     ModalScope modal;
-    hr = parent->SetNameOf(state->topLevel, column->entries[entryIndex].child.get(),
-                           newName.c_str(), SHGDN_INFOLDER, &renamed);
-    Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX",
-        column->entries[entryIndex].name.c_str(), newName.c_str(), hr);
+    hr = parent->SetNameOf(state->topLevel, oldChild.get(), newName.c_str(), SHGDN_INFOLDER, &renamed);
+    Wh_Log(L"rename \"%s\" to \"%s\": hr=0x%08lX", oldName.c_str(), newName.c_str(), hr);
     parent->Release();
     if (SUCCEEDED(hr) && renamed) {
-        // Show the new name now, then read the folder again for the order.
-        std::wstring newPath = FilePathOf(column->folder.get(), renamed);
+        // A dialog of the rename may have run a loop in which the column was read again or closed: the item is found again by its id.
+        bool open = ColumnIsOpen(state, column);
+        std::wstring newPath = FilePathOf(folderPidl.get(), renamed);
         if (!oldPath.empty() && !newPath.empty()) {
             UndoEntry entry;
             entry.renamedFrom = oldPath;
             entry.renamedTo = newPath;
             PushUndo(state, std::move(entry));
         }
-        column->entries[entryIndex].name = newName;
-        column->entries[entryIndex].child.reset(renamed);
-        renamed = nullptr;
-        column->selectedChild.reset(ILClone(column->entries[entryIndex].child.get()));
-        if (entryIndex < column->texts.size() && column->texts[entryIndex]) {
-            column->texts[entryIndex].Text(
-                MiddleEllipsis(newName, NameCapacity(column)));
+        if (open) {
+            // Show the new name now, then read the folder again for the order.
+            for (size_t at = 0; at < column->entries.size(); at++) {
+                if (ILIsEqual(column->entries[at].child.get(), oldChild.get())) {
+                    column->entries[at].name = newName;
+                    column->entries[at].child.reset(ILClone(renamed));
+                    column->selectedChild.reset(ILClone(renamed));
+                    if (at < column->texts.size() && column->texts[at]) {
+                        column->texts[at].Text(MiddleEllipsis(newName, NameCapacity(column)));
+                    }
+                    break;
+                }
+            }
+            RequestLoad(state, column);
         }
-        RequestLoad(state, column);
     }
     if (renamed) {
         CoTaskMemFree(renamed);
@@ -8400,7 +8461,7 @@ void ExtractHere(WindowState* state, Column* column, size_t entryIndex, bool nam
             return;
         }
     } else {
-        target = PathOf(column->folder.get());  // Into the folder that holds the archive.
+        target = DiskPathOf(column->folder.get());  // Into the folder that holds the archive.
         if (target.empty()) {
             return;
         }
@@ -8924,7 +8985,7 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
                 }
                 const wchar_t* leaf = wcsrchr(destination.c_str(), L'\\');
                 for (auto& column : now->columns) {
-                    if (column && _wcsicmp(PathOf(column->folder.get()).c_str(), dir.c_str()) == 0) {
+                    if (column && _wcsicmp(DiskPathOf(column->folder.get()).c_str(), dir.c_str()) == 0) {
                         now->selectNames.assign(1, leaf ? leaf + 1 : destination.c_str());
                         now->selectNamesColumn = column.get();
                         RequestLoad(now, column.get());
@@ -11788,6 +11849,10 @@ void AbandonWindow(WindowState* state) {
     (void)state->rename.release();
     g_renaming = false;
     g_panelWindow = nullptr;
+    // The window's drop registration went with the window; the target is never freed, like the columns. A later window of this
+    // thread, which reuses the state, registers its own.
+    state->panelDrop = nullptr;
+    state->panelDropWindow = nullptr;
     try {
         if (state->timer) {
             state->timer.Stop();
@@ -12339,6 +12404,9 @@ void OnTick() {
     WindowState* state = StateForThisThread(false);
     if (!state || !state->on || !state->bridge) {
         return;
+    }
+    if (t_modalDepth > 0) {
+        return;  // A dialog, a menu or a drag of the mod is open below this tick: what it uses stays where it is.
     }
     if (!IsWindow(state->topLevel)) {
         AbandonWindow(state);
@@ -13636,14 +13704,16 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                     }
                 });
             }
-            // What the shell's targets take as the effect when no key says otherwise: a move, and a copy
-            // for items taken out of an archive (they cannot be moved).
-            args.Data().SetDataProvider(L"Preferred DropEffect", [fromArchive](dt::DataProviderRequest const& request) {
-                try {
-                    request.SetData(StreamOfBytes(std::vector<uint8_t>{(uint8_t)(fromArchive ? 1 : 2), 0, 0, 0}));
-                } catch (...) {
-                }
-            });
+            // Items taken out of an archive cannot be moved: the targets are told to copy. Otherwise no preference is
+            // given, as with the mouse: the target decides (a move on the same drive, a copy to another).
+            if (fromArchive) {
+                args.Data().SetDataProvider(L"Preferred DropEffect", [](dt::DataProviderRequest const& request) {
+                    try {
+                        request.SetData(StreamOfBytes(std::vector<uint8_t>{1, 0, 0, 0}));
+                    } catch (...) {
+                    }
+                });
+            }
             args.AllowedOperations(fromArchive ? dt::DataPackageOperation::Copy
                                                : (dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
                                                   dt::DataPackageOperation::Link));
@@ -14619,7 +14689,8 @@ struct MoveNudger {
                 if ((finger || GetCursorPos(&now)) && (fingerChanged || now.x != last.x || now.y != last.y)) {
                     last = now;
                     WPARAM keys = 0;
-                    if (finger || (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) keys |= MK_LBUTTON;
+                    // The drag button: the physical right one when the buttons are swapped.
+                    if (finger || (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000)) keys |= MK_LBUTTON;
                     if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
                     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
                     if (PostThreadMessageW(threadId, WM_MOUSEMOVE, keys,
@@ -15263,12 +15334,17 @@ struct PanelDropTarget : IDropTarget {
             DWORD dropKeys = (keys & ~(DWORD)(MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) | (buttons ? buttons : MK_LBUTTON);
             DWORD result = wanted;
             ModalScope modal;
-            HRESULT hr = folder->Drop(data, dropKeys, pt, &result);
+            IDropTarget* target = folder;  // A reference of its own: the drop's menu runs a loop in which `folder` may be let go.
+            target->AddRef();
+            HRESULT hr = target->Drop(data, dropKeys, pt, &result);
+            target->Release();
             Wh_Log(L"drop coming in on \"%s\": effect %lu, hr=0x%08lX", PathOf(folderPidl.get()).c_str(),
                 (unsigned long)result, hr);
             *effect = result;
-            folder->Release();  // The drop ends the folder's part: no DragLeave.
-            folder = nullptr;
+            if (folder) {
+                folder->Release();  // The drop ends the folder's part: no DragLeave.
+                folder = nullptr;
+            }
             folderPidl.reset();
         } else {
             LeaveFolder();
@@ -16245,6 +16321,10 @@ struct DetailsPane {
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     HWND syncTab = nullptr;              // The tab and the foreground state the pane was last brought in line for.
     bool syncActive = false;
+    int syncTries = 0;
+    int syncCount = 0;
+    ULONGLONG syncWindowAt = 0;
+    int lastShown = -1;                  // Whether Explorer's pane was shown at the last step.
     ULONGLONG raiseUntil = 0;            // Until then the pane is kept in front of the tab's window.
     ULONGLONG syncAt = 0;                // The pane is brought in line with the user's last choice at this time.
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
@@ -16315,8 +16395,10 @@ void PaneReadImage(IShellItem* item, PaneData* data) {
     if (FAILED(item->QueryInterface(IID_PPV_ARGS(&factory))) || !factory) {
         return;
     }
+    SFGAOF attributes = 0;
+    bool isFolder = SUCCEEDED(item->GetAttributes(SFGAO_FOLDER, &attributes)) && (attributes & SFGAO_FOLDER);
     for (int size : {320, 128}) {
-        if (GetItemBits(factory, size, SIIGBF_BIGGERSIZEOK, &data->image)) {
+        if (GetItemBits(factory, size, SIIGBF_BIGGERSIZEOK, &data->image, isFolder)) {
             data->hasImage = true;
             break;
         }
@@ -17016,7 +17098,8 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                 frame.Child(image);
             }
         }
-        if (!stacked && g_panePreview && data.previewKind != 0) {
+        // Images, video and sound open in the card whatever the setting for documents says.
+        if (!stacked && data.previewKind != 0 && (g_panePreview || data.previewKind >= 4)) {
             // A plain spinner while the real preview loads (it is shown when it is ready).
             muxc::Grid layered;
             if (auto child = frame.Child()) {
@@ -17879,6 +17962,9 @@ void PaneRevealLayer(WindowState* state, DetailsPane* pane, mux::UIElement const
 }
 
 void PaneInstallLayer(WindowState* state, DetailsPane* pane, mux::UIElement const& view) {
+    if (!pane->layered) {
+        return;
+    }
     view.Opacity(0.0);
     uint32_t at = pane->layered.Children().Size() > 0 ? 1 : 0;
     pane->layered.Children().InsertAt(at, view);
@@ -18403,6 +18489,9 @@ void PaneStartMediaPreview(WindowState* state, DetailsPane* pane, std::wstring c
     }
     DWORD thread = GetCurrentThreadId();
     try {
+        if (!pane->layered) {
+            return;  // No card to put it in.
+        }
         if (data->previewKind == 4) {
             pane->loading = true;
             mux::Media::Imaging::BitmapImage bitmap;
@@ -19556,9 +19645,16 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         auto raise = [&]() {
             if (pane->visible && pane->bridge) {
                 SetWindowPos((HWND)pane->bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                // The shell's preview, when one is shown, stays above the pane's island.
+                if (pane->handler && pane->host && IsWindow(pane->host)) {
+                    SetWindowPos(pane->host, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
             }
         };
         if (tab != pane->syncTab || active != pane->syncActive) {
+            if (tab != pane->syncTab || !pane->syncActive) {
+                pane->syncTries = 0;  // A new tab, or the window coming to the front: a fresh start. Not a flicker of the focus.
+            }
             pane->syncTab = tab;
             pane->syncActive = active;
             pane->syncAt = active ? now + 500 : 0;  // Not before the tab has laid itself out.
@@ -19568,12 +19664,33 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         if (now < pane->raiseUntil) {
             raise();
         }
-        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving) {
+        // A change the user made in this tab by another way than the mod's toggle (Alt+Shift+P) is their choice too.
+        int shownNow = gone ? 0 : 1;
+        if (pane->lastShown != shownNow) {
+            if (pane->lastShown >= 0 && tab == pane->syncTab && now >= pane->raiseUntil && now >= pane->ownToggleUntil &&
+                !pane->shortcutAt && g_previewRedirect) {
+                g_paneWanted = shownNow;
+            }
+            pane->lastShown = shownNow;
+        }
+        // With the Preview pane left alone (previewRedirect off) there is no pane of ours to bring in line.
+        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving &&
+            g_previewRedirect) {
             pane->syncAt = 0;
             int wanted = g_paneWanted;
-            if (wanted >= 0 && wanted != (gone ? 0 : 1)) {
+            // At most four a window in ten seconds: if Explorer will not take it, the pane is left as it is.
+            if (now - pane->syncWindowAt > 10000) {
+                pane->syncWindowAt = now;
+                pane->syncCount = 0;
+            }
+            if (wanted >= 0 && wanted != (gone ? 0 : 1) && pane->syncCount < 4) {
+                pane->syncCount++;
                 Wh_Log(L"details pane: this tab follows the choice of the user, %s", wanted ? L"shown" : L"hidden");
                 PaneToggleNative(state);
+                // Explorer applies its own setting to a new tab a little later: looked at again, twice at most.
+                if (++pane->syncTries < 3) {
+                    pane->syncAt = GetTickCount64() + 1500;
+                }
             }
         }
     }
@@ -22290,9 +22407,11 @@ HRESULT LabelsServeKeywords(void* store, HRESULT hr, PROPVARIANT* out) {
     return S_OK;
 }
 
+std::atomic<bool> g_labelsBothHooks{false};  // Keywords are served as labels only when the SetValue guard is in too.
+
 HRESULT STDMETHODCALLTYPE LabelsGetValue_Hook(void* store, REFPROPERTYKEY key, PROPVARIANT* out) {
     HRESULT hr = LabelsGetValue_Original(store, key, out);
-    if (!out || g_unloading || !g_labels || !g_labelsGroup || !IsEqualPropertyKey(key, PKEY_Keywords)) {
+    if (!out || g_unloading || !g_labels || !g_labelsGroup || !g_labelsBothHooks || !IsEqualPropertyKey(key, PKEY_Keywords)) {
         return hr;
     }
     try {
@@ -22367,7 +22486,9 @@ bool LabelsInstallGroupHook() {
                         ok = WindhawkUtils::SetFunctionHook((LabelsGetValue_t)target, LabelsGetValue_Hook, &LabelsGetValue_Original) != FALSE;
                         void* setter = (*(void***)store)[6];  // 6 SetValue.
                         if (ok && !WindhawkUtils::SetFunctionHook((LabelsSetValue_t)setter, LabelsSetValue_Hook, &LabelsSetValue_Original)) {
-                            Wh_Log(L"labels: the SetValue hook could not be set");
+                            Wh_Log(L"labels: the SetValue hook could not be set, Keywords are not served as labels");
+                        } else {
+                            g_labelsBothHooks = ok;
                         }
                         store->Release();
                     }
@@ -23389,6 +23510,9 @@ HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, LPCWSTR className,
 // by the ticks and let go, as before.
 constexpr UINT_PTR kCloseSubclassId = 0x7A12;
 
+// The timers that wait: held here, since a timer nobody holds is dropped and never ticks.
+[[clang::no_destroy]] thread_local std::vector<mud::DispatcherQueueTimer> t_waitTimers;
+
 void ReleaseClosedWindow(WindowState* state) {
     Wh_Log(L"window closing, releasing its objects, window=%p", state->topLevel);
     RevokeAllHandlers();
@@ -23397,7 +23521,25 @@ void ReleaseClosedWindow(WindowState* state) {
     RemoveMenuEntry(state);
     ReleaseDetails(state);
     ReleaseEntry(state);
-    state->queue = nullptr;
+    // The templates and the timers of the restyled menu belong to this thread, which ends with the window.
+    g_rowTemplate = nullptr;
+    g_quickTemplate = nullptr;
+    g_presenterStyle = nullptr;
+    {
+        // The timer that ran this may be one of them: they are let go from the queue, after this call.
+        auto timers = std::make_shared<std::vector<mud::DispatcherQueueTimer>>(std::move(t_waitTimers));
+        t_waitTimers.clear();
+        try {
+            if (state->queue && !timers->empty()) {
+                state->queue.TryEnqueue([timers]() { timers->clear(); });
+            }
+        } catch (...) {
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_statesMutex);  // The mod's threads test and use the queue under this lock.
+        state->queue = nullptr;
+    }
     UnregisterKeepThread();
     // The state goes with its window; a later window of the thread gets a new one.
     std::unique_ptr<WindowState> owned;
@@ -23420,7 +23562,23 @@ LRESULT CALLBACK CloseSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         try {
             WindowState* state = StateForThisThread(false);
             if (state && state->topLevel == hwnd) {
-                ReleaseClosedWindow(state);
+                if (t_modalDepth == 0) {
+                    ReleaseClosedWindow(state);
+                } else if (state->queue) {
+                    // The close came inside a dialog, a preview call or a drag of the mod: the frames below still use the state.
+                    // It is released when none is left on the stack.
+                    Wh_Log(L"window closing inside a nested loop of the mod, its objects are released after it");
+                    auto work = std::make_shared<std::function<void()>>([state]() {
+                        if (g_unloading || StateForThisThread(false) != state) {
+                            return;
+                        }
+                        if (!IsWindow(state->topLevel)) {
+                            AbandonWindow(state);
+                        }
+                        ReleaseClosedWindow(state);
+                    });
+                    RunOutsideModal(state->queue, work);
+                }
             }
         } catch (...) {
             LogHresult(L"releasing a closed window");
@@ -23649,6 +23807,9 @@ void HookExtensions(HMODULE module) {
 // it frees have their code in the mod. The mod is unmapped right after the cleanup, so those turns
 // are run here: a marker is queued behind them, and the thread's messages are handled until it ran.
 void DrainUi(mud::DispatcherQueue const& queue) {
+    if (!queue) {
+        return;
+    }
     for (int round = 0; round < 2; round++) {
         auto ran = std::make_shared<std::atomic<bool>>(false);
         bool queued = false;
@@ -23699,8 +23860,6 @@ void WaitForCoroutines() {
 
 // Work for a window's thread that must not run inside a message loop of the mod's own (see ModalScope):
 // it waits, by a one-shot timer, until none is on the stack.
-// The timers that wait: held here, since a timer nobody holds is dropped and never ticks.
-[[clang::no_destroy]] thread_local std::vector<mud::DispatcherQueueTimer> t_waitTimers;
 
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work) {
     if (t_modalDepth == 0) {
@@ -23735,12 +23894,14 @@ void CloseEverything() {
         try {
             if (state->queue) {
                 mud::DispatcherQueue windowQueue = state->queue;
-                auto work = std::make_shared<std::function<void()>>([state, done]() {
-                    mud::DispatcherQueue queue = state->queue;
+                auto work = std::make_shared<std::function<void()>>([state, done, windowQueue]() {
+                    mud::DispatcherQueue queue = windowQueue;  // Not state->queue: a window that was closing has cleared it.
                     if (state->topLevel && IsWindow(state->topLevel)) {
                         RemoveWindowSubclass(state->topLevel, CloseSubclassProc, kCloseSubclassId);
                     }
                     RevokeAllHandlers();  // First: no delegate of the mod stays on an element.
+                    LabelsReleaseThreadObjects();
+                    ToolbarRestoreThread();
                     g_rowTemplate = nullptr;
                     g_quickTemplate = nullptr;
                     g_presenterStyle = nullptr;

@@ -63,7 +63,7 @@ constexpr size_t kMaxIcons = 120;
 constexpr size_t kIconBatch = 16;
 
 // Copies a shell bitmap's pixels. False if it can't be read.
-bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
+bool ReadBitmapBits(HBITMAP bitmap, IconBits* out, bool folder = false) {
     BITMAP info = {};
     if (!GetObjectW(bitmap, sizeof(info), &info) || info.bmWidth <= 0 ||
         info.bmHeight <= 0 || info.bmWidth > 512 || info.bmHeight > 512) {
@@ -94,8 +94,12 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
             break;
         }
     }
-    if (!anyAlpha) {
-        // No alpha channel: the picture sits on black. The black that touches the edge is the background, and goes.
+    if (!anyAlpha && !folder) {
+        for (size_t i = 3; i < out->bgra.size(); i += 4) {
+            out->bgra[i] = 255;  // A picture without alpha (a photo, a video frame) is opaque, black included.
+        }
+    } else if (!anyAlpha) {
+        // A folder's picture without an alpha channel sits on black. The black that touches the edge is the background, and goes.
         int w = out->width, h = out->height;
 
         std::vector<char> seen((size_t)w * h, 0);
@@ -149,7 +153,7 @@ bool HasBlackCorners(IconBits const& bits) {
 
 // The picture of an item, its thumbnail where the shell has one. A thumbnail on opaque black is given up for the icon, which has its
 // transparency. `flags` are the SIIGBF flags of the first try.
-bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits* bits, HRESULT* result = nullptr) {
+bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits* bits, bool folder, HRESULT* result = nullptr) {
     HBITMAP bitmap = nullptr;
     HRESULT got = factory->GetImage(SIZE{side, side}, flags, &bitmap);
     if (result) {
@@ -157,13 +161,13 @@ bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits
     }
     bool ok = false;
     if (SUCCEEDED(got) && bitmap) {
-        ok = ReadBitmapBits(bitmap, bits);
+        ok = ReadBitmapBits(bitmap, bits, folder);
         DeleteObject(bitmap);
-        if (ok && HasBlackCorners(*bits)) {
+        if (ok && folder && HasBlackCorners(*bits)) {
             HBITMAP plain = nullptr;
             if (SUCCEEDED(factory->GetImage(SIZE{side, side}, (flags & ~SIIGBF_INCACHEONLY) | SIIGBF_ICONONLY, &plain)) && plain) {
                 IconBits again;
-                if (ReadBitmapBits(plain, &again)) {
+                if (ReadBitmapBits(plain, &again, folder)) {
                     again.index = bits->index;
                     *bits = std::move(again);
                 }
@@ -218,17 +222,20 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
             // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
             LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
+            SFGAOF attributes = SFGAO_FOLDER;
+            PCUITEMID_CHILD one = children[i].get();
+            bool isFolder = SUCCEEDED(folder->GetAttributesOf(1, &one, &attributes)) && (attributes & SFGAO_FOLDER);
             IconBits bits;
             bits.index = indices[i];
             HRESULT got = S_OK;
-            if (GetItemBits(factory, side, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bits, &got)) {
+            if (GetItemBits(factory, side, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bits, isFolder, &got)) {
                 batch->icons.push_back(std::move(bits));
                 done = true;
             } else if (!cachedOnly) {
                 // No thumbnail to be had: the icon of the type, which every item has.
                 IconBits plain;
                 plain.index = indices[i];
-                if (GetItemBits(factory, side, SIIGBF_ICONONLY, &plain)) {
+                if (GetItemBits(factory, side, SIIGBF_ICONONLY, &plain, isFolder)) {
                     batch->icons.push_back(std::move(plain));
                 }
                 done = true;  // Asked in full: not again.
@@ -453,6 +460,10 @@ void RequestLoad(WindowState* state, Column* column) {
     job->maxItems = g_maxItems;
     job->queue = state->queue;
     job->cancel = column->cancel;
+    std::lock_guard<std::mutex> lock(g_workersMutex);  // StopWorker takes the workers out under it.
+    if (g_unloading) {
+        return;
+    }
     QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }
@@ -480,6 +491,10 @@ void RequestIcons(WindowState* state, Column* column) {
         }
     }
     column->iconWanted.erase(column->iconWanted.end() - take, column->iconWanted.end());
+    std::lock_guard<std::mutex> lock(g_workersMutex);  // StopWorker takes the workers out under it.
+    if (g_unloading) {
+        return;
+    }
     QueueJob(state->worker, std::move(job));
     SetEvent(state->worker->event);
 }

@@ -2,6 +2,31 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.17 (2026-11-23)
+
+### Fixed
+- **Details pane across tabs:** at most four follow-ups a window in ten seconds, so a pane that Explorer will not change is left as it is instead of being toggled again and again.
+
+## 1.0.16 (2026-11-23)
+
+### Fixed
+- **Details pane in a new tab:** Explorer applies its own setting to the tab a little after it opens, and could undo the mod's follow-up. The tab is looked at again, up to twice.
+
+## 1.0.15 (2026-11-23)
+
+### Fixed
+From the sixth AI review:
+- **Crash with Preview documents and code off.** Selecting a picture, a video or a song built no card for the preview, and the preview then used it. The card is built for them whatever the setting for documents says.
+- **A window that closes inside a dialog, a preview call or a drag of the mod** is released after them, not under them. The mod's tick leaves the panel alone while one is open, the drop onto a folder holds its own reference on the target, and a window's queue is cleared under the lock the mod's threads use.
+- **Rename** takes the items by their ids before the first one is renamed (a dialog of the rename can read the folder again and move the row numbers), checks that the column is still there afterwards, and a menu opened during the fade of a deleted row no longer keeps old row numbers.
+- **Mouse buttons swapped:** a drag out of the panel no longer drops at once. The drag button is the physical right one then.
+- **Touch drag** gives no preferred effect any more (except out of an archive, where it is a copy): the target decides, as for the mouse.
+- **A window that closes** lets go of the menu's templates and style and of its wait timers.
+- Smaller ones: no more null queue in the unload's drain, the readers check the unload under their lock before a job is queued, Keywords are served as labels only when the write guard is in too, Extract here and Compress work on the Desktop, a window's drop registration is forgotten with the window, turning every area off then on again releases the labels' and the toolbar's objects.
+- **Details pane:** the shell's preview stays above the pane when the pane is raised, a change made with Alt+Shift+P counts as your choice for the other tabs, and with Preview redirect off the tabs are left alone.
+- **Thumbnails:** the black of a folder's picture goes, but a photo or a video frame keeps its black.
+- Left as they are: the `no_destroy` on plain mutexes and containers, the per-thread caches, the labels' streams and the overlap with other mods (the PR says why). Archive entries start with `./`, which bsdtar and 7-Zip read.
+
 ## 1.0.14 (2026-11-23)
 
 ### Fixed

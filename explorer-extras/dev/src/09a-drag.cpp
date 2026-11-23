@@ -488,14 +488,16 @@ winrt::fire_and_forget TouchDragRun(mux::UIElement list, decltype(DragState::tou
                     }
                 });
             }
-            // What the shell's targets take as the effect when no key says otherwise: a move, and a copy
-            // for items taken out of an archive (they cannot be moved).
-            args.Data().SetDataProvider(L"Preferred DropEffect", [fromArchive](dt::DataProviderRequest const& request) {
-                try {
-                    request.SetData(StreamOfBytes(std::vector<uint8_t>{(uint8_t)(fromArchive ? 1 : 2), 0, 0, 0}));
-                } catch (...) {
-                }
-            });
+            // Items taken out of an archive cannot be moved: the targets are told to copy. Otherwise no preference is
+            // given, as with the mouse: the target decides (a move on the same drive, a copy to another).
+            if (fromArchive) {
+                args.Data().SetDataProvider(L"Preferred DropEffect", [](dt::DataProviderRequest const& request) {
+                    try {
+                        request.SetData(StreamOfBytes(std::vector<uint8_t>{1, 0, 0, 0}));
+                    } catch (...) {
+                    }
+                });
+            }
             args.AllowedOperations(fromArchive ? dt::DataPackageOperation::Copy
                                                : (dt::DataPackageOperation::Copy | dt::DataPackageOperation::Move |
                                                   dt::DataPackageOperation::Link));
@@ -1251,7 +1253,7 @@ struct OutDropSource : IDropSource {
             POINT where;
             GetCursorPos(&where);
             LogVerbose(L"touch: the drag loop asks, keys=0x%lX escape=%d, cursor %ld,%ld, left button %s", (unsigned long)keys,
-                escape ? 1 : 0, where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
+                escape ? 1 : 0, where.x, where.y, (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000) ? L"down" : L"up");
         }
         if (g_outPointerId) {
             POINT where;
@@ -1491,7 +1493,8 @@ struct MoveNudger {
                 if ((finger || GetCursorPos(&now)) && (fingerChanged || now.x != last.x || now.y != last.y)) {
                     last = now;
                     WPARAM keys = 0;
-                    if (finger || (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) keys |= MK_LBUTTON;
+                    // The drag button: the physical right one when the buttons are swapped.
+                    if (finger || (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000)) keys |= MK_LBUTTON;
                     if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
                     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
                     if (PostThreadMessageW(threadId, WM_MOUSEMOVE, keys,
@@ -1743,7 +1746,7 @@ void StartOutDrag(WindowState* state) {
         POINT where;
         GetCursorPos(&where);
         LogVerbose(L"touch: the drag leaves the panel, device=%d, the cursor is at %ld,%ld, the left button is %s", g_outDevice,
-            where.x, where.y, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? L"down" : L"up");
+            where.x, where.y, (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000) ? L"down" : L"up");
     }
     g_keepCapture = g_outPointerId != 0;
     DragEnd(state);
