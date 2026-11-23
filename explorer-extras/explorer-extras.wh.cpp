@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.11
+// @version         1.0.13
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -16234,6 +16234,7 @@ struct DetailsPane {
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
     HWND syncTab = nullptr;              // The tab and the foreground state the pane was last brought in line for.
     bool syncActive = false;
+    ULONGLONG raiseUntil = 0;            // Until then the pane is kept in front of the tab's window.
     ULONGLONG syncAt = 0;                // The pane is brought in line with the user's last choice at this time.
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
     bool dragging = false;       // The height handle is being dragged: the preview waits.
@@ -19477,7 +19478,13 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
     if (pane->shortcutAt && GetTickCount64() >= pane->shortcutAt) {
         pane->shortcutAt = 0;
         // The user's choice, for every tab and window: the pane there will follow it.
-        g_paneWanted = pane->visible && !pane->leaving ? 0 : 1;
+        // Read from Explorer's own pane window, which is what the toggle is about to flip.
+        HWND nativeHost = FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass");
+        RECT nativeRect = {};
+        bool nativeShown = nativeHost && GetWindowRect(nativeHost, &nativeRect) && nativeRect.right - nativeRect.left >= 40 &&
+                           nativeRect.bottom - nativeRect.top >= 40;
+        g_paneWanted = nativeShown ? 0 : 1;
+        Wh_Log(L"details pane: the user chose %s (Explorer's pane was %s, %ld x %ld)", g_paneWanted ? L"shown" : L"hidden", nativeShown ? L"shown" : L"hidden", nativeRect.right - nativeRect.left, nativeRect.bottom - nativeRect.top);
         PaneToggleNative(state);
     }
     if (pane->navInvokeAt && GetTickCount64() >= pane->navInvokeAt && pane->navOriginal) {
@@ -19534,10 +19541,21 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         HWND front = GetForegroundWindow();
         bool active = front && GetAncestor(front, GA_ROOT) == state->topLevel;
         ULONGLONG now = GetTickCount64();
+        // A tab's own window comes up over our pane's: the pane is brought to the front again, now and when the tab has settled.
+        auto raise = [&]() {
+            if (pane->visible && pane->bridge) {
+                SetWindowPos((HWND)pane->bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        };
         if (tab != pane->syncTab || active != pane->syncActive) {
             pane->syncTab = tab;
             pane->syncActive = active;
             pane->syncAt = active ? now + 500 : 0;  // Not before the tab has laid itself out.
+            pane->raiseUntil = now + 1500;
+            raise();
+        }
+        if (now < pane->raiseUntil) {
+            raise();
         }
         if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving) {
             pane->syncAt = 0;

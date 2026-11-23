@@ -2,6 +2,16 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.13 (2026-11-23)
+
+### Fixed
+- **Details pane follows your last choice** is read from Explorer's own pane (shown or not) when you toggle, not from the mod's pane, which lags behind it. Toggling off then on across tabs no longer comes back hidden.
+
+## 1.0.12 (2026-11-23)
+
+### Fixed
+- **Details pane and a new tab.** The new tab's window came up over the mod's pane, and Explorer's own pane showed in every tab. The pane is brought to the front when the tab changes, and kept there while the tab settles.
+
 ## 1.0.11 (2026-11-23)
 
 ### Fixed
