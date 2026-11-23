@@ -4,25 +4,27 @@
 
 namespace {
 
-// The display name Windows gives System.Keywords, or empty.
-std::wstring LabelsKeywordsName() {
-    static std::wstring name;
-    if (name.empty()) {
+// The display name Windows gives System.Keywords, or empty. The first call makes it, under the language's own thread safety, so
+// several window threads asking at once is fine.
+std::wstring const& LabelsKeywordsName() {
+    static const std::wstring name = []() {
+        std::wstring result;
         IPropertyDescription* description = nullptr;
         if (SUCCEEDED(PSGetPropertyDescription(PKEY_Keywords, IID_PPV_ARGS(&description))) && description) {
             PWSTR text = nullptr;
             if (SUCCEEDED(description->GetDisplayName(&text)) && text) {
-                name = text;
+                result = text;
                 CoTaskMemFree(text);
             }
             description->Release();
         }
-    }
+        return result;
+    }();
     return name;
 }
 
 void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase> const& items) {
-    std::wstring original = LabelsKeywordsName();
+    std::wstring const& original = LabelsKeywordsName();
     std::wstring ours = Str(L"labels.menu");
     if (original.empty()) {
         return;
@@ -45,6 +47,31 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
 
 [[clang::no_destroy]] thread_local winrt::weak_ref<muxc::MenuFlyout> t_labelsSortMenu;  // This window's Sort and group menu.
 
+#ifdef EXTRAS_VERBOSE
+// The items of the menu as they are when it opens, for the log: kind, text, checked.
+void LabelsDumpSortItems(winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase> const& items, int depth) {
+    for (auto const& base : items) {
+        std::wstring text;
+        const wchar_t* kind = L"item";
+        bool checked = false;
+        if (auto radio = base.try_as<muxc::RadioMenuFlyoutItem>()) {
+            text = radio.Text();
+            kind = L"radio";
+            checked = radio.IsChecked();
+        } else if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
+            text = sub.Text();
+            kind = L"sub";
+        } else if (auto item = base.try_as<muxc::MenuFlyoutItem>()) {
+            text = item.Text();
+        }
+        LogVerbose(L"SORTMENU %*s%s '%s'%s", depth * 2, L"", kind, text.c_str(), checked ? L" [checked]" : L"");
+        if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
+            LabelsDumpSortItems(sub.Items(), depth + 1);
+        }
+    }
+}
+#endif
+
 void LabelsOnSortMenuOpening(Inspectable const& sender) {
     if (g_unloading) {
         return;
@@ -52,6 +79,9 @@ void LabelsOnSortMenuOpening(Inspectable const& sender) {
     try {
         if (auto menu = sender.try_as<muxc::MenuFlyout>()) {
             LabelsRenameKeywords(menu.Items());
+#ifdef EXTRAS_VERBOSE
+            LabelsDumpSortItems(menu.Items(), 0);
+#endif
         }
     } catch (...) {
     }

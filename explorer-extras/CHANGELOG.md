@@ -2,6 +2,21 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.5 (2026-11-23)
+
+### Fixed
+- **Several tabs and windows.** Since 0.78.10 a tab switch was noticed late or not at all, because the windows the timer looked for were kept from the last tick: the panel and Explorer's sort and group options then followed the wrong tab, and the columns were rebuilt back and forth. The lookup is done each tick again, and every tab switch is seen at once.
+- **Sidebar.** The setting **Sidebar sets the first column** is back (on by default): a click on Home, Gallery, OneDrive or a pinned folder in the navigation pane makes it the first column. Off, the columns follow it like any other navigation.
+- Fixes from the fifth AI review:
+  - the context menu is held by a reference of its own while a command runs, so a confirmation or Open with can no longer free it under the command
+  - a pending icon goes to the row it is filed under and the row is checked, so a delete followed by scrolling cannot reach a row that is not built
+  - the preview handler's calls hold a message loop scope, so a closing window or the unload waits for them
+  - a window that closes lets go of its labels' fonts, flyouts and menu entries and leaves the list of threads
+  - Compress to: names go to tar as `.
+ame` (a name starting with @ or -C is a name), a failed archive is deleted with a message, there is no 10-minute limit, and too many items say so
+  - the pane's island is built into locals, a window without a XAML root no longer stops the entry tick, the name of the Tags property is made once for all threads, `IsBadStringPtrW` is gone, a lost capture ends the pane's resize drag, the Windows folder is asked from Windows, and no reader thread starts while the mod unloads
+- Still open from that review, to do next: the touch drag's default effect, the closing-window race at unload, the per-thread XAML objects of a closed window, the Recycle Bin names for undo with hidden extensions, and the navigation pane drop fallback.
+
 ## 1.0.3 (2026-11-18)
 
 ### Changed

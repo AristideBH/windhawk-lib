@@ -1026,6 +1026,12 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                 finish();
             }
         }));
+        // Alt+Tab or the Win key in the middle of a drag ends the capture without Released or Canceled.
+        Keep(handle, handle.PointerCaptureLost(winrt::auto_revoke, [drag, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            if (drag->first) {
+                finish();
+            }
+        }));
         page.Children().Append(handle);
     }
 
@@ -1288,6 +1294,7 @@ void PaneClosePreview(DetailsPane* pane) {
     }
     PaneStopMedia(pane);
     if (pane->handler) {
+        ModalScope modal;  // Unload is a call into the handler's process too.
         IPreviewHandler* handler = pane->handler;
         pane->handler = nullptr;
         try {
@@ -1342,7 +1349,10 @@ void PaneLayoutPreview(WindowState* state, DetailsPane* pane) {
     SetWindowPos(pane->host, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
                  SWP_NOACTIVATE | (pane->previewShown ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
     RECT inside = {0, 0, r.right - r.left, r.bottom - r.top};
-    pane->handler->SetRect(&inside);
+    {
+        ModalScope modal;
+        pane->handler->SetRect(&inside);
+    }
 }
 
 // The corner of the card: a spinner while the preview loads, then a button that switches between
@@ -2458,6 +2468,9 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
     if (FAILED(CLSIDFromString(data.previewClsid.c_str(), &clsid))) {
         return;
     }
+    // The calls into the handler's process wait on this thread, and COM runs the thread's posted messages meanwhile, among them the
+    // cleanup of a closing window or of the mod's unload: held as a message loop of the mod's own, that cleanup waits for the calls.
+    ModalScope modal;
     IPreviewHandler* handler = nullptr;
     HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&handler));
     if (FAILED(hr) || !handler) {
@@ -2592,7 +2605,7 @@ void PaneSyncPanel(WindowState* state) {
     if (!state->on || !state->bridge) {
         return;
     }
-    HWND fileList = FindVisibleChildCached(&state->paneFileList, state->topLevel, L"SHELLDLL_DefView");
+    HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
     RECT rect;
     if (fileList && FileListRect(state->topLevel, fileList, &rect) && !EqualRect(&rect, &state->lastRect)) {
         state->lastRect = rect;
@@ -3226,15 +3239,19 @@ void PaneCreateIsland(WindowState* state, DetailsPane* pane, RECT const& r) {
     scroller.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Disabled);
     body.Children().Append(inner);
     root.Children().Append(body);
+    // Built into locals and handed to the pane only when it all worked: a throw halfway leaves the pane without a source, so the
+    // next tick tries again, and nothing calls a method of a bridge that is not there.
+    auto source = mux::Hosting::DesktopWindowXamlSource();
+    source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
+    source.Content(root);
+    auto bridge = source.SiteBridge();
+    bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
     pane->root = root;
     pane->body = body;
     pane->inner = inner;
     pane->scroller = scroller;
-    pane->source = mux::Hosting::DesktopWindowXamlSource();
-    pane->source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
-    pane->source.Content(root);
-    pane->bridge = pane->source.SiteBridge();
-    pane->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
+    pane->source = source;
+    pane->bridge = bridge;
     pane->rect = r;
     Wh_Log(L"details pane: island made over the native pane, %ldx%ld at %ld,%ld", r.right - r.left, r.bottom - r.top, r.left, r.top);
 }
@@ -3249,8 +3266,8 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     // Explorer's Preview pane is on when the file view stops well short of the right edge of the
     // frame and the Details pane's window is not there to fill the gap. (The Preview pane has no
     // window of its own when the file has nothing to preview, so its window cannot be looked for.)
-    HWND view = FindVisibleChildCached(&state->paneView, state->topLevel, L"SHELLDLL_DefView");
-    HWND tab = FindVisibleChildCached(&state->paneTab, state->topLevel, L"ShellTabWindowClass");
+    HWND view = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+    HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
     bool previewOn = false;
     if (view && tab) {
         RECT v, t;
@@ -3403,7 +3420,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             }
         }
     }
-    HWND host = g_detailsPane ? FindVisibleChildCached(&state->paneHost, state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
+    HWND host = g_detailsPane ? FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
     RECT r = {};
     bool gone = !host;
     if (host) {
@@ -3485,6 +3502,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
                 // and Explorer's input must not be attached to that process's.
+                ModalScope modal;
                 HRESULT focus = pane->handler->SetFocus();
                 Wh_Log(L"preview: focus asked, handler 0x%08lx", (unsigned long)focus);
                 pane->previewFocused = true;

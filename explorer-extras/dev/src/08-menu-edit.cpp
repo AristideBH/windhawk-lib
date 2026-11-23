@@ -727,29 +727,41 @@ void RunContextCommand(UINT id) {
     }
     try {
                     ContextMenuState* context = state->context.get();
+                    // Everything the command needs is copied here, and the menu is held by a reference of its own: the command can run a
+                    // message loop (a confirmation, Open with), inside which the menu is closed and the state freed. What is left of
+                    // this function must not read `context` again.
+                    IContextMenu* menu = context->menu;
+                    menu->AddRef();
+                    struct MenuRelease {
+                        IContextMenu* menu;
+                        ~MenuRelease() { menu->Release(); }
+                    } menuRelease{menu};
+                    Column* column = context->column;
+                    std::vector<size_t> entries = context->entries;
+                    HWND owner = context->owner;
+                    UINT idFirst = context->idFirst;
                     // For an undo of a delete: the paths, before they are gone.
                     std::vector<std::wstring> pathsBefore;
-                    for (size_t entry : context->entries) {
-                        if (context->column && entry < context->column->entries.size()) {
+                    for (size_t entry : entries) {
+                        if (column && entry < column->entries.size()) {
                             pathsBefore.push_back(FilePathOf(
-                                context->column->folder.get(),
-                                context->column->entries[entry].child.get()));
+                                column->folder.get(),
+                                column->entries[entry].child.get()));
                         }
                     }
                     wchar_t verb[64] = L"";
-                    context->menu->GetCommandString(
-                        id - context->idFirst, GCS_VERBW, nullptr,
+                    menu->GetCommandString(
+                        id - idFirst, GCS_VERBW, nullptr,
                         (char*)verb, ARRAYSIZE(verb));
                     Wh_Log(L"context menu verb \"%s\"", verb);
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
-                        CopyOrCut(state, context->column, context->entries,
+                        CopyOrCut(state, column, entries,
                                   !_wcsicmp(verb, L"cut"));
                         return;
                     }
                     if (!_wcsicmp(verb, L"rename") && state->queue &&
-                        context->entries.size() == 1) {
-                        Column* column = context->column;
-                        size_t entry = context->entries[0];
+                        entries.size() == 1) {
+                        size_t entry = entries[0];
                         // After the flyout has closed and given focus back.
                         state->queue.TryEnqueue([column, entry]() {
                             WindowState* state = StateForThisThread(false);
@@ -765,20 +777,30 @@ void RunContextCommand(UINT id) {
                     }
                     CMINVOKECOMMANDINFOEX invoke = {};
                     invoke.cbSize = sizeof(invoke);
-                    invoke.hwnd = context->owner;
-                    invoke.lpVerb = MAKEINTRESOURCEA(id - context->idFirst);
-                    invoke.lpVerbW = MAKEINTRESOURCEW(id - context->idFirst);
+                    invoke.hwnd = owner;
+                    invoke.lpVerb = MAKEINTRESOURCEA(id - idFirst);
+                    invoke.lpVerbW = MAKEINTRESOURCEW(id - idFirst);
                     invoke.nShow = SW_SHOWNORMAL;
                     invoke.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
                     GetCursorPos(&invoke.ptInvoke);
                     ModalScope modal;
-                    HRESULT hr = context->menu->InvokeCommand(
+                    HRESULT hr = menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
                     Wh_Log(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
+                    // The command ran a message loop of its own: the window, and the column, may be gone by now.
+                    if (g_unloading || StateForThisThread(false) != state) {
+                        return;
+                    }
+                    bool columnThere = false;
+                    for (auto& open : state->columns) {
+                        columnThere = columnThere || open.get() == column;
+                    }
                     // The command may have changed the folder. Read it now
                     // instead of waiting for the change notification.
                     if (!_wcsicmp(verb, L"delete")) {
-                        HideDeletedRows(context->column, context->entries);
+                        if (columnThere) {
+                            HideDeletedRows(column, entries);
+                        }
                         if (SUCCEEDED(hr) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
                             RememberDeletion(state, pathsBefore);
                         }
@@ -1382,9 +1404,16 @@ mux::UIElement OfficialIcon(const wchar_t* name, double size) {
         return nullptr;
     }
     try {
+        wchar_t windows[MAX_PATH] = L"C:\\Windows";
+        GetWindowsDirectoryW(windows, MAX_PATH);
+        for (wchar_t* c = windows; *c; c++) {
+            if (*c == L'\\') {
+                *c = L'/';
+            }
+        }
         std::wstring path =
-            std::wstring(L"C:/Windows/SystemApps/MicrosoftWindows.Client.FileExp_cw5n1h2txyewy/"
-                         L"FileExplorerExtensions/Assets/images/contrast-standard/") +
+            std::wstring(windows) + L"/SystemApps/MicrosoftWindows.Client.FileExp_cw5n1h2txyewy/"
+                                    L"FileExplorerExtensions/Assets/images/contrast-standard/" +
             (IsDarkMode() ? L"theme-dark/" : L"theme-light/") + name + L".svg";
         if (!PathFileExistsW(path.c_str())) {
             return nullptr;
@@ -1561,8 +1590,16 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
     std::wstring base = !dir.empty() && dir.back() == L'\\' ? dir + L"." : dir;
     // "--" ends the options: a name that starts with a dash is a name, not an option.
     command += L"-f \"" + destination + L"\" -C \"" + base + L"\" --";
+    // ".\" in front of each name: bsdtar reads a name that starts with @ as an archive to append and one that starts with -C as a
+    // change of directory, even after "--".
     for (auto& name : names) {
-        command += L" \"" + name + L"\"";
+        command += L" \".\\" + name + L"\"";
+    }
+    if (command.size() > 30000) {
+        // CreateProcess takes 32767 characters: say so instead of doing nothing.
+        ModalScope modal;
+        MessageBoxW(state->topLevel, Str(L"compress.toomany"), L"Explorer Extras", MB_OK | MB_ICONINFORMATION);
+        return;
     }
     auto queue = state->queue;
     Wh_Log(L"compress: %s", command.c_str());
@@ -1573,23 +1610,31 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
         DWORD code = 1;
         if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
                            &startup, &process)) {
+            // No time limit: a big archive takes as long as it takes. Only the mod unloading ends it.
             HANDLE waitFor[2] = {process.hProcess, g_stopEvent};
-            DWORD waited = WaitForMultipleObjects(g_stopEvent ? 2 : 1, waitFor, FALSE, 10 * 60 * 1000);
+            DWORD waited = WaitForMultipleObjects(g_stopEvent ? 2 : 1, waitFor, FALSE, INFINITE);
             if (waited != WAIT_OBJECT_0) {
-                // The mod is unloading, or tar ran too long: it ends here, and the partial archive goes.
                 TerminateProcess(process.hProcess, 1);
                 WaitForSingleObject(process.hProcess, 5000);
-                DeleteFileW(destination.c_str());
             }
             GetExitCodeProcess(process.hProcess, &code);
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
         }
         Wh_Log(L"compress: \"%s\" done, exit code %lu", destination.c_str(), code);
+        bool made = code == 0;
+        if (!made) {
+            DeleteFileW(destination.c_str());  // A partial archive must not stay, and must not look like the real one.
+        }
         try {
-            queue.TryEnqueue([destination, dir]() {
+            queue.TryEnqueue([destination, dir, made]() {
                 WindowState* now = StateForThisThread(false);
                 if (!now || !now->on || g_unloading) {
+                    return;
+                }
+                if (!made) {
+                    ModalScope modal;
+                    MessageBoxW(now->topLevel, Str(L"compress.failed"), L"Explorer Extras", MB_OK | MB_ICONWARNING);
                     return;
                 }
                 const wchar_t* leaf = wcsrchr(destination.c_str(), L'\\');

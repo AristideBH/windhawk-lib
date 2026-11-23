@@ -80,6 +80,16 @@
       "sub": "behaviour"
     },
     {
+      "id": "sidebarRoot",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Sidebar sets the first column",
+      "description": "Clicking Home, Gallery, OneDrive or a pinned folder in the navigation pane makes it the first column. Off, the columns follow it like any other navigation. The tree (This PC, drives, Network) always follows the columns.",
+      "needs": "now",
+      "sub": "behaviour"
+    },
+    {
       "id": "foldersFirst",
       "group": "columns",
       "type": "bool",
@@ -552,7 +562,9 @@
     "labels.clear": "Clear tags",
     "labels.ambiguous": "Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart.",
     "labels.menu.ntfs": "Tags (needs an NTFS drive)",
-    "labels.recent": "Recent"
+    "labels.recent": "Recent",
+    "compress.failed": "The archive could not be made, so it was not kept. Your files are untouched.",
+    "compress.toomany": "Too many items to compress at once. Compress fewer items, or a folder that holds them."
   },
   "fr": {
     "strings": {
@@ -599,7 +611,9 @@
       "labels.clear": "Effacer les étiquettes",
       "labels.ambiguous": "Un autre élément porte le même nom affiché, donc aucun point n’est montré. Affichez les extensions de nom de fichier pour les distinguer.",
       "labels.menu.ntfs": "Étiquettes (disque NTFS requis)",
-      "labels.recent": "Récents"
+      "labels.recent": "Récents",
+      "compress.failed": "L’archive n’a pas pu être créée, elle n’a donc pas été conservée. Vos fichiers sont intacts.",
+      "compress.toomany": "Trop d’éléments à compresser en une fois. Compressez-en moins, ou un dossier qui les contient."
     }
   }
 }

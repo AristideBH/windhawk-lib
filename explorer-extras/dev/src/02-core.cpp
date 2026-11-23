@@ -119,7 +119,7 @@ std::atomic<bool> g_paneAnim{true};         // The content of the pane slides an
 ULONGLONG g_paneLeaveUntil = 0;  // While the details pane slides out, the Columns panel stays behind it.
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
-std::atomic<bool> g_sidebarRoot{true};   // Fixed: a click in the navigation pane makes its folder the first column.
+std::atomic<bool> g_sidebarRoot{true};   // A click in the navigation pane makes its folder the first column (setting sidebarRoot).
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_lastEdge{true};       // Fixed: the line on the right of the last column shows (not an option any more).
@@ -183,23 +183,11 @@ BOOL CALLBACK FindVisibleChildProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-// The same, from a cache kept by the caller: a window that is still there, visible and a child of `parent` is the answer, so a
-// timer tick does not walk the whole window tree each time. Another tab coming to the front hides this one, and the walk is done.
-HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className);
-
 HWND FindVisibleChild(HWND parent, const wchar_t* className) {
     FindContext context;
     context.className = className;
     EnumChildWindows(parent, FindVisibleChildProc, (LPARAM)&context);
     return context.found;
-}
-
-HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className) {
-    if (*cache && IsWindow(*cache) && IsWindowVisible(*cache) && IsChild(parent, *cache)) {
-        return *cache;
-    }
-    *cache = FindVisibleChild(parent, className);
-    return *cache;
 }
 
 BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {

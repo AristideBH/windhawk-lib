@@ -28,6 +28,16 @@ std::mutex g_keepThreadsMutex;
 [[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
 thread_local bool t_keepRegistered = false;
 
+// The thread's window is gone: it is no longer asked to release anything at unload, and the list does not grow with every window of
+// the session.
+void UnregisterKeepThread() {
+    DWORD self = GetCurrentThreadId();
+    std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+    g_keepThreads.erase(std::remove_if(g_keepThreads.begin(), g_keepThreads.end(), [self](KeepThread const& entry) { return entry.id == self; }),
+                        g_keepThreads.end());
+    t_keepRegistered = false;
+}
+
 // Records this thread and its queue, once: at unload it is asked to release what it holds.
 void RegisterKeepThread() {
     if (t_keepRegistered) {
@@ -395,9 +405,6 @@ struct WindowState {
     // Columns per tab: the tab that is showing, and the stacks of the others.
     DragState drag;
     HWND currentTab = nullptr;
-    HWND tickFileList = nullptr;  // The windows OnTick found last time (see FindVisibleChildCached).
-    HWND tickTab = nullptr;
-    HWND paneView = nullptr, paneTab = nullptr, paneHost = nullptr, paneFileList = nullptr;  // The same for the details pane's step.
     ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
     std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
     std::vector<TabSnapshot> tabSnapshots;

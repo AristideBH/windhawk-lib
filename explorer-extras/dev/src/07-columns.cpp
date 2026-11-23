@@ -494,7 +494,7 @@ muxc::ListViewItem MakeRowShell(double rowHeight, bool stripe = false) {
     return row;
 }
 
-void ApplyIconBits(Column* column, IconBits const& icon);
+void ApplyIconBits(Column* column, IconBits const& icon, size_t row);
 
 void LabelsFillRowDots(Column* column, size_t entry);  // 10g2
 
@@ -601,7 +601,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     }
     auto pending = column->pendingIcons.find(entryIndex);
     if (pending != column->pendingIcons.end()) {
-        ApplyIconBits(column, *pending->second);
+        ApplyIconBits(column, *pending->second, entryIndex);  // By the row it is filed under, not by the number it carries.
         column->pendingIcons.erase(pending);
     }
 }
@@ -1585,7 +1585,12 @@ const GUID kIidBufferByteAccess = {
 
 // Runs on the window's UI thread when the worker has read some icons.
 // Puts an icon into its row's icon cell.
-void ApplyIconBits(Column* column, IconBits const& icon) {
+// `row` is the row the icon goes to. An icon filed under a row (pendingIcons) is applied to that row: the number it carries can be
+// the row of an older listing, after a delete moved the rows.
+void ApplyIconBits(Column* column, IconBits const& icon, size_t row) {
+    if (row >= column->iconHosts.size() || !column->iconHosts[row]) {
+        return;  // No such row, or its content is not built yet: nothing to put the icon in.
+    }
     try {
         mux::Media::Imaging::WriteableBitmap bitmap(icon.width, icon.height);
         auto buffer = bitmap.PixelBuffer();
@@ -1609,7 +1614,7 @@ void ApplyIconBits(Column* column, IconBits const& icon) {
         image.Stretch(mux::Media::Stretch::Uniform);
         image.HorizontalAlignment(mux::HorizontalAlignment::Left);
         image.VerticalAlignment(mux::VerticalAlignment::Center);
-        auto host = column->iconHosts[icon.index];
+        auto host = column->iconHosts[row];
         if (host.Children().Size() > 0 && host.Children().GetAt(0).try_as<muxc::Image>()) {
             return;  // Already has its icon.
         }
@@ -1642,7 +1647,7 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
                 column->pendingIcons[icon.index] = std::make_shared<IconBits>(icon);
                 continue;
             }
-            ApplyIconBits(column.get(), icon);
+            ApplyIconBits(column.get(), icon, icon.index);
         }
         return;
     }

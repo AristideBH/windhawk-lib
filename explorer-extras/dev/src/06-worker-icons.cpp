@@ -277,6 +277,9 @@ LONG IconSideOf(WindowState* state) {
 // A new worker for a window. Workers that have ended are cleaned up here.
 Worker* CreateWorker() {
     std::lock_guard<std::mutex> lock(g_workersMutex);
+    if (g_unloading) {
+        return nullptr;  // StopWorker has swapped the workers out, or is about to: a thread started now would outlive the mod.
+    }
     for (size_t i = 0; i < g_workers.size();) {
         Worker* old = g_workers[i].get();
         if (old->finished && WaitForSingleObject(old->thread, 0) == WAIT_OBJECT_0) {
@@ -357,6 +360,9 @@ void RequestLoad(WindowState* state, Column* column) {
     }
     if (!state->worker) {
         state->worker = CreateWorker();
+    }
+    if (!state->worker) {
+        return;  // The mod is unloading.
     }
     // The load this column asked before is not wanted any more.
     if (column->cancel) {

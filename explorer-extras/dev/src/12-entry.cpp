@@ -44,6 +44,7 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_focusRect = SettingBool(L"focusRect");
     g_doubleClickUp = SettingBool(L"doubleClickUp");
+    g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");

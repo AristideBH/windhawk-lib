@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.3
+// @version         1.0.5
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -95,6 +95,9 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - doubleClickUp: true
       $name: Double-click empty space to go up
       $description: Goes up one folder. In the first column, the parent folder is added in front.
+    - sidebarRoot: true
+      $name: Sidebar sets the first column
+      $description: Clicking Home, Gallery, OneDrive or a pinned folder in the navigation pane makes it the first column. Off, the columns follow it like any other navigation. The tree (This PC, drives, Network) always follows the columns.
     $name: Behaviour
   - content:
     - foldersFirst: true
@@ -438,7 +441,7 @@ std::atomic<bool> g_paneAnim{true};         // The content of the pane slides an
 ULONGLONG g_paneLeaveUntil = 0;  // While the details pane slides out, the Columns panel stays behind it.
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_restore{true};
-std::atomic<bool> g_sidebarRoot{true};   // Fixed: a click in the navigation pane makes its folder the first column.
+std::atomic<bool> g_sidebarRoot{true};   // A click in the navigation pane makes its folder the first column (setting sidebarRoot).
 std::atomic<bool> g_focusRect{true};
 std::atomic<bool> g_doubleClickUp{false};
 std::atomic<bool> g_lastEdge{true};       // Fixed: the line on the right of the last column shows (not an option any more).
@@ -502,23 +505,11 @@ BOOL CALLBACK FindVisibleChildProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-// The same, from a cache kept by the caller: a window that is still there, visible and a child of `parent` is the answer, so a
-// timer tick does not walk the whole window tree each time. Another tab coming to the front hides this one, and the walk is done.
-HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className);
-
 HWND FindVisibleChild(HWND parent, const wchar_t* className) {
     FindContext context;
     context.className = className;
     EnumChildWindows(parent, FindVisibleChildProc, (LPARAM)&context);
     return context.found;
-}
-
-HWND FindVisibleChildCached(HWND* cache, HWND parent, const wchar_t* className) {
-    if (*cache && IsWindow(*cache) && IsWindowVisible(*cache) && IsChild(parent, *cache)) {
-        return *cache;
-    }
-    *cache = FindVisibleChild(parent, className);
-    return *cache;
 }
 
 BOOL CALLBACK FindCabinetOnThread(HWND hwnd, LPARAM lParam) {
@@ -692,6 +683,7 @@ constexpr SettingInfo kSettings[] = {
     {L"keepStale", L"columns.behaviour.keepStale", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"headerKeyboard", L"columns.behaviour.headerKeyboard", SettingKind::Bool, 0, L"", 0, 0, false},
     {L"doubleClickUp", L"columns.behaviour.doubleClickUp", SettingKind::Bool, 1, L"", 0, 0, false},
+    {L"sidebarRoot", L"columns.behaviour.sidebarRoot", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"foldersFirst", L"columns.content.foldersFirst", SettingKind::Bool, 1, L"", 0, 0, true},
     {L"desktopRealOnly", L"columns.content.desktopRealOnly", SettingKind::Bool, 1, L"", 0, 0, true},
     {L"minWidth", L"columns.layout.minWidth", SettingKind::Int, 160, L"", 80, 800, true},
@@ -780,6 +772,8 @@ constexpr StringInfo kStrings[] = {
     {L"labels.ambiguous", L"Another item here has the same displayed name, so no dot is shown for it. Show file name extensions to tell them apart."},
     {L"labels.menu.ntfs", L"Tags (needs an NTFS drive)"},
     {L"labels.recent", L"Recent"},
+    {L"compress.failed", L"The archive could not be made, so it was not kept. Your files are untouched."},
+    {L"compress.toomany", L"Too many items to compress at once. Compress fewer items, or a folder that holds them."},
 };
 
 constexpr StringInfo kStringsFr[] = {
@@ -827,6 +821,8 @@ constexpr StringInfo kStringsFr[] = {
     {L"labels.ambiguous", L"Un autre \u00E9l\u00E9ment porte le m\u00EAme nom affich\u00E9, donc aucun point n\u2019est montr\u00E9. Affichez les extensions de nom de fichier pour les distinguer."},
     {L"labels.menu.ntfs", L"\u00C9tiquettes (disque NTFS requis)"},
     {L"labels.recent", L"R\u00E9cents"},
+    {L"compress.failed", L"L\u2019archive n\u2019a pas pu \u00EAtre cr\u00E9\u00E9e, elle n\u2019a donc pas \u00E9t\u00E9 conserv\u00E9e. Vos fichiers sont intacts."},
+    {L"compress.toomany", L"Trop d\u2019\u00E9l\u00E9ments \u00E0 compresser en une fois. Compressez-en moins, ou un dossier qui les contient."},
 };
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
 constexpr size_t kStringCount = sizeof(kStrings) / sizeof(kStrings[0]);
@@ -3066,6 +3062,16 @@ std::mutex g_keepThreadsMutex;
 [[clang::no_destroy]] std::vector<KeepThread> g_keepThreads;
 thread_local bool t_keepRegistered = false;
 
+// The thread's window is gone: it is no longer asked to release anything at unload, and the list does not grow with every window of
+// the session.
+void UnregisterKeepThread() {
+    DWORD self = GetCurrentThreadId();
+    std::lock_guard<std::mutex> lock(g_keepThreadsMutex);
+    g_keepThreads.erase(std::remove_if(g_keepThreads.begin(), g_keepThreads.end(), [self](KeepThread const& entry) { return entry.id == self; }),
+                        g_keepThreads.end());
+    t_keepRegistered = false;
+}
+
 // Records this thread and its queue, once: at unload it is asked to release what it holds.
 void RegisterKeepThread() {
     if (t_keepRegistered) {
@@ -3433,9 +3439,6 @@ struct WindowState {
     // Columns per tab: the tab that is showing, and the stacks of the others.
     DragState drag;
     HWND currentTab = nullptr;
-    HWND tickFileList = nullptr;  // The windows OnTick found last time (see FindVisibleChildCached).
-    HWND tickTab = nullptr;
-    HWND paneView = nullptr, paneTab = nullptr, paneHost = nullptr, paneFileList = nullptr;  // The same for the details pane's step.
     ULONGLONG specSyncDue = 0;  // When to read the sort of the folder Explorer shows.
     std::wstring hiddenFolder;  // The folder a tab that is not in Columns showed last.
     std::vector<TabSnapshot> tabSnapshots;
@@ -3950,6 +3953,9 @@ LONG IconSideOf(WindowState* state) {
 // A new worker for a window. Workers that have ended are cleaned up here.
 Worker* CreateWorker() {
     std::lock_guard<std::mutex> lock(g_workersMutex);
+    if (g_unloading) {
+        return nullptr;  // StopWorker has swapped the workers out, or is about to: a thread started now would outlive the mod.
+    }
     for (size_t i = 0; i < g_workers.size();) {
         Worker* old = g_workers[i].get();
         if (old->finished && WaitForSingleObject(old->thread, 0) == WAIT_OBJECT_0) {
@@ -4030,6 +4036,9 @@ void RequestLoad(WindowState* state, Column* column) {
     }
     if (!state->worker) {
         state->worker = CreateWorker();
+    }
+    if (!state->worker) {
+        return;  // The mod is unloading.
     }
     // The load this column asked before is not wanted any more.
     if (column->cancel) {
@@ -4573,7 +4582,7 @@ muxc::ListViewItem MakeRowShell(double rowHeight, bool stripe = false) {
     return row;
 }
 
-void ApplyIconBits(Column* column, IconBits const& icon);
+void ApplyIconBits(Column* column, IconBits const& icon, size_t row);
 
 void LabelsFillRowDots(Column* column, size_t entry);  // 10g2
 
@@ -4680,7 +4689,7 @@ void BuildRowContent(Column* column, size_t entryIndex, muxc::ListViewItem const
     }
     auto pending = column->pendingIcons.find(entryIndex);
     if (pending != column->pendingIcons.end()) {
-        ApplyIconBits(column, *pending->second);
+        ApplyIconBits(column, *pending->second, entryIndex);  // By the row it is filed under, not by the number it carries.
         column->pendingIcons.erase(pending);
     }
 }
@@ -5664,7 +5673,12 @@ const GUID kIidBufferByteAccess = {
 
 // Runs on the window's UI thread when the worker has read some icons.
 // Puts an icon into its row's icon cell.
-void ApplyIconBits(Column* column, IconBits const& icon) {
+// `row` is the row the icon goes to. An icon filed under a row (pendingIcons) is applied to that row: the number it carries can be
+// the row of an older listing, after a delete moved the rows.
+void ApplyIconBits(Column* column, IconBits const& icon, size_t row) {
+    if (row >= column->iconHosts.size() || !column->iconHosts[row]) {
+        return;  // No such row, or its content is not built yet: nothing to put the icon in.
+    }
     try {
         mux::Media::Imaging::WriteableBitmap bitmap(icon.width, icon.height);
         auto buffer = bitmap.PixelBuffer();
@@ -5688,7 +5702,7 @@ void ApplyIconBits(Column* column, IconBits const& icon) {
         image.Stretch(mux::Media::Stretch::Uniform);
         image.HorizontalAlignment(mux::HorizontalAlignment::Left);
         image.VerticalAlignment(mux::VerticalAlignment::Center);
-        auto host = column->iconHosts[icon.index];
+        auto host = column->iconHosts[row];
         if (host.Children().Size() > 0 && host.Children().GetAt(0).try_as<muxc::Image>()) {
             return;  // Already has its icon.
         }
@@ -5721,7 +5735,7 @@ void ApplyIcons(std::shared_ptr<IconBatch> const& batch) {
                 column->pendingIcons[icon.index] = std::make_shared<IconBits>(icon);
                 continue;
             }
-            ApplyIconBits(column.get(), icon);
+            ApplyIconBits(column.get(), icon, icon.index);
         }
         return;
     }
@@ -7871,29 +7885,41 @@ void RunContextCommand(UINT id) {
     }
     try {
                     ContextMenuState* context = state->context.get();
+                    // Everything the command needs is copied here, and the menu is held by a reference of its own: the command can run a
+                    // message loop (a confirmation, Open with), inside which the menu is closed and the state freed. What is left of
+                    // this function must not read `context` again.
+                    IContextMenu* menu = context->menu;
+                    menu->AddRef();
+                    struct MenuRelease {
+                        IContextMenu* menu;
+                        ~MenuRelease() { menu->Release(); }
+                    } menuRelease{menu};
+                    Column* column = context->column;
+                    std::vector<size_t> entries = context->entries;
+                    HWND owner = context->owner;
+                    UINT idFirst = context->idFirst;
                     // For an undo of a delete: the paths, before they are gone.
                     std::vector<std::wstring> pathsBefore;
-                    for (size_t entry : context->entries) {
-                        if (context->column && entry < context->column->entries.size()) {
+                    for (size_t entry : entries) {
+                        if (column && entry < column->entries.size()) {
                             pathsBefore.push_back(FilePathOf(
-                                context->column->folder.get(),
-                                context->column->entries[entry].child.get()));
+                                column->folder.get(),
+                                column->entries[entry].child.get()));
                         }
                     }
                     wchar_t verb[64] = L"";
-                    context->menu->GetCommandString(
-                        id - context->idFirst, GCS_VERBW, nullptr,
+                    menu->GetCommandString(
+                        id - idFirst, GCS_VERBW, nullptr,
                         (char*)verb, ARRAYSIZE(verb));
                     Wh_Log(L"context menu verb \"%s\"", verb);
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
-                        CopyOrCut(state, context->column, context->entries,
+                        CopyOrCut(state, column, entries,
                                   !_wcsicmp(verb, L"cut"));
                         return;
                     }
                     if (!_wcsicmp(verb, L"rename") && state->queue &&
-                        context->entries.size() == 1) {
-                        Column* column = context->column;
-                        size_t entry = context->entries[0];
+                        entries.size() == 1) {
+                        size_t entry = entries[0];
                         // After the flyout has closed and given focus back.
                         state->queue.TryEnqueue([column, entry]() {
                             WindowState* state = StateForThisThread(false);
@@ -7909,20 +7935,30 @@ void RunContextCommand(UINT id) {
                     }
                     CMINVOKECOMMANDINFOEX invoke = {};
                     invoke.cbSize = sizeof(invoke);
-                    invoke.hwnd = context->owner;
-                    invoke.lpVerb = MAKEINTRESOURCEA(id - context->idFirst);
-                    invoke.lpVerbW = MAKEINTRESOURCEW(id - context->idFirst);
+                    invoke.hwnd = owner;
+                    invoke.lpVerb = MAKEINTRESOURCEA(id - idFirst);
+                    invoke.lpVerbW = MAKEINTRESOURCEW(id - idFirst);
                     invoke.nShow = SW_SHOWNORMAL;
                     invoke.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
                     GetCursorPos(&invoke.ptInvoke);
                     ModalScope modal;
-                    HRESULT hr = context->menu->InvokeCommand(
+                    HRESULT hr = menu->InvokeCommand(
                         (CMINVOKECOMMANDINFO*)&invoke);
                     Wh_Log(L"context menu command %u (%s) -> hr=0x%08lX", id, verb, hr);
+                    // The command ran a message loop of its own: the window, and the column, may be gone by now.
+                    if (g_unloading || StateForThisThread(false) != state) {
+                        return;
+                    }
+                    bool columnThere = false;
+                    for (auto& open : state->columns) {
+                        columnThere = columnThere || open.get() == column;
+                    }
                     // The command may have changed the folder. Read it now
                     // instead of waiting for the change notification.
                     if (!_wcsicmp(verb, L"delete")) {
-                        HideDeletedRows(context->column, context->entries);
+                        if (columnThere) {
+                            HideDeletedRows(column, entries);
+                        }
                         if (SUCCEEDED(hr) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
                             RememberDeletion(state, pathsBefore);
                         }
@@ -8526,9 +8562,16 @@ mux::UIElement OfficialIcon(const wchar_t* name, double size) {
         return nullptr;
     }
     try {
+        wchar_t windows[MAX_PATH] = L"C:\\Windows";
+        GetWindowsDirectoryW(windows, MAX_PATH);
+        for (wchar_t* c = windows; *c; c++) {
+            if (*c == L'\\') {
+                *c = L'/';
+            }
+        }
         std::wstring path =
-            std::wstring(L"C:/Windows/SystemApps/MicrosoftWindows.Client.FileExp_cw5n1h2txyewy/"
-                         L"FileExplorerExtensions/Assets/images/contrast-standard/") +
+            std::wstring(windows) + L"/SystemApps/MicrosoftWindows.Client.FileExp_cw5n1h2txyewy/"
+                                    L"FileExplorerExtensions/Assets/images/contrast-standard/" +
             (IsDarkMode() ? L"theme-dark/" : L"theme-light/") + name + L".svg";
         if (!PathFileExistsW(path.c_str())) {
             return nullptr;
@@ -8705,8 +8748,16 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
     std::wstring base = !dir.empty() && dir.back() == L'\\' ? dir + L"." : dir;
     // "--" ends the options: a name that starts with a dash is a name, not an option.
     command += L"-f \"" + destination + L"\" -C \"" + base + L"\" --";
+    // ".\" in front of each name: bsdtar reads a name that starts with @ as an archive to append and one that starts with -C as a
+    // change of directory, even after "--".
     for (auto& name : names) {
-        command += L" \"" + name + L"\"";
+        command += L" \".\\" + name + L"\"";
+    }
+    if (command.size() > 30000) {
+        // CreateProcess takes 32767 characters: say so instead of doing nothing.
+        ModalScope modal;
+        MessageBoxW(state->topLevel, Str(L"compress.toomany"), L"Explorer Extras", MB_OK | MB_ICONINFORMATION);
+        return;
     }
     auto queue = state->queue;
     Wh_Log(L"compress: %s", command.c_str());
@@ -8717,23 +8768,31 @@ void CompressItems(WindowState* state, Column* column, std::vector<size_t> const
         DWORD code = 1;
         if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
                            &startup, &process)) {
+            // No time limit: a big archive takes as long as it takes. Only the mod unloading ends it.
             HANDLE waitFor[2] = {process.hProcess, g_stopEvent};
-            DWORD waited = WaitForMultipleObjects(g_stopEvent ? 2 : 1, waitFor, FALSE, 10 * 60 * 1000);
+            DWORD waited = WaitForMultipleObjects(g_stopEvent ? 2 : 1, waitFor, FALSE, INFINITE);
             if (waited != WAIT_OBJECT_0) {
-                // The mod is unloading, or tar ran too long: it ends here, and the partial archive goes.
                 TerminateProcess(process.hProcess, 1);
                 WaitForSingleObject(process.hProcess, 5000);
-                DeleteFileW(destination.c_str());
             }
             GetExitCodeProcess(process.hProcess, &code);
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
         }
         Wh_Log(L"compress: \"%s\" done, exit code %lu", destination.c_str(), code);
+        bool made = code == 0;
+        if (!made) {
+            DeleteFileW(destination.c_str());  // A partial archive must not stay, and must not look like the real one.
+        }
         try {
-            queue.TryEnqueue([destination, dir]() {
+            queue.TryEnqueue([destination, dir, made]() {
                 WindowState* now = StateForThisThread(false);
                 if (!now || !now->on || g_unloading) {
+                    return;
+                }
+                if (!made) {
+                    ModalScope modal;
+                    MessageBoxW(now->topLevel, Str(L"compress.failed"), L"Explorer Extras", MB_OK | MB_ICONWARNING);
                     return;
                 }
                 const wchar_t* leaf = wcsrchr(destination.c_str(), L'\\');
@@ -12169,10 +12228,10 @@ void OnTick() {
         SyncViewButtonIcon(state);
         UpdateLastEdge(state);
 
-        HWND fileList = FindVisibleChildCached(&state->tickFileList, state->topLevel, L"SHELLDLL_DefView");
+        HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
 
         // Columns per tab: another tab came to the front.
-        HWND tab = FindVisibleChildCached(&state->tickTab, state->topLevel, L"ShellTabWindowClass");
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
         if (tab && tab != state->currentTab && HandleTabSwitch(state, tab, fileList)) {
             return;
         }
@@ -16931,6 +16990,12 @@ mux::UIElement PaneBuild(PaneData const& data, DetailsPane* pane) {
                 finish();
             }
         }));
+        // Alt+Tab or the Win key in the middle of a drag ends the capture without Released or Canceled.
+        Keep(handle, handle.PointerCaptureLost(winrt::auto_revoke, [drag, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            if (drag->first) {
+                finish();
+            }
+        }));
         page.Children().Append(handle);
     }
 
@@ -17193,6 +17258,7 @@ void PaneClosePreview(DetailsPane* pane) {
     }
     PaneStopMedia(pane);
     if (pane->handler) {
+        ModalScope modal;  // Unload is a call into the handler's process too.
         IPreviewHandler* handler = pane->handler;
         pane->handler = nullptr;
         try {
@@ -17247,7 +17313,10 @@ void PaneLayoutPreview(WindowState* state, DetailsPane* pane) {
     SetWindowPos(pane->host, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
                  SWP_NOACTIVATE | (pane->previewShown ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
     RECT inside = {0, 0, r.right - r.left, r.bottom - r.top};
-    pane->handler->SetRect(&inside);
+    {
+        ModalScope modal;
+        pane->handler->SetRect(&inside);
+    }
 }
 
 // The corner of the card: a spinner while the preview loads, then a button that switches between
@@ -18363,6 +18432,9 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
     if (FAILED(CLSIDFromString(data.previewClsid.c_str(), &clsid))) {
         return;
     }
+    // The calls into the handler's process wait on this thread, and COM runs the thread's posted messages meanwhile, among them the
+    // cleanup of a closing window or of the mod's unload: held as a message loop of the mod's own, that cleanup waits for the calls.
+    ModalScope modal;
     IPreviewHandler* handler = nullptr;
     HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&handler));
     if (FAILED(hr) || !handler) {
@@ -18496,7 +18568,7 @@ void PaneSyncPanel(WindowState* state) {
     if (!state->on || !state->bridge) {
         return;
     }
-    HWND fileList = FindVisibleChildCached(&state->paneFileList, state->topLevel, L"SHELLDLL_DefView");
+    HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
     RECT rect;
     if (fileList && FileListRect(state->topLevel, fileList, &rect) && !EqualRect(&rect, &state->lastRect)) {
         state->lastRect = rect;
@@ -19129,15 +19201,19 @@ void PaneCreateIsland(WindowState* state, DetailsPane* pane, RECT const& r) {
     scroller.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Disabled);
     body.Children().Append(inner);
     root.Children().Append(body);
+    // Built into locals and handed to the pane only when it all worked: a throw halfway leaves the pane without a source, so the
+    // next tick tries again, and nothing calls a method of a bridge that is not there.
+    auto source = mux::Hosting::DesktopWindowXamlSource();
+    source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
+    source.Content(root);
+    auto bridge = source.SiteBridge();
+    bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
     pane->root = root;
     pane->body = body;
     pane->inner = inner;
     pane->scroller = scroller;
-    pane->source = mux::Hosting::DesktopWindowXamlSource();
-    pane->source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
-    pane->source.Content(root);
-    pane->bridge = pane->source.SiteBridge();
-    pane->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
+    pane->source = source;
+    pane->bridge = bridge;
     pane->rect = r;
     Wh_Log(L"details pane: island made over the native pane, %ldx%ld at %ld,%ld", r.right - r.left, r.bottom - r.top, r.left, r.top);
 }
@@ -19152,8 +19228,8 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     // Explorer's Preview pane is on when the file view stops well short of the right edge of the
     // frame and the Details pane's window is not there to fill the gap. (The Preview pane has no
     // window of its own when the file has nothing to preview, so its window cannot be looked for.)
-    HWND view = FindVisibleChildCached(&state->paneView, state->topLevel, L"SHELLDLL_DefView");
-    HWND tab = FindVisibleChildCached(&state->paneTab, state->topLevel, L"ShellTabWindowClass");
+    HWND view = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+    HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
     bool previewOn = false;
     if (view && tab) {
         RECT v, t;
@@ -19305,7 +19381,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             }
         }
     }
-    HWND host = g_detailsPane ? FindVisibleChildCached(&state->paneHost, state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
+    HWND host = g_detailsPane ? FindVisibleChild(state->topLevel, L"DetailsPaneHwndHostClass") : nullptr;
     RECT r = {};
     bool gone = !host;
     if (host) {
@@ -19387,6 +19463,7 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
             if (!pane->previewFocused && pane->overTicks >= 3 && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
                 // The handler is asked to take the focus itself: its window may be in another process,
                 // and Explorer's input must not be attached to that process's.
+                ModalScope modal;
                 HRESULT focus = pane->handler->SetFocus();
                 Wh_Log(L"preview: focus asked, handler 0x%08lx", (unsigned long)focus);
                 pane->previewFocused = true;
@@ -20057,7 +20134,7 @@ LabelsKind LabelsKindOf(void* element) {
         void** infoTable = *(void***)classInfo;
         using GetName_t = const wchar_t* (*)(void*);
         const wchar_t* name = ((GetName_t)infoTable[g_labelsNameSlot])(classInfo);
-        if (name && !IsBadStringPtrW(name, 200)) {
+        if (name) {  // DirectUI's own class name
             struct Row { const wchar_t* name; LabelsKind kind; };
             static const Row rows[] = {{L"UIItem", kItem}, {L"UIProperty", kProperty},
                                        {L"UITilesPropertyCollection", kTilesCollection},
@@ -20082,7 +20159,7 @@ std::wstring LabelsAccName(void* element) {
     void* value = nullptr;
     const wchar_t* text = LabelsGetAccName(element, &value);
     std::wstring result;
-    if (text && !IsBadStringPtrW(text, 600)) {
+    if (text) {  // DirectUI's own accessible name
         result = text;
     }
     if (value) {
@@ -22749,25 +22826,27 @@ bool ToolbarTick(WindowState* state) {
 
 namespace {
 
-// The display name Windows gives System.Keywords, or empty.
-std::wstring LabelsKeywordsName() {
-    static std::wstring name;
-    if (name.empty()) {
+// The display name Windows gives System.Keywords, or empty. The first call makes it, under the language's own thread safety, so
+// several window threads asking at once is fine.
+std::wstring const& LabelsKeywordsName() {
+    static const std::wstring name = []() {
+        std::wstring result;
         IPropertyDescription* description = nullptr;
         if (SUCCEEDED(PSGetPropertyDescription(PKEY_Keywords, IID_PPV_ARGS(&description))) && description) {
             PWSTR text = nullptr;
             if (SUCCEEDED(description->GetDisplayName(&text)) && text) {
-                name = text;
+                result = text;
                 CoTaskMemFree(text);
             }
             description->Release();
         }
-    }
+        return result;
+    }();
     return name;
 }
 
 void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc::MenuFlyoutItemBase> const& items) {
-    std::wstring original = LabelsKeywordsName();
+    std::wstring const& original = LabelsKeywordsName();
     std::wstring ours = Str(L"labels.menu");
     if (original.empty()) {
         return;
@@ -22788,6 +22867,7 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
 }
 
 [[clang::no_destroy]] thread_local winrt::weak_ref<muxc::MenuFlyout> t_labelsSortMenu;  // This window's Sort and group menu.
+
 
 void LabelsOnSortMenuOpening(Inspectable const& sender) {
     if (g_unloading) {
@@ -22960,6 +23040,13 @@ void EntryTick() {
         }
         if (!state->menuItem) {
             int visited = 0;
+            if (!state->xamlRoot) {
+                // A window that was open before the mod loaded has no XAML root here: nothing to walk.
+                if (state->entryTries >= 40) {
+                    StopEntry(state);
+                }
+                return;
+            }
             auto content = state->xamlRoot.Content();
             if (auto root = content.try_as<mux::DependencyObject>()) {
                 WalkForViewFlyout(state, root, 0, visited);
@@ -23100,11 +23187,13 @@ constexpr UINT_PTR kCloseSubclassId = 0x7A12;
 void ReleaseClosedWindow(WindowState* state) {
     Wh_Log(L"window closing, releasing its objects, window=%p", state->topLevel);
     RevokeAllHandlers();
+    LabelsReleaseThreadObjects();  // The fonts, flyouts and menu entries of the labels, which a thread that ends would leak.
     HidePanel(state, L"window closed");
     RemoveMenuEntry(state);
     ReleaseDetails(state);
     ReleaseEntry(state);
     state->queue = nullptr;
+    UnregisterKeepThread();
     // The state goes with its window; a later window of the thread gets a new one.
     std::unique_ptr<WindowState> owned;
     {
@@ -23577,6 +23666,7 @@ void LoadSettings() {
     g_restore = SettingBool(L"restoreOnOpen");
     g_focusRect = SettingBool(L"focusRect");
     g_doubleClickUp = SettingBool(L"doubleClickUp");
+    g_sidebarRoot = SettingBool(L"sidebarRoot");
     g_headerKeyboard = SettingBool(L"headerKeyboard");
     g_keepStale = SettingBool(L"keepStale");
     g_harmonize = SettingBool(L"harmonizeWidths");

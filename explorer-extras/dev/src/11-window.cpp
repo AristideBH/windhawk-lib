@@ -124,6 +124,13 @@ void EntryTick() {
         }
         if (!state->menuItem) {
             int visited = 0;
+            if (!state->xamlRoot) {
+                // A window that was open before the mod loaded has no XAML root here: nothing to walk.
+                if (state->entryTries >= 40) {
+                    StopEntry(state);
+                }
+                return;
+            }
             auto content = state->xamlRoot.Content();
             if (auto root = content.try_as<mux::DependencyObject>()) {
                 WalkForViewFlyout(state, root, 0, visited);
@@ -264,11 +271,13 @@ constexpr UINT_PTR kCloseSubclassId = 0x7A12;
 void ReleaseClosedWindow(WindowState* state) {
     Wh_Log(L"window closing, releasing its objects, window=%p", state->topLevel);
     RevokeAllHandlers();
+    LabelsReleaseThreadObjects();  // The fonts, flyouts and menu entries of the labels, which a thread that ends would leak.
     HidePanel(state, L"window closed");
     RemoveMenuEntry(state);
     ReleaseDetails(state);
     ReleaseEntry(state);
     state->queue = nullptr;
+    UnregisterKeepThread();
     // The state goes with its window; a later window of the thread gets a new one.
     std::unique_ptr<WindowState> owned;
     {

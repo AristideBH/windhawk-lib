@@ -18,6 +18,7 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Keep columns after choosing a file | on | Columns to the right stay, dimmed, when you choose a file or several items. Off closes them. |
 | Keyboard on group headers | off | Arrow keys reach group headers. Left, Right and Enter collapse and expand them. |
 | Double-click empty space to go up | on | Goes up one folder. In the first column, the parent folder is added in front. |
+| Sidebar sets the first column | on | Clicking Home, Gallery, OneDrive or a pinned folder in the navigation pane makes it the first column. Off, the columns follow it like any other navigation. The tree (This PC, drives, Network) always follows the columns. |
 
 ### Content
 

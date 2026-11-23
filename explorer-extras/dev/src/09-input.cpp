@@ -1796,10 +1796,10 @@ void OnTick() {
         SyncViewButtonIcon(state);
         UpdateLastEdge(state);
 
-        HWND fileList = FindVisibleChildCached(&state->tickFileList, state->topLevel, L"SHELLDLL_DefView");
+        HWND fileList = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
 
         // Columns per tab: another tab came to the front.
-        HWND tab = FindVisibleChildCached(&state->tickTab, state->topLevel, L"ShellTabWindowClass");
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
         if (tab && tab != state->currentTab && HandleTabSwitch(state, tab, fileList)) {
             return;
         }

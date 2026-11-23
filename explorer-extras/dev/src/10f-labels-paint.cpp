@@ -212,7 +212,7 @@ LabelsKind LabelsKindOf(void* element) {
         void** infoTable = *(void***)classInfo;
         using GetName_t = const wchar_t* (*)(void*);
         const wchar_t* name = ((GetName_t)infoTable[g_labelsNameSlot])(classInfo);
-        if (name && !IsBadStringPtrW(name, 200)) {
+        if (name) {  // DirectUI's own class name
             struct Row { const wchar_t* name; LabelsKind kind; };
             static const Row rows[] = {{L"UIItem", kItem}, {L"UIProperty", kProperty},
                                        {L"UITilesPropertyCollection", kTilesCollection},
@@ -237,7 +237,7 @@ std::wstring LabelsAccName(void* element) {
     void* value = nullptr;
     const wchar_t* text = LabelsGetAccName(element, &value);
     std::wstring result;
-    if (text && !IsBadStringPtrW(text, 600)) {
+    if (text) {  // DirectUI's own accessible name
         result = text;
     }
     if (value) {
