@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.5
+// @version         1.0.6
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -435,6 +435,7 @@ struct ModalScope {
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_autoFolderSize{false};  // A folder's size is counted when it is selected; off, a button counts it.
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
+std::atomic<int> g_paneWanted{-1};  // What the user chose last for the details pane: 1 shown, 0 hidden, -1 not chosen yet.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.
 std::atomic<bool> g_paneAnim{true};         // The content of the pane slides and fades.
@@ -1009,6 +1010,8 @@ std::wstring ModuleAt(void* address) {
     return text;
 }
 
+std::wstring PathOf(PCIDLIST_ABSOLUTE pidl);
+
 HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
                                             PCUIDLIST_RELATIVE pidl,
                                             UINT flags) {
@@ -1023,6 +1026,8 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
         }
         g_panePidl = ILClone((PCIDLIST_ABSOLUTE)pidl);
         g_paneAt = GetTickCount64();
+        POINT where = {};
+        GetCursorPos(&where);
     }
     return BrowseObject_Original(self, pidl, flags);
 }
@@ -8710,7 +8715,14 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
 // new archive is selected.
 
 void CompressItems(WindowState* state, Column* column, std::vector<size_t> const& picked, int kind) {
-    std::wstring dir = PathOf(column->folder.get());
+    // The folder on disk: PathOf gives a display name for a special folder (Bureau for the Desktop), which tar cannot use.
+    std::wstring dir;
+    {
+        wchar_t folderPath[MAX_PATH] = L"";
+        if (SHGetPathFromIDListW(column->folder.get(), folderPath)) {
+            dir = folderPath;
+        }
+    }
     std::vector<std::wstring> names;
     bool singleFolder = false;
     for (size_t index : picked) {
@@ -16094,6 +16106,9 @@ struct DetailsPane {
     int tickMs = 60;
     ULONGLONG ownToggleUntil = 0;       // The mod is toggling Explorer's own control: it is not a command of the user.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
+    HWND syncTab = nullptr;              // The tab and the foreground state the pane was last brought in line for.
+    bool syncActive = false;
+    ULONGLONG syncAt = 0;                // The pane is brought in line with the user's last choice at this time.
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
     bool dragging = false;       // The height handle is being dragged: the preview waits.
     bool previewFocused = false;  // The mouse is over the preview, which has the keyboard focus.
@@ -19340,6 +19355,8 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
     PaneMediaTick(pane);
     if (pane->shortcutAt && GetTickCount64() >= pane->shortcutAt) {
         pane->shortcutAt = 0;
+        // The user's choice, for every tab and window: the pane there will follow it.
+        g_paneWanted = pane->visible && !pane->leaving ? 0 : 1;
         PaneToggleNative(state);
     }
     if (pane->navInvokeAt && GetTickCount64() >= pane->navInvokeAt && pane->navOriginal) {
@@ -19388,6 +19405,27 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(host, &r);
         MapWindowPoints(HWND_DESKTOP, state->topLevel, (POINT*)&r, 2);
         gone = r.right - r.left < 40 || r.bottom - r.top < 40;
+    }
+    // Explorer keeps the pane per tab and per window: a tab or a window that comes to the front is
+    // brought to what the user chose last, once, through Explorer's own control.
+    if (g_detailsPane && !g_unloading) {
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        HWND front = GetForegroundWindow();
+        bool active = front && GetAncestor(front, GA_ROOT) == state->topLevel;
+        ULONGLONG now = GetTickCount64();
+        if (tab != pane->syncTab || active != pane->syncActive) {
+            pane->syncTab = tab;
+            pane->syncActive = active;
+            pane->syncAt = active ? now + 500 : 0;  // Not before the tab has laid itself out.
+        }
+        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving) {
+            pane->syncAt = 0;
+            int wanted = g_paneWanted;
+            if (wanted >= 0 && wanted != (gone ? 0 : 1)) {
+                Wh_Log(L"details pane: this tab follows the choice of the user, %s", wanted ? L"shown" : L"hidden");
+                PaneToggleNative(state);
+            }
+        }
     }
     if (gone) {
         if (pane->visible) {
@@ -22851,14 +22889,31 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
     if (original.empty()) {
         return;
     }
+    // Explorer can list an entry twice in a folder that has several grouping types set: only the first of the Tags entries is shown.
+    muxc::RadioMenuFlyoutItem firstTags{nullptr};
     for (auto const& base : items) {
         if (auto radio = base.try_as<muxc::RadioMenuFlyoutItem>()) {
             std::wstring text = std::wstring(radio.Text());
             bool on = g_labels && g_labelsGroup && !g_unloading;  // At unload the entry gets Windows' own name back.
             if (on && text == original) {
                 radio.Text(ours);
+                text = ours;
             } else if (!on && text == ours) {
                 radio.Text(original);
+                text = original;
+            }
+            if (text == ours || text == original) {
+                if (!on || !firstTags) {
+                    radio.Visibility(mux::Visibility::Visible);
+                    if (on) {
+                        firstTags = radio;
+                    }
+                } else {
+                    if (radio.IsChecked() && !firstTags.IsChecked()) {
+                        firstTags.IsChecked(true);
+                    }
+                    radio.Visibility(mux::Visibility::Collapsed);
+                }
             }
         } else if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
             LabelsRenameKeywords(sub.Items());

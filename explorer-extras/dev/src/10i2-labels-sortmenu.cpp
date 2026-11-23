@@ -29,6 +29,8 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
     if (original.empty()) {
         return;
     }
+    // Explorer can list an entry twice in a folder that has several grouping types set: only the first of the Tags entries is shown.
+    muxc::RadioMenuFlyoutItem firstTags{nullptr};
     for (auto const& base : items) {
         if (auto radio = base.try_as<muxc::RadioMenuFlyoutItem>()) {
             std::wstring text = std::wstring(radio.Text());
@@ -36,8 +38,23 @@ void LabelsRenameKeywords(winrt::Windows::Foundation::Collections::IVector<muxc:
             if (on && text == original) {
                 LogVerbose(L"SORTMENU renamed '%s' to '%s'", text.c_str(), ours.c_str());
                 radio.Text(ours);
+                text = ours;
             } else if (!on && text == ours) {
                 radio.Text(original);
+                text = original;
+            }
+            if (text == ours || text == original) {
+                if (!on || !firstTags) {
+                    radio.Visibility(mux::Visibility::Visible);
+                    if (on) {
+                        firstTags = radio;
+                    }
+                } else {
+                    if (radio.IsChecked() && !firstTags.IsChecked()) {
+                        firstTags.IsChecked(true);
+                    }
+                    radio.Visibility(mux::Visibility::Collapsed);
+                }
             }
         } else if (auto sub = base.try_as<muxc::MenuFlyoutSubItem>()) {
             LabelsRenameKeywords(sub.Items());

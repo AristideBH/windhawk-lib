@@ -102,6 +102,8 @@ std::wstring ModuleAt(void* address) {
     return text;
 }
 
+std::wstring PathOf(PCIDLIST_ABSOLUTE pidl);
+
 HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
                                             PCUIDLIST_RELATIVE pidl,
                                             UINT flags) {
@@ -116,6 +118,10 @@ HRESULT STDMETHODCALLTYPE BrowseObject_Hook(IShellBrowser* self,
         }
         g_panePidl = ILClone((PCIDLIST_ABSOLUTE)pidl);
         g_paneAt = GetTickCount64();
+        POINT where = {};
+        GetCursorPos(&where);
+        LogVerbose(L"navigation pane click: \"%s\", cursor %ld,%ld, flags 0x%X", PathOf((PCIDLIST_ABSOLUTE)pidl).c_str(), where.x,
+            where.y, flags);
     }
     return BrowseObject_Original(self, pidl, flags);
 }

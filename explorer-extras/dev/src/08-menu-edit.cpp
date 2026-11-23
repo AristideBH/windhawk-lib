@@ -1552,7 +1552,14 @@ mux::UIElement ToolbarIcon(WindowState* state, const wchar_t* label, double size
 // new archive is selected.
 
 void CompressItems(WindowState* state, Column* column, std::vector<size_t> const& picked, int kind) {
-    std::wstring dir = PathOf(column->folder.get());
+    // The folder on disk: PathOf gives a display name for a special folder (Bureau for the Desktop), which tar cannot use.
+    std::wstring dir;
+    {
+        wchar_t folderPath[MAX_PATH] = L"";
+        if (SHGetPathFromIDListW(column->folder.get(), folderPath)) {
+            dir = folderPath;
+        }
+    }
     std::vector<std::wstring> names;
     bool singleFolder = false;
     for (size_t index : picked) {

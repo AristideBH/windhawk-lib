@@ -130,6 +130,9 @@ struct DetailsPane {
     int tickMs = 60;
     ULONGLONG ownToggleUntil = 0;       // The mod is toggling Explorer's own control: it is not a command of the user.
     ULONGLONG shortcutAt = 0;            // Alt+Shift+P is to be sent at this time (the entry was chosen).
+    HWND syncTab = nullptr;              // The tab and the foreground state the pane was last brought in line for.
+    bool syncActive = false;
+    ULONGLONG syncAt = 0;                // The pane is brought in line with the user's last choice at this time.
     bool leaving = false;  // The native pane went away: ours slides out before it is hidden.
     bool dragging = false;       // The height handle is being dragged: the preview waits.
     bool previewFocused = false;  // The mouse is over the preview, which has the keyboard focus.
@@ -3379,6 +3382,8 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
     PaneMediaTick(pane);
     if (pane->shortcutAt && GetTickCount64() >= pane->shortcutAt) {
         pane->shortcutAt = 0;
+        // The user's choice, for every tab and window: the pane there will follow it.
+        g_paneWanted = pane->visible && !pane->leaving ? 0 : 1;
         PaneToggleNative(state);
     }
     if (pane->navInvokeAt && GetTickCount64() >= pane->navInvokeAt && pane->navOriginal) {
@@ -3427,6 +3432,27 @@ void PaneStep(WindowState* state, DetailsPane* pane) {
         GetWindowRect(host, &r);
         MapWindowPoints(HWND_DESKTOP, state->topLevel, (POINT*)&r, 2);
         gone = r.right - r.left < 40 || r.bottom - r.top < 40;
+    }
+    // Explorer keeps the pane per tab and per window: a tab or a window that comes to the front is
+    // brought to what the user chose last, once, through Explorer's own control.
+    if (g_detailsPane && !g_unloading) {
+        HWND tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        HWND front = GetForegroundWindow();
+        bool active = front && GetAncestor(front, GA_ROOT) == state->topLevel;
+        ULONGLONG now = GetTickCount64();
+        if (tab != pane->syncTab || active != pane->syncActive) {
+            pane->syncTab = tab;
+            pane->syncActive = active;
+            pane->syncAt = active ? now + 500 : 0;  // Not before the tab has laid itself out.
+        }
+        if (pane->syncAt && now >= pane->syncAt && !pane->shortcutAt && now >= pane->ownToggleUntil && !pane->leaving) {
+            pane->syncAt = 0;
+            int wanted = g_paneWanted;
+            if (wanted >= 0 && wanted != (gone ? 0 : 1)) {
+                Wh_Log(L"details pane: this tab follows the choice of the user, %s", wanted ? L"shown" : L"hidden");
+                PaneToggleNative(state);
+            }
+        }
     }
     if (gone) {
         if (pane->visible) {

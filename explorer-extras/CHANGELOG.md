@@ -2,6 +2,14 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.6 (2026-11-23)
+
+### Fixed
+- **Compress to** failed everywhere the folder is a special one (the Desktop, Downloads): the folder was given to tar by its display name. It is the path on disk now.
+- **Group by** showed the Tags entry twice in a folder with several grouping types set: Explorer lists the entry twice there. Only the first is shown, with the check of either.
+- **Details pane across tabs and windows.** Explorer keeps the pane per tab and per window. A tab or a window that comes to the front now follows what you chose last, once.
+- Not found yet: the freeze after a sidebar click with two tabs open, and the first column being reset by a click on a row. The debug log now records each navigation pane click, with the cursor position.
+
 ## 1.0.5 (2026-11-23)
 
 ### Fixed
