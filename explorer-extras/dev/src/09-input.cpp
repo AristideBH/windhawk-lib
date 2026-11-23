@@ -1785,8 +1785,11 @@ void OnTick() {
     if (!state || !state->on || !state->bridge) {
         return;
     }
-    if (t_modalDepth > 0) {
-        return;  // A dialog, a menu or a drag of the mod is open below this tick: what it uses stays where it is.
+    // A dialog, a menu or a drag of the mod is open below this tick: what it uses stays where it is. Only what takes the panel or the
+    // window down waits; the rest (the auto-scroll and the spring-loading of a drag that comes back over the panel) goes on.
+    bool teardown = !IsWindow(state->topLevel) || g_unloading || !g_enabled;
+    if (teardown && t_modalDepth > 0) {
+        return;
     }
     if (!IsWindow(state->topLevel)) {
         AbandonWindow(state);

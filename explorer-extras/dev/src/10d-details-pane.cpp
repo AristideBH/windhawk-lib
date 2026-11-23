@@ -2537,6 +2537,13 @@ void PaneOpenPreview(WindowState* state, DetailsPane* pane, PaneData const& data
     if (SUCCEEDED(hr)) {
         hr = handler->DoPreview();
     }
+    // DoPreview can take a second or more, in a loop in which the window may have closed: the pane is then abandoned, and nothing
+    // else would unload the handler (its process would keep the file open).
+    if (StateForThisThread(false) != state || state->details != pane) {
+        handler->Unload();
+        handler->Release();
+        return;
+    }
     if (FAILED(hr)) {
         Wh_Log(L"preview: %s failed (0x%08lx)", data.previewPath.c_str(), (unsigned long)hr);
         handler->Unload();

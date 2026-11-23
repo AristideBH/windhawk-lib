@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.20 (2026-11-23)
+
+### Fixed
+From the seventh AI review:
+- **Drag that leaves the panel and comes back:** the panel's auto-scroll and the spring-loading of a folder work again. The mod's tick only waits, while a dialog or a drag of the mod is open, for what takes the panel or the window down.
+- **Preview handler of a window that closes during the preview:** the handler is unloaded and released when its preview call returns after the window is gone (its process kept the file open).
+
+The two points left (labels in the files, the overlap with other mods) are the maintainers' calls, as the PR says.
+
 ## 1.0.19 (2026-11-23)
 
 ### Fixed
