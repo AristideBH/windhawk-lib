@@ -2,10 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.10 (2026-11-23)
+
+### Fixed
+- **Black squares on folder pictures**, in the columns and in the details pane. The shell gives the thumbnail of some folders (empty ones) as a picture on opaque black. Such a picture is given up for the folder's icon, which has its transparency; every other thumbnail is kept.
+
 ## 1.0.9 (2026-11-23)
 
 ### Fixed
-- **Black squares behind folder icons.** For some folders (empty ones) the shell gives the folder's thumbnail as a picture on opaque black, and rebuilding the icon cache does not change it. A folder is asked for its icon, which has its transparency. Files keep their thumbnails.
+- **Icons.** (see 1.0.10 for the black squares)
 
 ## 1.0.8 (2026-11-23)
 

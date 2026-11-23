@@ -135,6 +135,45 @@ bool ReadBitmapBits(HBITMAP bitmap, IconBits* out) {
     return true;
 }
 
+// The shell hands some folder thumbnails over as a picture on opaque black. True for such a bitmap: all four corners opaque black.
+bool HasBlackCorners(IconBits const& bits) {
+    if (bits.width < 2 || bits.height < 2) {
+        return false;
+    }
+    auto black = [&](int x, int y) {
+        const unsigned char* px = &bits.bgra[((size_t)y * bits.width + x) * 4];
+        return !px[0] && !px[1] && !px[2] && px[3] == 255;
+    };
+    return black(0, 0) && black(bits.width - 1, 0) && black(0, bits.height - 1) && black(bits.width - 1, bits.height - 1);
+}
+
+// The picture of an item, its thumbnail where the shell has one. A thumbnail on opaque black is given up for the icon, which has its
+// transparency. `flags` are the SIIGBF flags of the first try.
+bool GetItemBits(IShellItemImageFactory* factory, LONG side, int flags, IconBits* bits, HRESULT* result = nullptr) {
+    HBITMAP bitmap = nullptr;
+    HRESULT got = factory->GetImage(SIZE{side, side}, flags, &bitmap);
+    if (result) {
+        *result = got;
+    }
+    bool ok = false;
+    if (SUCCEEDED(got) && bitmap) {
+        ok = ReadBitmapBits(bitmap, bits);
+        DeleteObject(bitmap);
+        if (ok && HasBlackCorners(*bits)) {
+            HBITMAP plain = nullptr;
+            if (SUCCEEDED(factory->GetImage(SIZE{side, side}, (flags & ~SIIGBF_INCACHEONLY) | SIIGBF_ICONONLY, &plain)) && plain) {
+                IconBits again;
+                if (ReadBitmapBits(plain, &again)) {
+                    again.index = bits->index;
+                    *bits = std::move(again);
+                }
+                DeleteObject(plain);
+            }
+        }
+    }
+    return ok;
+}
+
 // Reads icons, or thumbnails where the shell has one, for the first items of
 // a folder and sends them to the window's UI thread in small batches.
 void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
@@ -176,30 +215,23 @@ void LoadIcons(PCIDLIST_ABSOLUTE folderPidl, std::vector<Pidl>& children,
         bool done = false;
         IShellItemImageFactory* factory = nullptr;
         if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
-            HBITMAP bitmap = nullptr;
             // A row's icon is 20 DIP: the picture is asked for at that size on this screen, 32 px at least.
             LONG side = t_iconSide ? t_iconSide : MulDiv(20, (int)GetDpiForSystem(), 96);
             side = side < 32 ? 32 : side;
-            // A folder's thumbnail is a picture on opaque black for some folders, whatever the cache holds (the shell gives it so
-            // to anyone who asks): a folder gets its icon, which has its transparency.
-            SFGAOF attributes = SFGAO_FOLDER;
-            bool isFolder = SUCCEEDED(folder->GetAttributesOf(1, (PCUITEMID_CHILD_ARRAY)&children[i], &attributes)) && (attributes & SFGAO_FOLDER);
-            int kind = isFolder ? SIIGBF_ICONONLY : 0;
-            HRESULT got = factory->GetImage(SIZE{side, side}, kind | (cachedOnly ? SIIGBF_INCACHEONLY : 0), &bitmap);
-            if (FAILED(got) && !cachedOnly) {
-                // No thumbnail to be had: the icon of the type, which every item has.
-                got = factory->GetImage(SIZE{side, side}, SIIGBF_ICONONLY, &bitmap);
-            }
-            if (SUCCEEDED(got) && bitmap) {
-                IconBits bits;
-                bits.index = indices[i];
-                if (ReadBitmapBits(bitmap, &bits)) {
-                    batch->icons.push_back(std::move(bits));
-                }
-                DeleteObject(bitmap);
+            IconBits bits;
+            bits.index = indices[i];
+            HRESULT got = S_OK;
+            if (GetItemBits(factory, side, cachedOnly ? SIIGBF_INCACHEONLY : 0, &bits, &got)) {
+                batch->icons.push_back(std::move(bits));
                 done = true;
             } else if (!cachedOnly) {
-                done = true;  // Asked in full and failed: not again.
+                // No thumbnail to be had: the icon of the type, which every item has.
+                IconBits plain;
+                plain.index = indices[i];
+                if (GetItemBits(factory, side, SIIGBF_ICONONLY, &plain)) {
+                    batch->icons.push_back(std::move(plain));
+                }
+                done = true;  // Asked in full: not again.
             }
             factory->Release();
         } else {

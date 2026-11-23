@@ -202,14 +202,9 @@ void PaneReadImage(IShellItem* item, PaneData* data) {
         return;
     }
     for (int size : {320, 128}) {
-        HBITMAP bitmap = nullptr;
-        if (SUCCEEDED(factory->GetImage(SIZE{size, size}, SIIGBF_BIGGERSIZEOK, &bitmap)) && bitmap) {
-            bool ok = ReadBitmapBits(bitmap, &data->image);
-            DeleteObject(bitmap);
-            if (ok) {
-                data->hasImage = true;
-                break;
-            }
+        if (GetItemBits(factory, size, SIIGBF_BIGGERSIZEOK, &data->image)) {
+            data->hasImage = true;
+            break;
         }
     }
     factory->Release();
