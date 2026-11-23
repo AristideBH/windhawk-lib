@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.9 (2026-11-23)
+
+### Fixed
+- **Black squares behind folder icons.** For some folders the shell's icon cache returns the picture with opaque black corners (a known Windows 11 cache fault; the mod's own call shows it too). The black that touches the picture's edge is made transparent, with or without an alpha channel. Rebuilding the icon cache fixes it at the source.
+
 ## 1.0.8 (2026-11-23)
 
 ### Fixed
