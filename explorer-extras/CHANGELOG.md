@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.19 (2026-11-23)
+
+### Fixed
+- **A file selected in an earlier column showed its parent folder in the details pane.** Coming back up to a folder, Explorer puts back the selection it remembers for it (the folder the user came up from), which undid the mod's selection of the file. The selection is checked again for 1.6 s and set again if Explorer took it back.
+
 ## 1.0.18 (2026-11-23)
 
 ### Fixed

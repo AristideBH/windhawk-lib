@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.18
+// @version         1.0.19
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -3625,6 +3625,12 @@ struct WindowState {
     Pidl selectFolder;  // A file to select in Explorer's view,
     Pidl selectChild;   // once it shows that folder.
     std::vector<Pidl> selectExtra;  // More items to add to that selection.
+    // After the selection was set in Explorer's view, it is looked at again for a moment: Explorer puts back the selection it
+    // remembers for a folder it has just come back to (the folder the user came up from), and that undoes ours.
+    Pidl keepFolder;
+    Pidl keepChild;
+    ULONGLONG keepNext = 0;
+    ULONGLONG keepUntil = 0;
     // Cut items, dimmed until the clipboard changes.
     Pidl cutFolder;
     std::wstring cutFolderPath;  // The same, as a path. Pidls built from a path
@@ -6848,6 +6854,14 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 // one navigation. A selection in the folder Explorer already shows needs no
 // navigation: it is mirrored at once, so a previewer that asks Explorer for the
 // selected item (QuickLook on Space) finds it there.
+// The selection just set in Explorer's view is checked again a few times in the next second.
+void WatchSelectionInExplorer(WindowState* state) {
+    state->keepFolder.reset(ILClone(state->selectFolder.get()));
+    state->keepChild.reset(ILClone(state->selectChild.get()));
+    state->keepNext = GetTickCount64() + 250;
+    state->keepUntil = GetTickCount64() + 1600;
+}
+
 void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay) {
     if (!g_follow) {
         return;
@@ -6867,6 +6881,8 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG 
                     if (!state->selectExtra.empty()) {
                         AddToSelectionInExplorer(browser, state->selectExtra);
                         state->selectExtra.clear();
+                    } else {
+                        WatchSelectionInExplorer(state);
                     }
                     state->selectFolder.reset();
                     state->selectChild.reset();
@@ -7194,6 +7210,8 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         column->selectionChangedAt = GetTickCount64();
         state->slowRenameAt = 0;
+        state->keepChild.reset();  // A new choice ends the watch on the last one.
+        state->keepFolder.reset();
 
         LiftStale(state, columnIndex);
 
@@ -12487,7 +12505,7 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
-        bool busy = state->building || state->pendingNav || state->selectChild || state->rename || state->drag.column ||
+        bool busy = state->building || state->pendingNav || state->selectChild || state->keepChild || state->rename || state->drag.column ||
                     state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
                     state->specCheckAt || state->swapDeadline || now < state->watchEditUntil || now < state->openTabUntil;
         RetimeTick(state->timer, &state->tickMs, TickIntervalMs(state->topLevel, busy));
@@ -12950,7 +12968,7 @@ void OnTick() {
         // or as a slow safety net.
         bool selectPending = state->selectChild && !state->pendingNav;
         bool check = fileList != state->lastFileList || state->expected ||
-                     selectPending || state->ticks % 20 == 0;
+                     selectPending || state->keepChild || state->ticks % 20 == 0;
         if (!check) {
             return;
         }
@@ -12986,6 +13004,8 @@ void OnTick() {
                 if (!state->selectExtra.empty()) {
                     AddToSelectionInExplorer(browser, state->selectExtra);
                     state->selectExtra.clear();
+                } else {
+                    WatchSelectionInExplorer(state);
                 }
                 state->selectFolder.reset();
                 state->selectChild.reset();
@@ -12994,6 +13014,21 @@ void OnTick() {
                 state->selectFolder.reset();
                 state->selectChild.reset();
                 state->selectExtra.clear();
+            }
+        }
+        // The selection set a moment ago still stands? Explorer can put back the one it remembers for the folder.
+        if (state->keepChild && state->keepFolder) {
+            ULONGLONG now = GetTickCount64();
+            if (now >= state->keepUntil) {
+                state->keepChild.reset();
+                state->keepFolder.reset();
+            } else if (now >= state->keepNext && !state->pendingNav && !state->expected && ILIsEqual(current.get(), state->keepFolder.get())) {
+                state->keepNext = now + 250;
+                auto chosen = ExplorerSelection(browser);
+                if (chosen.size() != 1 || !ILIsEqual(chosen[0].get(), state->keepChild.get())) {
+                    Wh_Log(L"Explorer's view took back its own selection, ours is set again");
+                    SelectInExplorer(browser, state->keepChild.get());
+                }
             }
         }
     } catch (...) {

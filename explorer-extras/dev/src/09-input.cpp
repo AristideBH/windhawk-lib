@@ -1804,7 +1804,7 @@ void OnTick() {
         }
         state->ticks++;
         ULONGLONG now = GetTickCount64();
-        bool busy = state->building || state->pendingNav || state->selectChild || state->rename || state->drag.column ||
+        bool busy = state->building || state->pendingNav || state->selectChild || state->keepChild || state->rename || state->drag.column ||
                     state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
                     state->specCheckAt || state->swapDeadline || now < state->watchEditUntil || now < state->openTabUntil;
         RetimeTick(state->timer, &state->tickMs, TickIntervalMs(state->topLevel, busy));
@@ -2269,7 +2269,7 @@ void OnTick() {
         // or as a slow safety net.
         bool selectPending = state->selectChild && !state->pendingNav;
         bool check = fileList != state->lastFileList || state->expected ||
-                     selectPending || state->ticks % 20 == 0;
+                     selectPending || state->keepChild || state->ticks % 20 == 0;
         if (!check) {
             return;
         }
@@ -2305,6 +2305,8 @@ void OnTick() {
                 if (!state->selectExtra.empty()) {
                     AddToSelectionInExplorer(browser, state->selectExtra);
                     state->selectExtra.clear();
+                } else {
+                    WatchSelectionInExplorer(state);
                 }
                 state->selectFolder.reset();
                 state->selectChild.reset();
@@ -2313,6 +2315,21 @@ void OnTick() {
                 state->selectFolder.reset();
                 state->selectChild.reset();
                 state->selectExtra.clear();
+            }
+        }
+        // The selection set a moment ago still stands? Explorer can put back the one it remembers for the folder.
+        if (state->keepChild && state->keepFolder) {
+            ULONGLONG now = GetTickCount64();
+            if (now >= state->keepUntil) {
+                state->keepChild.reset();
+                state->keepFolder.reset();
+            } else if (now >= state->keepNext && !state->pendingNav && !state->expected && ILIsEqual(current.get(), state->keepFolder.get())) {
+                state->keepNext = now + 250;
+                auto chosen = ExplorerSelection(browser);
+                if (chosen.size() != 1 || !ILIsEqual(chosen[0].get(), state->keepChild.get())) {
+                    Wh_Log(L"Explorer's view took back its own selection, ours is set again");
+                    SelectInExplorer(browser, state->keepChild.get());
+                }
             }
         }
     } catch (...) {

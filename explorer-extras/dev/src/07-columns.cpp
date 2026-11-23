@@ -2618,6 +2618,14 @@ void NavigateExplorer(WindowState* state, PCIDLIST_ABSOLUTE folder) {
 // one navigation. A selection in the folder Explorer already shows needs no
 // navigation: it is mirrored at once, so a previewer that asks Explorer for the
 // selected item (QuickLook on Space) finds it there.
+// The selection just set in Explorer's view is checked again a few times in the next second.
+void WatchSelectionInExplorer(WindowState* state) {
+    state->keepFolder.reset(ILClone(state->selectFolder.get()));
+    state->keepChild.reset(ILClone(state->selectChild.get()));
+    state->keepNext = GetTickCount64() + 250;
+    state->keepUntil = GetTickCount64() + 1600;
+}
+
 void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG delay) {
     if (!g_follow) {
         return;
@@ -2637,6 +2645,8 @@ void ScheduleNavigation(WindowState* state, PCIDLIST_ABSOLUTE folder, ULONGLONG 
                     if (!state->selectExtra.empty()) {
                         AddToSelectionInExplorer(browser, state->selectExtra);
                         state->selectExtra.clear();
+                    } else {
+                        WatchSelectionInExplorer(state);
                     }
                     state->selectFolder.reset();
                     state->selectChild.reset();
@@ -2964,6 +2974,8 @@ void OnRowSelected(muxc::ListView const& list) {
         }
         column->selectionChangedAt = GetTickCount64();
         state->slowRenameAt = 0;
+        state->keepChild.reset();  // A new choice ends the watch on the last one.
+        state->keepFolder.reset();
 
         LiftStale(state, columnIndex);
 

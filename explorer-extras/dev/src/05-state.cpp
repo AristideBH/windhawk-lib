@@ -552,6 +552,12 @@ struct WindowState {
     Pidl selectFolder;  // A file to select in Explorer's view,
     Pidl selectChild;   // once it shows that folder.
     std::vector<Pidl> selectExtra;  // More items to add to that selection.
+    // After the selection was set in Explorer's view, it is looked at again for a moment: Explorer puts back the selection it
+    // remembers for a folder it has just come back to (the folder the user came up from), and that undoes ours.
+    Pidl keepFolder;
+    Pidl keepChild;
+    ULONGLONG keepNext = 0;
+    ULONGLONG keepUntil = 0;
     // Cut items, dimmed until the clipboard changes.
     Pidl cutFolder;
     std::wstring cutFolderPath;  // The same, as a path. Pidls built from a path
