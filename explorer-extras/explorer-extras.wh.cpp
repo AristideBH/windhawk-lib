@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version              1.1.0
+// @version              1.1.1
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -4260,6 +4260,22 @@ std::vector<std::wstring> TagIndexFixedRoots() {
 
 // A stream write seen by a watcher: read the file again and bring the index in line.
 void TagIndexReread(std::wstring const& path) {
+    // A file is read at most once a second: something that rewrites streams in a loop (or a sync client) must not
+    // keep this thread and the disk busy. A write inside that second can be missed; the next walk of the drive (at the next start) corrects it.
+    {
+        static std::mutex throttleMutex;
+        static std::unordered_map<std::wstring, ULONGLONG> lastRead;
+        std::lock_guard<std::mutex> lock(throttleMutex);
+        ULONGLONG now = GetTickCount64();
+        auto found = lastRead.find(path);
+        if (found != lastRead.end() && now - found->second < 1000) {
+            return;
+        }
+        if (lastRead.size() > 5000) {
+            lastRead.clear();
+        }
+        lastRead[path] = now;
+    }
     std::vector<LabelTag> tags;
     LabelsReadResult result = LabelsReadFileEx(TagIndexLong(path), &tags);
     if (result == LabelsReadResult::Ok || result == LabelsReadResult::Failed) {
