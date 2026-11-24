@@ -3320,8 +3320,57 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     Wh_Log(L"details pane: the Preview pane was switched on, Explorer's Details entry chosen, try %d", pane->redirectTries);
 }
 
-// What is selected in Explorer's own view, as absolute ids and a key that changes with it.
+bool TagViewSelectedPaths(WindowState* state, std::vector<std::wstring>* paths);  // 10j4: the rows selected in a tag's list.
+
+// What is selected in Explorer's own view, as absolute ids and a key that changes with it. While a tag's list shows over the file
+// area, its selected rows are the selection (the pane shows them as it shows the file view's).
 bool PaneReadSelection(WindowState* state, DetailsPane* pane, std::wstring* key) {
+    std::vector<std::wstring> listed;
+    if (TagViewSelectedPaths(state, &listed)) {
+        unsigned long long hash = 1469598103934665603ULL;
+        for (auto const& path : listed) {
+            for (wchar_t c : path) {
+                hash = (hash ^ (unsigned long long)c) * 1099511628211ULL;
+            }
+        }
+        wchar_t tail[64];
+        swprintf(tail, ARRAYSIZE(tail), L"|%d|%llx", (int)listed.size(), hash);
+        std::wstring next = L"taglist" + std::wstring(tail);
+        if (next != pane->wantedKey) {
+            pane->wantedKey = next;
+            PaneClosePreview(pane);
+            pane->wantedSince = GetTickCount64();
+            pane->wantedIndex = -1;
+            pane->wantedItems.clear();
+            pane->wantedHashes.clear();
+            pane->wantedFolder.reset();
+            pane->wantedFolderPath.clear();
+            for (size_t i = 0; i < listed.size() && i < 2000; i++) {
+                PIDLIST_ABSOLUTE absolute = nullptr;
+                if (FAILED(SHParseDisplayName(listed[i].c_str(), nullptr, &absolute, 0, nullptr)) || !absolute) {
+                    continue;
+                }
+                uint64_t each = 1469598103934665603ULL;
+                PCUITEMID_CHILD last = ILFindLastID(absolute);
+                UINT size = ILGetSize(last);
+                const unsigned char* bytes = (const unsigned char*)last;
+                for (UINT b = 0; b < size; b++) {
+                    each = (each ^ bytes[b]) * 1099511628211ULL;
+                }
+                if (pane->wantedItems.empty()) {
+                    Pidl parent(ILClone(absolute));
+                    if (ILRemoveLastID(parent.get())) {
+                        pane->wantedFolderPath = PathOf(parent.get());
+                        pane->wantedFolder = std::move(parent);
+                    }
+                }
+                pane->wantedItems.emplace_back(absolute);
+                pane->wantedHashes.push_back(each);
+            }
+        }
+        *key = next;
+        return true;
+    }
     IShellBrowser* browser = BrowserOf(state->topLevel);
     if (!browser) {
         return false;

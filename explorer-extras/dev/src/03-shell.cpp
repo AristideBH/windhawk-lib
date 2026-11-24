@@ -17,6 +17,8 @@ thread_local bool g_renaming = false;
 thread_local HWND g_panelWindow = nullptr;
 
 bool PaneHandleAltP(HWND hwnd, LPMSG msg);  // 10d: Alt+P shows or hides the details pane.
+HWND TagViewWindow();                       // 10j4: the window of the tag list, while it is open on this thread.
+HWND SidebarWindow();                       // 10j: the window of the sidebar on this thread.
 
 using TranslateAcceleratorW_t = int(WINAPI*)(HWND, HACCEL, LPMSG);
 TranslateAcceleratorW_t TranslateAcceleratorW_Original;
@@ -28,6 +30,23 @@ int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
         (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP ||
          msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
         return 0;  // Not translated: the message goes on to the focused control.
+    }
+    // The sidebar takes Delete and F2 for itself while it has the keyboard (unpin a favorite, rename a tag), not Explorer's own.
+    if (msg && (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP) && (msg->wParam == VK_DELETE || msg->wParam == VK_F2)) {
+        HWND sidebar = SidebarWindow();
+        HWND focus = sidebar ? GetFocus() : nullptr;
+        if (focus && (focus == sidebar || IsChild(sidebar, focus))) {
+            return 0;
+        }
+    }
+    // The list of a tag's files takes Backspace and Alt+Left for itself (it closes), not Explorer's Back.
+    if (msg && (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) &&
+        (msg->wParam == VK_BACK || (msg->message == WM_SYSKEYDOWN && msg->wParam == VK_LEFT))) {
+        HWND tagView = TagViewWindow();
+        HWND focus = tagView ? GetFocus() : nullptr;
+        if (focus && (focus == tagView || IsChild(tagView, focus))) {
+            return 0;
+        }
     }
     // Keys the panel takes for itself while the keyboard is in it: Backspace,
     // and Ctrl+Shift+N, which Explorer would use to make a folder in its own,
@@ -340,18 +359,39 @@ Pidl FolderLinkTarget(IShellFolder* folder, PCUITEMID_CHILD child) {
     }
     IShellItem* item = nullptr;
     if (SUCCEEDED(SHCreateItemWithParent(nullptr, folder, child, IID_PPV_ARGS(&item))) && item) {
-        IShellItem* target = nullptr;
-        if (SUCCEEDED(item->BindToHandler(nullptr, BHID_LinkTargetItem, IID_PPV_ARGS(&target))) &&
-            target) {
-            SFGAOF kind = 0;
-            if (SUCCEEDED(target->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM, &kind)) &&
-                (kind & SFGAO_FOLDER) && !(kind & SFGAO_STREAM)) {
-                PIDLIST_ABSOLUTE pidl = nullptr;
-                if (SUCCEEDED(SHGetIDListFromObject(target, &pidl)) && pidl) {
-                    result.reset(pidl);
+        // The link is resolved by IShellLink with SLR_NO_UI: the shell's own binding (BHID_LinkTargetItem) shows the "Problem with
+        // shortcut" box for a link whose target is gone, once for every such link of a folder (the Recent folder is full of them).
+        wchar_t* linkPath = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &linkPath)) && linkPath) {
+            IShellLinkW* link = nullptr;
+            if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link))) && link) {
+                IPersistFile* file = nullptr;
+                if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file))) && file) {
+                    if (SUCCEEDED(file->Load(linkPath, STGM_READ)) &&
+                        SUCCEEDED(link->Resolve(nullptr, SLR_NO_UI | SLR_NOSEARCH | SLR_NOUPDATE | SLR_NOLINKINFO | (500 << 16)))) {
+                        PIDLIST_ABSOLUTE pidl = nullptr;
+                        if (SUCCEEDED(link->GetIDList(&pidl)) && pidl) {
+                            IShellItem* target = nullptr;
+                            SFGAOF kind = 0;
+                            if (SUCCEEDED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&target))) && target &&
+                                SUCCEEDED(target->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM, &kind)) && (kind & SFGAO_FOLDER) &&
+                                !(kind & SFGAO_STREAM)) {
+                                result.reset(pidl);
+                                pidl = nullptr;
+                            }
+                            if (target) {
+                                target->Release();
+                            }
+                            if (pidl) {
+                                CoTaskMemFree(pidl);
+                            }
+                        }
+                    }
+                    file->Release();
                 }
+                link->Release();
             }
-            target->Release();
+            CoTaskMemFree(linkPath);
         }
         item->Release();
     }
@@ -559,6 +599,8 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
 
     std::vector<int> ids(count, 0);
     std::vector<std::wstring> texts;  // Group titles, indexed by id.
+    std::vector<double> numbers;      // The number a title stands for, when the values are numbers (their order is the groups').
+    std::vector<bool> numberKnown;
     SYSTEMTIME nowLocal{};
     GetLocalTime(&nowLocal);
     int firstType = -1;
@@ -611,6 +653,8 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
             continue;
         }
         std::wstring text;
+        double numberOf = 0;
+        bool haveNumber = false;
         if (isName) {
             const std::wstring& name = result->entries[i].name;
             if (!name.empty()) {
@@ -622,14 +666,34 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         } else if (value.vt == VT_BSTR && value.bstrVal) {
             text = value.bstrVal;
         } else if (value.vt != VT_EMPTY && value.vt != VT_NULL) {
-            // Numbers and the like: let OLE turn them into text.
-            VARIANT asText;
-            VariantInit(&asText);
-            if (SUCCEEDED(VariantChangeType(&asText, &value, 0, VT_BSTR)) &&
-                asText.bstrVal) {
-                text = asText.bstrVal;
+            // Numbers and the like: the property's own text for the value first (System.Home.Grouping 1 is "Quick access"), then
+            // what OLE makes of it.
+            PROPVARIANT asProperty;
+            PropVariantInit(&asProperty);
+            if (SUCCEEDED(VariantToPropVariant(&value, &asProperty))) {
+                PWSTR formatted = nullptr;
+                if (SUCCEEDED(PSFormatForDisplayAlloc(key, asProperty, PDFF_DEFAULT, &formatted)) && formatted) {
+                    text = formatted;
+                    CoTaskMemFree(formatted);
+                }
+                PropVariantClear(&asProperty);
             }
-            VariantClear(&asText);
+            VARIANT asNumber;
+            VariantInit(&asNumber);
+            if (SUCCEEDED(VariantChangeType(&asNumber, &value, 0, VT_R8))) {
+                numberOf = asNumber.dblVal;
+                haveNumber = true;
+            }
+            VariantClear(&asNumber);
+            if (text.empty()) {
+                VARIANT asText;
+                VariantInit(&asText);
+                if (SUCCEEDED(VariantChangeType(&asText, &value, 0, VT_BSTR)) &&
+                    asText.bstrVal) {
+                    text = asText.bstrVal;
+                }
+                VariantClear(&asText);
+            }
         }
         if (text.empty() && column >= 0) {
             SHELLDETAILS details{};
@@ -648,6 +712,10 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         auto found = std::find(texts.begin(), texts.end(), text);
         if (found == texts.end()) {
             texts.push_back(text);
+            numbers.resize(texts.size(), 0);
+            numberKnown.resize(texts.size(), false);
+            numbers[texts.size() - 1] = numberOf;
+            numberKnown[texts.size() - 1] = haveNumber;
             ids[i] = (int)texts.size() - 1;
         } else {
             ids[i] = (int)(found - texts.begin());
@@ -677,12 +745,23 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
             return ascending ? a < b : a > b;
         });
     } else {
-        std::sort(order.begin(), order.end(),
-                  [ascending, &texts](int a, int b) {
-                      int cmp = StrCmpLogicalW(texts[a].c_str(),
-                                               texts[b].c_str());
-                      return ascending ? cmp < 0 : cmp > 0;
-                  });
+        bool allNumbers = !order.empty();
+        for (int id : order) {
+            allNumbers = allNumbers && id >= 0 && id < (int)numberKnown.size() && numberKnown[id];
+        }
+        if (allNumbers) {
+            // Values that are numbers keep their numeric order, whatever their titles are (Home: Quick access, Favorites, Recent).
+            std::sort(order.begin(), order.end(), [ascending, &numbers](int a, int b) {
+                return ascending ? numbers[a] < numbers[b] : numbers[a] > numbers[b];
+            });
+        } else {
+            std::sort(order.begin(), order.end(),
+                      [ascending, &texts](int a, int b) {
+                          int cmp = StrCmpLogicalW(texts[a].c_str(),
+                                                   texts[b].c_str());
+                          return ascending ? cmp < 0 : cmp > 0;
+                      });
+        }
     }
     std::vector<std::wstring> names;
     for (int id : order) {

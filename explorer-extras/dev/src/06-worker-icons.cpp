@@ -451,6 +451,8 @@ void RequestLoad(WindowState* state, Column* column) {
     }
     column->cancel = std::make_shared<std::atomic<bool>>(false);
     column->generation = ++state->nextGeneration;
+    column->loading = true;
+    column->loadStartedAt = GetTickCount64();
     auto job = std::make_unique<Job>();
     job->generation = column->generation;
     job->folder.reset(ILClone(column->folder.get()));

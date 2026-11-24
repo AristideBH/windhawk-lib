@@ -1,6 +1,9 @@
 void RestoreViewButtonIcon(WindowState* state);
 void HoverOn(WindowState* state);
 void HoverOff(WindowState* state);
+namespace {
+void SidebarDismissPopups(WindowState* state);  // 10j.
+}
 // ---- Columns ----
 
 int ColumnIndexOfList(WindowState* state, muxc::ListView const& list) {
@@ -814,10 +817,85 @@ void ApplyCutState(WindowState* state) {
     }
 }
 
+muxc::TextBlock MakeText(std::wstring const& text, double size, bool semibold, bool secondary);  // 10b
+
+// The muted line over a column's list: a spinner and "Loading…" while a folder that has not been shown yet takes more than a moment,
+// "This folder is empty" when a listing came with no row. Made when the column is, shown and hidden by UpdateColumnNotice.
+void BuildColumnNotice(Column* column) {
+    muxc::StackPanel notice;
+    notice.Orientation(muxc::Orientation::Vertical);
+    notice.Spacing(10);
+    notice.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    notice.VerticalAlignment(mux::VerticalAlignment::Top);
+    notice.Margin(mux::Thickness{16, 56, 16, 0});
+    notice.IsHitTestVisible(false);
+    notice.Visibility(mux::Visibility::Collapsed);
+    notice.OpacityTransition(mux::ScalarTransition());
+    notice.Opacity(0);
+    muxc::ProgressRing ring;
+    ring.Width(20);
+    ring.Height(20);
+    ring.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    ring.Visibility(mux::Visibility::Collapsed);
+    notice.Children().Append(ring);
+    auto text = MakeText(L"", 13, false, true);
+    text.TextAlignment(mux::TextAlignment::Center);
+    text.TextWrapping(mux::TextWrapping::Wrap);
+    text.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    notice.Children().Append(text);
+    column->notice = notice;
+    column->noticeRing = ring;
+    column->noticeText = text;
+}
+
+void UpdateColumnNotice(Column* column) {
+    if (!column->notice) {
+        return;
+    }
+    bool show = false;
+    bool spinning = false;
+    const wchar_t* text = L"";
+    if (g_columnNotice) {
+        if (column->loading && !column->filled) {
+            if (GetTickCount64() - column->loadStartedAt > 300) {  // A quick folder never flashes it.
+                show = true;
+                spinning = true;
+                text = Str(L"columns.loading");
+            }
+        } else if (column->filled && column->entries.empty()) {
+            show = true;
+            text = Str(L"columns.empty");
+        }
+    }
+    try {
+        if (show) {
+            if (std::wstring(column->noticeText.Text()) != text) {
+                column->noticeText.Text(text);
+            }
+            if (column->noticeRing.IsActive() != spinning) {
+                column->noticeRing.IsActive(spinning);
+            }
+            column->noticeRing.Visibility(spinning ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+            if (column->notice.Visibility() != mux::Visibility::Visible) {
+                column->notice.Visibility(mux::Visibility::Visible);
+            }
+            column->notice.Opacity(0.85);
+        } else if (column->notice.Visibility() != mux::Visibility::Collapsed) {
+            column->notice.Opacity(0);
+            column->noticeRing.IsActive(false);
+            column->notice.Visibility(mux::Visibility::Collapsed);
+        }
+    } catch (...) {
+        LogHresult(L"a column's notice");
+    }
+}
+
 // What follows a fill or a patch: the cut look, a rename or a selection that was waiting for
 // the new rows, and a scroll position to put back.
 void FinishFill(WindowState* state, Column* column) {
     column->filled = true;
+    column->loading = false;
+    UpdateColumnNotice(column);
     column->list.IsTabStop(column->entries.empty());
     if (!state->cutPaths.empty()) {
         ApplyCutState(state);
@@ -1524,6 +1602,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
     for (size_t position = 0; position < state->columns.size(); position++) {
         auto& column = state->columns[position];
         if (column->generation == loaded->generation) {
+            column->loading = false;
             // The column's folder is gone: the column and those after it are
             // removed, and the one before it shows its folder again, without
             // the row that led here.
@@ -1964,6 +2043,9 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
                     WindowState* pressState = StateForThisThread(false);
+                    if (pressState && pressState->sidebar) {
+                        SidebarDismissPopups(pressState);  // A flyout of the sidebar does not see a click in a column.
+                    }
                     // A row marks its own press as handled, so the list's ordinary
                     // press handler never sees it. A drag of rows starts here.
                     if (pressState && pressState->on && !g_unloading && !pressState->rename) {
@@ -2380,9 +2462,14 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             }
         });
 
+    // The list and the notice over it (a column's muted "Loading…" and "This folder is empty") share a grid.
+    BuildColumnNotice(column.get());
+    muxc::Grid listHost;
+    listHost.Children().Append(list);
+    listHost.Children().Append(column->notice);
     muxc::StackPanel cell;
     cell.Orientation(muxc::Orientation::Horizontal);
-    cell.Children().Append(list);
+    cell.Children().Append(listHost);
     cell.Children().Append(grip);
 
     column->list = list;

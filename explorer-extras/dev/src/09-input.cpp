@@ -1222,6 +1222,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
 void AbandonWindow(WindowState* state) {
     Wh_Log(L"window closed with the panel on, letting its objects go");
     AbandonDetails(state);
+    AbandonSidebar(state);
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
     (void)state->rename.release();
@@ -1806,6 +1807,9 @@ void OnTick() {
             return;
         }
         state->ticks++;
+        for (auto& openColumn : state->columns) {
+            UpdateColumnNotice(openColumn.get());  // The spinner of a column that is slow, the setting switched on or off.
+        }
         ULONGLONG now = GetTickCount64();
         bool busy = state->building || state->pendingNav || state->selectChild || state->keepChild || state->rename || state->drag.column ||
                     state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
@@ -1847,7 +1851,14 @@ void OnTick() {
         // panel would show but get no mouse. Keep it on top.
         {
             HWND panelWindow = (HWND)state->bridge.WindowId().Value;
-            if (panelWindow && GetTickCount64() > g_paneLeaveUntil && GetWindow(panelWindow, GW_HWNDPREV)) {
+            // The list of a tag's files (10j4) is above the panel on purpose: it is not raised over.
+            HWND tagViewWindow = TagViewWindow();
+            bool tagViewAbove = false;
+            for (HWND above = panelWindow ? GetWindow(panelWindow, GW_HWNDPREV) : nullptr; tagViewWindow && above;
+                 above = GetWindow(above, GW_HWNDPREV)) {
+                tagViewAbove = tagViewAbove || above == tagViewWindow;
+            }
+            if (panelWindow && !tagViewAbove && GetTickCount64() > g_paneLeaveUntil && GetWindow(panelWindow, GW_HWNDPREV)) {
                 SetWindowPos(panelWindow, HWND_TOP, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;

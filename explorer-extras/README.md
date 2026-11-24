@@ -6,13 +6,14 @@
 
 *A 40-second tour. If the video does not play here, [watch it directly](https://github.com/AristideBH/windhawk-lib/raw/main/explorer-extras/assets/captures/hero.mp4).*
 
-Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
+Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds five independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
 
 | Feature | In one line |
 | --- | --- |
 | [**Columns**](#columns) | Miller columns in the View menu, with drag and drop, touch and per-folder memory. |
 | [**Details pane**](#details-pane) | One pane for details and real previews of PDF, text, Markdown, images, video and sound. |
 | [**Labels**](#labels) | Colour tags on files and folders, usable in Explorer's own Sort by and Group by. |
+| [**Sidebar**](#sidebar) | A navigation pane of Favorites, Locations and Tags, with a list of the files of each tag. Off by default. |
 | [**Toolbar**](#toolbar) | Tighter buttons, a search box you drag to resize, and round corners. |
 
 ## Columns
@@ -55,6 +56,17 @@ Colour labels, like the tags of macOS, on files and folders.
 - **Easy to set.** In the **Tags** section of the details pane, or from the right-click menu: a **Tags** entry with the colours, **Add tag** and **Clear tags**. The last eight names you typed are listed, so you type each one once.
 - **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
 - **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
+
+## Sidebar
+
+A sidebar in place of Explorer's navigation pane, off until you turn on **Replace the navigation pane**.
+
+- **Favorites, Locations, Tags.** Pinned folders, Home, This PC with its drives and devices, and your labels as tags.
+- **Pin by drop, reorder by drag.** Drop a folder to pin it, drop files on a tag to label them, drag rows to reorder.
+- **Tag lists.** A tag opens every file that has it, across your local drives, in a sortable list. Rename, recolour or delete a tag everywhere at once.
+- **Options.** File counts, free space and an eject button on drives, keyboard use.
+
+More in [`docs/sidebar.md`](docs/sidebar.md).
 
 ## Toolbar
 

@@ -2,6 +2,15 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.1.0 (2026-11-24)
+
+### Added
+- **Sidebar** (off by default, **Replace the navigation pane**): Favorites, Locations and Tags in place of Explorer's navigation pane. Pin by drop, drag to reorder, folded sections, drives and devices group, This PC, Recycle Bin and drive menus, keyboard use. Documented in `docs/sidebar.md`.
+- **Tag lists:** a tag opens the files that carry it, from a background index of the fixed local drives, with sortable and resizable columns, the details pane, the right-click menu and Back. Open in a new tab names the tab after the tag. Rename, recolour and delete a tag on every file, with progress.
+- **Options:** header hover, collapsible or flat drives, tag counts, tags order (recent, mine, by name) and number shown, free-space bar and eject button on drives, keyboard in the sidebar.
+- **Columns:** a muted notice in an empty column and a spinner while a folder loads (**Notice in an empty column, and while one loads**, under Columns, Content).
+- **Right-click menus** of the sidebar and of tag lists share one menu with Explorer's own entries, and sidebar settings apply live.
+
 ## 1.0.24 (2026-11-23)
 
 Groundwork for the sidebar (design in `docs/superpowers/specs/2026-11-23-sidebar-design.md`); nothing in the interface changes yet.
@@ -383,3 +392,4 @@ The first public beta. Explorer Extras is now more than the Columns layout: it h
 - 0.29 to 0.32: touch (hold and drag, drops, rubber band).
 - 0.24 to 0.28: the settings window and its schema.
 - 0.3 to 0.23: the Columns layout, drag and drop between columns, windows and apps, per folder memory, archives, undo.
+

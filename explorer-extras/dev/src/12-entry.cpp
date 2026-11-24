@@ -85,6 +85,33 @@ void LoadSettings() {
     g_follow = true;
     g_maxItems = SettingInt(L"maxItems");
     g_detailsPane = SettingBool(L"detailsPane");
+    g_sidebar = SettingBool(L"sidebarOn");
+    g_sidebarRecentTags = SettingInt(L"sidebarRecentTags");
+    g_sidebarHeaderHover = SettingBool(L"sidebarHeaderHover");
+    {
+        std::wstring sort = SettingText(L"sidebarTagsSort");
+        g_sidebarTagsSort = sort == L"manual" ? 1 : sort == L"name" ? 2 : 0;
+    }
+    g_columnNotice = SettingBool(L"columnNotice");
+    g_sidebarKeyboard = SettingBool(L"sidebarKeyboard");
+    g_sidebarTagCounts = SettingBool(L"sidebarTagCounts");
+    g_sidebarDriveSpace = SettingBool(L"sidebarDriveSpace");
+    g_sidebarDriveEject = SettingBool(L"sidebarDriveEject");
+#ifdef EXTRAS_VERBOSE
+    {
+        // Debug build: a file named sidebar-options-on in %LOCALAPPDATA%\\ExplorerExtras switches the sidebar's optional features on
+        // (to try them without the settings page).
+        wchar_t local[MAX_PATH];
+        DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+        if (length && length < MAX_PATH &&
+            GetFileAttributesW((std::wstring(local) + L"\\ExplorerExtras\\sidebar-options-on").c_str()) != INVALID_FILE_ATTRIBUTES) {
+            g_sidebarKeyboard = g_sidebarTagCounts = g_sidebarDriveSpace = g_sidebarDriveEject = true;
+        }
+    }
+#endif
+    g_sidebarSettingsVersion++;
+    g_sidebarDrivesCollapsible = SettingBool(L"sidebarDrivesCollapsible");
+    g_sidebarDrivesFlat = SettingBool(L"sidebarDrivesFlat");
     g_previewRedirect = SettingBool(L"previewRedirect");
     g_paneAnim = SettingBool(L"paneAnimation");
     g_panePreview = SettingBool(L"livePreview");
@@ -122,6 +149,10 @@ BOOL Wh_ModInit() {
     TagListSelfTest();
     TagIndexSelfTest();
     ToolbarSelfTest();
+    SidebarLocationsSelfTest();
+    FavoritesSelfTest();
+    TagsUiSelfTest();
+    TagResultsSelfTest();
     TagIndexStart();  // The debug build runs the index for real (the release build starts it with the sidebar, Task 4).
 #endif
 

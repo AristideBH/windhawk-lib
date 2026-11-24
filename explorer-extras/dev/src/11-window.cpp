@@ -278,6 +278,7 @@ void ReleaseClosedWindow(WindowState* state) {
     HidePanel(state, L"window closed");
     RemoveMenuEntry(state);
     ReleaseDetails(state);
+    ReleaseSidebar(state);
     ReleaseEntry(state);
     // The templates and the timers of the restyled menu belong to this thread, which ends with the window.
     g_rowTemplate = nullptr;
@@ -355,7 +356,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels && !g_sidebar)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -390,6 +391,7 @@ void OnWindowCreated(Inspectable const& rootObject) {
     timer.Start();
     state->entryTimer = timer;
     StartDetails(state);
+    StartSidebar(state);
     Wh_Log(L"window created, window=%p, looking for the View flyout", top);
 }
 
@@ -400,7 +402,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels || g_sidebar)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);
@@ -671,6 +673,7 @@ void CloseEverything() {
                     HidePanel(state, L"mod unloading");
                     RemoveMenuEntry(state);
                     ReleaseDetails(state);
+                    ReleaseSidebar(state);
                     ReleaseEntry(state);
                     state->queue = nullptr;
                     delete state;

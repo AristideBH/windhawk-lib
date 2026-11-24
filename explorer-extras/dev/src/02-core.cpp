@@ -113,6 +113,18 @@ struct ModalScope {
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_autoFolderSize{false};  // A folder's size is counted when it is selected; off, a button counts it.
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
+std::atomic<bool> g_sidebar{false};        // The sidebar over the navigation pane.
+std::atomic<bool> g_sidebarDrivesCollapsible{false};  // The Drives and devices group can be closed.
+std::atomic<bool> g_sidebarDrivesFlat{false};         // Drives are listed flat, with no group.
+std::atomic<bool> g_sidebarHeaderHover{false};  // The section headers have a hover background.
+std::atomic<unsigned> g_sidebarSettingsVersion{0};  // Counts the changes of the sidebar's settings: a sidebar made earlier is made again.
+std::atomic<bool> g_columnNotice{true};        // A notice in an empty column, and a spinner while one loads.
+std::atomic<bool> g_sidebarKeyboard{false};    // The keyboard stays in the sidebar after a click on a row.
+std::atomic<bool> g_sidebarTagCounts{false};   // A file count at the right of each tag row.
+std::atomic<bool> g_sidebarDriveSpace{false};  // A free-space bar along the bottom of a drive's row.
+std::atomic<bool> g_sidebarDriveEject{false};  // An eject button on a removable drive's row.
+std::atomic<int> g_sidebarTagsSort{0};      // How the sidebar orders its tags: 0 recent, 1 the user's order, 2 by name.
+std::atomic<int> g_sidebarRecentTags{4};   // How many recent tags the sidebar lists.
 std::atomic<int> g_paneWanted{-1};  // What the user chose last for the details pane: 1 shown, 0 hidden, -1 not chosen yet.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.

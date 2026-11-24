@@ -86,7 +86,26 @@ bool TagIndexStartsWith(std::wstring const& text, std::wstring const& prefix) {
     return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
 }
 
-const wchar_t* const kTagIndexExcluded[] = {L"windows", L"program files", L"program files (x86)", L"programdata", L"$recycle.bin",
+// True for a path in the user's temp folder: nobody keeps tagged files there, and the debug build's self-tests write tags there.
+bool TagIndexInTemp(std::wstring const& path) {
+    static const std::wstring temp = [] {
+        wchar_t buffer[MAX_PATH * 2];
+        DWORD length = GetTempPathW(ARRAYSIZE(buffer), buffer);
+        if (!length || length >= ARRAYSIZE(buffer)) {
+            return std::wstring();
+        }
+        wchar_t longPath[MAX_PATH * 2];
+        DWORD longLength = GetLongPathNameW(buffer, longPath, ARRAYSIZE(longPath));
+        std::wstring result = longLength && longLength < ARRAYSIZE(longPath) ? std::wstring(longPath) : std::wstring(buffer);
+        if (!result.empty() && result.back() != L'\\') {
+            result += L'\\';
+        }
+        return TagIndexKey(result);
+    }();
+    return !temp.empty() && TagIndexKey(path + L"\\").compare(0, temp.size(), temp) == 0;
+}
+
+const wchar_t* const kTagIndexExcluded[] ={L"windows", L"program files", L"program files (x86)", L"programdata", L"$recycle.bin",
                                            L"system volume information"};
 
 }  // namespace
@@ -198,6 +217,9 @@ bool TagIndexScanRoot(TagIndexData& data, std::wstring root, bool skipSystem, bo
             }
             full += found.cFileName;
             if (isDir && skipSystem && dir.size() == rootLength && TagIndexExcludedBelowRoot(found.cFileName)) {
+                continue;
+            }
+            if (isDir && skipSystem && TagIndexInTemp(full)) {
                 continue;
             }
             // A file that is only in the cloud: opening it would download it.
@@ -641,7 +663,7 @@ void TagIndexWatchRoot(std::wstring root) {
             auto* note = (FILE_NOTIFY_INFORMATION*)(buffer.data() + offset);
             std::wstring relative(note->FileName, note->FileNameLength / sizeof(wchar_t));
             std::wstring colonless = relative.substr(0, relative.rfind(L':') == std::wstring::npos ? relative.size() : relative.rfind(L':'));
-            if (!TagIndexExcludedBelowRoot(colonless)) {
+            if (!TagIndexExcludedBelowRoot(colonless) && !TagIndexInTemp(root + colonless)) {
                 std::wstring full = root + relative;
                 std::wstring read;
                 {
@@ -749,6 +771,24 @@ void TagIndexStart() {
         std::lock_guard<std::mutex> lock(g_tagIndexMutex);
         TagIndexLoadLocked(true);
     }
+    // Every tag the saved index knows is in the tag list (a list that was lost or reset fills again).
+    {
+        std::vector<LabelTag> known;
+        {
+            std::lock_guard<std::mutex> lock(g_tagIndexMutex);
+            for (auto const& item : g_tagIndex.files) {
+                if (!TagIndexInTemp(item.second.path)) {
+                    known.insert(known.end(), item.second.tags.begin(), item.second.tags.end());
+                }
+            }
+        }
+        for (auto const& tag : known) {
+            std::wstring shown = TagShownName(tag);
+            if (!shown.empty()) {
+                TagListEnsure(shown, tag.colour);
+            }
+        }
+    }
     std::wstring folder = TagIndexFolder();
     if (!folder.empty()) {
         g_tagIndexLock = CreateFileW((folder + L"\\tagindex.lock").c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
@@ -828,6 +868,9 @@ size_t TagIndexCount(std::wstring const& tag) {
 
 // The labels write a file's tags through this, so the index knows at once (a watcher would tell it a moment later).
 void TagIndexNoteWrite(std::wstring const& path, std::vector<LabelTag> const& tags) {
+    if (TagIndexInTemp(path)) {
+        return;
+    }
     for (auto const& tag : tags) {
         std::wstring shown = TagShownName(tag);
         if (!shown.empty()) {

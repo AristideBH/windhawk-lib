@@ -703,6 +703,48 @@ bool CopyOrCut(WindowState* state, Column* column,
     return SUCCEEDED(hr);
 }
 
+// Copy or Cut for the items of a menu that is not a column's (08b): the items are the children of `folder`. The clipboard only; the
+// columns' dimming of cut items is theirs.
+bool GenericCopyOrCut(WindowState* state, PCIDLIST_ABSOLUTE folder, std::vector<Pidl> const& children, bool cut) {
+    IShellFolder* parent = nullptr;
+    HRESULT hr = ILIsEmpty(folder) ? SHGetDesktopFolder(&parent) : SHBindToObject(nullptr, folder, nullptr, IID_PPV_ARGS(&parent));
+    if (FAILED(hr) || !parent) {
+        return false;
+    }
+    std::vector<PCUITEMID_CHILD> ids;
+    for (auto const& child : children) {
+        ids.push_back(child.get());
+    }
+    IDataObject* data = nullptr;
+    hr = ids.empty() ? E_INVALIDARG
+                     : parent->GetUIObjectOf(state->topLevel, (UINT)ids.size(), ids.data(), IID_IDataObject, nullptr, (void**)&data);
+    parent->Release();
+    if (FAILED(hr) || !data) {
+        return false;
+    }
+    if (cut) {
+        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+        if (memory) {
+            if (DWORD* effect = (DWORD*)GlobalLock(memory)) {
+                *effect = DROPEFFECT_MOVE;
+                GlobalUnlock(memory);
+            }
+            FORMATETC fmt = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            STGMEDIUM medium = {};
+            medium.tymed = TYMED_HGLOBAL;
+            medium.hGlobal = memory;
+            if (FAILED(data->SetData(&fmt, &medium, TRUE))) {
+                GlobalFree(memory);
+            }
+        }
+    }
+    hr = OleSetClipboard(data);
+    data->Release();
+    Wh_Log(L"%s %d item(s) of a sidebar or list menu: hr=0x%08lX", cut ? L"cut" : L"copy", (int)ids.size(), hr);
+    return SUCCEEDED(hr);
+}
+
 // Lets go of the shell menu and every handler on the flyout's items.
 void CloseContextMenu(WindowState* state) {
     if (!state->context) {
@@ -816,6 +858,30 @@ void RunContextCommand(UINT id) {
                         id - idFirst, GCS_VERBW, nullptr,
                         (char*)verb, ARRAYSIZE(verb));
                     Wh_Log(L"context menu verb \"%s\"", verb);
+                    if (context->generic) {
+                        // Items of the sidebar or of a tag's list (08b): Copy and Cut through the clipboard, the rest by the shell,
+                        // then what the caller asked to do (read the list again).
+                        std::function<void()> after = context->afterCommand;
+                        if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
+                            GenericCopyOrCut(state, context->genericFolder.get(), context->genericChildren, !_wcsicmp(verb, L"cut"));
+                            return;
+                        }
+                        CMINVOKECOMMANDINFOEX generic = {};
+                        generic.cbSize = sizeof(generic);
+                        generic.hwnd = owner;
+                        generic.lpVerb = MAKEINTRESOURCEA(id - idFirst);
+                        generic.lpVerbW = MAKEINTRESOURCEW(id - idFirst);
+                        generic.nShow = SW_SHOWNORMAL;
+                        generic.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                        GetCursorPos(&generic.ptInvoke);
+                        ModalScope modal;
+                        HRESULT result = menu->InvokeCommand((CMINVOKECOMMANDINFO*)&generic);
+                        Wh_Log(L"context menu command %u (%s) of a sidebar or list menu -> hr=0x%08lX", id, verb, result);
+                        if (!g_unloading && StateForThisThread(false) == state && after) {
+                            after();
+                        }
+                        return;
+                    }
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
                         CopyOrCut(state, column, entries,
                                   !_wcsicmp(verb, L"cut"));
@@ -1795,6 +1861,9 @@ const wchar_t* MockupGlyphForVerb(std::wstring const& verb) {
         {L"rename", L"\uE8AC"}, {L"delete", L"\uE74D"},     {L"properties", L"\uE946"},
         {L"open", L"\uE8E5"},   {L"openas", L"\uE7AC"},     {L"copyaspath", L"\uF89A"},
         {L"edit", L"\uE70F"},   {L"print", L"\uE749"},      {L"play", L"\uE768"},
+        {L"empty", L"\uE74D"},  {L"eject", L"\uE88E"},      {L"format", L"\uEDA2"},
+        {L"connectnetworkdrive", L"\uE8CE"}, {L"mapnetdrive", L"\uE8CE"}, {L"mapnetworkdrive", L"\uE8CE"},
+        {L"mapdrive", L"\uE8CE"}, {L"connect", L"\uE8CE"}, {L"manage", L"\uE7EF"},
     };
     for (auto& entry : table) {
         if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
@@ -1943,6 +2012,11 @@ struct MenuBuilder {
     bool styled = false;       // The presenter has no padding of its own.
     muxc::Grid quickHeader{nullptr};  // The quick row and the line under it, to put them under the list
     mux::UIElement quickLine{nullptr};  // when the menu opens upwards.
+    // A menu asked in another island than the columns' (the sidebar, the tag list): its window and scale, for the click-outside
+    // watch, and whether the menu may go past that island's edge (a narrow one would cut it).
+    HWND hostWindow = nullptr;
+    double hostScale = 0;
+    bool unconstrained = false;
 
     MenuBuilder(WindowState* owner, double minWidth, bool toolbarFallback)
         : state(owner), toolbarIcons(toolbarFallback) {
@@ -2166,6 +2240,9 @@ struct MenuBuilder {
             button.Flyout(spec.submenu);
             // Like a cascading menu: beside the row, top aligned with it.
             spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
+            if (unconstrained) {
+                spec.submenu.ShouldConstrainToRootBounds(false);  // Opened in a narrow island (the sidebar): not cut at its edge.
+            }
             auto sub = spec.submenu;
             // Weak: a handler that holds the element it is on keeps both alive for as long as the window.
             auto weakSub = winrt::make_weak(sub);
@@ -2287,6 +2364,9 @@ struct MenuBuilder {
         if (styled && g_presenterStyle) {
             flyout.FlyoutPresenterStyle(g_presenterStyle);
         }
+        if (unconstrained) {
+            flyout.ShouldConstrainToRootBounds(false);
+        }
         state->context->flyout = flyout;
         // Opened upwards, the quick row goes under the list so that it stays next to the pointer.
         {
@@ -2322,9 +2402,11 @@ struct MenuBuilder {
         // flyout's own light dismiss does not see it.
         try {
             auto rootCopy = root;
+            HWND hostWnd = hostWindow;
+            double hostZoom = hostScale;
             auto timer = state->queue.CreateTimer();
             timer.Interval(std::chrono::milliseconds(40));
-            Keep(timer, timer.Tick(winrt::auto_revoke, [rootCopy](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            Keep(timer, timer.Tick(winrt::auto_revoke, [rootCopy, hostWnd, hostZoom](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->context->flyout || g_unloading) {
                     sender.Stop();
@@ -2332,12 +2414,14 @@ struct MenuBuilder {
                 }
                 auto& ctx = *st->context;
                 bool down = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
-                if (down && !ctx.wasDown && !ctx.openSub && st->rootGrid && st->bridge) {
+                HWND island = hostWnd ? hostWnd : (st->bridge ? (HWND)st->bridge.WindowId().Value : nullptr);
+                if (down && !ctx.wasDown && !ctx.openSub && island && (hostWnd || st->rootGrid)) {
                     try {
                         auto topLeft = rootCopy.TransformToVisual(nullptr).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
-                        double scale = st->rootGrid.XamlRoot() ? st->rootGrid.XamlRoot().RasterizationScale() : 1.0;
+                        double scale = hostWnd ? (hostZoom > 0 ? hostZoom : 1.0)
+                                               : (st->rootGrid.XamlRoot() ? st->rootGrid.XamlRoot().RasterizationScale() : 1.0);
                         POINT corner = {(LONG)(topLeft.X * scale), (LONG)(topLeft.Y * scale)};
-                        ClientToScreen((HWND)st->bridge.WindowId().Value, &corner);
+                        ClientToScreen(island, &corner);
                         RECT box = {corner.x - 3, corner.y - 3, corner.x + (LONG)(rootCopy.ActualWidth() * scale) + 3,
                                     corner.y + (LONG)(rootCopy.ActualHeight() * scale) + 3};
                         POINT cursor;

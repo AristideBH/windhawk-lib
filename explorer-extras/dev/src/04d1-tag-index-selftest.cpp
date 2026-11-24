@@ -58,7 +58,8 @@ void TagIndexSelfTest() {
     // A folder of our own with tagged files, a tagged sub folder and an untagged file.
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
-    std::wstring dir = std::wstring(temp) + L"extras-index-test";
+    // One folder per process: every Explorer process runs this test when the mod loads, at the same moment.
+    std::wstring dir = std::wstring(temp) + L"extras-index-test-" + std::to_wstring(GetCurrentProcessId());
     std::wstring sub = dir + L"\\sub";
     CreateDirectoryW(dir.c_str(), nullptr);
     CreateDirectoryW(sub.c_str(), nullptr);

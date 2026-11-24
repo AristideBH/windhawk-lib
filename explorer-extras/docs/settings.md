@@ -26,6 +26,7 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | --- | --- | --- |
 | Folders first | on | Folders are listed before files in each column, whatever the sort. |
 | Desktop column shows real items only | on | Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column. |
+| Notice in an empty column, and while one loads | on | A muted line in the column when the folder is empty, and a small spinner with Loading when a folder takes a moment to open. |
 
 ### Layout
 
@@ -102,6 +103,21 @@ This file is generated from `settings.schema.json` by `docs/make-settings-doc.py
 | Search box width | 0 | In pixels. 0 keeps Explorer’s own proportion. A width you dragged is kept until you change this value. (0 to 800) |
 | Corner radius of the address bar | 4 | In pixels. Explorer’s own is 4, 16 makes the ends fully round. (0 to 16) |
 | Corner radius of the search box | 4 | In pixels. Explorer’s own is 4, 16 makes the ends fully round. (0 to 16) |
+
+## Sidebar
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Replace the navigation pane | off | Covers Explorer’s navigation pane with a sidebar of Favorites, Locations and Tags. Off leaves the navigation pane as it is. |
+| Highlight section headers on hover | off | Gives the Favorites, Locations and Tags headers a background while the pointer is over them. The chevron and the … button have their own. |
+| Let the Drives and devices group collapse | off | Adds a chevron to the group so it can be closed. Off keeps it always open, and a click on its row opens This PC. |
+| List drives without a group | off | Puts the drives, OneDrive and phones straight in Locations instead of under Drives and devices. |
+| Keep the keyboard in the sidebar after a click | off | When on, the arrows, Enter, Delete (unpin a favorite), F2 (rename a tag) and Ctrl+arrows (move a favorite or tag) work on the row you clicked. When off, the keyboard goes back to the file area, so the arrow keys keep moving through the columns. |
+| Show how many files each tag has | off | A muted number at the right of each tag row in the sidebar. |
+| Show free space under each drive | off | A thin bar along the bottom of a drive's row that shows how full it is. It does not change the row's size. |
+| Eject button on removable drives | off | A small button at the right of a removable drive's row, shown while the pointer is over it. |
+| Order of the tags in the sidebar | Most recently used | Recent puts the tag you used last on top. My order keeps the order you give by dragging a tag row. |
+| Tags shown in the sidebar | 4 | The most recently used tags the sidebar lists, View all shows the others. -1 lists every tag. (-1 to 50) |
 
 ## Limits
 

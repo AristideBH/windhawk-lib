@@ -227,7 +227,9 @@ void ToolbarApplyCommandBar() {
     } catch (...) {
         LogVerbose(L"TOOLBAR command bar apply threw");
     }
-    LogVerbose(L"TOOLBAR command bar: gap %d, %d of %d buttons changed", g_cmdGap.load(), changed, seen);
+    if (changed > 0) {
+        LogVerbose(L"TOOLBAR command bar: gap %d, %d of %d buttons changed", g_cmdGap.load(), changed, seen);  // Not when nothing changed: it was thousands of lines a minute.
+    }
 }
 
 // The wanted width of the search box: the dragged one (kept while the setting it was made against is unchanged), else the setting.

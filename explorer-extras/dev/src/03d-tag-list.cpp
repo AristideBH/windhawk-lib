@@ -257,17 +257,46 @@ ULONGLONG TagListNow() {
     return value.QuadPart;
 }
 
+// The value is read at every call, not once: several Explorer processes load the mod, each one writes the whole list, and a copy
+// that was read once would write over what another process changed since (and its sidebar would never show a new tag).
 void TagListLoadLocked() {
-    if (g_tagListLoaded) {
-        return;
-    }
-    g_tagListLoaded = true;
-    std::vector<wchar_t> buffer(60000);
+    static std::vector<wchar_t> buffer(60000);  // Under g_tagListMutex.
     size_t length = Wh_GetStringValue(L"tagList", buffer.data(), buffer.size());
     std::vector<TagDef> loaded;
     if (length && length < buffer.size() && TagListParse(std::wstring(buffer.data(), length), &loaded)) {
         g_tagList = std::move(loaded);
     }
+    if (g_tagListLoaded) {
+        return;
+    }
+    g_tagListLoaded = true;
+#ifdef EXTRAS_VERBOSE
+    // Debug build only: a file named reset-taglist in %LOCALAPPDATA%\ExplorerExtras empties the list (after saving a copy of it as
+    // taglist.backup.txt there), for a list that the self-tests of a test build filled with their own names.
+    {
+        wchar_t local[MAX_PATH];
+        DWORD localLength = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+        if (localLength && localLength < MAX_PATH) {
+            std::wstring flag = std::wstring(local) + L"\\ExplorerExtras\\reset-taglist";
+            if (GetFileAttributesW(flag.c_str()) != INVALID_FILE_ATTRIBUTES && DeleteFileW(flag.c_str())) {
+                std::wstring text = TagListSerialize(g_tagList);
+                int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
+                std::string utf8((size_t)bytes, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), utf8.data(), bytes, nullptr, nullptr);
+                HANDLE backup = CreateFileW((std::wstring(local) + L"\\ExplorerExtras\\taglist.backup.txt").c_str(), GENERIC_WRITE, 0,
+                                            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (backup != INVALID_HANDLE_VALUE) {
+                    DWORD written = 0;
+                    WriteFile(backup, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
+                    CloseHandle(backup);
+                }
+                g_tagList.clear();
+                Wh_DeleteValue(L"tagList");
+                Wh_Log(L"TAGS the tag list was reset (copy in taglist.backup.txt)");
+            }
+        }
+    }
+#endif
     // Once: the recent tags the first builds stored on their own become part of the list.
     if (Wh_GetIntValue(L"tagList.legacyImported", 0) == 0) {
         TagListImportInto(g_tagList, LabelsRecentLegacyTake(), TagListNow());

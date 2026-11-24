@@ -211,6 +211,11 @@ struct Column {
     winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    bool loading = false;               // A listing was asked for and has not come yet.
+    ULONGLONG loadStartedAt = 0;
+    muxc::StackPanel notice{nullptr};   // The muted line (and spinner) over the list: "Loading…", "This folder is empty".
+    muxc::TextBlock noticeText{nullptr};
+    muxc::ProgressRing noticeRing{nullptr};
     std::shared_ptr<std::atomic<bool>> cancel;  // Set when this column's load is not wanted.
     int scrollStyle = -1;  // The scrollbar style these rows were given.
     double gutterRight = 10;  // The strip kept free on the right, in px.
@@ -286,6 +291,12 @@ struct ContextMenuState {
     HWND owner = nullptr;
     Column* column = nullptr;  // The column and items the menu is for.
     std::vector<size_t> entries;
+    // A menu for items that are not a column's (08b: the sidebar's rows, the list of a tag's files): the items' folder and children
+    // for Copy and Cut, and what to do after a command ran.
+    bool generic = false;
+    Pidl genericFolder;
+    std::vector<Pidl> genericChildren;
+    std::function<void()> afterCommand;
     bool insideArchive = false;  // The items are inside an archive that is being browsed.
     muxc::Primitives::FlyoutBase flyout{nullptr};
     winrt::event_token closedToken{};
@@ -512,6 +523,8 @@ struct WindowState {
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
     bool sortMenuDone = false;  // The Sort and group menu has its handler (labels).
     bool toolbarDone = false;   // The toolbar's buttons were found and handled.
+    struct TagViewPanel* tagView = nullptr;  // The list of the files of a tag over the file area, 10j4.
+    struct SidebarPanel* sidebar = nullptr;  // The sidebar over this window's navigation pane, 10j.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
@@ -608,6 +621,9 @@ void StartDetails(WindowState* state);
 void AbandonDetails(WindowState* state);
 void WatchWindowClose(HWND top);  // 11-window: the window releases its objects when it is closed.
 void ReleaseDetails(WindowState* state);
+void StartSidebar(WindowState* state);    // 10j
+void ReleaseSidebar(WindowState* state);
+void AbandonSidebar(WindowState* state);
 
 std::mutex g_statesMutex;
 [[clang::no_destroy]] std::vector<std::unique_ptr<WindowState>> g_states;

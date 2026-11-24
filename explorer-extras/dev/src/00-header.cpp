@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.24
+// @version              1.1.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -22,7 +22,7 @@
 
 A 40-second tour is at the top of the project page: https://github.com/AristideBH/windhawk-lib/tree/main/explorer-extras#readme
 
-Explorer Extras adds four independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
+Explorer Extras adds five independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
 
 ## Columns
 
@@ -52,6 +52,14 @@ Colour labels, like the tags of macOS, on files and folders.
 - **Easy to set.** In the **Tags** section of the details pane, or from the right-click menu: a **Tags** entry with the colours, **Add tag** and **Clear tags**. The last eight names you typed are listed, so you type each one once.
 - **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
 - **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
+
+## Sidebar
+
+A sidebar in place of Explorer's navigation pane, off until you turn on **Replace the navigation pane**.
+
+- **Favorites, Locations, Tags.** Pinned folders, Home, This PC with its drives and devices, and your labels as tags.
+- **Pin by drop, reorder by drag.** Drop a folder to pin it, drop files on a tag to label them, drag rows to reorder.
+- **Tag lists.** A tag opens every file that has it, across your local drives. Rename, recolour or delete a tag everywhere at once.
 
 ## Toolbar
 

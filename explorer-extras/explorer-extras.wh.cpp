@@ -2,7 +2,7 @@
 // @id              explorer-extras
 // @name            Explorer Extras
 // @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.24
+// @version              1.1.0
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -22,7 +22,7 @@
 
 A 40-second tour is at the top of the project page: https://github.com/AristideBH/windhawk-lib/tree/main/explorer-extras#readme
 
-Explorer Extras adds four independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
+Explorer Extras adds five independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
 
 ## Columns
 
@@ -52,6 +52,14 @@ Colour labels, like the tags of macOS, on files and folders.
 - **Easy to set.** In the **Tags** section of the details pane, or from the right-click menu: a **Tags** entry with the colours, **Add tag** and **Clear tags**. The last eight names you typed are listed, so you type each one once.
 - **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
 - **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
+
+## Sidebar
+
+A sidebar in place of Explorer's navigation pane, off until you turn on **Replace the navigation pane**.
+
+- **Favorites, Locations, Tags.** Pinned folders, Home, This PC with its drives and devices, and your labels as tags.
+- **Pin by drop, reorder by drag.** Drop a folder to pin it, drop files on a tag to label them, drag rows to reorder.
+- **Tag lists.** A tag opens every file that has it, across your local drives. Rename, recolour or delete a tag everywhere at once.
 
 ## Toolbar
 
@@ -106,6 +114,9 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     - desktopRealOnly: true
       $name: Desktop column shows real items only
       $description: Hides virtual items (This PC, Recycle Bin, Control Panel…) from the Desktop column.
+    - columnNotice: true
+      $name: Notice in an empty column, and while one loads
+      $description: A muted line in the column when the folder is empty, and a small spinner with Loading when a folder takes a moment to open.
     $name: Content
   - layout:
     - minWidth: 160
@@ -235,6 +246,42 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
     $name: Corner radius of the search box
     $description: In pixels. Explorer’s own is 4, 16 makes the ends fully round.
   $name: Toolbar
+- sidebar:
+  - sidebarOn: false
+    $name: Replace the navigation pane
+    $description: Covers Explorer’s navigation pane with a sidebar of Favorites, Locations and Tags. Off leaves the navigation pane as it is.
+  - sidebarHeaderHover: false
+    $name: Highlight section headers on hover
+    $description: Gives the Favorites, Locations and Tags headers a background while the pointer is over them. The chevron and the … button have their own.
+  - sidebarDrivesCollapsible: false
+    $name: Let the Drives and devices group collapse
+    $description: Adds a chevron to the group so it can be closed. Off keeps it always open, and a click on its row opens This PC.
+  - sidebarDrivesFlat: false
+    $name: List drives without a group
+    $description: Puts the drives, OneDrive and phones straight in Locations instead of under Drives and devices.
+  - sidebarKeyboard: false
+    $name: Keep the keyboard in the sidebar after a click
+    $description: When on, the arrows, Enter, Delete (unpin a favorite), F2 (rename a tag) and Ctrl+arrows (move a favorite or tag) work on the row you clicked. When off, the keyboard goes back to the file area, so the arrow keys keep moving through the columns.
+  - sidebarTagCounts: false
+    $name: Show how many files each tag has
+    $description: A muted number at the right of each tag row in the sidebar.
+  - sidebarDriveSpace: false
+    $name: Show free space under each drive
+    $description: A thin bar along the bottom of a drive's row that shows how full it is. It does not change the row's size.
+  - sidebarDriveEject: false
+    $name: Eject button on removable drives
+    $description: A small button at the right of a removable drive's row, shown while the pointer is over it.
+  - sidebarTagsSort: recent
+    $name: Order of the tags in the sidebar
+    $description: Recent puts the tag you used last on top. My order keeps the order you give by dragging a tag row.
+    $options:
+    - recent: Most recently used
+    - manual: My order (drag a tag to move it)
+    - name: By name
+  - sidebarRecentTags: 4
+    $name: Tags shown in the sidebar
+    $description: The most recently used tags the sidebar lists, View all shows the others. -1 lists every tag.
+  $name: Sidebar
 - limits:
   - maxItems: 5000
     $name: Maximum items per column
@@ -303,6 +350,7 @@ If you like it, you can support the work on Ko-fi: https://ko-fi.com/aristidebh
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.h>
@@ -435,6 +483,18 @@ struct ModalScope {
 std::atomic<bool> g_follow{true};
 std::atomic<bool> g_autoFolderSize{false};  // A folder's size is counted when it is selected; off, a button counts it.
 std::atomic<bool> g_detailsPane{true};     // The merged details pane.
+std::atomic<bool> g_sidebar{false};        // The sidebar over the navigation pane.
+std::atomic<bool> g_sidebarDrivesCollapsible{false};  // The Drives and devices group can be closed.
+std::atomic<bool> g_sidebarDrivesFlat{false};         // Drives are listed flat, with no group.
+std::atomic<bool> g_sidebarHeaderHover{false};  // The section headers have a hover background.
+std::atomic<unsigned> g_sidebarSettingsVersion{0};  // Counts the changes of the sidebar's settings: a sidebar made earlier is made again.
+std::atomic<bool> g_columnNotice{true};        // A notice in an empty column, and a spinner while one loads.
+std::atomic<bool> g_sidebarKeyboard{false};    // The keyboard stays in the sidebar after a click on a row.
+std::atomic<bool> g_sidebarTagCounts{false};   // A file count at the right of each tag row.
+std::atomic<bool> g_sidebarDriveSpace{false};  // A free-space bar along the bottom of a drive's row.
+std::atomic<bool> g_sidebarDriveEject{false};  // An eject button on a removable drive's row.
+std::atomic<int> g_sidebarTagsSort{0};      // How the sidebar orders its tags: 0 recent, 1 the user's order, 2 by name.
+std::atomic<int> g_sidebarRecentTags{4};   // How many recent tags the sidebar lists.
 std::atomic<int> g_paneWanted{-1};  // What the user chose last for the details pane: 1 shown, 0 hidden, -1 not chosen yet.
 std::atomic<bool> g_previewRedirect{true};  // The Preview pane shows the merged pane.
 std::atomic<bool> g_panePreview{true};      // Documents and code get their real preview in the pane.
@@ -693,6 +753,7 @@ constexpr SettingInfo kSettings[] = {
     {L"focusRect", L"columns.layout.focusRect", SettingKind::Bool, 0, L"", 0, 0, true},
     {L"background", L"columns.layout.background", SettingKind::Enum, 0, L"theme", 0, 0, true},
     {L"staleAccent", L"columns.layout.staleAccent", SettingKind::Bool, 0, L"", 0, 0, true},
+    {L"columnNotice", L"columns.content.columnNotice", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"oddRows", L"columns.layout.oddRows", SettingKind::Bool, 1, L"", 0, 0, true},
     {L"rememberSort", L"columns.memory.rememberSort", SettingKind::Bool, 1, L"", 0, 0, false},
     {L"rememberWidth", L"columns.memory.rememberWidth", SettingKind::Bool, 1, L"", 0, 0, false},
@@ -723,12 +784,65 @@ constexpr SettingInfo kSettings[] = {
     {L"searchWidth", L"toolbar.searchWidth", SettingKind::Int, 0, L"", 0, 800, false},
     {L"addressRadius", L"toolbar.addressRadius", SettingKind::Int, 4, L"", 0, 16, false},
     {L"searchRadius", L"toolbar.searchRadius", SettingKind::Int, 4, L"", 0, 16, false},
+    {L"sidebarOn", L"sidebar.sidebarOn", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarHeaderHover", L"sidebar.sidebarHeaderHover", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarDrivesCollapsible", L"sidebar.sidebarDrivesCollapsible", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarDrivesFlat", L"sidebar.sidebarDrivesFlat", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarKeyboard", L"sidebar.sidebarKeyboard", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarTagCounts", L"sidebar.sidebarTagCounts", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarDriveSpace", L"sidebar.sidebarDriveSpace", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarDriveEject", L"sidebar.sidebarDriveEject", SettingKind::Bool, 0, L"", 0, 0, false},
+    {L"sidebarTagsSort", L"sidebar.sidebarTagsSort", SettingKind::Enum, 0, L"recent", 0, 0, false},
+    {L"sidebarRecentTags", L"sidebar.sidebarRecentTags", SettingKind::Int, 4, L"", -1, 50, false},
     {L"maxItems", L"limits.maxItems", SettingKind::Int, 5000, L"", 50, 20000, true},
     {L"previewMaxMb", L"limits.previewMaxMb", SettingKind::Int, 60, L"", 1, 1024, false},
     {L"previewMaxMp", L"limits.previewMaxMp", SettingKind::Int, 40, L"", 4, 400, false},
 };
 
 constexpr StringInfo kStrings[] = {
+    {L"sidebar.favorites", L"Favorites"},
+    {L"sidebar.locations", L"Locations"},
+    {L"sidebar.tags", L"Tags"},
+    {L"sidebar.hide", L"Hide from sidebar"},
+    {L"sidebar.unpin", L"Unpin from sidebar"},
+    {L"sidebar.newtab", L"Open in new tab"},
+    {L"sidebar.missing", L"This folder no longer exists"},
+    {L"sidebar.drives", L"Drives and devices"},
+    {L"sidebar.locations.edit", L"Choose the locations shown"},
+    {L"sidebar.tags.viewall", L"View all"},
+    {L"sidebar.tags.open", L"Open"},
+    {L"sidebar.eject", L"Eject"},
+    {L"columns.empty", L"This folder is empty"},
+    {L"columns.loading", L"Loading\u2026"},
+    {L"sidebar.recent", L"Recent"},
+    {L"tagview.back", L"Back"},
+    {L"tagview.name", L"Name"},
+    {L"tagview.location", L"Location"},
+    {L"tagview.modified", L"Date modified"},
+    {L"tagview.size", L"Size"},
+    {L"tagview.count", L"%u items"},
+    {L"tagview.files", L"%u files"},
+    {L"tagview.empty", L"No file has this tag"},
+    {L"tagview.notags", L"No tags yet"},
+    {L"tagview.indexing", L"Indexing, %u items so far\u2026"},
+    {L"tagview.openlocation", L"Open file location"},
+    {L"sidebar.drop.pin", L"Pin to %1"},
+    {L"sidebar.drop.tag", L"Tag as %1"},
+    {L"sidebar.tags.ok", L"OK"},
+    {L"sidebar.tags.cancel", L"Cancel"},
+    {L"sidebar.tags.invalid", L"That name cannot be used"},
+    {L"sidebar.tags.exists", L"A tag with that name already exists"},
+    {L"sidebar.tags.rename", L"Rename\u2026"},
+    {L"sidebar.tags.colour", L"Colour"},
+    {L"sidebar.tags.hide", L"Hide from sidebar"},
+    {L"sidebar.tags.show", L"Show in sidebar"},
+    {L"sidebar.tags.delete", L"Delete"},
+    {L"sidebar.tags.new", L"New tag\u2026"},
+    {L"sidebar.tags.hiddennote", L"hidden"},
+    {L"sidebar.tags.confirm", L"Remove \u201C%s\u201D from %u items? This cannot be undone."},
+    {L"sidebar.tags.empty", L"No tags yet. Make one from the \u2026 menu, or tag a file from its right-click menu."},
+    {L"sidebar.tags.manage", L"Manage tags"},
+    {L"sidebar.tags.stop", L"Stop"},
     {L"menu.columns", L"Columns"},
     {L"pane.open", L"Open"},
     {L"pane.copypath", L"Copy path"},
@@ -778,6 +892,49 @@ constexpr StringInfo kStrings[] = {
 };
 
 constexpr StringInfo kStringsFr[] = {
+    {L"sidebar.favorites", L"Favoris"},
+    {L"sidebar.locations", L"Emplacements"},
+    {L"sidebar.tags", L"\u00C9tiquettes"},
+    {L"sidebar.hide", L"Masquer de la barre lat\u00E9rale"},
+    {L"sidebar.unpin", L"D\u00E9tacher de la barre lat\u00E9rale"},
+    {L"sidebar.newtab", L"Ouvrir dans un nouvel onglet"},
+    {L"sidebar.missing", L"Ce dossier n\u2019existe plus"},
+    {L"sidebar.drives", L"Disques et p\u00E9riph\u00E9riques"},
+    {L"sidebar.locations.edit", L"Choisir les emplacements affich\u00E9s"},
+    {L"sidebar.tags.viewall", L"Tout afficher"},
+    {L"sidebar.tags.open", L"Ouvrir"},
+    {L"sidebar.eject", L"\u00C9jecter"},
+    {L"columns.empty", L"Ce dossier est vide"},
+    {L"columns.loading", L"Chargement\u2026"},
+    {L"sidebar.recent", L"R\u00E9cents"},
+    {L"tagview.back", L"Retour"},
+    {L"tagview.name", L"Nom"},
+    {L"tagview.location", L"Emplacement"},
+    {L"tagview.modified", L"Modifi\u00E9 le"},
+    {L"tagview.size", L"Taille"},
+    {L"tagview.count", L"%u \u00E9l\u00E9ments"},
+    {L"tagview.files", L"%u fichiers"},
+    {L"tagview.empty", L"Aucun fichier n\u2019a cette \u00E9tiquette"},
+    {L"tagview.notags", L"Aucune \u00E9tiquette"},
+    {L"tagview.indexing", L"Indexation\u2026 %u \u00E9l\u00E9ments parcourus"},
+    {L"tagview.openlocation", L"Ouvrir l\u2019emplacement du fichier"},
+    {L"sidebar.drop.pin", L"\u00C9pingler \u00E0 %1"},
+    {L"sidebar.drop.tag", L"\u00C9tiqueter avec %1"},
+    {L"sidebar.tags.ok", L"OK"},
+    {L"sidebar.tags.cancel", L"Annuler"},
+    {L"sidebar.tags.invalid", L"Ce nom ne peut pas \u00EAtre utilis\u00E9"},
+    {L"sidebar.tags.exists", L"Une \u00E9tiquette porte d\u00E9j\u00E0 ce nom"},
+    {L"sidebar.tags.rename", L"Renommer\u2026"},
+    {L"sidebar.tags.colour", L"Couleur"},
+    {L"sidebar.tags.hide", L"Masquer de la barre lat\u00E9rale"},
+    {L"sidebar.tags.show", L"Afficher dans la barre lat\u00E9rale"},
+    {L"sidebar.tags.delete", L"Supprimer"},
+    {L"sidebar.tags.new", L"Nouvelle \u00E9tiquette\u2026"},
+    {L"sidebar.tags.hiddennote", L"masqu\u00E9e"},
+    {L"sidebar.tags.confirm", L"Retirer \u00AB %s \u00BB de %u \u00E9l\u00E9ments ? Cette action est irr\u00E9versible."},
+    {L"sidebar.tags.empty", L"Aucune \u00E9tiquette. Cr\u00E9ez-en une avec le menu \u2026, ou \u00E9tiquetez un fichier depuis son menu contextuel."},
+    {L"sidebar.tags.manage", L"G\u00E9rer les \u00E9tiquettes"},
+    {L"sidebar.tags.stop", L"Arr\u00EAter"},
     {L"menu.columns", L"Colonnes"},
     {L"pane.open", L"Ouvrir"},
     {L"pane.copypath", L"Copier le chemin"},
@@ -925,6 +1082,8 @@ thread_local bool g_renaming = false;
 thread_local HWND g_panelWindow = nullptr;
 
 bool PaneHandleAltP(HWND hwnd, LPMSG msg);  // 10d: Alt+P shows or hides the details pane.
+HWND TagViewWindow();                       // 10j4: the window of the tag list, while it is open on this thread.
+HWND SidebarWindow();                       // 10j: the window of the sidebar on this thread.
 
 using TranslateAcceleratorW_t = int(WINAPI*)(HWND, HACCEL, LPMSG);
 TranslateAcceleratorW_t TranslateAcceleratorW_Original;
@@ -936,6 +1095,23 @@ int WINAPI TranslateAcceleratorW_Hook(HWND hwnd, HACCEL accel, LPMSG msg) {
         (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP ||
          msg->message == WM_SYSKEYDOWN || msg->message == WM_SYSKEYUP)) {
         return 0;  // Not translated: the message goes on to the focused control.
+    }
+    // The sidebar takes Delete and F2 for itself while it has the keyboard (unpin a favorite, rename a tag), not Explorer's own.
+    if (msg && (msg->message == WM_KEYDOWN || msg->message == WM_KEYUP) && (msg->wParam == VK_DELETE || msg->wParam == VK_F2)) {
+        HWND sidebar = SidebarWindow();
+        HWND focus = sidebar ? GetFocus() : nullptr;
+        if (focus && (focus == sidebar || IsChild(sidebar, focus))) {
+            return 0;
+        }
+    }
+    // The list of a tag's files takes Backspace and Alt+Left for itself (it closes), not Explorer's Back.
+    if (msg && (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) &&
+        (msg->wParam == VK_BACK || (msg->message == WM_SYSKEYDOWN && msg->wParam == VK_LEFT))) {
+        HWND tagView = TagViewWindow();
+        HWND focus = tagView ? GetFocus() : nullptr;
+        if (focus && (focus == tagView || IsChild(tagView, focus))) {
+            return 0;
+        }
     }
     // Keys the panel takes for itself while the keyboard is in it: Backspace,
     // and Ctrl+Shift+N, which Explorer would use to make a folder in its own,
@@ -1242,18 +1418,39 @@ Pidl FolderLinkTarget(IShellFolder* folder, PCUITEMID_CHILD child) {
     }
     IShellItem* item = nullptr;
     if (SUCCEEDED(SHCreateItemWithParent(nullptr, folder, child, IID_PPV_ARGS(&item))) && item) {
-        IShellItem* target = nullptr;
-        if (SUCCEEDED(item->BindToHandler(nullptr, BHID_LinkTargetItem, IID_PPV_ARGS(&target))) &&
-            target) {
-            SFGAOF kind = 0;
-            if (SUCCEEDED(target->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM, &kind)) &&
-                (kind & SFGAO_FOLDER) && !(kind & SFGAO_STREAM)) {
-                PIDLIST_ABSOLUTE pidl = nullptr;
-                if (SUCCEEDED(SHGetIDListFromObject(target, &pidl)) && pidl) {
-                    result.reset(pidl);
+        // The link is resolved by IShellLink with SLR_NO_UI: the shell's own binding (BHID_LinkTargetItem) shows the "Problem with
+        // shortcut" box for a link whose target is gone, once for every such link of a folder (the Recent folder is full of them).
+        wchar_t* linkPath = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &linkPath)) && linkPath) {
+            IShellLinkW* link = nullptr;
+            if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link))) && link) {
+                IPersistFile* file = nullptr;
+                if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file))) && file) {
+                    if (SUCCEEDED(file->Load(linkPath, STGM_READ)) &&
+                        SUCCEEDED(link->Resolve(nullptr, SLR_NO_UI | SLR_NOSEARCH | SLR_NOUPDATE | SLR_NOLINKINFO | (500 << 16)))) {
+                        PIDLIST_ABSOLUTE pidl = nullptr;
+                        if (SUCCEEDED(link->GetIDList(&pidl)) && pidl) {
+                            IShellItem* target = nullptr;
+                            SFGAOF kind = 0;
+                            if (SUCCEEDED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&target))) && target &&
+                                SUCCEEDED(target->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM, &kind)) && (kind & SFGAO_FOLDER) &&
+                                !(kind & SFGAO_STREAM)) {
+                                result.reset(pidl);
+                                pidl = nullptr;
+                            }
+                            if (target) {
+                                target->Release();
+                            }
+                            if (pidl) {
+                                CoTaskMemFree(pidl);
+                            }
+                        }
+                    }
+                    file->Release();
                 }
+                link->Release();
             }
-            target->Release();
+            CoTaskMemFree(linkPath);
         }
         item->Release();
     }
@@ -1460,6 +1657,8 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
 
     std::vector<int> ids(count, 0);
     std::vector<std::wstring> texts;  // Group titles, indexed by id.
+    std::vector<double> numbers;      // The number a title stands for, when the values are numbers (their order is the groups').
+    std::vector<bool> numberKnown;
     SYSTEMTIME nowLocal{};
     GetLocalTime(&nowLocal);
     int firstType = -1;
@@ -1512,6 +1711,8 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
             continue;
         }
         std::wstring text;
+        double numberOf = 0;
+        bool haveNumber = false;
         if (isName) {
             const std::wstring& name = result->entries[i].name;
             if (!name.empty()) {
@@ -1523,14 +1724,34 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         } else if (value.vt == VT_BSTR && value.bstrVal) {
             text = value.bstrVal;
         } else if (value.vt != VT_EMPTY && value.vt != VT_NULL) {
-            // Numbers and the like: let OLE turn them into text.
-            VARIANT asText;
-            VariantInit(&asText);
-            if (SUCCEEDED(VariantChangeType(&asText, &value, 0, VT_BSTR)) &&
-                asText.bstrVal) {
-                text = asText.bstrVal;
+            // Numbers and the like: the property's own text for the value first (System.Home.Grouping 1 is "Quick access"), then
+            // what OLE makes of it.
+            PROPVARIANT asProperty;
+            PropVariantInit(&asProperty);
+            if (SUCCEEDED(VariantToPropVariant(&value, &asProperty))) {
+                PWSTR formatted = nullptr;
+                if (SUCCEEDED(PSFormatForDisplayAlloc(key, asProperty, PDFF_DEFAULT, &formatted)) && formatted) {
+                    text = formatted;
+                    CoTaskMemFree(formatted);
+                }
+                PropVariantClear(&asProperty);
             }
-            VariantClear(&asText);
+            VARIANT asNumber;
+            VariantInit(&asNumber);
+            if (SUCCEEDED(VariantChangeType(&asNumber, &value, 0, VT_R8))) {
+                numberOf = asNumber.dblVal;
+                haveNumber = true;
+            }
+            VariantClear(&asNumber);
+            if (text.empty()) {
+                VARIANT asText;
+                VariantInit(&asText);
+                if (SUCCEEDED(VariantChangeType(&asText, &value, 0, VT_BSTR)) &&
+                    asText.bstrVal) {
+                    text = asText.bstrVal;
+                }
+                VariantClear(&asText);
+            }
         }
         if (text.empty() && column >= 0) {
             SHELLDETAILS details{};
@@ -1549,6 +1770,10 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
         auto found = std::find(texts.begin(), texts.end(), text);
         if (found == texts.end()) {
             texts.push_back(text);
+            numbers.resize(texts.size(), 0);
+            numberKnown.resize(texts.size(), false);
+            numbers[texts.size() - 1] = numberOf;
+            numberKnown[texts.size() - 1] = haveNumber;
             ids[i] = (int)texts.size() - 1;
         } else {
             ids[i] = (int)(found - texts.begin());
@@ -1577,12 +1802,23 @@ void GroupFallback(IShellFolder* folder, const SortSpec& spec,
             return ascending ? a < b : a > b;
         });
     } else {
-        std::sort(order.begin(), order.end(),
-                  [ascending, &texts](int a, int b) {
-                      int cmp = StrCmpLogicalW(texts[a].c_str(),
-                                               texts[b].c_str());
-                      return ascending ? cmp < 0 : cmp > 0;
-                  });
+        bool allNumbers = !order.empty();
+        for (int id : order) {
+            allNumbers = allNumbers && id >= 0 && id < (int)numberKnown.size() && numberKnown[id];
+        }
+        if (allNumbers) {
+            // Values that are numbers keep their numeric order, whatever their titles are (Home: Quick access, Favorites, Recent).
+            std::sort(order.begin(), order.end(), [ascending, &numbers](int a, int b) {
+                return ascending ? numbers[a] < numbers[b] : numbers[a] > numbers[b];
+            });
+        } else {
+            std::sort(order.begin(), order.end(),
+                      [ascending, &texts](int a, int b) {
+                          int cmp = StrCmpLogicalW(texts[a].c_str(),
+                                                   texts[b].c_str());
+                          return ascending ? cmp < 0 : cmp > 0;
+                      });
+        }
     }
     std::vector<std::wstring> names;
     for (int id : order) {
@@ -2544,17 +2780,19 @@ ULONGLONG TagListNow() {
     return value.QuadPart;
 }
 
+// The value is read at every call, not once: several Explorer processes load the mod, each one writes the whole list, and a copy
+// that was read once would write over what another process changed since (and its sidebar would never show a new tag).
 void TagListLoadLocked() {
-    if (g_tagListLoaded) {
-        return;
-    }
-    g_tagListLoaded = true;
-    std::vector<wchar_t> buffer(60000);
+    static std::vector<wchar_t> buffer(60000);  // Under g_tagListMutex.
     size_t length = Wh_GetStringValue(L"tagList", buffer.data(), buffer.size());
     std::vector<TagDef> loaded;
     if (length && length < buffer.size() && TagListParse(std::wstring(buffer.data(), length), &loaded)) {
         g_tagList = std::move(loaded);
     }
+    if (g_tagListLoaded) {
+        return;
+    }
+    g_tagListLoaded = true;
     // Once: the recent tags the first builds stored on their own become part of the list.
     if (Wh_GetIntValue(L"tagList.legacyImported", 0) == 0) {
         TagListImportInto(g_tagList, LabelsRecentLegacyTake(), TagListNow());
@@ -3497,7 +3735,26 @@ bool TagIndexStartsWith(std::wstring const& text, std::wstring const& prefix) {
     return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
 }
 
-const wchar_t* const kTagIndexExcluded[] = {L"windows", L"program files", L"program files (x86)", L"programdata", L"$recycle.bin",
+// True for a path in the user's temp folder: nobody keeps tagged files there, and the debug build's self-tests write tags there.
+bool TagIndexInTemp(std::wstring const& path) {
+    static const std::wstring temp = [] {
+        wchar_t buffer[MAX_PATH * 2];
+        DWORD length = GetTempPathW(ARRAYSIZE(buffer), buffer);
+        if (!length || length >= ARRAYSIZE(buffer)) {
+            return std::wstring();
+        }
+        wchar_t longPath[MAX_PATH * 2];
+        DWORD longLength = GetLongPathNameW(buffer, longPath, ARRAYSIZE(longPath));
+        std::wstring result = longLength && longLength < ARRAYSIZE(longPath) ? std::wstring(longPath) : std::wstring(buffer);
+        if (!result.empty() && result.back() != L'\\') {
+            result += L'\\';
+        }
+        return TagIndexKey(result);
+    }();
+    return !temp.empty() && TagIndexKey(path + L"\\").compare(0, temp.size(), temp) == 0;
+}
+
+const wchar_t* const kTagIndexExcluded[] ={L"windows", L"program files", L"program files (x86)", L"programdata", L"$recycle.bin",
                                            L"system volume information"};
 
 }  // namespace
@@ -3609,6 +3866,9 @@ bool TagIndexScanRoot(TagIndexData& data, std::wstring root, bool skipSystem, bo
             }
             full += found.cFileName;
             if (isDir && skipSystem && dir.size() == rootLength && TagIndexExcludedBelowRoot(found.cFileName)) {
+                continue;
+            }
+            if (isDir && skipSystem && TagIndexInTemp(full)) {
                 continue;
             }
             // A file that is only in the cloud: opening it would download it.
@@ -4049,7 +4309,7 @@ void TagIndexWatchRoot(std::wstring root) {
             auto* note = (FILE_NOTIFY_INFORMATION*)(buffer.data() + offset);
             std::wstring relative(note->FileName, note->FileNameLength / sizeof(wchar_t));
             std::wstring colonless = relative.substr(0, relative.rfind(L':') == std::wstring::npos ? relative.size() : relative.rfind(L':'));
-            if (!TagIndexExcludedBelowRoot(colonless)) {
+            if (!TagIndexExcludedBelowRoot(colonless) && !TagIndexInTemp(root + colonless)) {
                 std::wstring full = root + relative;
                 std::wstring read;
                 {
@@ -4157,6 +4417,24 @@ void TagIndexStart() {
         std::lock_guard<std::mutex> lock(g_tagIndexMutex);
         TagIndexLoadLocked(true);
     }
+    // Every tag the saved index knows is in the tag list (a list that was lost or reset fills again).
+    {
+        std::vector<LabelTag> known;
+        {
+            std::lock_guard<std::mutex> lock(g_tagIndexMutex);
+            for (auto const& item : g_tagIndex.files) {
+                if (!TagIndexInTemp(item.second.path)) {
+                    known.insert(known.end(), item.second.tags.begin(), item.second.tags.end());
+                }
+            }
+        }
+        for (auto const& tag : known) {
+            std::wstring shown = TagShownName(tag);
+            if (!shown.empty()) {
+                TagListEnsure(shown, tag.colour);
+            }
+        }
+    }
     std::wstring folder = TagIndexFolder();
     if (!folder.empty()) {
         g_tagIndexLock = CreateFileW((folder + L"\\tagindex.lock").c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
@@ -4236,6 +4514,9 @@ size_t TagIndexCount(std::wstring const& tag) {
 
 // The labels write a file's tags through this, so the index knows at once (a watcher would tell it a moment later).
 void TagIndexNoteWrite(std::wstring const& path, std::vector<LabelTag> const& tags) {
+    if (TagIndexInTemp(path)) {
+        return;
+    }
     for (auto const& tag : tags) {
         std::wstring shown = TagShownName(tag);
         if (!shown.empty()) {
@@ -4480,6 +4761,11 @@ struct Column {
     winrt::event_token captureLostToken{};
     winrt::event_token exitToken{};
     bool filled = false;  // Has shown a listing at least once.
+    bool loading = false;               // A listing was asked for and has not come yet.
+    ULONGLONG loadStartedAt = 0;
+    muxc::StackPanel notice{nullptr};   // The muted line (and spinner) over the list: "Loading…", "This folder is empty".
+    muxc::TextBlock noticeText{nullptr};
+    muxc::ProgressRing noticeRing{nullptr};
     std::shared_ptr<std::atomic<bool>> cancel;  // Set when this column's load is not wanted.
     int scrollStyle = -1;  // The scrollbar style these rows were given.
     double gutterRight = 10;  // The strip kept free on the right, in px.
@@ -4555,6 +4841,12 @@ struct ContextMenuState {
     HWND owner = nullptr;
     Column* column = nullptr;  // The column and items the menu is for.
     std::vector<size_t> entries;
+    // A menu for items that are not a column's (08b: the sidebar's rows, the list of a tag's files): the items' folder and children
+    // for Copy and Cut, and what to do after a command ran.
+    bool generic = false;
+    Pidl genericFolder;
+    std::vector<Pidl> genericChildren;
+    std::function<void()> afterCommand;
     bool insideArchive = false;  // The items are inside an archive that is being browsed.
     muxc::Primitives::FlyoutBase flyout{nullptr};
     winrt::event_token closedToken{};
@@ -4781,6 +5073,8 @@ struct WindowState {
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
     bool sortMenuDone = false;  // The Sort and group menu has its handler (labels).
     bool toolbarDone = false;   // The toolbar's buttons were found and handled.
+    struct TagViewPanel* tagView = nullptr;  // The list of the files of a tag over the file area, 10j4.
+    struct SidebarPanel* sidebar = nullptr;  // The sidebar over this window's navigation pane, 10j.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.
     // The pill that marks the active column, on a layer over the strip.
     muxc::Canvas overlay{nullptr};
@@ -4877,6 +5171,9 @@ void StartDetails(WindowState* state);
 void AbandonDetails(WindowState* state);
 void WatchWindowClose(HWND top);  // 11-window: the window releases its objects when it is closed.
 void ReleaseDetails(WindowState* state);
+void StartSidebar(WindowState* state);    // 10j
+void ReleaseSidebar(WindowState* state);
+void AbandonSidebar(WindowState* state);
 
 std::mutex g_statesMutex;
 [[clang::no_destroy]] std::vector<std::unique_ptr<WindowState>> g_states;
@@ -5396,6 +5693,8 @@ void RequestLoad(WindowState* state, Column* column) {
     }
     column->cancel = std::make_shared<std::atomic<bool>>(false);
     column->generation = ++state->nextGeneration;
+    column->loading = true;
+    column->loadStartedAt = GetTickCount64();
     auto job = std::make_unique<Job>();
     job->generation = column->generation;
     job->folder.reset(ILClone(column->folder.get()));
@@ -5447,6 +5746,9 @@ void RequestIcons(WindowState* state, Column* column) {
 void RestoreViewButtonIcon(WindowState* state);
 void HoverOn(WindowState* state);
 void HoverOff(WindowState* state);
+namespace {
+void SidebarDismissPopups(WindowState* state);  // 10j.
+}
 // ---- Columns ----
 
 int ColumnIndexOfList(WindowState* state, muxc::ListView const& list) {
@@ -6260,10 +6562,85 @@ void ApplyCutState(WindowState* state) {
     }
 }
 
+muxc::TextBlock MakeText(std::wstring const& text, double size, bool semibold, bool secondary);  // 10b
+
+// The muted line over a column's list: a spinner and "Loading…" while a folder that has not been shown yet takes more than a moment,
+// "This folder is empty" when a listing came with no row. Made when the column is, shown and hidden by UpdateColumnNotice.
+void BuildColumnNotice(Column* column) {
+    muxc::StackPanel notice;
+    notice.Orientation(muxc::Orientation::Vertical);
+    notice.Spacing(10);
+    notice.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    notice.VerticalAlignment(mux::VerticalAlignment::Top);
+    notice.Margin(mux::Thickness{16, 56, 16, 0});
+    notice.IsHitTestVisible(false);
+    notice.Visibility(mux::Visibility::Collapsed);
+    notice.OpacityTransition(mux::ScalarTransition());
+    notice.Opacity(0);
+    muxc::ProgressRing ring;
+    ring.Width(20);
+    ring.Height(20);
+    ring.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    ring.Visibility(mux::Visibility::Collapsed);
+    notice.Children().Append(ring);
+    auto text = MakeText(L"", 13, false, true);
+    text.TextAlignment(mux::TextAlignment::Center);
+    text.TextWrapping(mux::TextWrapping::Wrap);
+    text.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    notice.Children().Append(text);
+    column->notice = notice;
+    column->noticeRing = ring;
+    column->noticeText = text;
+}
+
+void UpdateColumnNotice(Column* column) {
+    if (!column->notice) {
+        return;
+    }
+    bool show = false;
+    bool spinning = false;
+    const wchar_t* text = L"";
+    if (g_columnNotice) {
+        if (column->loading && !column->filled) {
+            if (GetTickCount64() - column->loadStartedAt > 300) {  // A quick folder never flashes it.
+                show = true;
+                spinning = true;
+                text = Str(L"columns.loading");
+            }
+        } else if (column->filled && column->entries.empty()) {
+            show = true;
+            text = Str(L"columns.empty");
+        }
+    }
+    try {
+        if (show) {
+            if (std::wstring(column->noticeText.Text()) != text) {
+                column->noticeText.Text(text);
+            }
+            if (column->noticeRing.IsActive() != spinning) {
+                column->noticeRing.IsActive(spinning);
+            }
+            column->noticeRing.Visibility(spinning ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+            if (column->notice.Visibility() != mux::Visibility::Visible) {
+                column->notice.Visibility(mux::Visibility::Visible);
+            }
+            column->notice.Opacity(0.85);
+        } else if (column->notice.Visibility() != mux::Visibility::Collapsed) {
+            column->notice.Opacity(0);
+            column->noticeRing.IsActive(false);
+            column->notice.Visibility(mux::Visibility::Collapsed);
+        }
+    } catch (...) {
+        LogHresult(L"a column's notice");
+    }
+}
+
 // What follows a fill or a patch: the cut look, a rename or a selection that was waiting for
 // the new rows, and a scroll position to put back.
 void FinishFill(WindowState* state, Column* column) {
     column->filled = true;
+    column->loading = false;
+    UpdateColumnNotice(column);
     column->list.IsTabStop(column->entries.empty());
     if (!state->cutPaths.empty()) {
         ApplyCutState(state);
@@ -6970,6 +7347,7 @@ void ApplyLoaded(std::shared_ptr<Loaded> const& loaded) {
     for (size_t position = 0; position < state->columns.size(); position++) {
         auto& column = state->columns[position];
         if (column->generation == loaded->generation) {
+            column->loading = false;
             // The column's folder is gone: the column and those after it are
             // removed, and the one before it shows its folder again, without
             // the row that led here.
@@ -7410,6 +7788,9 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
                 if (auto list = sender.try_as<muxc::ListView>()) {
                     auto scroller = FindListScroller(list, 0);
                     WindowState* pressState = StateForThisThread(false);
+                    if (pressState && pressState->sidebar) {
+                        SidebarDismissPopups(pressState);  // A flyout of the sidebar does not see a click in a column.
+                    }
                     // A row marks its own press as handled, so the list's ordinary
                     // press handler never sees it. A drag of rows starts here.
                     if (pressState && pressState->on && !g_unloading && !pressState->rename) {
@@ -7814,9 +8195,14 @@ void AddColumn(WindowState* state, Pidl folder, bool atFront = false, bool archi
             }
         });
 
+    // The list and the notice over it (a column's muted "Loading…" and "This folder is empty") share a grid.
+    BuildColumnNotice(column.get());
+    muxc::Grid listHost;
+    listHost.Children().Append(list);
+    listHost.Children().Append(column->notice);
     muxc::StackPanel cell;
     cell.Orientation(muxc::Orientation::Horizontal);
-    cell.Children().Append(list);
+    cell.Children().Append(listHost);
     cell.Children().Append(grip);
 
     column->list = list;
@@ -9256,6 +9642,48 @@ bool CopyOrCut(WindowState* state, Column* column,
     return SUCCEEDED(hr);
 }
 
+// Copy or Cut for the items of a menu that is not a column's (08b): the items are the children of `folder`. The clipboard only; the
+// columns' dimming of cut items is theirs.
+bool GenericCopyOrCut(WindowState* state, PCIDLIST_ABSOLUTE folder, std::vector<Pidl> const& children, bool cut) {
+    IShellFolder* parent = nullptr;
+    HRESULT hr = ILIsEmpty(folder) ? SHGetDesktopFolder(&parent) : SHBindToObject(nullptr, folder, nullptr, IID_PPV_ARGS(&parent));
+    if (FAILED(hr) || !parent) {
+        return false;
+    }
+    std::vector<PCUITEMID_CHILD> ids;
+    for (auto const& child : children) {
+        ids.push_back(child.get());
+    }
+    IDataObject* data = nullptr;
+    hr = ids.empty() ? E_INVALIDARG
+                     : parent->GetUIObjectOf(state->topLevel, (UINT)ids.size(), ids.data(), IID_IDataObject, nullptr, (void**)&data);
+    parent->Release();
+    if (FAILED(hr) || !data) {
+        return false;
+    }
+    if (cut) {
+        static UINT format = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+        if (memory) {
+            if (DWORD* effect = (DWORD*)GlobalLock(memory)) {
+                *effect = DROPEFFECT_MOVE;
+                GlobalUnlock(memory);
+            }
+            FORMATETC fmt = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            STGMEDIUM medium = {};
+            medium.tymed = TYMED_HGLOBAL;
+            medium.hGlobal = memory;
+            if (FAILED(data->SetData(&fmt, &medium, TRUE))) {
+                GlobalFree(memory);
+            }
+        }
+    }
+    hr = OleSetClipboard(data);
+    data->Release();
+    Wh_Log(L"%s %d item(s) of a sidebar or list menu: hr=0x%08lX", cut ? L"cut" : L"copy", (int)ids.size(), hr);
+    return SUCCEEDED(hr);
+}
+
 // Lets go of the shell menu and every handler on the flyout's items.
 void CloseContextMenu(WindowState* state) {
     if (!state->context) {
@@ -9369,6 +9797,30 @@ void RunContextCommand(UINT id) {
                         id - idFirst, GCS_VERBW, nullptr,
                         (char*)verb, ARRAYSIZE(verb));
                     Wh_Log(L"context menu verb \"%s\"", verb);
+                    if (context->generic) {
+                        // Items of the sidebar or of a tag's list (08b): Copy and Cut through the clipboard, the rest by the shell,
+                        // then what the caller asked to do (read the list again).
+                        std::function<void()> after = context->afterCommand;
+                        if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
+                            GenericCopyOrCut(state, context->genericFolder.get(), context->genericChildren, !_wcsicmp(verb, L"cut"));
+                            return;
+                        }
+                        CMINVOKECOMMANDINFOEX generic = {};
+                        generic.cbSize = sizeof(generic);
+                        generic.hwnd = owner;
+                        generic.lpVerb = MAKEINTRESOURCEA(id - idFirst);
+                        generic.lpVerbW = MAKEINTRESOURCEW(id - idFirst);
+                        generic.nShow = SW_SHOWNORMAL;
+                        generic.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                        GetCursorPos(&generic.ptInvoke);
+                        ModalScope modal;
+                        HRESULT result = menu->InvokeCommand((CMINVOKECOMMANDINFO*)&generic);
+                        Wh_Log(L"context menu command %u (%s) of a sidebar or list menu -> hr=0x%08lX", id, verb, result);
+                        if (!g_unloading && StateForThisThread(false) == state && after) {
+                            after();
+                        }
+                        return;
+                    }
                     if (!_wcsicmp(verb, L"copy") || !_wcsicmp(verb, L"cut")) {
                         CopyOrCut(state, column, entries,
                                   !_wcsicmp(verb, L"cut"));
@@ -10348,6 +10800,9 @@ const wchar_t* MockupGlyphForVerb(std::wstring const& verb) {
         {L"rename", L"\uE8AC"}, {L"delete", L"\uE74D"},     {L"properties", L"\uE946"},
         {L"open", L"\uE8E5"},   {L"openas", L"\uE7AC"},     {L"copyaspath", L"\uF89A"},
         {L"edit", L"\uE70F"},   {L"print", L"\uE749"},      {L"play", L"\uE768"},
+        {L"empty", L"\uE74D"},  {L"eject", L"\uE88E"},      {L"format", L"\uEDA2"},
+        {L"connectnetworkdrive", L"\uE8CE"}, {L"mapnetdrive", L"\uE8CE"}, {L"mapnetworkdrive", L"\uE8CE"},
+        {L"mapdrive", L"\uE8CE"}, {L"connect", L"\uE8CE"}, {L"manage", L"\uE7EF"},
     };
     for (auto& entry : table) {
         if (_wcsicmp(verb.c_str(), entry.verb) == 0) {
@@ -10496,6 +10951,11 @@ struct MenuBuilder {
     bool styled = false;       // The presenter has no padding of its own.
     muxc::Grid quickHeader{nullptr};  // The quick row and the line under it, to put them under the list
     mux::UIElement quickLine{nullptr};  // when the menu opens upwards.
+    // A menu asked in another island than the columns' (the sidebar, the tag list): its window and scale, for the click-outside
+    // watch, and whether the menu may go past that island's edge (a narrow one would cut it).
+    HWND hostWindow = nullptr;
+    double hostScale = 0;
+    bool unconstrained = false;
 
     MenuBuilder(WindowState* owner, double minWidth, bool toolbarFallback)
         : state(owner), toolbarIcons(toolbarFallback) {
@@ -10719,6 +11179,9 @@ struct MenuBuilder {
             button.Flyout(spec.submenu);
             // Like a cascading menu: beside the row, top aligned with it.
             spec.submenu.Placement(muxc::Primitives::FlyoutPlacementMode::RightEdgeAlignedTop);
+            if (unconstrained) {
+                spec.submenu.ShouldConstrainToRootBounds(false);  // Opened in a narrow island (the sidebar): not cut at its edge.
+            }
             auto sub = spec.submenu;
             // Weak: a handler that holds the element it is on keeps both alive for as long as the window.
             auto weakSub = winrt::make_weak(sub);
@@ -10840,6 +11303,9 @@ struct MenuBuilder {
         if (styled && g_presenterStyle) {
             flyout.FlyoutPresenterStyle(g_presenterStyle);
         }
+        if (unconstrained) {
+            flyout.ShouldConstrainToRootBounds(false);
+        }
         state->context->flyout = flyout;
         // Opened upwards, the quick row goes under the list so that it stays next to the pointer.
         {
@@ -10875,9 +11341,11 @@ struct MenuBuilder {
         // flyout's own light dismiss does not see it.
         try {
             auto rootCopy = root;
+            HWND hostWnd = hostWindow;
+            double hostZoom = hostScale;
             auto timer = state->queue.CreateTimer();
             timer.Interval(std::chrono::milliseconds(40));
-            Keep(timer, timer.Tick(winrt::auto_revoke, [rootCopy](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            Keep(timer, timer.Tick(winrt::auto_revoke, [rootCopy, hostWnd, hostZoom](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
                 WindowState* st = StateForThisThread(false);
                 if (!st || !st->context || !st->context->flyout || g_unloading) {
                     sender.Stop();
@@ -10885,12 +11353,14 @@ struct MenuBuilder {
                 }
                 auto& ctx = *st->context;
                 bool down = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
-                if (down && !ctx.wasDown && !ctx.openSub && st->rootGrid && st->bridge) {
+                HWND island = hostWnd ? hostWnd : (st->bridge ? (HWND)st->bridge.WindowId().Value : nullptr);
+                if (down && !ctx.wasDown && !ctx.openSub && island && (hostWnd || st->rootGrid)) {
                     try {
                         auto topLeft = rootCopy.TransformToVisual(nullptr).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
-                        double scale = st->rootGrid.XamlRoot() ? st->rootGrid.XamlRoot().RasterizationScale() : 1.0;
+                        double scale = hostWnd ? (hostZoom > 0 ? hostZoom : 1.0)
+                                               : (st->rootGrid.XamlRoot() ? st->rootGrid.XamlRoot().RasterizationScale() : 1.0);
                         POINT corner = {(LONG)(topLeft.X * scale), (LONG)(topLeft.Y * scale)};
-                        ClientToScreen((HWND)st->bridge.WindowId().Value, &corner);
+                        ClientToScreen(island, &corner);
                         RECT box = {corner.x - 3, corner.y - 3, corner.x + (LONG)(rootCopy.ActualWidth() * scale) + 3,
                                     corner.y + (LONG)(rootCopy.ActualHeight() * scale) + 3};
                         POINT cursor;
@@ -11902,6 +12372,300 @@ muxc::ToolTip BuildDetailTip(Column* column, size_t entryIndex) {
     return tip;
 }
 
+// The shell's context menu for any set of items, in the columns' own flyout (08-menu-edit.cpp's ShowItemFlyout is the one for a
+// column's rows): a quick row (Cut, Copy, Paste, Delete, Properties), Open, the caller's own rows, Open in a new tab, Tags, Copy as
+// path, the format's main action, and the rest of the shell's entries behind "More options". Used by the sidebar's rows and by the list
+// of a tag's files, which are not column rows. The menu is XAML (a native popup runs a modal loop inside a XAML handler, which crashed
+// Explorer before) and may go past the edge of the island it is asked in (the sidebar is narrower than the menu).
+//
+// What it leaves out of the columns' menu, on purpose: Rename (a row of these lists cannot be edited), Compress to, New folder from
+// selection and the archive cases, which need a column. The columns' menu is adjusted later on the same pieces.
+
+struct MenuItemSet {
+    Pidl folder;                      // The folder that holds the items (absolute).
+    std::vector<Pidl> children;       // Their ids in it.
+    std::vector<std::wstring> paths;  // Their paths on disk, an empty one for an item that has none.
+    std::vector<bool> isFolder;
+    struct Extra {
+        std::wstring text;
+        const wchar_t* glyph = L"";
+        std::function<void()> action;
+    };
+    std::vector<Extra> extras;         // The caller's rows, after Open.
+    std::vector<std::wstring> hideVerbs;  // Shell verbs the menu leaves out (the caller has its own).
+    std::vector<std::wstring> promoteVerbs;  // Shell verbs shown as rows of their own after Open, not behind "More options" (Empty).
+    std::function<void()> after;       // After a command of the shell ran (read a list again).
+    mux::UIElement anchor{nullptr};    // The element the menu is placed on, and the point on it.
+    winrt::Windows::Foundation::Point position{};
+    std::optional<winrt::Windows::Foundation::Rect> rowBox;  // The row, so that the menu does not cover it.
+    HWND hostWindow = nullptr;         // The island of the anchor (it is not the columns').
+    double hostScale = 1.0;
+};
+
+void ShowItemFlyoutFor(WindowState* state, MenuItemSet set) {
+    try {
+        CloseContextMenu(state);
+        if (set.children.empty() || !set.anchor) {
+            return;
+        }
+        IShellFolder* parent = nullptr;
+        HRESULT hr = ILIsEmpty(set.folder.get()) ? SHGetDesktopFolder(&parent)
+                                                 : SHBindToObject(nullptr, set.folder.get(), nullptr, IID_PPV_ARGS(&parent));
+        if (FAILED(hr) || !parent) {
+            Wh_Log(L"item menu: can't bind the folder, hr=0x%08lX", hr);
+            return;
+        }
+        std::vector<PCUITEMID_CHILD> ids;
+        for (auto const& child : set.children) {
+            ids.push_back(child.get());
+        }
+        IContextMenu* menu = nullptr;
+        hr = parent->GetUIObjectOf(state->topLevel, (UINT)ids.size(), ids.data(), IID_IContextMenu, nullptr, (void**)&menu);
+        parent->Release();
+        if (FAILED(hr) || !menu) {
+            Wh_Log(L"item menu: no IContextMenu, hr=0x%08lX", hr);
+            return;
+        }
+        HMENU hmenu = CreatePopupMenu();
+        hr = menu->QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXPLORE);
+        if (FAILED(hr)) {
+            DestroyMenu(hmenu);
+            menu->Release();
+            Wh_Log(L"item menu: QueryContextMenu hr=0x%08lX", hr);
+            return;
+        }
+        state->context = std::make_unique<ContextMenuState>();
+        state->context->menu = menu;
+        state->context->hmenu = hmenu;
+        state->context->owner = state->topLevel;
+        state->context->generic = true;
+        state->context->genericFolder = Pidl(ILClone(set.folder.get()));
+        for (auto const& child : set.children) {
+            state->context->genericChildren.push_back(Pidl(ILCloneChild(child.get())));
+        }
+        state->context->afterCommand = set.after;
+
+        std::vector<MenuRow> rows;
+        int count = GetMenuItemCount(hmenu);
+        for (int i = 0; i < count && i < 80; i++) {
+            MENUITEMINFOW info;
+            std::wstring text = MenuText(hmenu, i, &info);
+            if ((info.fType & MFT_SEPARATOR) || text.empty()) {
+                continue;
+            }
+            MenuRow row;
+            row.pos = i;
+            row.id = info.wID;
+            row.text = text;
+            row.sub = info.hSubMenu;
+            row.enabled = !(info.fState & (MFS_DISABLED | MFS_GRAYED));
+            wchar_t verb[64] = L"";
+            menu->GetCommandString(info.wID - state->context->idFirst, GCS_VERBW, nullptr, (char*)verb, ARRAYSIZE(verb));
+            row.verb = verb;
+            rows.push_back(std::move(row));
+        }
+
+        muxc::Flyout flyout;
+        MenuBuilder builder(state, 300, true);
+        builder.hostWindow = set.hostWindow;
+        builder.hostScale = set.hostScale;
+        builder.unconstrained = set.hostWindow != nullptr;
+        std::set<int> used;  // Positions shown above "More options".
+        for (auto const& row : rows) {
+            for (auto const& hidden : set.hideVerbs) {
+                if (_wcsicmp(row.verb.c_str(), hidden.c_str()) == 0) {
+                    used.insert(row.pos);
+                }
+            }
+        }
+        bool single = set.children.size() == 1;
+        bool onDisk = true;
+        for (auto const& path : set.paths) {
+            onDisk = onDisk && !path.empty();
+        }
+        onDisk = onDisk && set.paths.size() == set.children.size();
+
+        auto findRow = [&](const wchar_t* verb) -> MenuRow* {
+            for (auto& row : rows) {
+                if (!used.count(row.pos) && _wcsicmp(row.verb.c_str(), verb) == 0) {
+                    return &row;
+                }
+            }
+            return nullptr;
+        };
+
+        // The quick row: Cut, Copy, Paste (a folder takes it), Delete, and the properties pinned at the right end.
+        {
+            std::vector<MenuQuick> header;
+            auto addQuick = [&](MenuRow* row, bool pinned) {
+                used.insert(row->pos);
+                UINT id = row->id;
+                MenuQuick item;
+                item.label = row->text;
+                item.tip = row->text;
+                item.glyph = MockupGlyphForVerb(row->verb);
+                item.icon = OfficialIconName(row->verb);
+                item.glyphOnly = pinned;
+                item.enabled = row->enabled;
+                item.pinned = pinned;
+                item.action = [id]() { RunContextCommand(id); };
+                header.push_back(std::move(item));
+            };
+            for (const wchar_t* verb : {L"cut", L"copy", L"paste", L"delete"}) {
+                if (MenuRow* row = findRow(verb)) {
+                    addQuick(row, false);
+                }
+            }
+            if (MenuRow* row = findRow(L"properties")) {
+                addQuick(row, true);
+            }
+            builder.QuickRow(header);
+        }
+
+        auto addRow = [&](std::wstring const& text, const wchar_t* glyph, bool enabled, std::function<void()> action,
+                          muxc::MenuFlyout const& submenu, const wchar_t* iconFile) {
+            MenuRowSpec spec;
+            spec.text = text;
+            spec.glyph = glyph ? glyph : L"";
+            spec.icon = iconFile ? iconFile : L"";
+            spec.enabled = enabled;
+            spec.action = std::move(action);
+            spec.submenu = submenu;
+            builder.Row(spec);
+        };
+        auto addShellRow = [&](MenuRow* row, const wchar_t* glyphOverride, mux::UIElement custom = nullptr) {
+            used.insert(row->pos);
+            UINT id = row->id;
+            muxc::MenuFlyout subMenu{nullptr};
+            if (row->sub) {
+                subMenu = muxc::MenuFlyout();
+                InitSubmenu(state, row->sub, row->pos);
+                FillFlyoutItems(state, row->sub, subMenu.Items(), 1, nullptr);
+            }
+            const wchar_t* icon = OfficialIconName(row->verb);
+            if (!icon[0]) {
+                icon = FormatActionIcon(row->verb);
+            }
+            MenuRowSpec spec;
+            spec.text = row->text;
+            spec.glyph = glyphOverride ? glyphOverride : MockupGlyphForVerb(row->verb);
+            spec.icon = icon;
+            spec.shortcut = ShortcutForVerb(row->verb);
+            spec.enabled = row->enabled;
+            spec.custom = custom;
+            spec.action = row->sub ? std::function<void()>() : [id]() { RunContextCommand(id); };
+            spec.submenu = subMenu;
+            builder.Row(spec);
+        };
+
+        // First group: Open, the caller's rows, Open in new tab (a folder), Open with.
+        if (MenuRow* row = findRow(L"open")) {
+            mux::UIElement appIcon{nullptr};
+            if (single && !set.isFolder[0] && onDisk) {
+                appIcon = AppIconOf(set.paths[0]);
+            }
+            addShellRow(row, nullptr, appIcon);
+        }
+        for (auto const& extra : set.extras) {
+            auto action = extra.action;
+            addRow(extra.text, extra.glyph, true, [action]() {
+                WindowState* now = StateForThisThread(false);
+                if (now && !g_unloading) {
+                    action();
+                }
+            }, muxc::MenuFlyout{nullptr}, L"");
+        }
+        for (auto const& verb : set.promoteVerbs) {
+            if (MenuRow* row = findRow(verb.c_str())) {
+                mux::UIElement custom{nullptr};
+                if (_wcsicmp(verb.c_str(), L"eject") == 0) {
+                    // The eject symbol (a triangle over a bar) drawn as a shape: the glyph fonts have no code for it that I could check.
+                    custom = mux::Markup::XamlReader::Load(std::wstring(L"<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'") +
+                                      L" Data='M 8,3 L 13,9 L 3,9 Z M 3,11 L 13,11 L 13,13 L 3,13 Z' Width='16' Height='16' "
+                                      L"Stretch='None' Fill='{ThemeResource TextFillColorPrimaryBrush}'/>").as<mux::UIElement>();
+                }
+                addShellRow(row, nullptr, custom);
+            }
+        }
+        if (single && set.isFolder[0]) {
+            Pidl target(ILCombine(set.folder.get(), set.children[0].get()));
+            auto shared = std::make_shared<Pidl>(std::move(target));
+            addRow(L"Open in new tab", L"", true, [shared]() { OpenFolderInNewTab(StateForThisThread(false), shared->get()); },
+                   muxc::MenuFlyout{nullptr}, L"windows.opennewtab");
+        }
+        if (MenuRow* row = findRow(L"openas")) {
+            addShellRow(row, nullptr);
+        }
+
+        // Second group: Tags (every item needs a path), Copy as path, the format's main action.
+        builder.separatorWanted = true;
+        if (onDisk && g_labels) {
+            std::vector<std::wstring> labelPaths = set.paths;
+            bool keeps = true;
+            {
+                std::wstring folderPath = labelPaths[0];
+                PathRemoveFileSpecW(folderPath.data());
+                folderPath.resize(wcslen(folderPath.c_str()));
+                auto cached = LabelsFolderFor(folderPath);
+                if (cached->complete) {
+                    keeps = cached->streamsSupported;
+                }
+            }
+            winrt::weak_ref<mux::FrameworkElement> weakAnchor = set.anchor.as<mux::FrameworkElement>();
+            addRow(Str(keeps ? L"labels.menu" : L"labels.menu.ntfs"), L"", keeps, nullptr,
+                   keeps ? LabelsTagsSubmenu(labelPaths, [weakAnchor]() -> mux::FrameworkElement { return weakAnchor.get(); })
+                         : muxc::MenuFlyout{nullptr},
+                   L"");
+        }
+        if (MenuRow* row = findRow(L"copyaspath")) {
+            addShellRow(row, nullptr);
+        }
+        const wchar_t* formatVerbs[] = {L"setdesktopwallpaper", L"Windows.PowerShell.Run", L"runas", L"edit",
+                                        L"print",               L"play",                   L"mount", L"install"};
+        for (auto verb : formatVerbs) {
+            if (MenuRow* row = findRow(verb)) {
+                if (!row->sub) {
+                    addShellRow(row, L"");
+                    break;
+                }
+            }
+        }
+
+        // Third group: everything else the shell offers.
+        muxc::MenuFlyout more;
+        FillFlyoutItems(state, hmenu, more.Items(), 0, &used);
+        if (more.Items().Size() > 0) {
+            builder.separatorWanted = true;
+            addRow(L"More options", L"", true, nullptr, more, L"");
+        }
+        builder.Show(flyout, set.anchor, set.position, set.rowBox);
+        Wh_Log(L"item menu shown for %d item(s): %u parts", (int)set.children.size(), builder.root.Children().Size());
+    } catch (...) {
+        LogHresult(L"ShowItemFlyoutFor");
+        CloseContextMenu(state);
+    }
+}
+
+// The set for one path on disk or one shell item: the folder that holds it and its id in it. `path` may be empty when only the
+// absolute id is known.
+bool MenuItemSetAdd(MenuItemSet& set, PCIDLIST_ABSOLUTE absolute, std::wstring const& path, bool folder) {
+    if (!absolute) {
+        return false;
+    }
+    Pidl parent(ILClone(absolute));
+    if (!ILRemoveLastID(parent.get())) {
+        return false;
+    }
+    if (set.children.empty()) {
+        set.folder = std::move(parent);
+    } else if (!ILIsEqual(set.folder.get(), parent.get())) {
+        return false;  // The shell's menu is for items of one folder.
+    }
+    set.children.push_back(Pidl(ILCloneChild(ILFindLastID(absolute))));
+    set.paths.push_back(path);
+    set.isFolder.push_back(folder);
+    return true;
+}
 // ---- Selection by a rectangle ----
 
 muxc::ScrollViewer FindListScroller(mux::DependencyObject const& node, int depth) {
@@ -13121,6 +13885,7 @@ void HidePanel(WindowState* state, const wchar_t* why) {
 void AbandonWindow(WindowState* state) {
     Wh_Log(L"window closed with the panel on, letting its objects go");
     AbandonDetails(state);
+    AbandonSidebar(state);
     state->on = false;
     (void)state->context.release();  // Never destroyed, like the columns.
     (void)state->rename.release();
@@ -13703,6 +14468,9 @@ void OnTick() {
             return;
         }
         state->ticks++;
+        for (auto& openColumn : state->columns) {
+            UpdateColumnNotice(openColumn.get());  // The spinner of a column that is slow, the setting switched on or off.
+        }
         ULONGLONG now = GetTickCount64();
         bool busy = state->building || state->pendingNav || state->selectChild || state->keepChild || state->rename || state->drag.column ||
                     state->reloadDue || state->postActionAt || state->postActionAt2 || state->syncSelAt ||
@@ -13744,7 +14512,14 @@ void OnTick() {
         // panel would show but get no mouse. Keep it on top.
         {
             HWND panelWindow = (HWND)state->bridge.WindowId().Value;
-            if (panelWindow && GetTickCount64() > g_paneLeaveUntil && GetWindow(panelWindow, GW_HWNDPREV)) {
+            // The list of a tag's files (10j4) is above the panel on purpose: it is not raised over.
+            HWND tagViewWindow = TagViewWindow();
+            bool tagViewAbove = false;
+            for (HWND above = panelWindow ? GetWindow(panelWindow, GW_HWNDPREV) : nullptr; tagViewWindow && above;
+                 above = GetWindow(above, GW_HWNDPREV)) {
+                tagViewAbove = tagViewAbove || above == tagViewWindow;
+            }
+            if (panelWindow && !tagViewAbove && GetTickCount64() > g_paneLeaveUntil && GetWindow(panelWindow, GW_HWNDPREV)) {
                 SetWindowPos(panelWindow, HWND_TOP, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 static int logged = 0;
@@ -20804,8 +21579,57 @@ void PaneRedirectPreview(WindowState* state, DetailsPane* pane) {
     Wh_Log(L"details pane: the Preview pane was switched on, Explorer's Details entry chosen, try %d", pane->redirectTries);
 }
 
-// What is selected in Explorer's own view, as absolute ids and a key that changes with it.
+bool TagViewSelectedPaths(WindowState* state, std::vector<std::wstring>* paths);  // 10j4: the rows selected in a tag's list.
+
+// What is selected in Explorer's own view, as absolute ids and a key that changes with it. While a tag's list shows over the file
+// area, its selected rows are the selection (the pane shows them as it shows the file view's).
 bool PaneReadSelection(WindowState* state, DetailsPane* pane, std::wstring* key) {
+    std::vector<std::wstring> listed;
+    if (TagViewSelectedPaths(state, &listed)) {
+        unsigned long long hash = 1469598103934665603ULL;
+        for (auto const& path : listed) {
+            for (wchar_t c : path) {
+                hash = (hash ^ (unsigned long long)c) * 1099511628211ULL;
+            }
+        }
+        wchar_t tail[64];
+        swprintf(tail, ARRAYSIZE(tail), L"|%d|%llx", (int)listed.size(), hash);
+        std::wstring next = L"taglist" + std::wstring(tail);
+        if (next != pane->wantedKey) {
+            pane->wantedKey = next;
+            PaneClosePreview(pane);
+            pane->wantedSince = GetTickCount64();
+            pane->wantedIndex = -1;
+            pane->wantedItems.clear();
+            pane->wantedHashes.clear();
+            pane->wantedFolder.reset();
+            pane->wantedFolderPath.clear();
+            for (size_t i = 0; i < listed.size() && i < 2000; i++) {
+                PIDLIST_ABSOLUTE absolute = nullptr;
+                if (FAILED(SHParseDisplayName(listed[i].c_str(), nullptr, &absolute, 0, nullptr)) || !absolute) {
+                    continue;
+                }
+                uint64_t each = 1469598103934665603ULL;
+                PCUITEMID_CHILD last = ILFindLastID(absolute);
+                UINT size = ILGetSize(last);
+                const unsigned char* bytes = (const unsigned char*)last;
+                for (UINT b = 0; b < size; b++) {
+                    each = (each ^ bytes[b]) * 1099511628211ULL;
+                }
+                if (pane->wantedItems.empty()) {
+                    Pidl parent(ILClone(absolute));
+                    if (ILRemoveLastID(parent.get())) {
+                        pane->wantedFolderPath = PathOf(parent.get());
+                        pane->wantedFolder = std::move(parent);
+                    }
+                }
+                pane->wantedItems.emplace_back(absolute);
+                pane->wantedHashes.push_back(each);
+            }
+        }
+        *key = next;
+        return true;
+    }
     IShellBrowser* browser = BrowserOf(state->topLevel);
     if (!browser) {
         return false;
@@ -24062,6 +24886,9 @@ void ToolbarApplyCommandBar() {
         }
     } catch (...) {
     }
+    if (changed > 0) {
+        LogVerbose(L"TOOLBAR command bar: gap %d, %d of %d buttons changed", g_cmdGap.load(), changed, seen);  // Not when nothing changed: it was thousands of lines a minute.
+    }
 }
 
 // The wanted width of the search box: the dragged one (kept while the setting it was made against is unchanged), else the setting.
@@ -24547,6 +25374,5277 @@ void LabelsRestoreSortMenu() {
     }
     t_labelsSortMenu = nullptr;
 }
+// Sidebar: the mod's own navigation pane. A XAML island placed over Explorer's navigation pane (the details pane does the same
+// on its side): Explorer keeps the space, the splitter and the View > Show > Navigation pane toggle, and the native tree stays
+// alive under the island. Three sections, Favorites, Locations and Tags, each with a header that collapses it.
+//
+// The island follows the VISIBLE `NamespaceTreeControl` of the window (every tab has its own, and Explorer hides the pane by
+// making that control invisible without moving it): shown on its rectangle while one is visible, hidden when none is.
+//
+// This part is the shell: the island, the headers, the rows and their icons. What the sections hold comes from 10j1 to 10j3
+// (Favorites, Locations, Tags); until those exist the sections carry a few rows of known folders and the recent tags.
+
+// A place of the Locations section (10j2). `path` is empty for a place that is not a folder on disk.
+struct LocationPath {
+    std::wstring key;
+    std::wstring path;
+};
+struct LocationEntry {
+    std::wstring key;
+    std::wstring name;
+    std::wstring path;
+    std::shared_ptr<ITEMIDLIST> pidl;
+    bool visible = true;
+    bool drive = false;
+};
+
+// A folder pinned to Quick access, as the Favorites section lists it (10j1).
+struct FavoriteEntry {
+    std::wstring path;
+    std::wstring name;
+    std::shared_ptr<ITEMIDLIST> pidl;
+    bool exists = true;
+};
+
+// A change to a tag on every file that carries it (rename, recolour, delete), running on a mod thread (10j3). The window reads
+// the counters at its tick to show the progress.
+struct TagsJob {
+    std::atomic<bool> cancel{false};
+    std::atomic<size_t> done{0};
+    std::atomic<size_t> total{0};
+    std::atomic<bool> finished{false};
+};
+
+struct SidebarPanel {
+    mux::Hosting::DesktopWindowXamlSource source{nullptr};
+    winrt::Microsoft::UI::Content::DesktopChildSiteBridge bridge{nullptr};
+    mud::DispatcherQueueTimer timer{nullptr};
+    winrt::event_token token{};
+    muxc::StackPanel host{nullptr};
+    HWND pane = nullptr;      // The visible native pane the island sits on.
+    RECT rect{};              // Where the island is, in the window's client coordinates.
+    bool shown = false;
+    bool built = false;
+    int tickMs = 60;
+    unsigned ticks = 0;
+    ULONGLONG iconSide = 0;   // The icon size (pixels) the rows asked for.
+    bool dark = false;        // The theme the tag icons were last made for.
+    struct Section {
+        std::wstring key;
+        muxc::StackPanel body{nullptr};
+        mux::UIElement chevronUp{nullptr};
+        mux::UIElement chevronDown{nullptr};
+        mux::UIElement chevron{nullptr};
+        mux::UIElement more{nullptr};  // The "…" button of the header, when it has one.
+        muxc::Button headerButton{nullptr};  // The header's own button: where the pill goes when the section is collapsed.
+        bool collapsed = false;
+        bool hovered = false;
+        mud::DispatcherQueueTimer collapseTimer{nullptr};  // Held here: a timer nobody holds is dropped and never ticks.
+    };
+    std::vector<Section> sections;
+    // A row that shows a tag: its icon is remade when the theme changes.
+    struct TagRow {
+        winrt::weak_ref<muxc::Grid> icon;
+        int colour = 0;
+        std::wstring name;
+        winrt::weak_ref<muxc::TextBlock> count;  // The file count at the right of the row, when that option is on.
+    };
+    std::vector<TagRow> tagRows;
+    std::wstring viewKey;  // The row of the tag whose list is open ("tags" for the list of tags): it keeps the pill.
+    bool tagEditing = false;  // A tag's name is being typed in its row: the rows are not made again meanwhile.
+    std::wstring tagSig;  // The tags the rows were made from (names and colours, in order): the rows are made again when it changes.
+    muxc::Grid tagProgress{nullptr};  // The line under the Tags header that shows a running change (a bar and a cancel button).
+    muxc::ProgressBar tagBar{nullptr};
+    std::shared_ptr<TagsJob> tagJob;
+    // The Locations section: the entries shown, the rows that mark the selected one, the menu of the header.
+    std::vector<LocationEntry> locations;
+    struct Mark {
+        std::wstring key;
+        muxc::Border selected{nullptr};
+        muxc::Border pill{nullptr};
+        muxc::Button button{nullptr};
+    };
+    std::vector<Mark> locationMarks;
+    // One pill for the selected row, which slides to the row that gets selected (like the active column's).
+    muxc::Grid pillHost{nullptr};
+    muxc::Border pill{nullptr};
+    bool pillPlaced = false;
+    std::wstring shownKey;  // The row the pill is on.
+    muxc::MenuFlyout locationsMenu{nullptr};
+    muxc::Grid driveChildren{nullptr};
+    std::wstring selectedKey;
+    std::shared_ptr<ITEMIDLIST> lastFolder;
+    DWORD driveMask = 0;
+    unsigned remoteVersion = 0;  // The network drives the list holds (they are named on a thread).
+    // The Favorites section: the pinned folders shown, the block that takes a dropped folder, the drop target of the island.
+    std::vector<FavoriteEntry> favorites;
+    unsigned favoritesVersion = 0;
+    mux::UIElement favBlock{nullptr};
+    muxc::Border favHighlight{nullptr};
+    mux::UIElement tagsBlock{nullptr};  // The whole Tags section: it is out of sight when labels are switched off.
+    muxc::Border tagLine{nullptr};      // The accent line that shows where a dragged tag row will go (manual order).
+    muxc::Canvas overlay{nullptr};  // Where the label of a drag from the columns is made.
+    muxc::Primitives::Popup ghostPopup{nullptr};  // Where it shows: a popup that is not cut at the sidebar's edge.
+    muxc::Border favLine{nullptr};  // The accent line that shows where a dropped folder goes in the list.
+    IDropTarget* drop = nullptr;
+    HWND dropWindow = nullptr;
+    std::wstring dropZone;  // The row or section a drag is over, while one is.
+    struct DriveBar {
+        std::wstring path;
+        winrt::weak_ref<muxc::Grid> bar;       // The free-space bar of a drive's row (its two columns are the used and the free share).
+    };
+    std::vector<DriveBar> driveBars;
+    unsigned settingsVersion = 0;  // g_sidebarSettingsVersion when this sidebar was made.
+    bool suppressClick = false;  // A row was dragged to a new place: the release is not a click.
+};
+
+// 10j2 (Locations), used by the shell below.
+bool LocationsGrouped(size_t driveEntryCount);
+bool LocationVisible(std::wstring const& key);
+void LocationSetVisible(std::wstring const& key, bool visible);
+std::wstring SidebarEntryIn(std::vector<LocationPath> const& entries, std::wstring const& folder);
+std::vector<LocationEntry> LocationsList();
+void SidebarFillLocations(WindowState* state, SidebarPanel* panel);
+muxc::Button SidebarLocationsMore(WindowState* state, SidebarPanel* panel);
+void SidebarFollowFolder(WindowState* state, SidebarPanel* panel);
+namespace {
+void SidebarMarkSelected(SidebarPanel* panel, std::wstring const& key);
+}
+// 10j4 (the list of a tag's files).
+void TagResultsShow(WindowState* state, std::wstring const& tag);
+void TagListShow(WindowState* state);
+void TagViewLeave(WindowState* state);
+void TagViewLeaveHere(WindowState* state);
+void TagViewTick(WindowState* state);
+void ReleaseTagView(WindowState* state);
+void AbandonTagView(WindowState* state);
+// 10j3 (Tags).
+void SidebarKeyDown(WindowState* state, mux::Input::KeyRoutedEventArgs const& args);
+std::vector<std::wstring> TagsItemsOf(IDataObject* data);
+void TagsDropLater(std::wstring const& tag, std::vector<std::wstring> paths);
+void SidebarFillTags(WindowState* state, SidebarPanel* panel);
+void TagsTick(WindowState* state, SidebarPanel* panel);
+muxc::Button SidebarTagsMore(WindowState* state, SidebarPanel* panel);
+muxc::Grid SidebarTagsProgress(WindowState* state, SidebarPanel* panel);
+void TagsReleaseThreadObjects();
+// 10j1 (Favorites).
+void SidebarFillFavorites(WindowState* state, SidebarPanel* panel);
+void FavoritesTick(WindowState* state, SidebarPanel* panel);
+void FavoritesWatchStart();
+void SidebarRegisterDrop(WindowState* state, SidebarPanel* panel);
+void SidebarRevokeDrop(SidebarPanel* panel);
+
+namespace {
+
+constexpr int kSidebarCollapseMs = 180;
+
+std::wstring SidebarCollapsedValue(std::wstring const& key) {
+    return L"sidebar.collapsed." + key;
+}
+
+}  // namespace
+
+// The window of this thread's sidebar: the hook of Explorer's accelerators leaves Delete and F2 to it while it has the keyboard.
+thread_local HWND g_sidebarWindowLocal = nullptr;
+HWND SidebarWindow() {
+    return g_sidebarWindowLocal;
+}
+
+bool SidebarSectionCollapsed(std::wstring const& key) {
+    return Wh_GetIntValue(SidebarCollapsedValue(key).c_str(), 0) != 0;
+}
+
+void SidebarSetSectionCollapsed(std::wstring const& key, bool collapsed) {
+    Wh_SetIntValue(SidebarCollapsedValue(key).c_str(), collapsed ? 1 : 0);
+}
+
+namespace {
+
+const wchar_t kSidebarButtonTemplate[] =
+    L"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+    L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>"
+    L"<Grid Background='Transparent'>"
+    L"<VisualStateManager.VisualStateGroups><VisualStateGroup x:Name='CommonStates'>"
+    L"<VisualState x:Name='Normal'/>"
+    L"<VisualState x:Name='PointerOver'><VisualState.Setters>"
+    L"<Setter Target='Base.Background' Value='{ThemeResource SubtleFillColorSecondaryBrush}'/></VisualState.Setters></VisualState>"
+    L"<VisualState x:Name='Pressed'><VisualState.Setters>"
+    L"<Setter Target='Base.Background' Value='{ThemeResource SubtleFillColorTertiaryBrush}'/></VisualState.Setters></VisualState>"
+    L"<VisualState x:Name='Disabled'/>"
+    L"</VisualStateGroup></VisualStateManager.VisualStateGroups>"
+    L"<Border x:Name='Base' Margin='{TemplateBinding Padding}' CornerRadius='4' Background='Transparent'/>"
+    L"<ContentPresenter HorizontalContentAlignment='Stretch' VerticalContentAlignment='Center'/>"
+    L"</Grid></ControlTemplate>";
+
+// The header's button: no fill on hover (the "Highlight section headers" setting brings the row's one back).
+const wchar_t kSidebarFlatTemplate[] =
+    L"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'>"
+    L"<Grid Background='Transparent'><ContentPresenter HorizontalContentAlignment='Stretch' VerticalContentAlignment='Center'/></Grid>"
+    L"</ControlTemplate>";
+
+// The small buttons of a header (chevron, "…"): a button's look, a faint fill at rest, more on hover and press.
+const wchar_t kSidebarSmallTemplate[] =
+    L"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+    L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='Button'>"
+    L"<Grid Background='Transparent'>"
+    L"<VisualStateManager.VisualStateGroups><VisualStateGroup x:Name='CommonStates'>"
+    L"<VisualState x:Name='Normal'/>"
+    L"<VisualState x:Name='PointerOver'><VisualState.Setters>"
+    L"<Setter Target='Base.Background' Value='{ThemeResource ControlFillColorSecondaryBrush}'/>"
+    L"<Setter Target='Base.BorderBrush' Value='{ThemeResource ControlStrokeColorDefaultBrush}'/></VisualState.Setters></VisualState>"
+    L"<VisualState x:Name='Pressed'><VisualState.Setters>"
+    L"<Setter Target='Base.Background' Value='{ThemeResource ControlFillColorTertiaryBrush}'/>"
+    L"<Setter Target='Base.BorderBrush' Value='{ThemeResource ControlStrokeColorDefaultBrush}'/></VisualState.Setters></VisualState>"
+    L"<VisualState x:Name='Disabled'/>"
+    L"</VisualStateGroup></VisualStateManager.VisualStateGroups>"
+    L"<Border x:Name='Base' CornerRadius='4' Background='Transparent' BorderBrush='Transparent' BorderThickness='1'/>"
+    L"<ContentPresenter HorizontalContentAlignment='Center' VerticalContentAlignment='Center'/>"
+    L"</Grid></ControlTemplate>";
+
+muxc::Button SidebarNewButtonWith(const wchar_t* automationId, double height, const wchar_t* padding, const wchar_t* templateMarkup);
+
+muxc::Button SidebarNewButton(const wchar_t* automationId, double height, const wchar_t* padding) {
+    return SidebarNewButtonWith(automationId, height, padding, kSidebarButtonTemplate);
+}
+
+muxc::Button SidebarNewButtonWith(const wchar_t* automationId, double height, const wchar_t* padding, const wchar_t* templateMarkup) {
+    std::wstring markup = std::wstring(L"<Button ") + kXamlNs + L" Height='" + std::to_wstring(height) +
+                          L"' Padding='" + padding + L"' BorderThickness='0' Background='Transparent' "
+                          L"HorizontalAlignment='Stretch' HorizontalContentAlignment='Stretch' UseSystemFocusVisuals='True' "
+                          L"AutomationProperties.AutomationId='" + automationId + L"'/>";
+    auto button = LoadXaml(markup).as<muxc::Button>();
+    button.Template(LoadXaml(templateMarkup).as<muxc::ControlTemplate>());
+    return button;
+}
+
+// A Segoe Fluent Icons glyph in the secondary text colour (a theme resource, so it follows the theme).
+muxc::FontIcon SidebarGlyph(const wchar_t* glyph, double size) {
+    auto icon = LoadXaml(std::wstring(L"<FontIcon ") + kXamlNs +
+                         L" FontFamily='Segoe Fluent Icons' Foreground='{ThemeResource TextFillColorSecondaryBrush}'/>")
+                    .as<muxc::FontIcon>();
+    icon.Glyph(glyph);
+    icon.FontSize(size);
+    return icon;
+}
+
+muxc::Border SidebarThemedBorder(const wchar_t* brush) {
+    return LoadXaml(std::wstring(L"<Border ") + kXamlNs + L" Background='{ThemeResource " + brush + L"}'/>").as<muxc::Border>();
+}
+
+// The pixels of an icon as a bitmap (on the UI thread).
+mux::Media::Imaging::WriteableBitmap SidebarBitmap(IconBits const& icon) {
+    mux::Media::Imaging::WriteableBitmap bitmap(icon.width, icon.height);
+    auto buffer = bitmap.PixelBuffer();
+    winrt::com_ptr<IBufferByteAccessLocal> access;
+    winrt::check_hresult(((::IUnknown*)winrt::get_abi(buffer))->QueryInterface(kIidBufferByteAccess, access.put_void()));
+    uint8_t* pixels = nullptr;
+    winrt::check_hresult(access->Buffer(&pixels));
+    if (!pixels || buffer.Capacity() < icon.bgra.size()) {
+        throw winrt::hresult_error(E_FAIL);
+    }
+    memcpy(pixels, icon.bgra.data(), icon.bgra.size());
+    buffer.Length((uint32_t)icon.bgra.size());
+    bitmap.Invalidate();
+    return bitmap;
+}
+
+}  // namespace
+
+// The tag glyph of the mockups, drawn as a vector in the colour of a label (softened in the light theme, as the dots are).
+muxc::Grid SidebarTagIcon(int colour, bool dark) {
+    COLORREF rgb = LabelsDotRgb(colour, dark);
+    auto path = LoadXaml(std::wstring(L"<Path ") + kXamlNs +
+                         L" Width='16' Height='16' Stretch='None' Data='F0 M 2.5,2.5 L 8.2,2.5 C 8.6,2.5 8.9,2.65 9.2,2.9 "
+                         L"L 13.1,6.8 C 13.7,7.4 13.7,8.4 13.1,9 L 9,13.1 C 8.4,13.7 7.4,13.7 6.8,13.1 L 2.9,9.2 C 2.65,8.9 2.5,8.6 2.5,8.2 Z "
+                         L"M 4.6,3.9 A 0.8,0.8 0 1 0 4.6,5.5 A 0.8,0.8 0 1 0 4.6,3.9 Z'/>")
+                    .as<mux::Shapes::Path>();
+    path.Fill(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{255, GetRValue(rgb), GetGValue(rgb), GetBValue(rgb)}));
+    muxc::Grid grid;
+    grid.Width(16);
+    grid.Height(16);
+    grid.Children().Append(path);
+    return grid;
+}
+
+// Reads an item's icon on a thread of the mod and hands it to the UI thread as a bitmap, which `done` puts where it goes.
+// `done` runs on the window's thread, and not at all when the window or the mod is gone.
+void SidebarLoadIcon(WindowState* state, PCIDLIST_ABSOLUTE pidl, std::function<void(mux::Media::ImageSource const&)> done) {
+    if (!pidl || !state->queue || g_unloading) {
+        return;
+    }
+    Pidl copy(ILCloneFull(pidl));
+    LONG side = IconSideOf(state);
+    mud::DispatcherQueue queue = state->queue;
+    StartModThread([copy = std::move(copy), side, queue, done = std::move(done)]() mutable {
+        HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        auto bits = std::make_shared<IconBits>();
+        bool ok = false;
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(SHCreateItemFromIDList(copy.get(), IID_PPV_ARGS(&item))) && item) {
+            IShellItemImageFactory* factory = nullptr;
+            if (SUCCEEDED(item->QueryInterface(IID_PPV_ARGS(&factory))) && factory) {
+                ok = GetItemBits(factory, side ? side : 16, SIIGBF_ICONONLY, bits.get(), true);
+                factory->Release();
+            }
+            item->Release();
+        }
+        if (SUCCEEDED(init)) {
+            CoUninitialize();
+        }
+        if (!ok || g_unloading) {
+            return;
+        }
+        auto shared = std::make_shared<std::function<void(mux::Media::ImageSource const&)>>(std::move(done));
+        try {
+            queue.TryEnqueue([bits, shared]() {
+                if (g_unloading) {
+                    return;
+                }
+                try {
+                    (*shared)(SidebarBitmap(*bits));
+                } catch (...) {
+                }
+            });
+        } catch (...) {
+        }
+    });
+}
+
+namespace {
+
+// A row of a section: an icon (16 px), a text, a selected backing and the pill that marks the selected row.
+// `iconHost` is where the icon goes; it is filled later (a shell icon arrives from a thread) or at once (a tag).
+struct SidebarRow {
+    muxc::Button button{nullptr};
+    muxc::Grid iconHost{nullptr};
+    muxc::Border selected{nullptr};
+    muxc::Border pill{nullptr};
+    muxc::Grid content{nullptr};  // The row's face: overlays (a count, a free-space bar, an eject button) go in it.
+};
+
+SidebarRow SidebarMakeRow(std::wstring const& key, std::wstring const& text, bool selected, double indent = 0) {
+    SidebarRow row;
+    std::wstring id = L"SidebarRow." + key;
+    row.button = SidebarNewButton(id.c_str(), 32, L"0");
+    muxc::Grid content;
+    row.selected = SidebarThemedBorder(L"SubtleFillColorSecondaryBrush");
+    row.selected.Margin(mux::Thickness{0, 0, 0, 0});
+    row.selected.CornerRadius(mux::CornerRadius{3, 3, 3, 3});
+    row.selected.Visibility(selected ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    content.Height(32);  // The presenter centres its content: without a height the backing is as thin as its margins.
+    content.Children().Append(row.selected);
+    row.pill = SidebarThemedBorder(L"AccentFillColorDefaultBrush");
+    row.pill.Width(3);
+    row.pill.Height(16);
+    row.pill.CornerRadius(mux::CornerRadius{1.5, 1.5, 1.5, 1.5});
+    row.pill.HorizontalAlignment(mux::HorizontalAlignment::Left);
+    row.pill.VerticalAlignment(mux::VerticalAlignment::Center);
+    row.pill.Margin(mux::Thickness{4, 0, 0, 0});
+    row.pill.Visibility(selected ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    content.Children().Append(row.pill);
+    muxc::StackPanel line;
+    line.Orientation(muxc::Orientation::Horizontal);
+    line.Margin(mux::Thickness{15 + indent, 0, 11, 0});
+    line.VerticalAlignment(mux::VerticalAlignment::Center);
+    row.iconHost = muxc::Grid();
+    row.iconHost.Width(16);
+    row.iconHost.Height(16);
+    row.iconHost.OpacityTransition(mux::ScalarTransition());
+    line.Children().Append(row.iconHost);
+    muxc::TextBlock label;
+    label.Text(text);  // Set in code: a name is data, not markup.
+    label.FontSize(14);
+    label.Margin(mux::Thickness{10, 0, 0, 0});
+    label.VerticalAlignment(mux::VerticalAlignment::Center);
+    label.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    line.Children().Append(label);
+    content.Children().Append(line);
+    row.button.Content(content);
+    row.content = content;
+    return row;
+}
+
+namespace {
+
+// Makes a row of the sidebar draggable to another place in its list (Favorites, the tags in manual order). `where` tells, for a point
+// of the island, the place it means (an index) and where the line that shows it goes; `showLine` draws it (below zero hides it);
+// `drop` moves the row there, after the release (the rows are made again, the row itself included). The row follows nothing: it
+// dims while it is dragged and a line shows where it will go.
+void SidebarAttachReorder(WindowState* state, muxc::Button const& button,
+                          std::function<void(winrt::Windows::Foundation::Point, size_t*, float*)> where,
+                          std::function<void(float)> showLine, std::function<void(size_t)> drop) {
+    struct Drag {
+        bool down = false;
+        bool active = false;
+        winrt::Windows::Foundation::Point start{};
+        double opacity = 1;
+    };
+    auto drag = std::make_shared<Drag>();
+    winrt::weak_ref<muxc::Button> weak = button;
+    auto finish = [state, drag, weak, showLine](bool dropped, winrt::Windows::Foundation::Point at, std::function<void(winrt::Windows::Foundation::Point)> then) {
+        bool was = drag->active;
+        drag->down = false;
+        drag->active = false;
+        if (!was) {
+            return;
+        }
+        showLine(-1);
+        if (auto b = weak.get()) {
+            b.Opacity(drag->opacity);
+        }
+        if (dropped) {
+            then(at);
+        }
+    };
+    mux::Input::PointerEventHandler pressed([state, drag, weak](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+        auto point = args.GetCurrentPoint(nullptr);
+        if (!point.Properties().IsLeftButtonPressed()) {
+            return;
+        }
+        if (state->sidebar) {
+            state->sidebar->suppressClick = false;
+        }
+        drag->down = true;
+        drag->active = false;
+        drag->start = point.Position();
+        if (auto b = weak.get()) {
+            drag->opacity = b.Opacity();
+        }
+    });
+    mux::Input::PointerEventHandler moved([state, drag, weak, where, showLine](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+        if (!drag->down) {
+            return;
+        }
+        auto position = args.GetCurrentPoint(nullptr).Position();
+        if (!drag->active) {
+            double dx = position.X - drag->start.X, dy = position.Y - drag->start.Y;
+            if (dx * dx + dy * dy < 36) {
+                return;
+            }
+            drag->active = true;
+            if (state->sidebar) {
+                state->sidebar->suppressClick = true;
+            }
+            if (auto b = weak.get()) {
+                b.CapturePointer(args.Pointer());
+                b.Opacity(0.5);
+            }
+        }
+        size_t index = 0;
+        float line = -1;
+        where(position, &index, &line);
+        showLine(line);
+    });
+    mux::Input::PointerEventHandler released([state, drag, weak, where, drop, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+        auto position = args.GetCurrentPoint(nullptr).Position();
+        if (auto b = weak.get()) {
+            b.ReleasePointerCapture(args.Pointer());
+        }
+        finish(true, position, [state, where, drop](winrt::Windows::Foundation::Point at) {
+            size_t index = 0;
+            float line = -1;
+            where(at, &index, &line);
+            if (state->queue) {
+                state->queue.TryEnqueue([drop, index]() {
+                    if (!g_unloading) {
+                        drop(index);
+                    }
+                });
+            }
+        });
+    });
+    // The button's own handling of the release lets go of the capture BEFORE this row's PointerReleased handler runs, so a lost
+    // capture is judged after it: if the drag is still going then, it was cancelled, else the release dropped it.
+    mux::Input::PointerEventHandler lost([state, drag, finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        if (state->queue) {
+            state->queue.TryEnqueue([drag, finish]() {
+                if (drag->active) {
+                    finish(false, winrt::Windows::Foundation::Point{}, nullptr);
+                }
+            });
+        }
+    });
+    AddRouted(button, mux::UIElement::PointerPressedEvent(), winrt::box_value(pressed));
+    AddRouted(button, mux::UIElement::PointerMovedEvent(), winrt::box_value(moved));
+    AddRouted(button, mux::UIElement::PointerReleasedEvent(), winrt::box_value(released));
+    AddRouted(button, mux::UIElement::PointerCaptureLostEvent(), winrt::box_value(lost));
+}
+
+// The shell's menu of a row of the sidebar that is a folder (Favorites, Locations), with the rows of the sidebar's own: `extras`.
+void SidebarShowItemMenu(WindowState* state, SidebarPanel* panel, muxc::Button const& button, PCIDLIST_ABSOLUTE pidl,
+                         std::wstring const& path, std::vector<MenuItemSet::Extra> extras, std::vector<std::wstring> hideVerbs,
+                         std::vector<std::wstring> promoteVerbs, mux::Input::RightTappedRoutedEventArgs const& args) {
+    if (!pidl || !panel->bridge) {
+        return;
+    }
+    MenuItemSet set;
+    if (!MenuItemSetAdd(set, pidl, path, true)) {
+        return;
+    }
+    set.extras = std::move(extras);
+    set.hideVerbs = std::move(hideVerbs);
+    set.promoteVerbs = std::move(promoteVerbs);
+    set.anchor = button;
+    set.position = args.GetPosition(button);
+    set.rowBox = winrt::Windows::Foundation::Rect{0, 0, (float)button.ActualWidth(), (float)button.ActualHeight()};
+    set.hostWindow = (HWND)panel->bridge.WindowId().Value;
+    set.hostScale = button.XamlRoot() ? button.XamlRoot().RasterizationScale() : 1.0;
+    args.Handled(true);
+    ShowItemFlyoutFor(state, std::move(set));
+}
+
+}  // namespace
+
+// A shell item's icon in a row, when it arrives.
+void SidebarRowIconFromShell(WindowState* state, SidebarRow const& row, PCIDLIST_ABSOLUTE pidl) {
+    winrt::weak_ref<muxc::Grid> weak = row.iconHost;
+    row.iconHost.Opacity(0);
+    SidebarLoadIcon(state, pidl, [weak](mux::Media::ImageSource const& source) {
+        if (auto host = weak.get()) {
+            muxc::Image image;
+            image.Source(source);
+            image.Width(16);
+            image.Height(16);
+            image.Stretch(mux::Media::Stretch::Uniform);
+            host.Children().Clear();
+            host.Children().Append(image);
+            host.Opacity(1);
+        }
+    });
+}
+
+void SidebarSetChevron(SidebarPanel::Section& section) {
+    if (!section.chevron) {
+        return;
+    }
+    section.chevron.Opacity(section.hovered ? 1.0 : 0.0);
+    if (section.more) {
+        section.more.Opacity(section.hovered ? 1.0 : 0.0);
+    }
+    section.chevronUp.Opacity(section.collapsed ? 0.0 : 1.0);
+    section.chevronDown.Opacity(section.collapsed ? 1.0 : 0.0);
+}
+
+// A section's header: the title as a button (the whole row toggles the section), the chevron and, for Locations and Tags, a "…" menu
+// button, both of them real buttons of their own. They show while the pointer is anywhere over the row (or the keyboard is on
+// one of them), so the chevron stays while the pointer is on the "…".
+muxc::Grid SidebarMakeHeaderRow(WindowState* state, SidebarPanel::Section& section, std::wstring const& title,
+                                std::function<void()> onToggle, muxc::Button const& more) {
+    std::wstring id = L"SidebarHeader." + section.key;
+    auto button = SidebarNewButtonWith(id.c_str(), 32, L"0", g_sidebarHeaderHover ? kSidebarButtonTemplate : kSidebarFlatTemplate);
+    auto text = MakeText(title, 12, false, true);
+    text.TextWrapping(mux::TextWrapping::NoWrap);
+    text.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    text.Margin(mux::Thickness{16, 0, 74, 0});
+    text.VerticalAlignment(mux::VerticalAlignment::Center);
+    muxc::Grid line;
+    line.Children().Append(text);
+    button.Content(line);
+
+    muxc::Grid row;
+    row.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
+    row.Children().Append(button);
+
+    auto chevron = SidebarNewButtonWith((id + L".chevron").c_str(), 26, L"0", kSidebarSmallTemplate);
+    chevron.Width(26);
+    chevron.HorizontalAlignment(mux::HorizontalAlignment::Right);
+    chevron.VerticalAlignment(mux::VerticalAlignment::Center);
+    chevron.Margin(mux::Thickness{0, 0, 8, 0});
+    chevron.OpacityTransition(mux::ScalarTransition());
+    muxc::Grid glyphs;
+    auto up = SidebarGlyph(L"", 12);
+    auto down = SidebarGlyph(L"", 12);
+    up.OpacityTransition(mux::ScalarTransition());
+    down.OpacityTransition(mux::ScalarTransition());
+    glyphs.Children().Append(up);
+    glyphs.Children().Append(down);
+    chevron.Content(glyphs);
+    row.Children().Append(chevron);
+    if (more) {
+        more.HorizontalAlignment(mux::HorizontalAlignment::Right);
+        more.VerticalAlignment(mux::VerticalAlignment::Center);
+        more.Margin(mux::Thickness{0, 0, 40, 0});
+        more.OpacityTransition(mux::ScalarTransition());
+        row.Children().Append(more);
+    }
+
+    section.headerButton = button;
+    section.chevron = chevron;
+    section.chevronUp = up;
+    section.chevronDown = down;
+    section.more = more ? more.as<mux::UIElement>() : mux::UIElement{nullptr};
+    SidebarSetChevron(section);
+
+    std::wstring key = section.key;
+    auto setHovered = [state, key](bool hovered) {
+        if (state->sidebar) {
+            for (auto& s : state->sidebar->sections) {
+                if (s.key == key) {
+                    s.hovered = hovered;
+                    SidebarSetChevron(s);
+                }
+            }
+        }
+    };
+    Keep(row, row.PointerEntered(winrt::auto_revoke, [setHovered](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { setHovered(true); }));
+    Keep(row, row.PointerExited(winrt::auto_revoke, [setHovered](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { setHovered(false); }));
+    for (muxc::Button focusable : {button, chevron, more}) {
+        if (!focusable) {
+            continue;
+        }
+        Keep(focusable, focusable.GotFocus(winrt::auto_revoke, [setHovered](Inspectable const&, mux::RoutedEventArgs const&) { setHovered(true); }));
+        Keep(focusable, focusable.LostFocus(winrt::auto_revoke, [setHovered](Inspectable const&, mux::RoutedEventArgs const&) { setHovered(false); }));
+    }
+    Keep(button, button.Click(winrt::auto_revoke, [onToggle](Inspectable const&, mux::RoutedEventArgs const&) { onToggle(); }));
+    Keep(chevron, chevron.Click(winrt::auto_revoke, [onToggle](Inspectable const&, mux::RoutedEventArgs const&) { onToggle(); }));
+    return row;
+}
+
+// Collapses or expands a section: the rows fade (and slide a little), then the layout follows; expanding shows the layout first.
+void SidebarToggleSection(WindowState* state, std::wstring const& key) {
+    SidebarPanel* panel = state->sidebar;
+    if (!panel) {
+        return;
+    }
+    for (auto& section : panel->sections) {
+        if (section.key != key) {
+            continue;
+        }
+        section.collapsed = !section.collapsed;
+        SidebarSetSectionCollapsed(key, section.collapsed);
+        SidebarSetChevron(section);
+        auto body = section.body;
+        if (section.collapsed) {
+            body.Opacity(0);
+            body.Translation(winrt::Windows::Foundation::Numerics::float3{0, -8, 0});
+            if (section.collapseTimer) {
+                section.collapseTimer.Stop();
+            }
+            auto timer = state->queue.CreateTimer();
+            timer.Interval(std::chrono::milliseconds(kSidebarCollapseMs));
+            timer.IsRepeating(false);
+            Keep(timer, timer.Tick(winrt::auto_revoke, [state, key, body](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+                sender.Stop();
+                if (state->sidebar) {
+                    for (auto& s : state->sidebar->sections) {
+                        if (s.key == key && s.collapsed) {
+                            body.Visibility(mux::Visibility::Collapsed);
+                        }
+                    }
+                }
+            }));
+            section.collapseTimer = timer;
+            timer.Start();
+        } else {
+            if (section.collapseTimer) {
+                section.collapseTimer.Stop();
+            }
+            body.Visibility(mux::Visibility::Visible);
+            body.Opacity(1);
+            body.Translation(winrt::Windows::Foundation::Numerics::float3{0, 0, 0});
+        }
+        return;
+    }
+}
+
+muxc::StackPanel SidebarMakeBody(std::wstring const& key, bool collapsed) {
+    muxc::StackPanel body;
+    body.Orientation(muxc::Orientation::Vertical);
+    body.Spacing(2);  // A gap between the rows, so that a selected row and a hovered one are not one block.
+    body.OpacityTransition(mux::ScalarTransition());
+    body.TranslationTransition(mux::Vector3Transition());
+    body.Opacity(collapsed ? 0 : 1);
+    body.Visibility(collapsed ? mux::Visibility::Collapsed : mux::Visibility::Visible);
+    mux::Automation::AutomationProperties::SetAutomationId(body, L"SidebarBody." + key);
+    return body;
+}
+
+void SidebarBuild(WindowState* state, SidebarPanel* panel) {
+    muxc::StackPanel host;
+    host.Orientation(muxc::Orientation::Vertical);
+    host.Padding(mux::Thickness{2, 8, 2, 8});
+    host.Spacing(6);
+    host.XYFocusKeyboardNavigation(mux::Input::XYFocusKeyboardNavigationMode::Enabled);  // The arrows move from row to row.
+    {
+        // Keys the rows do not take themselves (Delete, F2, Ctrl+arrows): seen also when a row has handled the key.
+        mux::Input::KeyEventHandler keys([state](Inspectable const&, mux::Input::KeyRoutedEventArgs const& args) {
+            try {
+                SidebarKeyDown(state, args);
+            } catch (...) {
+                LogHresult(L"a key in the sidebar");
+            }
+        });
+        AddRouted(host, mux::UIElement::KeyDownEvent(), winrt::box_value(keys));
+    }
+    panel->host = host;
+    panel->dark = LabelsDarkTheme();
+
+    struct Spec {
+        const wchar_t* key;
+        const wchar_t* title;
+    };
+    for (Spec spec : {Spec{L"favorites", L"sidebar.favorites"}, Spec{L"locations", L"sidebar.locations"}, Spec{L"tags", L"sidebar.tags"}}) {
+        panel->sections.emplace_back();
+        auto& section = panel->sections.back();
+        section.key = spec.key;
+        section.collapsed = SidebarSectionCollapsed(section.key);
+    }
+    for (size_t i = 0; i < panel->sections.size(); i++) {
+        auto& section = panel->sections[i];
+        const wchar_t* titleId = i == 0 ? L"sidebar.favorites" : i == 1 ? L"sidebar.locations" : L"sidebar.tags";
+        muxc::StackPanel block;
+        block.Orientation(muxc::Orientation::Vertical);
+        std::wstring key = section.key;
+        muxc::Button more{nullptr};
+        if (i == 1) {
+            more = SidebarLocationsMore(state, panel);
+        } else if (i == 2) {
+            more = SidebarTagsMore(state, panel);
+        }
+        if (i > 0) {
+            // A thin line between the sections, at the top of the block that follows (it goes with the block when that is hidden).
+            auto divider = SidebarThemedBorder(L"DividerStrokeColorDefaultBrush");
+            divider.Height(1);
+            divider.Margin(mux::Thickness{12, 8, 12, 8});
+            divider.IsHitTestVisible(false);
+            block.Children().Append(divider);
+        }
+        block.Children().Append(SidebarMakeHeaderRow(state, section, Str(titleId), [state, key]() { SidebarToggleSection(state, key); }, more));
+        if (i == 2) {
+            block.Children().Append(SidebarTagsProgress(state, panel));
+        }
+        section.body = SidebarMakeBody(section.key, section.collapsed);
+        block.Children().Append(section.body);
+        if (i == 0) {
+            // The Favorites block sits in a grid with the outline that shows while a folder is dragged over it.
+            muxc::Grid favGrid;
+            auto outline = SidebarThemedBorder(L"SubtleFillColorSecondaryBrush");
+            outline.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+            outline.IsHitTestVisible(false);
+            outline.Opacity(0);
+            outline.OpacityTransition(mux::ScalarTransition());
+            favGrid.Children().Append(outline);
+            favGrid.Children().Append(block);
+            auto insertLine = SidebarThemedBorder(L"AccentFillColorDefaultBrush");
+            insertLine.Height(2);
+            insertLine.CornerRadius(mux::CornerRadius{1, 1, 1, 1});
+            insertLine.VerticalAlignment(mux::VerticalAlignment::Top);
+            insertLine.IsHitTestVisible(false);
+            insertLine.Visibility(mux::Visibility::Collapsed);
+            favGrid.Children().Append(insertLine);
+            host.Children().Append(favGrid);
+            panel->favBlock = favGrid;
+            panel->favHighlight = outline;
+            panel->favLine = insertLine;
+            SidebarFillFavorites(state, panel);
+        } else if (i == 2) {
+            // The Tags block in a grid with the line that shows where a dragged tag row goes (manual order).
+            muxc::Grid tagGrid;
+            tagGrid.Children().Append(block);
+            auto insertLine = SidebarThemedBorder(L"AccentFillColorDefaultBrush");
+            insertLine.Height(2);
+            insertLine.CornerRadius(mux::CornerRadius{1, 1, 1, 1});
+            insertLine.VerticalAlignment(mux::VerticalAlignment::Top);
+            insertLine.IsHitTestVisible(false);
+            insertLine.Visibility(mux::Visibility::Collapsed);
+            tagGrid.Children().Append(insertLine);
+            host.Children().Append(tagGrid);
+            panel->tagsBlock = tagGrid;
+            panel->tagLine = insertLine;
+            tagGrid.Visibility(g_labels ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        } else {
+            host.Children().Append(block);
+        }
+        if (i == 1) {
+            SidebarFillLocations(state, panel);
+        } else if (i == 2) {
+            SidebarFillTags(state, panel);
+        }
+    }
+
+    muxc::ScrollViewer scroller;
+    scroller.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
+    scroller.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Disabled);
+    auto pill = SidebarThemedBorder(L"AccentFillColorDefaultBrush");
+    pill.Width(3);
+    pill.Height(16);
+    pill.CornerRadius(mux::CornerRadius{1.5, 1.5, 1.5, 1.5});
+    pill.HorizontalAlignment(mux::HorizontalAlignment::Left);
+    pill.VerticalAlignment(mux::VerticalAlignment::Top);
+    pill.Margin(mux::Thickness{4, 0, 0, 0});
+    pill.Opacity(0);
+    pill.OpacityTransition(mux::ScalarTransition());
+    {
+        mux::Vector3Transition slide;
+        slide.Duration(std::chrono::milliseconds(140));
+        pill.TranslationTransition(slide);
+    }
+    muxc::Grid pillHost;
+    pillHost.Children().Append(host);
+    pillHost.Children().Append(pill);
+    panel->pillHost = pillHost;
+    panel->pill = pill;
+    scroller.Content(pillHost);
+    muxc::Grid root;
+    auto background = LoadXaml(std::wstring(L"<Grid ") + kXamlNs + L" Background='{ThemeResource SolidBackgroundFillColorBaseBrush}'/>").as<muxc::Grid>();
+    background.Children().Append(scroller);
+    root.Children().Append(background);
+    muxc::Canvas overlay;
+    overlay.IsHitTestVisible(false);
+    root.Children().Append(overlay);
+    panel->overlay = overlay;
+
+    auto source = mux::Hosting::DesktopWindowXamlSource();
+    source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
+    source.Content(root);
+    panel->source = source;
+    panel->bridge = source.SiteBridge();
+    g_sidebarWindowLocal = (HWND)panel->bridge.WindowId().Value;
+    SidebarRegisterDrop(state, panel);
+    panel->built = true;
+}
+
+BOOL CALLBACK SidebarFindPaneProc(HWND hwnd, LPARAM lParam) {
+    wchar_t name[64] = L"";
+    GetClassNameW(hwnd, name, ARRAYSIZE(name));
+    if (IsWindowVisible(hwnd) && wcscmp(name, L"NamespaceTreeControl") == 0) {
+        *(HWND*)lParam = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// The rectangle of the visible navigation pane, in the window's client coordinates. False when none is visible.
+bool SidebarPaneRect(WindowState* state, SidebarPanel* panel, RECT* rect) {
+    HWND found = nullptr;
+    EnumChildWindows(state->topLevel, SidebarFindPaneProc, (LPARAM)&found);
+    if (!found || !GetWindowRect(found, rect)) {
+        return false;
+    }
+    MapWindowPoints(nullptr, state->topLevel, (POINT*)rect, 2);
+    panel->pane = found;
+    return rect->right > rect->left && rect->bottom > rect->top;
+}
+
+void SidebarPlace(SidebarPanel* panel, RECT const& r) {
+    panel->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{r.left, r.top, r.right - r.left, r.bottom - r.top});
+    panel->bridge.Show();
+    SetWindowPos((HWND)panel->bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    panel->rect = r;
+    panel->shown = true;
+}
+
+void SidebarRefreshTheme(SidebarPanel* panel) {
+    bool dark = LabelsDarkTheme();
+    if (dark == panel->dark) {
+        return;
+    }
+    panel->dark = dark;
+    for (auto& row : panel->tagRows) {
+        if (auto host = row.icon.get()) {
+            host.Children().Clear();
+            host.Children().Append(SidebarTagIcon(row.colour, dark));
+        }
+    }
+}
+
+// Closes the flyouts that are open in the sidebar. A click in another island (a column) never reaches this one, so XAML does
+// not dismiss them by itself.
+void SidebarDismissPopups(WindowState* state) {
+    SidebarPanel* panel = state ? state->sidebar : nullptr;
+    if (!panel || !panel->host) {
+        return;
+    }
+    try {
+        auto root = panel->host.XamlRoot();
+        if (!root) {
+            return;
+        }
+        for (auto const& popup : mux::Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root)) {
+            popup.IsOpen(false);
+        }
+    } catch (...) {
+        LogHresult(L"closing the sidebar's flyouts");
+    }
+}
+
+void SidebarTick() {
+    if (g_unloading) {
+        return;
+    }
+    WindowState* state = StateForThisThread(false);
+    if (!state || !state->sidebar) {
+        return;
+    }
+    SidebarPanel* panel = state->sidebar;
+    if (!state->topLevel || !IsWindow(state->topLevel)) {
+        AbandonSidebar(state);
+        return;
+    }
+    try {
+        panel->ticks++;
+        if (panel->settingsVersion != g_sidebarSettingsVersion) {
+            // A setting of the sidebar changed: it is made again (after this tick, never from inside its own timer).
+            panel->settingsVersion = g_sidebarSettingsVersion;
+            if (state->queue) {
+                state->queue.TryEnqueue([state]() {
+                    if (!g_unloading && StateForThisThread(false) == state && state->sidebar) {
+                        ReleaseSidebar(state);
+                        StartSidebar(state);
+                    }
+                });
+            }
+            return;
+        }
+        if (!g_sidebar) {
+            if (panel->shown && panel->bridge) {
+                panel->bridge.Hide();
+                panel->shown = false;
+            }
+            return;
+        }
+        if (!panel->built) {
+            SidebarBuild(state, panel);
+        }
+        RECT r{};
+        if (!SidebarPaneRect(state, panel, &r)) {
+            if (panel->shown) {
+                panel->bridge.Hide();  // The pane is hidden (View, Show, Navigation pane): so is the sidebar.
+                panel->shown = false;
+            }
+            return;
+        }
+        if (!panel->shown || memcmp(&r, &panel->rect, sizeof(r)) != 0) {
+            SidebarPlace(panel, r);
+        }
+        if (panel->ticks % 10 == 0) {
+            SidebarRefreshTheme(panel);
+        }
+        if (panel->tagsBlock) {
+            // Labels switched off: no Tags section, and no tag list left open.
+            auto wanted = g_labels ? mux::Visibility::Visible : mux::Visibility::Collapsed;
+            if (panel->tagsBlock.Visibility() != wanted) {
+                panel->tagsBlock.Visibility(wanted);
+            }
+            if (!g_labels) {
+                TagViewLeave(state);
+            }
+        }
+        TagViewTick(state);
+        if (panel->ticks % 3 == 0) {
+            FavoritesTick(state, panel);
+            TagsTick(state, panel);
+            SidebarFollowFolder(state, panel);
+        }
+    } catch (winrt::hresult_error const& error) {
+        static int logged = 0;
+        if (logged++ < 5) {
+            Wh_Log(L"the sidebar's tick threw hr=0x%08X: %s", (unsigned)error.code().value, error.message().c_str());
+        }
+    } catch (...) {
+        static int logged = 0;
+        if (logged++ < 5) {
+            LogHresult(L"the sidebar's tick");
+        }
+    }
+}
+
+}  // namespace
+
+void StartSidebar(WindowState* state) {
+    if (state->sidebar || !state->queue || !g_sidebar) {
+        return;
+    }
+    try {
+        auto* panel = new SidebarPanel();
+        panel->settingsVersion = g_sidebarSettingsVersion;
+        state->sidebar = panel;
+        auto timer = state->queue.CreateTimer();
+        timer.Interval(std::chrono::milliseconds(60));
+        panel->token = timer.Tick([](mud::DispatcherQueueTimer const&, Inspectable const&) { SidebarTick(); });
+        timer.Start();
+        panel->timer = timer;
+        TagIndexStart();
+        FavoritesWatchStart();
+        Wh_Log(L"sidebar: watching window %p", state->topLevel);
+    } catch (...) {
+        LogHresult(L"StartSidebar");
+    }
+}
+
+// The mod unloads or the window goes: everything is released, on the window's thread.
+void ReleaseSidebar(WindowState* state) {
+    SidebarPanel* panel = state->sidebar;
+    if (!panel) {
+        return;
+    }
+    state->sidebar = nullptr;
+    g_sidebarWindowLocal = nullptr;
+    ReleaseTagView(state);
+    try {
+        if (panel->timer) {
+            panel->timer.Stop();
+            panel->timer.Tick(panel->token);
+        }
+        panel->timer = nullptr;
+        for (auto& section : panel->sections) {
+            if (section.collapseTimer) {
+                section.collapseTimer.Stop();
+                section.collapseTimer = nullptr;
+            }
+        }
+        panel->sections.clear();
+        panel->tagRows.clear();
+        SidebarRevokeDrop(panel);
+        panel->locationMarks.clear();
+        panel->favBlock = nullptr;
+        panel->favHighlight = nullptr;
+        panel->favLine = nullptr;
+        panel->overlay = nullptr;
+        panel->tagsBlock = nullptr;
+        panel->tagLine = nullptr;
+        panel->ghostPopup = nullptr;
+        panel->tagProgress = nullptr;
+        panel->tagBar = nullptr;
+        if (panel->tagJob) {
+            panel->tagJob->cancel = true;
+            panel->tagJob.reset();
+        }
+        TagsReleaseThreadObjects();
+        panel->pill = nullptr;
+        panel->pillHost = nullptr;
+        panel->locationsMenu = nullptr;
+        panel->driveChildren = nullptr;
+        panel->host = nullptr;
+        if (panel->bridge) {
+            panel->bridge.Hide();
+        }
+        if (panel->source) {
+            panel->source.Content(nullptr);
+            panel->source.Close();
+        }
+    } catch (...) {
+        LogHresult(L"releasing the sidebar");
+    }
+    delete panel;
+}
+
+// The window closed: the objects are let go, never released (they belong to a window that is gone).
+void AbandonSidebar(WindowState* state) {
+    SidebarPanel* panel = state->sidebar;
+    if (!panel) {
+        return;
+    }
+    state->sidebar = nullptr;
+    g_sidebarWindowLocal = nullptr;
+    AbandonTagView(state);
+    try {
+        if (panel->timer) {
+            panel->timer.Stop();
+            panel->timer.Tick(panel->token);
+        }
+    } catch (...) {
+    }
+    (void)winrt::detach_abi(panel->timer);
+    (void)winrt::detach_abi(panel->source);
+    (void)winrt::detach_abi(panel->bridge);
+    (void)winrt::detach_abi(panel->host);
+    (void)winrt::detach_abi(panel->favBlock);
+    (void)winrt::detach_abi(panel->favHighlight);
+    (void)winrt::detach_abi(panel->favLine);
+    (void)winrt::detach_abi(panel->overlay);
+    (void)winrt::detach_abi(panel->tagsBlock);
+    (void)winrt::detach_abi(panel->tagLine);
+    (void)winrt::detach_abi(panel->ghostPopup);
+    (void)winrt::detach_abi(panel->tagProgress);
+    (void)winrt::detach_abi(panel->tagBar);
+    if (panel->tagJob) {
+        panel->tagJob->cancel = true;
+    }
+    (void)winrt::detach_abi(panel->pill);
+    (void)winrt::detach_abi(panel->pillHost);
+    (void)winrt::detach_abi(panel->locationsMenu);
+    (void)winrt::detach_abi(panel->driveChildren);
+    for (auto& mark : panel->locationMarks) {
+        (void)winrt::detach_abi(mark.selected);
+        (void)winrt::detach_abi(mark.pill);
+        (void)winrt::detach_abi(mark.button);
+    }
+    for (auto& section : panel->sections) {
+        (void)winrt::detach_abi(section.body);
+        (void)winrt::detach_abi(section.collapseTimer);
+        (void)winrt::detach_abi(section.chevron);
+        (void)winrt::detach_abi(section.headerButton);
+        (void)winrt::detach_abi(section.chevronUp);
+        (void)winrt::detach_abi(section.chevronDown);
+    }
+    // The panel itself is leaked on purpose, like the details pane's.
+}
+// Sidebar, Favorites section: the folders Explorer has pinned to Quick access, in the shell's order. A folder dropped on the
+// section is pinned the same way Explorer's own "Pin to Quick access" does (the shell verb `pintohome`; `unpinfromhome` unpins).
+// Facts from the probe (PLAN.md, "Sidebar probes"): pins are listed by enumerating shell:::{679f85cb-...}; the verbs are used by
+// their ids, never their localized names; the store is %APPDATA%\Microsoft\Windows\Recent\AutomaticDestinations\
+// f01b4d95cf55d32a.automaticDestinations-ms, whose write time changes on a pin, so a change notification on its folder tells of
+// pins made elsewhere. There is no route to reorder pins, so the shell's order stands.
+//
+// Everything that asks the shell (listing, pinning) runs on a mod thread: a slow shell extension must not stall a window.
+// Also here: the drop target of the sidebar island, which pins a dropped folder and hands a drop on a Locations folder to that
+// folder's own drop target.
+
+namespace {
+
+std::mutex g_favMutex;
+[[clang::no_destroy]] std::vector<FavoriteEntry> g_favoritesCache;
+std::atomic<unsigned> g_favoritesVersion{0};
+std::atomic<bool> g_favoritesDirty{true};
+bool g_favoritesRunning = false;  // Under g_favMutex.
+
+const wchar_t kFavoritesHome[] = L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
+
+std::shared_ptr<ITEMIDLIST> FavoritesPidl(PIDLIST_ABSOLUTE pidl) {
+    return std::shared_ptr<ITEMIDLIST>(pidl, [](ITEMIDLIST* p) {
+        if (p) {
+            CoTaskMemFree(p);
+        }
+    });
+}
+
+// Calls `each` with every folder pinned to Quick access, until it returns false.
+template <typename Each>
+void FavoritesEach(Each each) {
+    PIDLIST_ABSOLUTE homePidl = nullptr;
+    if (FAILED(SHParseDisplayName(kFavoritesHome, nullptr, &homePidl, 0, nullptr)) || !homePidl) {
+        return;
+    }
+    IShellItem* home = nullptr;
+    IEnumShellItems* list = nullptr;
+    if (SUCCEEDED(SHCreateItemFromIDList(homePidl, IID_PPV_ARGS(&home))) && home &&
+        SUCCEEDED(home->BindToHandler(nullptr, BHID_EnumItems, IID_PPV_ARGS(&list))) && list) {
+        IShellItem* child = nullptr;
+        ULONG got = 0;
+        while (list->Next(1, &child, &got) == S_OK && got == 1) {
+            SFGAOF attributes = 0;
+            child->GetAttributes(SFGAO_FOLDER, &attributes);
+            bool goOn = true;
+            if (attributes & SFGAO_FOLDER) {
+                goOn = each(child);
+            }
+            child->Release();
+            if (!goOn) {
+                break;
+            }
+        }
+    }
+    if (list) {
+        list->Release();
+    }
+    if (home) {
+        home->Release();
+    }
+    CoTaskMemFree(homePidl);
+}
+
+std::wstring FavoritesPathOf(IShellItem* item) {
+    std::wstring path;
+    wchar_t* text = nullptr;
+    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) && text) {
+        path = text;
+        CoTaskMemFree(text);
+    }
+    return path;
+}
+
+// The shell verb of an item, by id, with no user interface.
+bool FavoritesInvokeVerb(IShellItem* item, const char* verb) {
+    IContextMenu* menu = nullptr;
+    if (FAILED(item->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&menu))) || !menu) {
+        return false;
+    }
+    HMENU popup = CreatePopupMenu();
+    menu->QueryContextMenu(popup, 0, 1, 0x7FFF, CMF_NORMAL);
+    CMINVOKECOMMANDINFO command = {sizeof(command)};
+    command.fMask = CMIC_MASK_FLAG_NO_UI;
+    command.lpVerb = verb;
+    command.nShow = SW_HIDE;
+    HRESULT hr = menu->InvokeCommand(&command);
+    DestroyMenu(popup);
+    menu->Release();
+    if (FAILED(hr)) {
+        Wh_Log(L"favorites: the verb %S failed, hr=0x%08lX", verb, hr);
+    }
+    return SUCCEEDED(hr);
+}
+
+// The folders (on disk, not archives) among the items of a drag.
+std::vector<std::wstring> FavoritesFoldersOf(IDataObject* data) {
+    std::vector<std::wstring> folders;
+    IShellItemArray* items = nullptr;
+    if (!data || FAILED(SHCreateShellItemArrayFromDataObject(data, IID_PPV_ARGS(&items))) || !items) {
+        return folders;
+    }
+    DWORD count = 0;
+    items->GetCount(&count);
+    for (DWORD i = 0; i < count && i < 64; i++) {
+        IShellItem* item = nullptr;
+        if (FAILED(items->GetItemAt(i, &item)) || !item) {
+            continue;
+        }
+        SFGAOF attributes = 0;
+        item->GetAttributes(SFGAO_FOLDER | SFGAO_STREAM | SFGAO_FILESYSTEM, &attributes);
+        if ((attributes & SFGAO_FOLDER) && (attributes & SFGAO_FILESYSTEM) && !(attributes & SFGAO_STREAM)) {
+            std::wstring path = FavoritesPathOf(item);
+            if (!path.empty()) {
+                folders.push_back(path);
+            }
+        }
+        item->Release();
+    }
+    items->Release();
+    return folders;
+}
+
+}  // namespace
+
+// The pinned folders, with their names and whether they still exist. Asks the shell: not for a window's thread.
+std::vector<FavoriteEntry> FavoritesLoad() {
+    std::vector<FavoriteEntry> list;
+    FavoritesEach([&](IShellItem* child) {
+        FavoriteEntry entry;
+        entry.path = FavoritesPathOf(child);
+        if (entry.path.empty()) {
+            return true;
+        }
+        wchar_t* name = nullptr;
+        if (SUCCEEDED(child->GetDisplayName(SIGDN_NORMALDISPLAY, &name)) && name) {
+            entry.name = name;
+            CoTaskMemFree(name);
+        }
+        if (entry.name.empty()) {
+            entry.name = entry.path;
+        }
+        entry.exists = GetFileAttributesW(entry.path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (entry.exists && SUCCEEDED(SHParseDisplayName(entry.path.c_str(), nullptr, &pidl, 0, nullptr))) {
+            entry.pidl = FavoritesPidl(pidl);
+        }
+        list.push_back(std::move(entry));
+        return true;
+    });
+    return list;
+}
+
+std::vector<std::wstring> FavoritesList() {
+    std::vector<std::wstring> paths;
+    for (auto const& entry : FavoritesLoad()) {
+        paths.push_back(entry.path);
+    }
+    return paths;
+}
+
+bool FavoritesPin(std::wstring const& folderPath) {
+    IShellItem* item = nullptr;
+    if (FAILED(SHCreateItemFromParsingName(folderPath.c_str(), nullptr, IID_PPV_ARGS(&item))) || !item) {
+        return false;
+    }
+    bool ok = FavoritesInvokeVerb(item, "pintohome");
+    item->Release();
+    g_favoritesDirty = true;
+    return ok;
+}
+
+bool FavoritesUnpin(std::wstring const& folderPath) {
+    bool ok = false;
+    FavoritesEach([&](IShellItem* child) {
+        if (_wcsicmp(FavoritesPathOf(child).c_str(), folderPath.c_str()) == 0) {
+            ok = FavoritesInvokeVerb(child, "unpinfromhome");
+            return false;
+        }
+        return true;
+    });
+    g_favoritesDirty = true;
+    return ok;
+}
+
+namespace {
+
+// Reads the list again on a mod thread when something said it changed.
+void FavoritesRefreshIfDirty() {
+    if (!g_favoritesDirty) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_favMutex);
+        if (g_favoritesRunning) {
+            return;
+        }
+        g_favoritesRunning = true;
+    }
+    g_favoritesDirty = false;
+    bool started = StartModThread([]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        auto list = FavoritesLoad();
+        if (com) {
+            CoUninitialize();
+        }
+        std::lock_guard<std::mutex> lock(g_favMutex);
+        g_favoritesCache = std::move(list);
+        g_favoritesRunning = false;
+        g_favoritesVersion++;
+    });
+    if (!started) {
+        std::lock_guard<std::mutex> lock(g_favMutex);
+        g_favoritesRunning = false;
+        g_favoritesDirty = true;
+    }
+}
+
+// Pins and unpins run on a mod thread, then the list is read again.
+void FavoritesPinLater(std::vector<std::wstring> paths, bool pin) {
+    StartModThread([paths, pin]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        for (auto const& path : paths) {
+            if (pin) {
+                FavoritesPin(path);
+            } else {
+                FavoritesUnpin(path);
+            }
+        }
+        if (com) {
+            CoUninitialize();
+        }
+        g_favoritesDirty = true;
+    });
+}
+
+}  // namespace
+
+// One thread per process watches the store of the pins, and marks the list stale when its write time changes.
+void FavoritesWatchStart() {
+    static bool started = false;
+    if (started) {
+        return;
+    }
+    started = true;
+    StartModThread([]() {
+        wchar_t* appData = nullptr;
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appData)) || !appData) {
+            return;
+        }
+        std::wstring folder = std::wstring(appData) + L"\\Microsoft\\Windows\\Recent\\AutomaticDestinations";
+        CoTaskMemFree(appData);
+        std::wstring store = folder + L"\\f01b4d95cf55d32a.automaticDestinations-ms";
+        auto writeTime = [&]() {
+            WIN32_FILE_ATTRIBUTE_DATA data = {};
+            GetFileAttributesExW(store.c_str(), GetFileExInfoStandard, &data);
+            return data.ftLastWriteTime;
+        };
+        HANDLE watch = FindFirstChangeNotificationW(folder.c_str(), FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE);
+        if (watch == INVALID_HANDLE_VALUE) {
+            return;
+        }
+        FILETIME last = writeTime();
+        HANDLE waits[2] = {g_stopEvent, watch};
+        while (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
+            FILETIME now = writeTime();
+            if (CompareFileTime(&now, &last) != 0) {
+                last = now;
+                g_favoritesDirty = true;
+            }
+            if (!FindNextChangeNotification(watch)) {
+                break;
+            }
+        }
+        FindCloseChangeNotification(watch);
+    });
+}
+
+namespace {
+void SidebarNavigate(WindowState* state, PCIDLIST_ABSOLUTE pidl);  // 10j2.
+void FavoritesInsertPoint(SidebarPanel* panel, winrt::Windows::Foundation::Point point, size_t* index, float* lineY);
+void SidebarShowInsertLine(SidebarPanel* panel, float lineY);
+
+// The order of the list is the mod's own: the shell keeps pins in the order they were made and has no way to move one, so the
+// order the user gave in the sidebar is kept as a setting (paths, one per line). A pin that is not in it comes after the others,
+// in the shell's order.
+const wchar_t kFavoritesOrderValue[] = L"sidebar.favorites.order";
+
+std::vector<std::wstring> FavoritesOrderLoad() {
+    std::vector<std::wstring> order;
+    std::vector<wchar_t> buffer(32000);
+    size_t length = Wh_GetStringValue(kFavoritesOrderValue, buffer.data(), buffer.size());
+    if (!length || length >= buffer.size()) {
+        return order;
+    }
+    std::wstring all(buffer.data(), length);
+    size_t start = 0;
+    while (start <= all.size()) {
+        size_t end = all.find(L'\n', start);
+        if (end == std::wstring::npos) {
+            end = all.size();
+        }
+        if (end > start) {
+            order.push_back(all.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    return order;
+}
+
+void FavoritesApplyOrder(std::vector<FavoriteEntry>& list) {
+    auto order = FavoritesOrderLoad();
+    if (order.empty()) {
+        return;
+    }
+    std::vector<FavoriteEntry> sorted;
+    std::vector<bool> taken(list.size(), false);
+    for (auto const& path : order) {
+        for (size_t i = 0; i < list.size(); i++) {
+            if (!taken[i] && _wcsicmp(list[i].path.c_str(), path.c_str()) == 0) {
+                taken[i] = true;
+                sorted.push_back(list[i]);
+                break;
+            }
+        }
+    }
+    for (size_t i = 0; i < list.size(); i++) {
+        if (!taken[i]) {
+            sorted.push_back(list[i]);
+        }
+    }
+    list = std::move(sorted);
+}
+
+// Puts `moving` at `index` of the list as it is shown (a folder already in the list moves there), and saves that order.
+void FavoritesPlace(SidebarPanel* panel, std::vector<std::wstring> const& moving, size_t index) {
+    auto isMoving = [&](std::wstring const& path) {
+        for (auto const& m : moving) {
+            if (_wcsicmp(m.c_str(), path.c_str()) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::vector<std::wstring> rest;
+    size_t at = 0;
+    for (size_t i = 0; i < panel->favorites.size(); i++) {
+        if (isMoving(panel->favorites[i].path)) {
+            continue;
+        }
+        if (i < index) {
+            at++;
+        }
+        rest.push_back(panel->favorites[i].path);
+    }
+    std::vector<std::wstring> order(rest.begin(), rest.begin() + at);
+    for (auto const& m : moving) {
+        bool twice = false;
+        for (auto const& o : order) {
+            twice = twice || _wcsicmp(o.c_str(), m.c_str()) == 0;
+        }
+        if (!twice) {
+            order.push_back(m);
+        }
+    }
+    order.insert(order.end(), rest.begin() + at, rest.end());
+    std::wstring text;
+    for (auto const& path : order) {
+        text += path + L"\n";
+    }
+    Wh_SetStringValue(kFavoritesOrderValue, text.c_str());
+}
+}
+
+// The rows of the Favorites body, made again from the cached list.
+void SidebarFillFavorites(WindowState* state, SidebarPanel* panel) {
+    SidebarPanel::Section* section = nullptr;
+    for (auto& s : panel->sections) {
+        if (s.key == L"favorites") {
+            section = &s;
+        }
+    }
+    if (!section || !section->body) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_favMutex);
+        panel->favorites = g_favoritesCache;
+        panel->favoritesVersion = g_favoritesVersion;
+    }
+    FavoritesApplyOrder(panel->favorites);
+    auto body = section->body;
+    body.Children().Clear();
+    panel->locationMarks.erase(std::remove_if(panel->locationMarks.begin(), panel->locationMarks.end(),
+                                              [](SidebarPanel::Mark const& m) { return m.key.rfind(L"fav.", 0) == 0; }),
+                               panel->locationMarks.end());
+    for (auto const& entry : panel->favorites) {
+        std::wstring key = L"fav." + entry.path;
+        auto row = SidebarMakeRow(key, entry.name, false);
+        if (entry.pidl) {
+            SidebarRowIconFromShell(state, row, entry.pidl.get());
+        }
+        SidebarPanel::Mark mark;
+        mark.key = key;
+        mark.selected = row.selected;
+        mark.pill = row.pill;
+        mark.button = row.button;
+        panel->locationMarks.push_back(std::move(mark));
+
+        std::shared_ptr<ITEMIDLIST> pidl = entry.pidl;
+        std::wstring path = entry.path;
+        if (!entry.exists) {
+            row.button.Opacity(0.5);
+            muxc::ToolTipService::SetToolTip(row.button, winrt::box_value(winrt::hstring(Str(L"sidebar.missing"))));
+        }
+        Keep(row.button, row.button.Click(winrt::auto_revoke, [state, pidl](Inspectable const&, mux::RoutedEventArgs const&) {
+            if (state->sidebar && state->sidebar->suppressClick) {
+                state->sidebar->suppressClick = false;  // The release of a drag that moved the row.
+                return;
+            }
+            if (pidl) {
+                SidebarNavigate(state, pidl.get());
+            }
+        }));
+        // Dragging a row to another place in the list: the order is the sidebar's own (the shell cannot reorder pins).
+        SidebarAttachReorder(
+            state, row.button,
+            [state](winrt::Windows::Foundation::Point point, size_t* index, float* line) {
+                if (state->sidebar) {
+                    FavoritesInsertPoint(state->sidebar, point, index, line);
+                }
+            },
+            [state](float line) {
+                if (state->sidebar) {
+                    SidebarShowInsertLine(state->sidebar, line);
+                }
+            },
+            [state, path](size_t index) {
+                SidebarPanel* now = state->sidebar;
+                if (!now) {
+                    return;
+                }
+                FavoritesPlace(now, {path}, index);
+                SidebarFillFavorites(state, now);
+            });
+
+        // The shell's menu of the folder, with "Unpin from sidebar" (the shell's own unpin verbs are left out). A folder that is gone
+        // has only that.
+        if (pidl) {
+            Keep(row.button, row.button.RightTapped(winrt::auto_revoke, [state, panel, button = row.button, pidl, path](Inspectable const&, mux::Input::RightTappedRoutedEventArgs const& args) {
+                std::vector<MenuItemSet::Extra> extras;
+                MenuItemSet::Extra unpin;
+                unpin.text = Str(L"sidebar.unpin");
+                unpin.glyph = L"\uE77A";
+                unpin.action = [path]() { FavoritesPinLater({path}, false); };
+                extras.push_back(std::move(unpin));
+                SidebarShowItemMenu(state, state->sidebar, button, pidl.get(), path, std::move(extras), {L"pintohome", L"unpinfromhome"}, {}, args);
+            }));
+        } else {
+            muxc::MenuFlyout flyout;
+            muxc::MenuFlyoutItem unpin;
+            unpin.Text(Str(L"sidebar.unpin"));
+            Keep(unpin, unpin.Click(winrt::auto_revoke, [path](Inspectable const&, mux::RoutedEventArgs const&) {
+                FavoritesPinLater({path}, false);
+            }));
+            flyout.Items().Append(unpin);
+            row.button.ContextFlyout(flyout);
+        }
+        body.Children().Append(row.button);
+    }
+    SidebarMarkSelected(panel, panel->selectedKey);
+    panel->lastFolder.reset();
+}
+
+void FavoritesTick(WindowState* state, SidebarPanel* panel) {
+    FavoritesRefreshIfDirty();
+    if (g_favoritesVersion != panel->favoritesVersion) {
+        SidebarFillFavorites(state, panel);
+    }
+}
+
+// ---- Drops on the sidebar ----
+
+namespace {
+
+struct SidebarDropZone {
+    enum Kind { None, Pin, Folder, Tag } kind = None;
+    std::wstring key;
+    std::shared_ptr<ITEMIDLIST> pidl;
+    std::wstring name;    // Folder, Tag: what the row is called (for the label of a drag).
+    size_t index = 0;     // Pin: where in the list a dropped folder goes.
+    float lineY = -1;     // Pin: where the line that shows it is, from the top of the block (-1: no line).
+};
+
+// The accent line between two rows of Favorites (lineY from the top of the block; below zero hides it).
+void SidebarShowInsertLine(SidebarPanel* panel, float lineY) {
+    if (!panel->favLine) {
+        return;
+    }
+    if (lineY < 0) {
+        // Collapsed, not only clear: its margin counts in the size of the block and would leave a blank after a row goes.
+        panel->favLine.Visibility(mux::Visibility::Collapsed);
+        return;
+    }
+    panel->favLine.Margin(mux::Thickness{10, lineY - 1, 10, 0});
+    panel->favLine.Visibility(mux::Visibility::Visible);
+    panel->favLine.Opacity(1);
+}
+
+bool SidebarRectOf(mux::UIElement const& element, winrt::Windows::Foundation::Rect* rect) {
+    auto frame = element.try_as<mux::FrameworkElement>();
+    if (!frame || frame.ActualWidth() <= 0 || frame.ActualHeight() <= 0) {
+        return false;
+    }
+    auto corner = element.TransformToVisual(nullptr).TransformPoint(winrt::Windows::Foundation::Point{0, 0});
+    *rect = winrt::Windows::Foundation::Rect{corner.X, corner.Y, (float)frame.ActualWidth(), (float)frame.ActualHeight()};
+    return true;
+}
+
+bool SidebarRectHolds(winrt::Windows::Foundation::Rect const& r, winrt::Windows::Foundation::Point const& p) {
+    return p.X >= r.X && p.X < r.X + r.Width && p.Y >= r.Y && p.Y < r.Y + r.Height;
+}
+
+// Between which two rows of Favorites a point (of the island) falls: before the first row whose middle is below it, else at the end.
+// `lineY` is where the line that shows it goes, from the top of the block (-1: none).
+void FavoritesInsertPoint(SidebarPanel* panel, winrt::Windows::Foundation::Point point, size_t* index, float* lineY) {
+    winrt::Windows::Foundation::Rect block{};
+    float top = panel->favBlock && SidebarRectOf(panel->favBlock, &block) ? block.Y : 0;
+    size_t n = 0;
+    float lastBottom = -1;
+    *index = 0;
+    *lineY = -1;
+    for (auto const& mark : panel->locationMarks) {
+        if (!mark.button || mark.key.rfind(L"fav.", 0) != 0) {
+            continue;
+        }
+        winrt::Windows::Foundation::Rect row;
+        if (SidebarRectOf(mark.button, &row)) {
+            if (point.Y < row.Y + row.Height / 2) {
+                *index = n;
+                *lineY = row.Y - top;
+                return;
+            }
+            lastBottom = row.Y + row.Height;
+        }
+        n++;
+    }
+    *index = n;
+    *lineY = lastBottom >= 0 ? lastBottom - top : -1;
+}
+
+SidebarDropZone SidebarZoneAt(SidebarPanel* panel, POINTL screen) {
+    SidebarDropZone zone;
+    HWND window = (HWND)panel->bridge.WindowId().Value;
+    POINT client = {screen.x, screen.y};
+    ScreenToClient(window, &client);
+    double scale = 1.0;
+    if (auto root = panel->host.XamlRoot()) {
+        scale = root.RasterizationScale();
+    }
+    if (scale <= 0) {
+        scale = 1.0;
+    }
+    winrt::Windows::Foundation::Point point{(float)(client.x / scale), (float)(client.y / scale)};
+    winrt::Windows::Foundation::Rect rect;
+    for (auto const& mark : panel->locationMarks) {
+        if (!mark.button || mark.key.rfind(L"fav.", 0) == 0 || mark.key == L"drives") {
+            continue;
+        }
+        if (mark.key.rfind(L"tag.", 0) == 0) {
+            if (SidebarRectOf(mark.button, &rect) && SidebarRectHolds(rect, point)) {
+                zone.kind = SidebarDropZone::Tag;  // A row of Tags: what is dropped on it gets the tag.
+                zone.key = mark.key;
+                zone.name = mark.key.substr(4);
+                return zone;
+            }
+            continue;
+        }
+        if (SidebarRectOf(mark.button, &rect) && SidebarRectHolds(rect, point)) {
+            for (auto const& entry : panel->locations) {
+                if (entry.key == mark.key && entry.pidl) {
+                    zone.kind = SidebarDropZone::Folder;
+                    zone.key = mark.key;
+                    zone.name = entry.name;
+                    zone.pidl = entry.pidl;
+                    return zone;
+                }
+            }
+            return zone;  // A row that takes no drop (Home, for one).
+        }
+    }
+    if (panel->favBlock && SidebarRectOf(panel->favBlock, &rect) && SidebarRectHolds(rect, point)) {
+        zone.kind = SidebarDropZone::Pin;
+        zone.key = L"favorites";
+        FavoritesInsertPoint(panel, point, &zone.index, &zone.lineY);
+    }
+    return zone;
+}
+
+struct SidebarDropTarget : IDropTarget {
+    LONG refs = 1;
+    IDataObject* data = nullptr;
+    std::vector<std::wstring> folders;  // The folders of the drag, for pinning.
+    std::vector<std::wstring> items;    // Everything on disk in the drag, for tagging.
+    IDropTarget* folder = nullptr;      // The folder's own target, between its DragEnter and DragLeave.
+    std::wstring folderKey;
+    IDropTargetHelper* helper = nullptr;  // The shell's: draws the drag image and the label ("Pin to Favorites") while over us.
+    bool helperActive = false;
+    std::wstring described;               // What the label says now (kind and key), to write it again only when it changes.
+
+    // The label of the drag: a DROPDESCRIPTION put in the data object, which the shell's helper draws next to the image.
+    void Describe(std::wstring const& which, int imageType, const wchar_t* message, const wchar_t* insert) {
+        if (!data || described == which) {
+            return;
+        }
+        described = which;
+        static UINT format = RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPDESCRIPTION));
+        if (!memory) {
+            return;
+        }
+        auto* description = (DROPDESCRIPTION*)GlobalLock(memory);
+        description->type = (DROPIMAGETYPE)imageType;
+        wcsncpy_s(description->szMessage, message, _TRUNCATE);
+        wcsncpy_s(description->szInsert, insert, _TRUNCATE);
+        GlobalUnlock(memory);
+        FORMATETC wanted = {(CLIPFORMAT)format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        STGMEDIUM medium = {};
+        medium.tymed = TYMED_HGLOBAL;
+        medium.hGlobal = memory;
+        if (FAILED(data->SetData(&wanted, &medium, TRUE))) {
+            GlobalFree(memory);
+        }
+    }
+
+    void HelperOver(POINTL pt, DWORD effect, bool enter) {
+        WindowState* state = StateForThisThread(false);
+        SidebarPanel* panel = state ? state->sidebar : nullptr;
+        if (!panel || !panel->dropWindow || !data || state->outDragActive) {
+            return;  // A drag of the columns has its own label (GhostOver).
+        }
+        if (!helper) {
+            CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&helper));
+        }
+        if (!helper) {
+            return;
+        }
+        POINT p = {pt.x, pt.y};
+        if (enter) {
+            helperActive = SUCCEEDED(helper->DragEnter(panel->dropWindow, data, &p, effect));
+        } else if (helperActive) {
+            helper->DragOver(&p, effect);
+        }
+    }
+
+    void HelperLeave() {
+        if (helper && helperActive) {
+            helper->DragLeave();
+        }
+        helperActive = false;
+        described.clear();
+    }
+
+    STDMETHODIMP QueryInterface(REFIID id, void** out) override {
+        if (id == IID_IUnknown || id == IID_IDropTarget) {
+            *out = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG now = InterlockedDecrement(&refs);
+        if (now == 0) {
+            delete this;
+        }
+        return (ULONG)now;
+    }
+
+    void LeaveFolder(bool drop) {
+        if (folder) {
+            if (!drop) {
+                folder->DragLeave();
+            }
+            folder->Release();
+            folder = nullptr;
+        }
+        folderKey.clear();
+    }
+
+    // The row or section under the drag shows it takes the drop; the one it left goes back to normal.
+    void Show(SidebarPanel* panel, std::wstring const& zoneKey) {
+        if (panel->dropZone == zoneKey) {
+            return;
+        }
+        panel->dropZone = zoneKey;
+        if (panel->favHighlight) {
+            panel->favHighlight.Opacity(zoneKey == L"favorites" ? 1 : 0);
+        }
+        SidebarMarkSelected(panel, panel->selectedKey);  // Back to the pill's row.
+        if (!zoneKey.empty() && zoneKey != L"favorites") {
+            for (auto& mark : panel->locationMarks) {
+                if (mark.key == zoneKey) {
+                    mark.selected.Visibility(mux::Visibility::Visible);
+                }
+            }
+        }
+    }
+
+    SidebarDropZone lastZone;  // The zone the last move was over, for the label.
+
+    // The label of a drag that began in the columns (the shell's helper draws it for the others): the same one the columns show,
+    // in the sidebar's own overlay, with a line that says what a drop here does.
+    void GhostGone() {
+        WindowState* state = StateForThisThread(false);
+        if (!state || !state->drag.ghost) {
+            return;
+        }
+        SidebarPanel* panel = state->sidebar;
+        if (!panel || !panel->ghostPopup) {
+            return;  // Not the sidebar's label.
+        }
+        try {
+            panel->ghostPopup.IsOpen(false);
+            panel->ghostPopup.Child(nullptr);
+        } catch (...) {
+        }
+        panel->ghostPopup = nullptr;
+        auto& d = state->drag;
+        d.ghost = nullptr;
+        d.ghostText = nullptr;
+        d.ghostAction = nullptr;
+        d.ghostIcon = nullptr;
+        d.ghostRow = nullptr;
+    }
+
+    void GhostOver(POINTL pt, DWORD keys, DWORD effect) {
+        WindowState* state = StateForThisThread(false);
+        SidebarPanel* panel = state ? state->sidebar : nullptr;
+        if (!panel || !panel->overlay || !panel->bridge || !state->outDragActive) {
+            return;
+        }
+        auto saved = state->overlay;
+        state->overlay = panel->overlay;
+        try {
+            if (!state->drag.ghost) {
+                ShowGhost(state, state->outSpec);
+                // The label is made in the overlay, then moved to a popup that is not bound to the island: the sidebar is narrow
+                // and would cut it.
+                auto ghost = state->drag.ghost;
+                uint32_t index = 0;
+                if (panel->overlay.Children().IndexOf(ghost, index)) {
+                    panel->overlay.Children().RemoveAt(index);
+                }
+                muxc::Primitives::Popup popup;
+                popup.ShouldConstrainToRootBounds(false);
+                popup.XamlRoot(panel->host.XamlRoot());
+                popup.IsHitTestVisible(false);
+                popup.Child(ghost);
+                popup.IsOpen(true);
+                panel->ghostPopup = popup;
+            }
+            HWND window = (HWND)panel->bridge.WindowId().Value;
+            POINT client = {pt.x, pt.y};
+            ScreenToClient(window, &client);
+            double scale = 1.0;
+            if (auto root = panel->host.XamlRoot()) {
+                scale = root.RasterizationScale();
+            }
+            if (scale <= 0) {
+                scale = 1.0;
+            }
+            panel->ghostPopup.HorizontalOffset(client.x / scale + 16);
+            panel->ghostPopup.VerticalOffset(client.y / scale + 16);
+            auto& d = state->drag;
+            d.ghostText.Text(Shortened(d.labelName, 40).c_str());
+            std::wstring line;
+            const wchar_t* glyph = L"";
+            auto fill = [](const wchar_t* pattern, std::wstring const& insert) {
+                std::wstring text = pattern;
+                size_t at = text.find(L"%1");
+                if (at != std::wstring::npos) {
+                    text.replace(at, 2, insert);
+                }
+                return text;
+            };
+            if (lastZone.kind == SidebarDropZone::Pin && effect != DROPEFFECT_NONE) {
+                line = fill(Str(L"sidebar.drop.pin"), Str(L"sidebar.favorites"));
+                glyph = L"";
+            } else if (lastZone.kind == SidebarDropZone::Tag && effect != DROPEFFECT_NONE) {
+                line = fill(Str(L"sidebar.drop.tag"), Shortened(lastZone.name, 28));
+                glyph = L"";
+            } else if (lastZone.kind == SidebarDropZone::Folder) {
+                if (effect == DROPEFFECT_NONE) {
+                    line = L"Can’t drop here";
+                    glyph = L"";
+                } else {
+                    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+                    const wchar_t* verb = L"Drop in ";
+                    if (state->outFromArchive) {
+                        verb = L"Extract to ";
+                        glyph = L"";
+                    } else if (ctrl && !shift) {
+                        verb = L"Copy to ";
+                        glyph = L"";
+                    } else if (alt) {
+                        verb = L"Link in ";
+                        glyph = L"";
+                    } else if (shift) {
+                        verb = L"Move to ";
+                    }
+                    line = std::wstring(verb) + Shortened(lastZone.name, 28);
+                }
+            }
+            if (line.empty()) {
+                d.ghostRow.Visibility(mux::Visibility::Collapsed);
+            } else {
+                d.ghostIcon.Glyph(glyph);
+                d.ghostAction.Text(line.c_str());
+                d.ghostRow.Visibility(mux::Visibility::Visible);
+            }
+        } catch (...) {
+            LogHresult(L"the label of a drag over the sidebar");
+        }
+        state->overlay = saved;
+    }
+
+    void Over(DWORD keys, POINTL pt, DWORD* effect) {
+        lastZone = SidebarDropZone();
+        OverCore(keys, pt, effect);
+        GhostOver(pt, keys, *effect);
+    }
+
+    void OverCore(DWORD keys, POINTL pt, DWORD* effect) {
+        DWORD wanted = *effect;
+        *effect = DROPEFFECT_NONE;
+        WindowState* state = StateForThisThread(false);
+        SidebarPanel* panel = state ? state->sidebar : nullptr;
+        if (!panel || !panel->bridge || !data) {
+            LeaveFolder(false);
+            return;
+        }
+        SidebarDropZone zone;
+        try {
+            zone = SidebarZoneAt(panel, pt);
+        } catch (...) {
+            LogHresult(L"finding the sidebar's drop zone");
+        }
+        lastZone = zone;
+        SidebarShowInsertLine(panel, zone.kind == SidebarDropZone::Pin && !folders.empty() ? zone.lineY : -1);
+        if (zone.kind == SidebarDropZone::Pin) {
+            LeaveFolder(false);
+            if (!folders.empty()) {
+                *effect = DROPEFFECT_LINK;
+                Describe(L"pin", DROPIMAGE_LINK, Str(L"sidebar.drop.pin"), Str(L"sidebar.favorites"));
+                Show(panel, zone.key);
+            } else {
+                Describe(L"none", DROPIMAGE_NONE, L"", L"");
+                Show(panel, L"");
+            }
+            return;
+        }
+        if (zone.kind == SidebarDropZone::Tag) {
+            LeaveFolder(false);
+            if (!items.empty()) {
+                *effect = DROPEFFECT_LINK;
+                Describe(zone.key, DROPIMAGE_LABEL, Str(L"sidebar.drop.tag"), zone.key.substr(4).c_str());
+                Show(panel, zone.key);
+            } else {
+                Describe(L"none", DROPIMAGE_NONE, L"", L"");
+                Show(panel, L"");
+            }
+            return;
+        }
+        if (zone.kind != SidebarDropZone::Folder) {
+            Describe(L"none", DROPIMAGE_NONE, L"", L"");
+        } else {
+            described.clear();  // The folder's own target writes the label.
+        }
+        if (zone.kind == SidebarDropZone::Folder) {
+            if (!folder || folderKey != zone.key) {
+                LeaveFolder(false);
+                IShellFolder* shellFolder = nullptr;
+                IDropTarget* created = nullptr;
+                if (SUCCEEDED(SHBindToObject(nullptr, zone.pidl.get(), nullptr, IID_PPV_ARGS(&shellFolder))) && shellFolder) {
+                    shellFolder->CreateViewObject(state->topLevel, IID_PPV_ARGS(&created));
+                    shellFolder->Release();
+                }
+                if (!created) {
+                    Show(panel, L"");
+                    return;
+                }
+                DWORD offered = wanted;
+                if (FAILED(created->DragEnter(data, keys, pt, &offered))) {
+                    created->Release();
+                    Show(panel, L"");
+                    return;
+                }
+                folder = created;
+                folderKey = zone.key;
+                *effect = offered;
+            } else {
+                DWORD offered = wanted;
+                if (SUCCEEDED(folder->DragOver(keys, pt, &offered))) {
+                    *effect = offered;
+                }
+            }
+            Show(panel, *effect != DROPEFFECT_NONE ? zone.key : L"");
+            return;
+        }
+        LeaveFolder(false);
+        Show(panel, L"");
+    }
+
+    void Finish() {
+        WindowState* state = StateForThisThread(false);
+        if (state && state->sidebar) {
+            SidebarShowInsertLine(state->sidebar, -1);
+            Show(state->sidebar, L"");
+        }
+        if (data) {
+            data->Release();
+            data = nullptr;
+        }
+        folders.clear();
+        items.clear();
+    }
+
+    STDMETHODIMP DragEnter(IDataObject* object, DWORD keys, POINTL pt, DWORD* effect) override {
+        if (data) {
+            data->Release();
+        }
+        data = object;
+        if (data) {
+            data->AddRef();
+        }
+        folders = FavoritesFoldersOf(data);
+        items = TagsItemsOf(data);
+        described.clear();
+        Over(keys, pt, effect);
+        HelperOver(pt, *effect, true);
+        return S_OK;
+    }
+    STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* effect) override {
+        Over(keys, pt, effect);
+        HelperOver(pt, *effect, false);
+        return S_OK;
+    }
+    STDMETHODIMP DragLeave() override {
+        GhostGone();
+        HelperLeave();
+        LeaveFolder(false);
+        Finish();
+        return S_OK;
+    }
+    STDMETHODIMP Drop(IDataObject* object, DWORD keys, POINTL pt, DWORD* effect) override {
+        DWORD wanted = *effect;
+        *effect = DROPEFFECT_NONE;
+        WindowState* state = StateForThisThread(false);
+        SidebarPanel* panel = state ? state->sidebar : nullptr;
+        SidebarDropZone zone;
+        if (panel && panel->bridge) {
+            try {
+                zone = SidebarZoneAt(panel, pt);
+            } catch (...) {
+                LogHresult(L"finding the sidebar's drop zone");
+            }
+        }
+        if (zone.kind == SidebarDropZone::Pin && !folders.empty()) {
+            std::vector<std::wstring> pins = folders;
+            LeaveFolder(false);
+            FavoritesPlace(panel, pins, zone.index);
+            std::vector<std::wstring> fresh;  // Those not pinned yet: a folder already in the list only moves.
+            for (auto const& path : pins) {
+                bool listed = false;
+                for (auto const& entry : panel->favorites) {
+                    listed = listed || _wcsicmp(entry.path.c_str(), path.c_str()) == 0;
+                }
+                if (!listed) {
+                    fresh.push_back(path);
+                }
+            }
+            if (!fresh.empty()) {
+                FavoritesPinLater(fresh, true);
+            }
+            SidebarFillFavorites(state, panel);  // The new order shows at once.
+            *effect = DROPEFFECT_LINK;
+        } else if (zone.kind == SidebarDropZone::Tag && !items.empty()) {
+            LeaveFolder(false);
+            TagsDropLater(zone.key.substr(4), items);
+            *effect = DROPEFFECT_LINK;
+        } else if (zone.kind == SidebarDropZone::Folder && folder && folderKey == zone.key) {
+            DWORD offered = wanted;
+            if (SUCCEEDED(folder->Drop(object, keys, pt, &offered))) {
+                *effect = offered;
+            }
+            LeaveFolder(true);
+        } else {
+            LeaveFolder(false);
+        }
+        if (helper && helperActive) {
+            POINT p = {pt.x, pt.y};
+            helper->Drop(object, &p, *effect);
+            helperActive = false;
+        }
+        described.clear();
+        GhostGone();
+        Finish();
+        return S_OK;
+    }
+};
+
+}  // namespace
+
+void SidebarRegisterDrop(WindowState* state, SidebarPanel* panel) {
+    if (panel->drop || !panel->bridge) {
+        return;
+    }
+    HWND window = (HWND)panel->bridge.WindowId().Value;
+    auto* target = new SidebarDropTarget();
+    HRESULT hr = RegisterDragDrop(window, target);
+    if (hr == DRAGDROP_E_ALREADYREGISTERED) {
+        RevokeDragDrop(window);  // The XAML island's own, which nothing here uses.
+        hr = RegisterDragDrop(window, target);
+    }
+    if (FAILED(hr)) {
+        Wh_Log(L"the sidebar could not take drops, hr=0x%08lX", hr);
+        target->Release();
+        return;
+    }
+    panel->drop = target;
+    panel->dropWindow = window;
+}
+
+void SidebarRevokeDrop(SidebarPanel* panel) {
+    if (!panel->drop) {
+        return;
+    }
+    auto* target = static_cast<SidebarDropTarget*>(panel->drop);
+    panel->drop = nullptr;
+    if (IsWindow(panel->dropWindow)) {
+        RevokeDragDrop(panel->dropWindow);
+    }
+    panel->dropWindow = nullptr;
+    target->LeaveFolder(false);
+    target->GhostGone();
+    target->HelperLeave();
+    if (target->helper) {
+        target->helper->Release();
+        target->helper = nullptr;
+    }
+    if (target->data) {
+        target->data->Release();
+        target->data = nullptr;
+    }
+    target->Release();
+}
+// Sidebar Favorites: the self-test of pinning. Debug build only (EXTRAS_VERBOSE). It pins a folder of its own in the temp
+// folder to Quick access through the shell, expects it in the list, unpins it and expects it gone, then logs one line:
+// "FAVORITES SELFTEST pass", or "FAVORITES SELFTEST FAIL <what>". tools/smoke-test-explorer-extras.ps1 reads that line.
+// It touches the user's real Quick access for a moment, so one Explorer process runs it at a time (a named mutex); the others
+// log nothing under that name.
+// Sidebar, Locations section: a fixed set of places (Home, the user's folder, Gallery, the drives and devices, Network, the
+// Recycle Bin and the cloud folders), each of which the user can show or hide. Drives are listed flat up to two of them and
+// grouped under "Drives and devices" from three. A click opens the place in the window; the entry that contains the folder
+// the window shows is the selected one.
+//
+// The pure parts (grouping, the entry that contains a folder, the saved visibility) are tested by 10j2a. The rest builds rows
+// with the shell of 10j. Dropping on an entry comes with the drop target of Task 6, which Favorites needs as well.
+
+bool LocationsGroupedFor(size_t driveEntryCount, bool flatOnly) {
+    return !flatOnly && driveEntryCount >= 3;
+}
+
+bool LocationsGrouped(size_t driveEntryCount) {
+    return LocationsGroupedFor(driveEntryCount, g_sidebarDrivesFlat);
+}
+
+namespace {
+
+std::wstring LocationValueName(std::wstring const& key) {
+    return L"sidebar.loc." + key;
+}
+
+std::wstring LocationTrimmed(std::wstring path) {
+    while (!path.empty() && path.back() == L'\\') {
+        path.pop_back();
+    }
+    return path;
+}
+
+std::shared_ptr<ITEMIDLIST> LocationPidl(PIDLIST_ABSOLUTE pidl) {
+    return std::shared_ptr<ITEMIDLIST>(pidl, [](ITEMIDLIST* p) {
+        if (p) {
+            CoTaskMemFree(p);
+        }
+    });
+}
+
+std::wstring LocationDisplayName(PCIDLIST_ABSOLUTE pidl) {
+    std::wstring text;
+    IShellItem* item = nullptr;
+    if (SUCCEEDED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item))) && item) {
+        wchar_t* name = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &name)) && name) {
+            text = name;
+            CoTaskMemFree(name);
+        }
+        item->Release();
+    }
+    return text;
+}
+
+PIDLIST_ABSOLUTE LocationParse(const wchar_t* parsingName) {
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHParseDisplayName(parsingName, nullptr, &pidl, 0, nullptr))) {
+        return nullptr;
+    }
+    return pidl;
+}
+
+void LocationAdd(std::vector<LocationEntry>& list, std::wstring key, PIDLIST_ABSOLUTE pidl, std::wstring path, bool drive) {
+    if (!pidl) {
+        return;
+    }
+    LocationEntry entry;
+    entry.key = std::move(key);
+    entry.pidl = LocationPidl(pidl);
+    entry.name = LocationDisplayName(pidl);
+    if (entry.name.empty()) {
+        entry.name = entry.key;
+    }
+    entry.path = std::move(path);
+    entry.drive = drive;
+    entry.visible = LocationVisible(entry.key);
+    list.push_back(std::move(entry));
+}
+
+void LocationAddKnown(std::vector<LocationEntry>& list, const wchar_t* key, REFKNOWNFOLDERID id, bool withPath) {
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHGetKnownFolderIDList(id, 0, nullptr, &pidl)) || !pidl) {
+        return;
+    }
+    std::wstring path;
+    if (withPath) {
+        wchar_t* text = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &text)) && text) {
+            path = text;
+            CoTaskMemFree(text);
+        }
+    }
+    LocationAdd(list, key, pidl, path, false);
+}
+
+// The cloud folders the sync clients registered (OneDrive and the like): HKCU\...\SyncRootManager\<id>\UserSyncRoots holds
+// one value per user, whose data is the folder.
+void LocationAddCloudRoots(std::vector<LocationEntry>& list) {
+    HKEY root = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SyncRootManager", 0,
+                      KEY_READ, &root) != ERROR_SUCCESS) {
+        return;
+    }
+    wchar_t id[256];
+    for (DWORD i = 0;; i++) {
+        DWORD length = ARRAYSIZE(id);
+        if (RegEnumKeyExW(root, i, id, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+            break;
+        }
+        std::wstring sub = std::wstring(id) + L"\\UserSyncRoots";
+        HKEY roots = nullptr;
+        if (RegOpenKeyExW(root, sub.c_str(), 0, KEY_READ, &roots) != ERROR_SUCCESS) {
+            continue;
+        }
+        wchar_t valueName[128];
+        wchar_t data[MAX_PATH * 2];
+        DWORD nameLength = ARRAYSIZE(valueName);
+        DWORD dataBytes = sizeof(data) - sizeof(wchar_t);
+        DWORD type = 0;
+        if (RegEnumValueW(roots, 0, valueName, &nameLength, nullptr, &type, (BYTE*)data, &dataBytes) == ERROR_SUCCESS &&
+            type == REG_SZ) {
+            data[dataBytes / sizeof(wchar_t)] = 0;
+            std::wstring path = data;
+            bool known = false;
+            for (auto const& entry : list) {
+                if (!entry.path.empty() && _wcsicmp(entry.path.c_str(), path.c_str()) == 0) {
+                    known = true;
+                }
+            }
+            if (!known && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                LocationAdd(list, L"cloud." + std::wstring(id), LocationParse(path.c_str()), path, false);
+            }
+        }
+        RegCloseKey(roots);
+    }
+    RegCloseKey(root);
+}
+
+void LocationAddFolder(std::vector<LocationEntry>& list, std::wstring key, std::wstring const& path) {
+    for (auto const& entry : list) {
+        if (!entry.path.empty() && _wcsicmp(entry.path.c_str(), path.c_str()) == 0) {
+            return;
+        }
+    }
+    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        LocationAdd(list, std::move(key), LocationParse(path.c_str()), path, true);  // Under "Drives and devices", with the drives.
+    }
+}
+
+// OneDrive, from its own accounts (HKCU\Software\Microsoft\OneDrive\Accounts\<name>\UserFolder): SyncRootManager can be empty
+// while OneDrive runs. And the phones Phone Link shows as folders under %USERPROFILE%\CrossDevice, one folder per phone.
+void LocationAddOneDriveAndPhones(std::vector<LocationEntry>& list) {
+    HKEY accounts = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\OneDrive\\Accounts", 0, KEY_READ, &accounts) == ERROR_SUCCESS) {
+        wchar_t name[256];
+        for (DWORD i = 0;; i++) {
+            DWORD length = ARRAYSIZE(name);
+            if (RegEnumKeyExW(accounts, i, name, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+                break;
+            }
+            wchar_t folder[MAX_PATH * 2];
+            DWORD bytes = sizeof(folder) - sizeof(wchar_t);
+            DWORD type = 0;
+            if (RegGetValueW(accounts, name, L"UserFolder", RRF_RT_REG_SZ, &type, folder, &bytes) == ERROR_SUCCESS) {
+                LocationAddFolder(list, L"onedrive." + std::wstring(name), folder);
+            }
+        }
+        RegCloseKey(accounts);
+    }
+    wchar_t* profile = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &profile)) && profile) {
+        std::wstring cross = std::wstring(profile) + L"\\CrossDevice";
+        CoTaskMemFree(profile);
+        WIN32_FIND_DATAW found;
+        HANDLE find = FindFirstFileExW((cross + L"\\*").c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr, 0);
+        if (find != INVALID_HANDLE_VALUE) {
+            do {
+                if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(found.cFileName, L".") != 0 &&
+                    wcscmp(found.cFileName, L"..") != 0) {
+                    LocationAddFolder(list, L"phone." + std::wstring(found.cFileName), cross + L"\\" + found.cFileName);
+                }
+            } while (FindNextFileW(find, &found));
+            FindClose(find);
+        }
+    }
+}
+
+// Network drives (mapped letters). The shell can take seconds to name one that is disconnected, so they are named on a mod
+// thread and join the list when they are ready (the version changes and the sidebar fills the section again).
+std::mutex g_remoteMutex;
+[[clang::no_destroy]] std::vector<LocationEntry> g_remoteEntries;
+DWORD g_remoteMask = 0;
+bool g_remoteRunning = false;
+std::atomic<unsigned> g_remoteVersion{0};
+
+DWORD LocationRemoteMask() {
+    DWORD mask = GetLogicalDrives();
+    DWORD remote = 0;
+    for (int i = 0; i < 26; i++) {
+        if (mask & (1u << i)) {
+            wchar_t root[4] = {(wchar_t)(L'A' + i), L':', L'\\', 0};
+            if (GetDriveTypeW(root) == DRIVE_REMOTE) {
+                remote |= 1u << i;
+            }
+        }
+    }
+    return remote;
+}
+
+void LocationRefreshRemote() {
+    DWORD remote = LocationRemoteMask();
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        if (remote == g_remoteMask || g_remoteRunning) {
+            return;
+        }
+        g_remoteRunning = true;
+    }
+    bool started = StartModThread([remote]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        std::vector<LocationEntry> found;
+        for (int i = 0; i < 26; i++) {
+            if (!(remote & (1u << i))) {
+                continue;
+            }
+            wchar_t root[4] = {(wchar_t)(L'A' + i), L':', L'\\', 0};
+            LocationAdd(found, std::wstring(L"drive.") + (wchar_t)(L'A' + i), LocationParse(root), root, true);
+        }
+        if (com) {
+            CoUninitialize();
+        }
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        g_remoteEntries = std::move(found);
+        g_remoteMask = remote;
+        g_remoteRunning = false;
+        g_remoteVersion++;
+    });
+    if (!started) {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        g_remoteRunning = false;
+    }
+}
+
+}  // namespace
+
+bool LocationVisible(std::wstring const& key) {
+    return Wh_GetIntValue(LocationValueName(key).c_str(), 1) != 0;
+}
+
+void LocationSetVisible(std::wstring const& key, bool visible) {
+    Wh_SetIntValue(LocationValueName(key).c_str(), visible ? 1 : 0);
+}
+
+// The key of the entry whose folder holds `folder`, the closest one when several do; empty when none does.
+std::wstring SidebarEntryIn(std::vector<LocationPath> const& entries, std::wstring const& folder) {
+    std::wstring best;
+    size_t bestLength = 0;
+    for (auto const& entry : entries) {
+        std::wstring path = LocationTrimmed(entry.path);
+        if (path.empty() || folder.size() < path.size()) {
+            continue;
+        }
+        if (_wcsnicmp(folder.c_str(), path.c_str(), path.size()) != 0) {
+            continue;
+        }
+        if (folder.size() != path.size() && folder[path.size()] != L'\\') {
+            continue;
+        }
+        if (best.empty() || path.size() > bestLength) {
+            best = entry.key;
+            bestLength = path.size();
+        }
+    }
+    return best;
+}
+
+// Every place the section can list, in the order it lists them, hidden ones included (`visible` says which are shown).
+// Drives that are not ready or remote are named by the shell, so a slow network drive is left out: it would stall the window.
+std::vector<LocationEntry> LocationsList() {
+    std::vector<LocationEntry> list;
+    LocationAdd(list, L"home", LocationParse(L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}"), L"", false);
+    LocationAddKnown(list, L"user", FOLDERID_Profile, true);
+    LocationAdd(list, L"gallery", LocationParse(L"shell:::{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}"), L"", false);
+    LocationAddKnown(list, L"recent", FOLDERID_Recent, true);  // Windows' Recent: the files and folders opened lately.
+    if (!list.empty() && list.back().key == L"recent") {
+        list.back().name = Str(L"sidebar.recent");  // The shell's own name for it is a long one ("Éléments récents").
+    }
+    DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; i++) {
+        if (!(mask & (1u << i))) {
+            continue;
+        }
+        wchar_t root[4] = {(wchar_t)(L'A' + i), L':', L'\\', 0};
+        UINT type = GetDriveTypeW(root);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE && type != DRIVE_CDROM) {  // Network drives: LocationRefreshRemote.
+            continue;
+        }
+        LocationAdd(list, std::wstring(L"drive.") + (wchar_t)(L'A' + i), LocationParse(root), root, true);
+    }
+    LocationRefreshRemote();
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        for (auto const& entry : g_remoteEntries) {
+            list.push_back(entry);
+            list.back().visible = LocationVisible(entry.key);
+        }
+    }
+    LocationAddKnown(list, L"network", FOLDERID_NetworkFolder, false);
+    LocationAddKnown(list, L"recyclebin", FOLDERID_RecycleBinFolder, false);
+    LocationAddCloudRoots(list);
+    LocationAddOneDriveAndPhones(list);
+    return list;
+}
+
+namespace {
+
+void SidebarNavigate(WindowState* state, PCIDLIST_ABSOLUTE pidl) {
+    TagViewLeaveHere(state);  // Any navigation closes the list of a tag's files (of this tab).
+    IShellBrowser* browser = state ? BrowserOf(state->topLevel) : nullptr;
+    if (!browser || !pidl) {
+        return;
+    }
+    // The flags of the native pane's own click (0x80001): the BrowseObject hook sees a pane click, as Columns expects, and
+    // Explorer's file list does not take the keyboard.
+    HRESULT hr = browser->BrowseObject(pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE | SBSP_ACTIVATE_NOFOCUS);
+    if (FAILED(hr)) {
+        Wh_Log(L"sidebar: opening a location failed, hr=0x%08lX", hr);
+    }
+    if (!g_sidebarKeyboard && state->queue) {
+        // The click gave the sidebar the keyboard: it goes back to the file area (the columns' panel, or Explorer's own view) so that
+        // the arrow keys go on moving through the folder, as they did before the click.
+        state->queue.TryEnqueue([state]() {
+            if (g_unloading || StateForThisThread(false) != state) {
+                return;
+            }
+            HWND target = state->on && state->bridge ? (HWND)state->bridge.WindowId().Value
+                                                     : FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+            if (target && IsWindow(target)) {
+                SetFocus(target);
+            }
+        });
+    }
+}
+
+// The pill and the backing go to one row: the one of `key`, or the Drives group when that holds the key and is closed.
+void SidebarPlacePill(SidebarPanel* panel) {
+    if (!panel->pill || !panel->pillHost) {
+        return;
+    }
+    for (auto const& mark : panel->locationMarks) {
+        if (mark.key != panel->shownKey || !mark.button) {
+            continue;
+        }
+        // In a section that is collapsed the pill goes to the section's header, so that it still says where the window is.
+        muxc::Button target = mark.button;
+        const wchar_t* sectionKey = mark.key.rfind(L"fav.", 0) == 0 ? L"favorites" : mark.key.rfind(L"tag.", 0) == 0 || mark.key == L"tags" ? L"tags" : L"locations";
+        for (auto const& section : panel->sections) {
+            if (section.key == sectionKey && section.collapsed && section.headerButton) {
+                target = section.headerButton;
+            }
+        }
+        double height = target.ActualHeight();
+        if (height <= 0 || target.ActualWidth() <= 0) {
+            break;  // Not laid out: no pill.
+        }
+        // On a header it is a dot as wide as the pill, not a bar.
+        double pillHeight = target == mark.button ? 16 : 3;
+        if (panel->pill.Height() != pillHeight) {
+            panel->pill.Height(pillHeight);
+        }
+        double y = target.TransformToVisual(panel->pillHost).TransformPoint(winrt::Windows::Foundation::Point{0, 0}).Y + (height - pillHeight) / 2;
+        if (!panel->pillPlaced) {
+            // The first place is taken at once, with no slide from the corner.
+            panel->pill.TranslationTransition(nullptr);
+            panel->pill.Translation(winrt::Windows::Foundation::Numerics::float3{0, (float)y, 0});
+            {
+                mux::Vector3Transition slide;
+                slide.Duration(std::chrono::milliseconds(140));
+                panel->pill.TranslationTransition(slide);
+            }
+            panel->pillPlaced = true;
+        } else {
+            auto now = panel->pill.Translation();
+            if (fabsf(now.y - (float)y) > 0.5f) {
+                panel->pill.Translation(winrt::Windows::Foundation::Numerics::float3{0, (float)y, 0});
+            }
+        }
+        panel->pill.Opacity(1);
+        return;
+    }
+    panel->pill.Opacity(0);
+    panel->pillPlaced = false;
+}
+
+void SidebarMarkSelected(SidebarPanel* panel, std::wstring const& key) {
+    panel->selectedKey = key;
+    std::wstring shown = key;
+    if (key.rfind(L"drive.", 0) == 0 && panel->driveChildren && panel->driveChildren.Visibility() != mux::Visibility::Visible) {
+        shown = L"drives";
+    }
+    for (auto& mark : panel->locationMarks) {
+        mark.selected.Visibility(mark.key == shown ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        mark.pill.Visibility(mux::Visibility::Collapsed);  // The row's own pill is not used: one pill slides (SidebarPlacePill).
+    }
+    panel->shownKey = shown;
+    SidebarPlacePill(panel);
+}
+
+void SidebarAddMark(SidebarPanel* panel, std::wstring const& key, SidebarRow const& row) {
+    SidebarPanel::Mark mark;
+    mark.key = key;
+    mark.selected = row.selected;
+    mark.pill = row.pill;
+    mark.button = row.button;
+    panel->locationMarks.push_back(std::move(mark));
+}
+
+// The free-space bar of a drive's row: a 3 px line along the bottom of the row's face (it takes no room), as wide as the text. Its
+// two columns are given the used and the free space when the drive has been asked, on a mod thread.
+void SidebarAddSpaceBar(SidebarPanel* panel, SidebarRow const& row, LocationEntry const& entry, double indent) {
+    muxc::Grid bar;
+    bar.Height(2);
+    bar.VerticalAlignment(mux::VerticalAlignment::Bottom);
+    bar.Margin(mux::Thickness{15 + indent + 26, 0, 12, 2});
+    bar.IsHitTestVisible(false);
+    bar.Visibility(mux::Visibility::Collapsed);
+    mux::Automation::AutomationProperties::SetAutomationId(bar, L"SidebarSpace." + entry.key);
+    muxc::ColumnDefinition used, free;
+    used.Width(mux::GridLength{0, mux::GridUnitType::Star});
+    free.Width(mux::GridLength{1, mux::GridUnitType::Star});
+    bar.ColumnDefinitions().Append(used);
+    bar.ColumnDefinitions().Append(free);
+    auto track = SidebarThemedBorder(L"ControlFillColorTertiaryBrush");
+    track.CornerRadius(mux::CornerRadius{1, 1, 1, 1});
+    muxc::Grid::SetColumnSpan(track, 2);
+    bar.Children().Append(track);
+    auto fill = SidebarThemedBorder(L"AccentFillColorDefaultBrush");
+    fill.CornerRadius(mux::CornerRadius{1, 1, 1, 1});
+    muxc::Grid::SetColumn(fill, 0);
+    bar.Children().Append(fill);
+    row.content.Children().Append(bar);
+    SidebarPanel::DriveBar remembered;
+    remembered.path = entry.path;
+    remembered.bar = bar;
+    panel->driveBars.push_back(std::move(remembered));
+}
+
+// Asks the drives of the bars how full they are (on a mod thread: a card reader without a card can take seconds) and sets the bars.
+void SidebarRefreshDriveSpace(WindowState* state, SidebarPanel* panel) {
+    if (panel->driveBars.empty() || !state->queue) {
+        return;
+    }
+    auto bars = panel->driveBars;
+    mud::DispatcherQueue queue = state->queue;
+    StartModThread([bars, queue]() {
+        auto result = std::make_shared<std::vector<std::pair<double, double>>>();  // used, total (bytes)
+        for (auto const& entry : bars) {
+            ULARGE_INTEGER freeBytes{}, total{}, totalFree{};
+            if (GetDiskFreeSpaceExW(entry.path.c_str(), &freeBytes, &total, &totalFree) && total.QuadPart > 0) {
+                result->push_back({(double)(total.QuadPart - freeBytes.QuadPart), (double)total.QuadPart});
+            } else {
+                result->push_back({0, 0});
+            }
+        }
+        if (g_unloading) {
+            return;
+        }
+        try {
+            queue.TryEnqueue([bars, result]() {
+                if (g_unloading) {
+                    return;
+                }
+                for (size_t i = 0; i < bars.size() && i < result->size(); i++) {
+                    auto bar = bars[i].bar.get();
+                    // The fill is the second child of the bar (a weak reference to a Border made by the XAML reader does not resolve).
+                    muxc::Border fill = bar && bar.Children().Size() > 1 ? bar.Children().GetAt(1).try_as<muxc::Border>() : muxc::Border{nullptr};
+                    auto [used, total] = (*result)[i];
+                    if (!bar || !fill || total <= 0) {
+                        continue;
+                    }
+                    // Shares, not bytes: star weights of hundreds of gigabytes are asking for trouble.
+                    bar.ColumnDefinitions().GetAt(0).Width(mux::GridLength{used / total, mux::GridUnitType::Star});
+                    bar.ColumnDefinitions().GetAt(1).Width(mux::GridLength{1 - used / total, mux::GridUnitType::Star});
+                    // Nearly full: the colour of a warning.
+                    try {
+                        fill.Background(mux::Application::Current().Resources().Lookup(
+                            winrt::box_value(used / total > 0.9 ? L"SystemFillColorCriticalBrush" : L"AccentFillColorDefaultBrush")).as<mux::Media::Brush>());
+                    } catch (...) {
+                    }
+                    bar.Visibility(mux::Visibility::Visible);
+                }
+            });
+        } catch (...) {
+        }
+    });
+}
+
+// The eject button of a removable drive's row: at the right, shown while the pointer is over the row. It asks the shell's own
+// "Eject" verb of the drive, on a mod thread.
+void SidebarAddEject(SidebarRow const& row, LocationEntry const& entry) {
+    auto button = SidebarNewButtonWith((L"SidebarEject." + entry.key).c_str(), 24, L"0", kSidebarSmallTemplate);
+    button.Width(24);
+    button.HorizontalAlignment(mux::HorizontalAlignment::Right);
+    button.VerticalAlignment(mux::VerticalAlignment::Center);
+    button.Margin(mux::Thickness{0, 0, 8, 0});
+    // The eject symbol: a triangle over a bar, drawn as a shape (no font has it under a code I could check).
+    button.Content(LoadXaml(std::wstring(L"<Path ") + kXamlNs +
+                            L" Data='M 8,3 L 13,9 L 3,9 Z M 3,11 L 13,11 L 13,13 L 3,13 Z' Width='16' Height='16' Stretch='None' "
+                            L"Fill='{ThemeResource TextFillColorSecondaryBrush}'/>"));
+    button.Opacity(0);
+    button.OpacityTransition(mux::ScalarTransition());
+    mux::Automation::AutomationProperties::SetName(button, Str(L"sidebar.eject"));
+    row.content.Children().Append(button);
+    winrt::weak_ref<muxc::Button> weak = button;
+    Keep(row.button, row.button.PointerEntered(winrt::auto_revoke, [weak](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        if (auto b = weak.get()) {
+            b.Opacity(1);
+        }
+    }));
+    Keep(row.button, row.button.PointerExited(winrt::auto_revoke, [weak](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        if (auto b = weak.get()) {
+            b.Opacity(0);
+        }
+    }));
+    std::shared_ptr<ITEMIDLIST> pidl = entry.pidl;
+    Keep(button, button.Click(winrt::auto_revoke, [pidl](Inspectable const&, mux::RoutedEventArgs const&) {
+        StartModThread([pidl]() {
+            bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+            IShellFolder* parent = nullptr;
+            PCUITEMID_CHILD child = nullptr;
+            if (SUCCEEDED(SHBindToParent(pidl.get(), IID_PPV_ARGS(&parent), &child)) && parent) {
+                IContextMenu* menu = nullptr;
+                if (SUCCEEDED(parent->GetUIObjectOf(nullptr, 1, &child, IID_IContextMenu, nullptr, (void**)&menu)) && menu) {
+                    HMENU popup = CreatePopupMenu();
+                    menu->QueryContextMenu(popup, 0, 1, 0x7FFF, CMF_NORMAL);
+                    CMINVOKECOMMANDINFO invoke = {sizeof(invoke)};
+                    invoke.fMask = CMIC_MASK_FLAG_NO_UI;
+                    invoke.lpVerb = "eject";
+                    invoke.nShow = SW_HIDE;
+                    HRESULT hr = menu->InvokeCommand(&invoke);
+                    Wh_Log(L"sidebar: eject, hr=0x%08lX", hr);
+                    DestroyMenu(popup);
+                    menu->Release();
+                }
+                parent->Release();
+            }
+            if (com) {
+                CoUninitialize();
+            }
+        });
+    }));
+}
+
+// One place as a row that opens it, with "Hide from sidebar" in its context menu.
+SidebarRow SidebarLocationRow(WindowState* state, SidebarPanel* panel, LocationEntry const& entry, double indent) {
+    auto row = SidebarMakeRow(entry.key, entry.name, false, indent);
+    SidebarRowIconFromShell(state, row, entry.pidl.get());
+    SidebarAddMark(panel, entry.key, row);
+    if (entry.key.rfind(L"drive.", 0) == 0 && entry.path.size() >= 2) {
+        UINT type = GetDriveTypeW((entry.path.substr(0, 2) + L"\\").c_str());  // Asking the type does not wake the drive.
+        if (g_sidebarDriveSpace && (type == DRIVE_FIXED || type == DRIVE_REMOVABLE)) {
+            SidebarAddSpaceBar(panel, row, entry, indent);
+        }
+        if (g_sidebarDriveEject && (type == DRIVE_REMOVABLE || type == DRIVE_CDROM) && entry.pidl) {
+            SidebarAddEject(row, entry);
+        }
+    }
+
+    std::shared_ptr<ITEMIDLIST> pidl = entry.pidl;
+    Keep(row.button, row.button.Click(winrt::auto_revoke, [state, pidl](Inspectable const&, mux::RoutedEventArgs const&) {
+        SidebarNavigate(state, pidl.get());
+    }));
+
+    // The shell's menu of the place, with "Hide from sidebar".
+    std::wstring key = entry.key;
+    std::wstring path = entry.path;
+    Keep(row.button, row.button.RightTapped(winrt::auto_revoke, [state, panel, button = row.button, pidl, key, path](Inspectable const&, mux::Input::RightTappedRoutedEventArgs const& args) {
+        std::vector<MenuItemSet::Extra> extras;
+        MenuItemSet::Extra hide;
+        hide.text = Str(L"sidebar.hide");
+        hide.glyph = L"\uED1A";
+        hide.action = [state, key]() {
+            LocationSetVisible(key, false);
+            if (state->queue) {
+                state->queue.TryEnqueue([state]() {
+                    if (state->sidebar) {
+                        SidebarFillLocations(state, state->sidebar);
+                    }
+                });
+            }
+        };
+        extras.push_back(std::move(hide));
+        // The Recycle Bin's "Empty Recycle Bin" and a drive's Eject and Format are rows of their own, not behind "More options".
+        std::vector<std::wstring> promote;
+        if (key == L"recyclebin") {
+            promote = {L"empty"};
+        } else if (key.rfind(L"drive.", 0) == 0) {
+            promote = {L"eject", L"format"};
+        }
+        SidebarShowItemMenu(state, panel, button, pidl.get(), path, std::move(extras), {}, std::move(promote), args);
+    }));
+    return row;
+}
+
+// The "Drives and devices" group: a row, and the drives under it, each hung from the row by an elbow. The group closes and opens
+// only when the user chose that (the "collapsible" setting); otherwise it is always open and a click on its row opens This PC.
+void SidebarAddDriveGroup(WindowState* state, SidebarPanel* panel, muxc::StackPanel const& body, std::vector<LocationEntry> const& drives) {
+    PIDLIST_ABSOLUTE computer = nullptr;
+    SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &computer);
+    // Named as the shell names This PC (in the user's language), since a click on the row opens it.
+    std::wstring groupName = computer ? LocationDisplayName(computer) : std::wstring();
+    auto groupRow = SidebarMakeRow(L"drives", groupName.empty() ? std::wstring(Str(L"sidebar.drives")) : groupName, false);
+    std::shared_ptr<ITEMIDLIST> computerPidl;
+    if (computer) {
+        SidebarRowIconFromShell(state, groupRow, computer);
+        computerPidl = LocationPidl(computer);
+    }
+    SidebarAddMark(panel, L"drives", groupRow);
+    if (computerPidl) {
+        // This PC's own shell menu (Open, Manage, Map network drive, Properties), with "Map network drive" as a row of its own (the
+        // shell's id of that verb is not written anywhere I could read: the likely ones are listed, the debug log names the rest).
+        Keep(groupRow.button, groupRow.button.RightTapped(winrt::auto_revoke, [state, panel, button = groupRow.button, computerPidl](Inspectable const&, mux::Input::RightTappedRoutedEventArgs const& args) {
+            SidebarShowItemMenu(state, panel, button, computerPidl.get(), std::wstring(), {}, {},
+                                {L"connectnetworkdrive", L"mapnetdrive", L"mapnetworkdrive", L"mapdrive", L"connect"}, args);
+        }));
+    }
+    bool collapsible = g_sidebarDrivesCollapsible;
+    muxc::FontIcon chevron{nullptr};
+    if (collapsible) {
+        chevron = SidebarGlyph(L"\uE70E", 12);
+        chevron.HorizontalAlignment(mux::HorizontalAlignment::Right);
+        chevron.VerticalAlignment(mux::VerticalAlignment::Center);
+        chevron.Margin(mux::Thickness{0, 0, 12, 0});
+        groupRow.button.Content().as<muxc::Grid>().Children().Append(chevron);
+    }
+    body.Children().Append(groupRow.button);
+
+    muxc::StackPanel list;
+    list.Orientation(muxc::Orientation::Vertical);
+    list.Spacing(2);
+    for (auto const& drive : drives) {
+        // The icon starts where the group's text does (15 + 16 + 10), and the elbow comes down from under the group's icon.
+        auto row = SidebarLocationRow(state, panel, drive, 26);
+        auto elbow = LoadXaml(std::wstring(L"<Path ") + kXamlNs +
+                              L" Data='M 0.5,7 V 12 Q 0.5,16.5 5,16.5 H 10' Stroke='{ThemeResource TextFillColorDisabledBrush}' "
+                              L"StrokeThickness='1' Opacity='0.55' HorizontalAlignment='Left' VerticalAlignment='Top' Margin='22,0,0,0' "
+                              L"IsHitTestVisible='False'/>");  // Softer than a control's stroke: a hint of the tree, not a line.
+        row.button.Content().as<muxc::Grid>().Children().Append(elbow.as<mux::UIElement>());
+        list.Children().Append(row.button);
+    }
+    bool open = !collapsible || Wh_GetIntValue(L"sidebar.collapsed.drives", 0) == 0;
+    list.Visibility(open ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    if (chevron) {
+        chevron.Glyph(open ? L"\uE70E" : L"\uE70D");
+    }
+    muxc::Grid children;
+    children.Children().Append(list);
+    body.Children().Append(children);
+    panel->driveChildren = children;
+
+    winrt::weak_ref<muxc::FontIcon> weakChevron = chevron;
+    Keep(groupRow.button, groupRow.button.Click(winrt::auto_revoke, [state, weakChevron, collapsible, computerPidl](Inspectable const&, mux::RoutedEventArgs const&) {
+        SidebarPanel* p = state->sidebar;
+        if (!collapsible) {
+            if (computerPidl) {
+                SidebarNavigate(state, computerPidl.get());
+            }
+            return;
+        }
+        if (!p || !p->driveChildren) {
+            return;
+        }
+        bool nowOpen = p->driveChildren.Visibility() != mux::Visibility::Visible;
+        p->driveChildren.Visibility(nowOpen ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+        Wh_SetIntValue(L"sidebar.collapsed.drives", nowOpen ? 0 : 1);
+        if (auto glyph = weakChevron.get()) {
+            glyph.Glyph(nowOpen ? L"\uE70E" : L"\uE70D");
+        }
+        SidebarMarkSelected(p, p->selectedKey);
+    }));
+}
+
+// The "…" menu of the section header: a check for each place, to show or hide it.
+void SidebarFillLocationsMenu(WindowState* state, SidebarPanel* panel, std::vector<LocationEntry> const& all) {
+    if (!panel->locationsMenu) {
+        return;
+    }
+    panel->locationsMenu.Items().Clear();
+    for (auto const& entry : all) {
+        muxc::ToggleMenuFlyoutItem item;
+        item.Text(entry.name);
+        item.IsChecked(entry.visible);
+        std::wstring key = entry.key;
+        Keep(item, item.Click(winrt::auto_revoke, [state, key, item](Inspectable const&, mux::RoutedEventArgs const&) {
+            LocationSetVisible(key, item.IsChecked());
+            if (state->queue) {
+                state->queue.TryEnqueue([state]() {
+                    if (state->sidebar) {
+                        SidebarFillLocations(state, state->sidebar);
+                    }
+                });
+            }
+        }));
+        panel->locationsMenu.Items().Append(item);
+    }
+}
+
+}  // namespace
+
+// The rows of the Locations body, made again from the list: at the start, after a change of what is shown and when a drive
+// comes or goes.
+void SidebarFillLocations(WindowState* state, SidebarPanel* panel) {
+    SidebarPanel::Section* section = nullptr;
+    for (auto& s : panel->sections) {
+        if (s.key == L"locations") {
+            section = &s;
+        }
+    }
+    if (!section || !section->body) {
+        return;
+    }
+    auto body = section->body;
+    body.Children().Clear();
+    panel->locationMarks.erase(std::remove_if(panel->locationMarks.begin(), panel->locationMarks.end(),
+                                              [](SidebarPanel::Mark const& m) {
+                                                  return m.key.rfind(L"fav.", 0) != 0 && m.key.rfind(L"tag.", 0) != 0;
+                                              }),
+                               panel->locationMarks.end());
+    panel->driveChildren = nullptr;
+    panel->driveBars.clear();
+    panel->driveMask = GetLogicalDrives();
+    panel->remoteVersion = g_remoteVersion;
+    auto all = LocationsList();
+    panel->locations.clear();
+    std::vector<LocationEntry> drives;
+    for (auto const& entry : all) {
+        if (entry.visible) {
+            panel->locations.push_back(entry);
+            if (entry.drive) {
+                drives.push_back(entry);
+            }
+        }
+    }
+    bool grouped = LocationsGrouped(drives.size());
+    bool groupDone = false;
+    for (auto const& entry : panel->locations) {
+        if (entry.drive) {
+            if (!grouped) {
+                body.Children().Append(SidebarLocationRow(state, panel, entry, 0).button);
+            } else if (!groupDone) {
+                groupDone = true;
+                SidebarAddDriveGroup(state, panel, body, drives);
+            }
+            continue;
+        }
+        body.Children().Append(SidebarLocationRow(state, panel, entry, 0).button);
+    }
+    SidebarFillLocationsMenu(state, panel, all);
+    SidebarRefreshDriveSpace(state, panel);
+    SidebarMarkSelected(panel, panel->selectedKey);
+    panel->lastFolder.reset();  // The selection is worked out again at the next tick.
+}
+
+// The "…" button of the header, with its menu of places to show or hide (the header row of 10j shows it on hover).
+muxc::Button SidebarLocationsMore(WindowState* state, SidebarPanel* panel) {
+    auto more = SidebarNewButtonWith(L"SidebarMenu.locations", 26, L"0", kSidebarSmallTemplate);
+    more.Width(26);
+    more.Content(SidebarGlyph(L"\uE712", 14));
+    mux::Automation::AutomationProperties::SetName(more, Str(L"sidebar.locations.edit"));
+    panel->locationsMenu = muxc::MenuFlyout();
+    more.Flyout(panel->locationsMenu);
+    return more;
+}
+
+// Selects the entry that holds the folder the window shows now (checked every few ticks), and rebuilds the list when a drive
+// has come or gone.
+void SidebarFollowFolder(WindowState* state, SidebarPanel* panel) {
+    if (!panel->viewKey.empty()) {
+        SidebarMarkSelected(panel, panel->viewKey);  // A tag's list is open: that tag has the pill.
+        SidebarPlacePill(panel);
+        return;
+    }
+    if (GetLogicalDrives() != panel->driveMask || g_remoteVersion != panel->remoteVersion) {
+        SidebarFillLocations(state, panel);
+    }
+    SidebarPlacePill(panel);  // Rows move when a section opens or closes.
+    if (panel->ticks % 1000 < 3) {
+        SidebarRefreshDriveSpace(state, panel);  // About once a minute.
+    }
+    IShellBrowser* browser = BrowserOf(state->topLevel);
+    if (!browser) {
+        return;
+    }
+    Pidl folder = CurrentFolder(browser);
+    if (!folder) {
+        return;
+    }
+    if (panel->lastFolder && ILIsEqual(panel->lastFolder.get(), folder.get())) {
+        return;
+    }
+    panel->lastFolder = LocationPidl(ILClone(folder.get()));
+    // Favorites come first, so a folder that is both a favorite and a location is selected as the favorite.
+    std::wstring key;
+    for (auto const& entry : panel->favorites) {
+        if (entry.pidl && ILIsEqual(entry.pidl.get(), folder.get())) {
+            key = L"fav." + entry.path;
+            break;
+        }
+    }
+    for (auto const& entry : panel->locations) {
+        if (key.empty() && entry.pidl && ILIsEqual(entry.pidl.get(), folder.get())) {
+            key = entry.key;
+        }
+    }
+    if (key.empty()) {
+        std::vector<LocationPath> paths;
+        for (auto const& entry : panel->favorites) {
+            paths.push_back({L"fav." + entry.path, entry.path});
+        }
+        for (auto const& entry : panel->locations) {
+            paths.push_back({entry.key, entry.path});
+        }
+        key = SidebarEntryIn(paths, PathOf(folder.get()));
+    }
+    SidebarMarkSelected(panel, key);
+}
+// Sidebar Locations: the self-test of the pure parts (grouping of the drives, the entry that contains a folder, the saved
+// visibility). Debug build only (EXTRAS_VERBOSE); runs once when the mod loads and writes one line to the log:
+// "LOCATIONS SELFTEST pass", or "LOCATIONS SELFTEST FAIL <what>". tools/smoke-test-explorer-extras.ps1 reads that line.
+// Sidebar, Tags section: the most recent visible tags as rows (the label shape in the label colour), a "…" menu on the header to
+// manage them (new tag, and for each tag rename, colour, show or hide, delete), and files dropped on a row, which get that tag.
+// Rename, recolour and delete change the tag on every file that carries it: a pass over the files the tag index lists, on a mod
+// thread, with a progress line under the header and a way to stop it. The list of tags is 03d, the index is 04d, the writing of
+// a tag on a file is the labels' own (10g).
+//
+// The rows are made again whenever the tags that should show (names, colours, order) are not the ones that do: a tag added
+// elsewhere, one that was used, one that was renamed. A tick checks it.
+
+void TagsOpenInNewTab(WindowState* state, std::wstring const& name);
+void TagsRename(WindowState* state, std::wstring const& oldName);
+void TagsRecolour(WindowState* state, std::wstring const& name, int colour);
+void TagsDelete(WindowState* state, std::wstring const& name);
+
+namespace {
+
+[[clang::no_destroy]] thread_local muxc::Flyout t_tagsFlyout{nullptr};  // The prompt or the confirmation that is open.
+
+std::wstring TagsSignature(std::vector<TagDef> const& list) {
+    std::wstring text;
+    for (auto const& tag : list) {
+        text += tag.name + L"\t" + std::to_wstring((int)tag.colour) + L"\n";
+    }
+    return text;
+}
+
+// The user's own order of the tags (the "My order" setting): their names, one per line, in a value of the mod's.
+const wchar_t kTagsOrderValue[] = L"sidebar.tags.order";
+
+std::vector<std::wstring> TagsOrderLoad() {
+    std::vector<std::wstring> order;
+    std::vector<wchar_t> buffer(32000);
+    size_t length = Wh_GetStringValue(kTagsOrderValue, buffer.data(), buffer.size());
+    if (!length || length >= buffer.size()) {
+        return order;
+    }
+    std::wstring all(buffer.data(), length);
+    size_t start = 0;
+    while (start <= all.size()) {
+        size_t end = all.find(L'\n', start);
+        if (end == std::wstring::npos) {
+            end = all.size();
+        }
+        if (end > start) {
+            order.push_back(all.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    return order;
+}
+
+// Every tag that is not hidden, in the order the setting asks for.
+std::vector<TagDef> TagsOrdered() {
+    int mode = g_sidebarTagsSort;
+    std::vector<TagDef> all = TagListRecent((int)kTagListMax);  // Visible tags, the most recently used first.
+    if (mode == 2) {
+        std::stable_sort(all.begin(), all.end(), [](TagDef const& a, TagDef const& b) {
+            return CompareStringOrdinal(a.name.c_str(), (int)a.name.size(), b.name.c_str(), (int)b.name.size(), TRUE) == CSTR_LESS_THAN;
+        });
+    } else if (mode == 1) {
+        auto order = TagsOrderLoad();
+        std::vector<TagDef> sorted;
+        std::vector<bool> taken(all.size(), false);
+        for (auto const& name : order) {
+            for (size_t i = 0; i < all.size(); i++) {
+                if (!taken[i] && TagNamesEqual(all[i].name, name)) {
+                    taken[i] = true;
+                    sorted.push_back(all[i]);
+                    break;
+                }
+            }
+        }
+        for (size_t i = 0; i < all.size(); i++) {
+            if (!taken[i]) {
+                sorted.push_back(all[i]);  // A tag the order does not know yet comes after the others, most recent first.
+            }
+        }
+        all = std::move(sorted);
+    }
+    return all;
+}
+
+std::vector<TagDef> TagsShown() {
+    int wanted = g_sidebarRecentTags;
+    size_t most = wanted < 1 ? kTagListMax : (size_t)wanted;  // Below 1 (the setting's -1): every tag that is not hidden.
+    auto list = TagsOrdered();
+    if (list.size() > most) {
+        list.resize(most);
+    }
+    return list;
+}
+
+// Puts a tag at `index` of the rows as shown (the order of "My order"), and saves the whole order.
+void TagsMoveTo(std::wstring const& name, size_t index) {
+    auto all = TagsOrdered();
+    std::vector<std::wstring> names;
+    size_t at = 0;
+    for (size_t i = 0; i < all.size(); i++) {
+        if (TagNamesEqual(all[i].name, name)) {
+            continue;
+        }
+        if (i < index) {
+            at++;
+        }
+        names.push_back(all[i].name);
+    }
+    names.insert(names.begin() + std::min(at, names.size()), name);
+    std::wstring text;
+    for (auto const& n : names) {
+        text += n + L"\n";
+    }
+    Wh_SetStringValue(kTagsOrderValue, text.c_str());
+}
+
+// Between which two rows of Tags a point of the island falls, as for Favorites.
+void TagsInsertPoint(SidebarPanel* panel, winrt::Windows::Foundation::Point point, size_t* index, float* lineY) {
+    winrt::Windows::Foundation::Rect block{};
+    float top = panel->tagsBlock && SidebarRectOf(panel->tagsBlock, &block) ? block.Y : 0;
+    size_t n = 0;
+    float lastBottom = -1;
+    *index = 0;
+    *lineY = -1;
+    for (auto const& mark : panel->locationMarks) {
+        if (!mark.button || mark.key.rfind(L"tag.", 0) != 0) {
+            continue;
+        }
+        winrt::Windows::Foundation::Rect row;
+        if (SidebarRectOf(mark.button, &row)) {
+            if (point.Y < row.Y + row.Height / 2) {
+                *index = n;
+                *lineY = row.Y - top;
+                return;
+            }
+            lastBottom = row.Y + row.Height;
+        }
+        n++;
+    }
+    *index = n;
+    *lineY = lastBottom >= 0 ? lastBottom - top : -1;
+}
+
+void TagsShowInsertLine(SidebarPanel* panel, float lineY) {
+    if (!panel->tagLine) {
+        return;
+    }
+    if (lineY < 0) {
+        panel->tagLine.Visibility(mux::Visibility::Collapsed);
+        return;
+    }
+    panel->tagLine.Margin(mux::Thickness{10, lineY - 1, 10, 0});
+    panel->tagLine.Visibility(mux::Visibility::Visible);
+}
+
+mux::FrameworkElement TagsAnchorFor(SidebarPanel* panel, std::wstring const& name) {
+    for (auto const& mark : panel->locationMarks) {
+        if (mark.key == L"tag." + name && mark.button) {
+            return mark.button;
+        }
+    }
+    return panel->host;
+}
+
+// ---- The passes over the files ----
+
+TagRewriteResult TagsRunPass(TagRewrite const& job, std::vector<std::wstring> const* paths,
+                             std::function<void(size_t, size_t)> const& progress, std::atomic<bool> const& cancel) {
+    if (paths) {
+        return TagIndexRewriteFiles(*paths, job, progress, cancel, nullptr);
+    }
+    return TagIndexRewrite(job, progress, cancel);
+}
+
+// Starts a pass on a mod thread (its progress shows at the next tick); one at a time. `removeTagAfter` takes the tag out of the
+// list when the pass went through on every file (a delete).
+bool TagsStartJob(WindowState* state, TagRewrite job, bool removeTagAfter) {
+    SidebarPanel* panel = state ? state->sidebar : nullptr;
+    if (!panel || (panel->tagJob && !panel->tagJob->finished)) {
+        return false;
+    }
+    auto running = std::make_shared<TagsJob>();
+    panel->tagJob = running;
+    bool started = StartModThread([running, job, removeTagAfter]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        TagRewriteResult result = TagsRunPass(
+            job, nullptr,
+            [running](size_t done, size_t total) {
+                running->done = done;
+                running->total = total;
+            },
+            running->cancel);
+        if (removeTagAfter && !result.cancelled && result.failed == 0) {
+            TagListRemove(job.oldName);
+        }
+        if (com) {
+            CoUninitialize();
+        }
+        running->finished = true;
+    });
+    if (!started) {
+        panel->tagJob.reset();
+    }
+    return started;
+}
+
+// ---- Prompts ----
+
+void TagsClosePrompt() {
+    if (t_tagsFlyout) {
+        try {
+            t_tagsFlyout.Hide();
+        } catch (...) {
+        }
+        t_tagsFlyout = nullptr;
+    }
+}
+
+muxc::Button TagsFlyoutButton(const wchar_t* text, bool accent) {
+    auto button = LoadXaml(std::wstring(L"<Button ") + kXamlNs + (accent ? L" Style='{StaticResource AccentButtonStyle}'/>" : L"/>")).as<muxc::Button>();
+    button.Content(winrt::box_value(winrt::hstring{text}));
+    return button;
+}
+
+void TagsShowFlyout(mux::FrameworkElement const& anchor, muxc::Flyout const& flyout) {
+    TagsClosePrompt();
+    t_tagsFlyout = flyout;
+    Keep(flyout, flyout.Closed(winrt::auto_revoke, [](Inspectable const&, Inspectable const&) { t_tagsFlyout = nullptr; }));
+    flyout.ShowAt(anchor);
+}
+
+std::wstring TagsProblemOf(std::wstring const& name, std::wstring const& except) {
+    if (!TagNameValid(name)) {
+        return Str(L"sidebar.tags.invalid");
+    }
+    for (auto const& tag : TagListSnapshot()) {
+        if (TagNamesEqual(tag.name, name) && !TagNamesEqual(tag.name, except)) {
+            return Str(L"sidebar.tags.exists");
+        }
+    }
+    return std::wstring();
+}
+
+void TagsRefillLater(WindowState* state) {
+    if (state && state->queue) {
+        state->queue.TryEnqueue([state]() {
+            if (state->sidebar && !g_unloading) {
+                SidebarFillTags(state, state->sidebar);
+            }
+        });
+    }
+}
+
+// A row with a name box, where the name of a tag is typed: at the top of the section for a new tag, in place of the row of the tag
+// that is renamed. Enter keeps the name (a name that is refused stays in the box, with the reason as its tooltip), Escape drops
+// it, and leaving the box keeps a good name and drops a bad one. `accept` gets the trimmed name and returns what is wrong with it.
+void TagsStartEdit(WindowState* state, std::wstring const& initial, int colour, std::wstring const& renaming,
+                   std::function<std::wstring(std::wstring const&)> accept) {
+    SidebarPanel* panel = state ? state->sidebar : nullptr;
+    if (!panel || panel->tagEditing || g_unloading) {
+        return;
+    }
+    SidebarPanel::Section* section = nullptr;
+    for (auto& s : panel->sections) {
+        if (s.key == L"tags") {
+            section = &s;
+        }
+    }
+    if (!section || !section->body) {
+        return;
+    }
+    if (section->collapsed) {
+        SidebarToggleSection(state, L"tags");
+    }
+    auto body = section->body;
+    uint32_t at = 0;
+    if (!renaming.empty()) {
+        for (auto const& mark : panel->locationMarks) {
+            uint32_t found = 0;
+            if (mark.key == L"tag." + renaming && mark.button && body.Children().IndexOf(mark.button, found)) {
+                at = found;
+                mark.button.Visibility(mux::Visibility::Collapsed);
+            }
+        }
+    }
+    muxc::Grid row;
+    row.Height(32);
+    row.Margin(mux::Thickness{12, 0, 8, 0});
+    row.ColumnDefinitions().Append(muxc::ColumnDefinition());
+    row.ColumnDefinitions().GetAt(0).Width(mux::GridLength{0, mux::GridUnitType::Auto});
+    row.ColumnDefinitions().Append(muxc::ColumnDefinition());
+    auto icon = SidebarTagIcon(colour, panel->dark);
+    icon.VerticalAlignment(mux::VerticalAlignment::Center);
+    icon.Margin(mux::Thickness{3, 0, 8, 0});
+    row.Children().Append(icon);
+    auto box = LoadXaml(std::wstring(L"<TextBox ") + kXamlNs + L" MaxLength='" + std::to_wstring(kLabelsMaxName) +
+                        L"' MinHeight='0' Height='28' Padding='6,0' VerticalContentAlignment='Center' "
+                        L"AutomationProperties.AutomationId='SidebarTagEdit'/>").as<muxc::TextBox>();
+    box.Text(initial);
+    muxc::Grid::SetColumn(box, 1);
+    row.Children().Append(box);
+    body.Children().InsertAt(at, row);
+    panel->tagEditing = true;
+    g_renaming = true;
+
+    auto finished = std::make_shared<bool>(false);
+    winrt::weak_ref<muxc::TextBox> weakBox = box;
+    // mode 0: Enter. 1: the box lost the keyboard. 2: Escape.
+    auto finish = [state, finished, weakBox, accept, row](int mode) {
+        if (*finished) {
+            return;
+        }
+        SidebarPanel* panel = state->sidebar;
+        auto box = weakBox.get();
+        if (!panel || !box) {
+            return;
+        }
+        std::wstring name = LabelsTrim(std::wstring(box.Text()));
+        if (mode != 2 && !name.empty()) {
+            std::wstring wrong = accept(name);
+            if (!wrong.empty()) {
+                if (mode == 0) {
+                    box.BorderBrush(mux::Application::Current().Resources().Lookup(winrt::box_value(L"SystemFillColorCriticalBrush")).as<mux::Media::Brush>());
+                    muxc::ToolTipService::SetToolTip(box, winrt::box_value(winrt::hstring{wrong}));
+                    return;
+                }
+            }
+        }
+        *finished = true;
+        panel->tagEditing = false;
+        g_renaming = false;
+        SidebarFillTags(state, panel);  // The row goes, and the rows of the tags are made again.
+    };
+    Keep(box, box.KeyDown(winrt::auto_revoke, [finish](Inspectable const&, mux::Input::KeyRoutedEventArgs const& args) {
+        if (args.Key() == winrt::Windows::System::VirtualKey::Enter) {
+            args.Handled(true);
+            finish(0);
+        } else if (args.Key() == winrt::Windows::System::VirtualKey::Escape) {
+            args.Handled(true);
+            finish(2);
+        }
+    }));
+    Keep(box, box.LostFocus(winrt::auto_revoke, [finish](Inspectable const&, mux::RoutedEventArgs const&) { finish(1); }));
+    box.Focus(mux::FocusState::Programmatic);
+    box.SelectAll();
+}
+
+// ---- The menu of a tag ----
+
+template <typename Items>
+void TagsMenuItemsFor(WindowState* state, Items items, TagDef const& tag, bool withOpen = false) {
+    std::wstring name = tag.name;
+    if (withOpen) {
+        // The row's own menu starts with where it leads: Open, Open in new tab, then a line.
+        muxc::MenuFlyoutItem open;
+        open.Text(Str(L"sidebar.tags.open"));
+        Keep(open, open.Click(winrt::auto_revoke, [state, name](Inspectable const&, mux::RoutedEventArgs const&) {
+            TagResultsShow(state, name);
+        }));
+        items.Append(open);
+        muxc::MenuFlyoutItem newTab;
+        newTab.Text(Str(L"sidebar.newtab"));
+        Keep(newTab, newTab.Click(winrt::auto_revoke, [state, name](Inspectable const&, mux::RoutedEventArgs const&) {
+            TagsOpenInNewTab(state, name);
+        }));
+        items.Append(newTab);
+        items.Append(muxc::MenuFlyoutSeparator());
+    }
+    muxc::MenuFlyoutItem rename;
+    rename.Text(Str(L"sidebar.tags.rename"));
+    Keep(rename, rename.Click(winrt::auto_revoke, [state, name](Inspectable const&, mux::RoutedEventArgs const&) { TagsRename(state, name); }));
+    items.Append(rename);
+
+    muxc::MenuFlyoutSubItem colours;
+    colours.Text(Str(L"sidebar.tags.colour"));
+    bool dark = LabelsDarkTheme();
+    for (int colour = 0; colour < 8; colour++) {
+        muxc::ToggleMenuFlyoutItem item;
+        std::wstring colourName = LabelsColourName(colour);
+        item.Text(colourName.empty() ? std::to_wstring(colour + 1) : colourName);
+        item.IsChecked(tag.colour == colour);
+        muxc::FontIcon dot;
+        dot.FontFamily(mux::Media::FontFamily(L"Segoe UI"));
+        dot.Glyph(L"●");
+        COLORREF fill = LabelsDotRgb(colour, dark);
+        dot.Foreground(mux::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(255, GetRValue(fill), GetGValue(fill), GetBValue(fill))));
+        item.Icon(dot);
+        Keep(item, item.Click(winrt::auto_revoke, [state, name, colour](Inspectable const&, mux::RoutedEventArgs const&) {
+            TagsRecolour(state, name, colour);
+        }));
+        colours.Items().Append(item);
+    }
+    items.Append(colours);
+
+    muxc::MenuFlyoutItem hide;
+    hide.Text(Str(tag.hidden ? L"sidebar.tags.show" : L"sidebar.tags.hide"));
+    bool hidden = tag.hidden;
+    Keep(hide, hide.Click(winrt::auto_revoke, [state, name, hidden](Inspectable const&, mux::RoutedEventArgs const&) {
+        TagListSetHidden(name, !hidden);
+        TagsRefillLater(state);
+    }));
+    items.Append(hide);
+
+    muxc::MenuFlyoutItem remove;
+    remove.Text(Str(L"sidebar.tags.delete"));
+    Keep(remove, remove.Click(winrt::auto_revoke, [state, name](Inspectable const&, mux::RoutedEventArgs const&) { TagsDelete(state, name); }));
+    items.Append(remove);
+}
+
+// The "…" menu: a new tag, then every tag (hidden ones too) with its own menu.
+void TagsFillManageMenu(WindowState* state, muxc::MenuFlyout const& menu, mux::FrameworkElement const& anchor) {
+    menu.Items().Clear();
+    muxc::MenuFlyoutItem add;
+    add.Text(Str(L"sidebar.tags.new"));
+    winrt::weak_ref<mux::FrameworkElement> weakAnchor = anchor;
+    Keep(add, add.Click(winrt::auto_revoke, [state, weakAnchor](Inspectable const&, mux::RoutedEventArgs const&) {
+        auto target = weakAnchor.get();
+        if (!target) {
+            return;
+        }
+        TagsStartEdit(state, std::wstring(), 0, std::wstring(), [state](std::wstring const& name) {
+            std::wstring wrong = TagsProblemOf(name, std::wstring());
+            if (wrong.empty()) {
+                TagListAdd(name, 0);
+                TagListTouch(name);
+            }
+            return wrong;
+        });
+    }));
+    menu.Items().Append(add);
+    auto all = TagListSnapshot();
+    if (!all.empty()) {
+        menu.Items().Append(muxc::MenuFlyoutSeparator());
+    }
+    for (auto const& tag : all) {
+        muxc::MenuFlyoutSubItem sub;
+        sub.Text(tag.hidden ? tag.name + L" (" + Str(L"sidebar.tags.hiddennote") + L")" : tag.name);
+        TagsMenuItemsFor(state, sub.Items(), tag);
+        menu.Items().Append(sub);
+    }
+}
+
+TagDef TagsDefOf(std::wstring const& name) {
+    for (auto const& tag : TagListSnapshot()) {
+        if (TagNamesEqual(tag.name, name)) {
+            return tag;
+        }
+    }
+    TagDef none;
+    none.name = name;
+    return none;
+}
+
+}  // namespace
+
+// ---- What the tags do ----
+
+// Adds the tag to every item that lacks it, and marks the tag as the latest used. Writes the files: not for a window's thread.
+void TagsAddToItems(std::vector<std::wstring> const& paths, std::wstring const& tag) {
+    TagDef def = TagsDefOf(tag);
+    bool known = false;
+    for (auto const& listed : TagListSnapshot()) {
+        known = known || TagNamesEqual(listed.name, tag);
+    }
+    if (!known) {
+        return;
+    }
+    LabelsApplyToSelection(paths, LabelTag{def.colour, def.name}, true);
+    TagListTouch(def.name);
+}
+
+// Takes the tag off every file in `paths` (the files the index lists when `paths` is null) and, when that went through on all of
+// them, out of the list. Returns what the pass did.
+TagRewriteResult TagsDeletePass(std::wstring const& name, std::vector<std::wstring> const* paths,
+                                std::function<void(size_t, size_t)> const& progress, std::atomic<bool> const& cancel) {
+    TagRewrite job;
+    job.oldName = name;
+    TagRewriteResult result = TagsRunPass(job, paths, progress, cancel);
+    if (!result.cancelled && result.failed == 0) {
+        TagListRemove(name);
+    }
+    return result;
+}
+
+void TagsRename(WindowState* state, std::wstring const& oldName) {
+    SidebarPanel* panel = state ? state->sidebar : nullptr;
+    if (!panel) {
+        return;
+    }
+    TagsStartEdit(state, oldName, TagsDefOf(oldName).colour, oldName, [state, oldName](std::wstring const& name) {
+        std::wstring wrong = TagsProblemOf(name, oldName);
+        if (!wrong.empty()) {
+            return wrong;
+        }
+        if (name == oldName) {
+            return std::wstring();
+        }
+        if (!TagListRename(oldName, name)) {
+            return std::wstring(Str(L"sidebar.tags.invalid"));
+        }
+        TagRewrite job;
+        job.oldName = oldName;
+        job.newName = name;
+        TagsStartJob(state, job, false);
+        return std::wstring();
+    });
+}
+
+void TagsRecolour(WindowState* state, std::wstring const& name, int colour) {
+    TagListRecolor(name, colour);
+    TagRewrite job;
+    job.oldName = name;
+    job.newName = name;
+    job.newColour = colour;
+    TagsStartJob(state, job, false);
+    TagsRefillLater(state);
+}
+
+// Asks first (with the number of files that have the tag), then runs the pass.
+void TagsDelete(WindowState* state, std::wstring const& name) {
+    SidebarPanel* panel = state ? state->sidebar : nullptr;
+    if (!panel) {
+        return;
+    }
+    size_t count = TagIndexCount(name);
+    muxc::Flyout flyout;
+    muxc::StackPanel content;
+    content.Spacing(10);
+    content.MaxWidth(190);
+    wchar_t text[400];
+    swprintf_s(text, Str(L"sidebar.tags.confirm"), name.c_str(), (unsigned)count);
+    auto message = MakeText(text, 13, false, false);
+    message.TextWrapping(mux::TextWrapping::Wrap);
+    content.Children().Append(message);
+    muxc::StackPanel buttons;
+    buttons.Orientation(muxc::Orientation::Horizontal);
+    buttons.Spacing(8);
+    buttons.HorizontalAlignment(mux::HorizontalAlignment::Right);
+    auto yes = TagsFlyoutButton(Str(L"sidebar.tags.delete"), true);
+    auto no = TagsFlyoutButton(Str(L"sidebar.tags.cancel"), false);
+    buttons.Children().Append(yes);
+    buttons.Children().Append(no);
+    content.Children().Append(buttons);
+    flyout.Content(content);
+    Keep(yes, yes.Click(winrt::auto_revoke, [state, name](Inspectable const&, mux::RoutedEventArgs const&) {
+        TagsClosePrompt();
+        TagRewrite job;
+        job.oldName = name;
+        TagsStartJob(state, job, true);
+    }));
+    Keep(no, no.Click(winrt::auto_revoke, [](Inspectable const&, mux::RoutedEventArgs const&) { TagsClosePrompt(); }));
+    TagsShowFlyout(TagsAnchorFor(panel, name), flyout);
+}
+
+// Opens a new tab (on Home) and shows the tag's list in it once the tab has settled on its folder: a list opened earlier would see the
+// tab still navigating and close.
+void TagsOpenInNewTab(WindowState* state, std::wstring const& name) {
+    if (!state || !state->queue) {
+        return;
+    }
+    HWND oldTab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+    PIDLIST_ABSOLUTE home = nullptr;
+    if (FAILED(SHParseDisplayName(L"shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}", nullptr, &home, 0, nullptr)) || !home) {
+        return;
+    }
+    auto homePidl = std::shared_ptr<ITEMIDLIST>(home, [](ITEMIDLIST* p) { CoTaskMemFree(p); });
+    OpenFolderInNewTab(state, homePidl.get());
+    // Settled: the new tab's folder has been the same for half a second. (Not compared with the Home we asked for: the tab can show
+    // another id for Home, and the compare never came true.)
+    auto settled = std::make_shared<int>(0);
+    auto last = std::make_shared<Pidl>();
+    ULONGLONG started = GetTickCount64();
+    try {
+        auto timer = state->queue.CreateTimer();
+        timer.Interval(std::chrono::milliseconds(100));
+        // A timer nobody holds is dropped and never ticks: the tick's own capture holds it, and lets go when it stops.
+        auto holder = std::make_shared<mud::DispatcherQueueTimer>(timer);
+        Keep(timer, timer.Tick(winrt::auto_revoke, [holder, oldTab, homePidl, settled, last, started, name](mud::DispatcherQueueTimer const& sender, Inspectable const&) {
+            WindowState* now = StateForThisThread(false);
+            if (!now || g_unloading || GetTickCount64() - started > 8000) {
+                sender.Stop();
+                *holder = nullptr;
+                return;
+            }
+            HWND tab = FindVisibleChild(now->topLevel, L"ShellTabWindowClass");
+            IShellBrowser* browser = BrowserOf(now->topLevel);
+            if (!tab || tab == oldTab || !browser) {
+                return;
+            }
+            Pidl folder = CurrentFolder(browser);
+            if (folder && *last && ILIsEqual(folder.get(), last->get())) {
+                (*settled)++;
+            } else {
+                *settled = 0;
+                *last = folder ? Pidl(ILClone(folder.get())) : Pidl();
+            }
+            if (*settled >= 5) {
+                sender.Stop();
+                *holder = nullptr;
+                TagResultsShow(now, name);
+            }
+        }));
+        timer.Start();
+    } catch (...) {
+        LogHresult(L"opening a tag in a new tab");
+    }
+}
+
+// The files (and folders) of a drag, as paths on disk.
+std::vector<std::wstring> TagsItemsOf(IDataObject* data) {
+    std::vector<std::wstring> paths;
+    IShellItemArray* items = nullptr;
+    if (!data || FAILED(SHCreateShellItemArrayFromDataObject(data, IID_PPV_ARGS(&items))) || !items) {
+        return paths;
+    }
+    DWORD count = 0;
+    items->GetCount(&count);
+    for (DWORD i = 0; i < count && i < 500; i++) {
+        IShellItem* item = nullptr;
+        if (FAILED(items->GetItemAt(i, &item)) || !item) {
+            continue;
+        }
+        wchar_t* text = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &text)) && text) {
+            paths.push_back(text);
+            CoTaskMemFree(text);
+        }
+        item->Release();
+    }
+    items->Release();
+    return paths;
+}
+
+// A drop on a tag row: the files get the tag, written on a mod thread.
+void TagsDropLater(std::wstring const& tag, std::vector<std::wstring> paths) {
+    StartModThread([tag, paths]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        TagsAddToItems(paths, tag);
+        if (com) {
+            CoUninitialize();
+        }
+    });
+}
+
+// ---- The section ----
+
+void SidebarFillTags(WindowState* state, SidebarPanel* panel) {
+    SidebarPanel::Section* section = nullptr;
+    for (auto& s : panel->sections) {
+        if (s.key == L"tags") {
+            section = &s;
+        }
+    }
+    if (!section || !section->body) {
+        return;
+    }
+    auto body = section->body;
+    body.Children().Clear();
+    panel->locationMarks.erase(std::remove_if(panel->locationMarks.begin(), panel->locationMarks.end(),
+                                              [](SidebarPanel::Mark const& m) { return m.key.rfind(L"tag.", 0) == 0; }),
+                               panel->locationMarks.end());
+    panel->tagRows.clear();
+    auto shown = TagsShown();
+    panel->tagSig = TagsSignature(shown);
+    for (auto const& tag : shown) {
+        std::wstring key = L"tag." + tag.name;
+        auto row = SidebarMakeRow(key, tag.name, false);
+        row.iconHost.Children().Append(SidebarTagIcon(tag.colour, panel->dark));
+        SidebarPanel::TagRow remembered;
+        remembered.icon = row.iconHost;
+        remembered.colour = tag.colour;
+        remembered.name = tag.name;
+        if (g_sidebarTagCounts) {
+            // The number of files with the tag, muted at the right of the row (kept up to date by the tick).
+            auto count = MakeText(L"", 12, false, true);
+            count.HorizontalAlignment(mux::HorizontalAlignment::Right);
+            count.VerticalAlignment(mux::VerticalAlignment::Center);
+            count.Margin(mux::Thickness{0, 0, 12, 0});
+            count.IsHitTestVisible(false);
+            row.content.Children().Append(count);
+            remembered.count = count;
+            count.Text(std::to_wstring(TagIndexCount(tag.name)));
+        }
+        panel->tagRows.push_back(remembered);
+        SidebarPanel::Mark mark;
+        mark.key = key;
+        mark.selected = row.selected;
+        mark.pill = row.pill;
+        mark.button = row.button;
+        panel->locationMarks.push_back(std::move(mark));
+        muxc::MenuFlyout flyout;
+        TagsMenuItemsFor(state, flyout.Items(), tag, true);
+        row.button.ContextFlyout(flyout);
+        std::wstring tagName = tag.name;
+        Keep(row.button, row.button.Click(winrt::auto_revoke, [state, tagName](Inspectable const&, mux::RoutedEventArgs const&) {
+            if (state->sidebar && state->sidebar->suppressClick) {
+                state->sidebar->suppressClick = false;  // The release of a drag that moved the row.
+                return;
+            }
+            TagResultsShow(state, tagName);
+        }));
+        if (g_sidebarTagsSort == 1) {
+            // "My order": a row can be dragged to another place.
+            SidebarAttachReorder(
+                state, row.button,
+                [state](winrt::Windows::Foundation::Point point, size_t* index, float* line) {
+                    if (state->sidebar) {
+                        TagsInsertPoint(state->sidebar, point, index, line);
+                    }
+                },
+                [state](float line) {
+                    if (state->sidebar) {
+                        TagsShowInsertLine(state->sidebar, line);
+                    }
+                },
+                [state, tagName](size_t index) {
+                    TagsMoveTo(tagName, index);
+                    if (state->sidebar) {
+                        SidebarFillTags(state, state->sidebar);
+                    }
+                });
+        }
+        body.Children().Append(row.button);
+    }
+    // "View all": the list of every tag, with how many files each has. Not shown when the rows already are every tag.
+    if (TagListSnapshot().size() > shown.size()) {
+        auto all = SidebarNewButton(L"SidebarRow.tags.viewall", 28, L"0");
+        auto allText = MakeText(Str(L"sidebar.tags.viewall"), 12, false, true);
+        allText.Margin(mux::Thickness{41, 0, 11, 0});
+        allText.VerticalAlignment(mux::VerticalAlignment::Center);
+        all.Content(allText);
+        Keep(all, all.Click(winrt::auto_revoke, [state](Inspectable const&, mux::RoutedEventArgs const&) { TagListShow(state); }));
+        body.Children().Append(all);
+    }
+    if (shown.empty()) {
+        auto hint = MakeText(Str(L"sidebar.tags.empty"), 12, false, true);
+        hint.TextWrapping(mux::TextWrapping::Wrap);
+        hint.Margin(mux::Thickness{15, 4, 11, 4});
+        body.Children().Append(hint);
+    }
+}
+
+// The keys of the sidebar, for the row that has the keyboard (arrows and Enter are the controls' own, with the focus moves of XAML):
+// Delete unpins a favorite, F2 renames a tag, Ctrl+Up and Ctrl+Down move a favorite (or a tag, in "My order") one place.
+void SidebarKeyDown(WindowState* state, mux::Input::KeyRoutedEventArgs const& args) {
+    using winrt::Windows::System::VirtualKey;
+    SidebarPanel* panel = state->sidebar;
+    if (!panel || !panel->host || panel->tagEditing || !state->queue) {
+        return;
+    }
+    auto focused = mux::Input::FocusManager::GetFocusedElement(panel->host.XamlRoot()).try_as<muxc::Button>();
+    if (!focused) {
+        return;
+    }
+    std::wstring key;
+    for (auto const& mark : panel->locationMarks) {
+        if (mark.button && mark.button == focused) {
+            key = mark.key;
+        }
+    }
+    if (key.empty()) {
+        return;
+    }
+    VirtualKey pressed = args.Key();
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool move = ctrl && (pressed == VirtualKey::Up || pressed == VirtualKey::Down);
+    bool up = pressed == VirtualKey::Up;
+    // After the rows are made again the row that moved has the keyboard again.
+    auto refill = [state, key](bool favorites) {
+        state->queue.TryEnqueue([state, key, favorites]() {
+            SidebarPanel* now = state->sidebar;
+            if (!now || g_unloading) {
+                return;
+            }
+            if (favorites) {
+                SidebarFillFavorites(state, now);
+            } else {
+                SidebarFillTags(state, now);
+            }
+            for (auto const& mark : now->locationMarks) {
+                if (mark.key == key && mark.button) {
+                    mark.button.Focus(mux::FocusState::Keyboard);
+                }
+            }
+        });
+    };
+    if (key.rfind(L"fav.", 0) == 0) {
+        std::wstring path = key.substr(4);
+        if (pressed == VirtualKey::Delete) {
+            FavoritesPinLater({path}, false);
+            args.Handled(true);
+        } else if (move) {
+            size_t at = 0;
+            for (size_t i = 0; i < panel->favorites.size(); i++) {
+                if (_wcsicmp(panel->favorites[i].path.c_str(), path.c_str()) == 0) {
+                    at = i;
+                }
+            }
+            FavoritesPlace(panel, {path}, up ? (at > 0 ? at - 1 : 0) : at + 2);
+            refill(true);
+            args.Handled(true);
+        }
+    } else if (key.rfind(L"tag.", 0) == 0) {
+        std::wstring name = key.substr(4);
+        if (pressed == VirtualKey::F2) {
+            TagsRename(state, name);
+            args.Handled(true);
+        } else if (move && g_sidebarTagsSort == 1) {
+            size_t at = 0;
+            for (size_t i = 0; i < panel->tagRows.size(); i++) {
+                if (TagNamesEqual(panel->tagRows[i].name, name)) {
+                    at = i;
+                }
+            }
+            TagsMoveTo(name, up ? (at > 0 ? at - 1 : 0) : at + 2);
+            refill(false);
+            args.Handled(true);
+        }
+    }
+}
+
+// Every few ticks: the rows when the tags changed, and the progress of a running change.
+void TagsTick(WindowState* state, SidebarPanel* panel) {
+    if (!panel->tagEditing && TagsSignature(TagsShown()) != panel->tagSig) {
+        SidebarFillTags(state, panel);
+    }
+    if (g_sidebarTagCounts && panel->ticks % 50 == 0) {
+        // About every three seconds: the counts of the rows (a tag was added to files, a file went).
+        for (auto const& row : panel->tagRows) {
+            if (auto count = row.count.get()) {
+                std::wstring text = std::to_wstring(TagIndexCount(row.name));
+                if (std::wstring(count.Text()) != text) {
+                    count.Text(text);
+                }
+            }
+        }
+    }
+    if (!panel->tagProgress) {
+        return;
+    }
+    auto job = panel->tagJob;
+    if (!job) {
+        panel->tagProgress.Visibility(mux::Visibility::Collapsed);
+        return;
+    }
+    if (job->finished) {
+        panel->tagJob.reset();
+        panel->tagProgress.Visibility(mux::Visibility::Collapsed);
+        if (!panel->tagEditing) {
+            SidebarFillTags(state, panel);
+        }
+        return;
+    }
+    panel->tagProgress.Visibility(mux::Visibility::Visible);
+    size_t total = job->total;
+    if (panel->tagBar) {
+        panel->tagBar.IsIndeterminate(total == 0);
+        if (total) {
+            panel->tagBar.Value(100.0 * (double)job->done / (double)total);
+        }
+    }
+}
+
+// The "..." button of the header, with its menu (the header row of 10j shows it on hover).
+muxc::Button SidebarTagsMore(WindowState* state, SidebarPanel*) {
+    auto more = SidebarNewButtonWith(L"SidebarMenu.tags", 26, L"0", kSidebarSmallTemplate);
+    more.Width(26);
+    more.Content(SidebarGlyph(L"\uE712", 14));
+    mux::Automation::AutomationProperties::SetName(more, Str(L"sidebar.tags.manage"));
+    muxc::MenuFlyout menu;
+    more.Flyout(menu);
+    winrt::weak_ref<muxc::Button> weak = more;
+    winrt::weak_ref<muxc::MenuFlyout> weakMenu = menu;
+    Keep(menu, menu.Opening(winrt::auto_revoke, [state, weakMenu, weak](Inspectable const&, Inspectable const&) {
+        auto shownMenu = weakMenu.get();
+        auto anchor = weak.get();
+        if (shownMenu && anchor) {
+            TagsFillManageMenu(state, shownMenu, anchor);
+        }
+    }));
+    return more;
+}
+
+// The progress line under the header: a thin bar and a button that stops the change. Shown while a change runs.
+muxc::Grid SidebarTagsProgress(WindowState* state, SidebarPanel* panel) {
+    muxc::Grid progress;
+    progress.Margin(mux::Thickness{15, 2, 11, 6});
+    progress.Visibility(mux::Visibility::Collapsed);
+    progress.ColumnDefinitions().Append(muxc::ColumnDefinition());
+    muxc::ColumnDefinition stopColumn;
+    stopColumn.Width(mux::GridLength{0, mux::GridUnitType::Auto});
+    progress.ColumnDefinitions().Append(stopColumn);
+    muxc::ProgressBar bar;
+    bar.Maximum(100);
+    bar.VerticalAlignment(mux::VerticalAlignment::Center);
+    progress.Children().Append(bar);
+    auto stop = SidebarNewButtonWith(L"SidebarTagsStop", 24, L"0", kSidebarSmallTemplate);
+    stop.Width(24);
+    stop.Margin(mux::Thickness{6, 0, 0, 0});
+    stop.Content(SidebarGlyph(L"\uE711", 11));
+    mux::Automation::AutomationProperties::SetName(stop, Str(L"sidebar.tags.stop"));
+    muxc::Grid::SetColumn(stop, 1);
+    Keep(stop, stop.Click(winrt::auto_revoke, [state](Inspectable const&, mux::RoutedEventArgs const&) {
+        if (state->sidebar && state->sidebar->tagJob) {
+            state->sidebar->tagJob->cancel = true;
+        }
+    }));
+    progress.Children().Append(stop);
+    panel->tagProgress = progress;
+    panel->tagBar = bar;
+    return progress;
+}
+
+void TagsReleaseThreadObjects() {
+    t_tagsFlyout = nullptr;
+    g_renaming = false;
+}
+// Sidebar Tags: the self-test of what a drop and a delete do (debug build only). It works on temp files and a tag of its own, and
+// logs one line: "TAGS UI SELFTEST pass", or "TAGS UI SELFTEST FAIL <what>". tools/smoke-test-explorer-extras.ps1 reads that line.
+// The files are in the temp folder, which the tag index leaves out, so the pass is run on the list of files directly.
+// Sidebar: the list of the files that carry a tag, and the list of all tags. Opened from a tag row ("View all" for the second). It
+// is the mod's own flat list in an island placed over the file area of the window (so it works with Columns off), fed by the
+// tag index (04d): Name, Location, Date modified, Size, sortable by a click on a title. The folder Explorer shows is not changed;
+// the list goes when the user navigates anywhere (a click in the sidebar, the address bar, Back, a Location click), on the
+// arrow of its header, on Back / Backspace / Alt+Left / Escape.
+//
+// The rows are drawn by hand and only those in view exist (a canvas as tall as the list, rows put where the scroll offset says), so a
+// tag on thousands of files costs a screenful. A shell context menu comes on a right click (a window of its own takes its
+// messages), a double click opens the item. Not here: dragging the rows out, renaming in the list (both are in the folder view).
+//
+// The pure parts (rows from the index, their sort) are tested by 10j4a.
+
+struct TagResultRow {
+    std::wstring path;
+    std::wstring name;
+    std::wstring folder;  // The folder that holds it: the Location column.
+    FILETIME modified{};
+    ULONGLONG size = 0;
+    bool isFolder = false;
+};
+
+enum class TagResultSort { Name, Location, Modified, Size };
+
+std::vector<TagResultRow> TagResultsRows(std::vector<IndexedFile> const& files) {
+    std::vector<TagResultRow> rows;
+    for (auto const& file : files) {
+        TagResultRow row;
+        row.path = file.path;
+        const wchar_t* base = PathFindFileNameW(file.path.c_str());
+        row.name = base;
+        row.folder = file.path.substr(0, (size_t)(base - file.path.c_str()));
+        if (row.folder.size() > 3 && row.folder.back() == L'\\') {
+            row.folder.pop_back();  // "C:\" keeps its slash, "C:\Users\" does not.
+        }
+        row.modified = file.modified;
+        row.size = file.isFolder ? 0 : file.size;
+        row.isFolder = file.isFolder;
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+namespace {
+
+int TagResultsText(std::wstring const& a, std::wstring const& b) {
+    return CompareStringOrdinal(a.c_str(), (int)a.size(), b.c_str(), (int)b.size(), TRUE) - CSTR_EQUAL;
+}
+
+}  // namespace
+
+void TagResultsSort(std::vector<TagResultRow>& rows, TagResultSort by, bool ascending) {
+    std::stable_sort(rows.begin(), rows.end(), [by, ascending](TagResultRow const& a, TagResultRow const& b) {
+        int c = 0;
+        switch (by) {
+            case TagResultSort::Name: c = TagResultsText(a.name, b.name); break;
+            case TagResultSort::Location: c = TagResultsText(a.folder, b.folder); break;
+            case TagResultSort::Modified: c = CompareFileTime(&a.modified, &b.modified); break;
+            case TagResultSort::Size: c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
+        }
+        if (c == 0) {
+            c = TagResultsText(a.path, b.path);
+        }
+        return ascending ? c < 0 : c > 0;
+    });
+}
+
+// ---- The panel ----
+
+struct TagViewPanel {
+    mux::Hosting::DesktopWindowXamlSource source{nullptr};
+    winrt::Microsoft::UI::Content::DesktopChildSiteBridge bridge{nullptr};
+    muxc::Grid root{nullptr};
+    muxc::Grid iconHost{nullptr};
+    muxc::TextBlock title{nullptr};
+    muxc::TextBlock count{nullptr};
+    muxc::Grid columnHeader{nullptr};
+    muxc::ScrollViewer scroller{nullptr};
+    muxc::Canvas canvas{nullptr};
+    muxc::TextBlock message{nullptr};
+    muxc::StackPanel messageHost{nullptr};  // The spinner and the message, at the top of the list.
+    muxc::ProgressRing ring{nullptr};
+    bool loadedOnce = false;                // The index has answered (or the cache did) since the list opened.
+    bool active = false;
+    bool shown = false;
+    RECT rect{};
+    bool tagsMode = false;  // The list of all tags, not the files of one.
+    std::wstring tag;
+    int colour = 0;
+    std::vector<TagResultRow> rows;
+    struct TagLine {
+        std::wstring name;
+        int colour = 0;
+        size_t count = 0;
+    };
+    std::vector<TagLine> tagLines;
+    bool ready = false;      // The index has had its first walk.
+    size_t progress = 0;     // Items it has seen, while it has not.
+    TagResultSort sort = TagResultSort::Name;
+    bool ascending = true;
+    std::set<size_t> selected;
+    size_t anchor = 0;
+    double widths[3] = {260, 150, 90};  // Location, Date modified, Size, in pixels (Name takes the rest). The user drags them.
+    struct Realized {
+        muxc::Grid grid{nullptr};
+        muxc::Grid cells{nullptr};
+        muxc::Border back{nullptr};
+    };
+    std::map<size_t, Realized> realized;
+    std::shared_ptr<ITEMIDLIST> folderAtOpen;  // The folder Explorer showed when the list opened: a change of it closes the list.
+    unsigned generation = 0;
+    bool loading = false;
+    unsigned ticks = 0;
+    // The title of the tab the list is in: Explorer's tab item (TabViewItem) holds a StackPanel header [spinner, TextBlock] that its
+    // own code writes, and an IconSource. While the list shows, the text is the tag's name and count and the icon is the tag's.
+    winrt::weak_ref<muxc::TabViewItem> tabItem;
+    bool titled = false;
+    std::wstring savedText, ourText;
+    muxc::IconSource savedIcon{nullptr};
+    muxc::IconSource ourIcon{nullptr};
+    int ourColour = -1;
+    HWND tab = nullptr;          // The tab (ShellTabWindowClass) the list belongs to: another tab shows its own folder.
+    bool tabHidden = false;      // The list is out of sight because another tab is showing.
+    std::wstring hiddenKey;      // The sidebar's pill key while it is.
+};
+
+void TagViewLeave(WindowState* state);
+void TagResultsShow(WindowState* state, std::wstring const& tag);
+
+namespace {
+
+void TagViewLoadSoon(WindowState* state);
+void TagViewLoadNow(WindowState* state);
+
+// Runs `work` after the handler that asked, on the window's thread: a handler of a row must not remake the rows (its own too).
+void TagViewLater(WindowState* state, std::function<void()> work) {
+    if (!state->queue) {
+        return;
+    }
+    state->queue.TryEnqueue([work]() {
+        if (!g_unloading) {
+            try {
+                work();
+            } catch (...) {
+                LogHresult(L"a tag list action");
+            }
+        }
+    });
+}
+
+// What the lists showed last, by tag (and the list of tags), so that opening one shows it at once and the index is read again
+// behind it. Under the mutex: every window of the process uses it.
+std::mutex g_tagViewCacheMutex;
+std::map<std::wstring, std::vector<TagResultRow>> g_tagViewRowsCache;
+std::vector<TagViewPanel::TagLine> g_tagViewLinesCache;
+bool g_tagViewLinesCached = false;
+
+std::wstring TagViewCacheKey(std::wstring tag) {
+    CharLowerBuffW(tag.data(), (DWORD)tag.size());
+    return tag;
+}
+
+constexpr double kTagViewRow = 32;
+
+thread_local HWND g_tagViewWindowLocal = nullptr;
+
+size_t TagViewCount(TagViewPanel* view) {
+    return view->tagsMode ? view->tagLines.size() : view->rows.size();
+}
+
+muxc::TabViewItem TagViewSelectedTab(mux::DependencyObject const& node, int depth, int* visited) {
+    if (!node || depth > 40 || ++*visited > 6000) {
+        return nullptr;
+    }
+    if (auto item = node.try_as<muxc::TabViewItem>()) {
+        if (item.IsSelected()) {
+            return item;
+        }
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = TagViewSelectedTab(mux::Media::VisualTreeHelper::GetChild(node, i), depth + 1, visited)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+muxc::TextBlock TagViewTabText(muxc::TabViewItem const& item) {
+    if (auto header = item.Header().try_as<muxc::Panel>()) {
+        for (auto child : header.Children()) {
+            if (auto block = child.try_as<muxc::TextBlock>()) {
+                return block;
+            }
+        }
+    }
+    return nullptr;
+}
+
+// Puts the tag's name and count, and its icon, on the tab. Every tick: Explorer writes the folder's name there when it likes.
+void TagViewTitle(WindowState* state, TagViewPanel* view) {
+    if (!view->active || view->tabHidden) {
+        return;
+    }
+    try {
+        auto item = view->tabItem.get();
+        if (!item) {
+            if (!state->xamlRoot || view->titled) {
+                return;
+            }
+            int visited = 0;
+            item = TagViewSelectedTab(state->xamlRoot.Content().try_as<mux::DependencyObject>(), 0, &visited);
+            if (!item) {
+                return;
+            }
+            view->tabItem = item;
+        }
+        auto block = TagViewTabText(item);
+        if (!block) {
+            return;
+        }
+        std::wstring name = view->tagsMode ? std::wstring(Str(L"sidebar.tags")) : view->tag;
+        size_t count = TagViewCount(view);
+        std::wstring wanted = view->loadedOnce ? name + L" (" + std::to_wstring(count) + L")" : name;
+        if (!view->titled) {
+            view->savedText = block.Text();
+            view->savedIcon = item.IconSource();
+            view->titled = true;
+        }
+        if (std::wstring(block.Text()) != wanted) {
+            block.Text(wanted);
+        }
+        view->ourText = wanted;
+        int colour = view->tagsMode ? 0 : view->colour;
+        if (!view->ourIcon || view->ourColour != colour) {
+            // The tag shape of the sidebar and of the list's header (the same path), in the tag's colour.
+            auto icon = LoadXaml(std::wstring(L"<PathIconSource ") + kXamlNs +
+                                 L" Data='F0 M 2.5,2.5 L 8.2,2.5 C 8.6,2.5 8.9,2.65 9.2,2.9 "
+                                 L"L 13.1,6.8 C 13.7,7.4 13.7,8.4 13.1,9 L 9,13.1 C 8.4,13.7 7.4,13.7 6.8,13.1 L 2.9,9.2 C 2.65,8.9 2.5,8.6 2.5,8.2 Z "
+                                 L"M 4.6,3.9 A 0.8,0.8 0 1 0 4.6,5.5 A 0.8,0.8 0 1 0 4.6,3.9 Z'/>")
+                            .as<muxc::PathIconSource>();
+            COLORREF rgb = LabelsDotRgb(colour, LabelsDarkTheme());
+            icon.Foreground(mux::Media::SolidColorBrush(winrt::Windows::UI::Color{255, GetRValue(rgb), GetGValue(rgb), GetBValue(rgb)}));
+            view->ourIcon = icon;
+            view->ourColour = colour;
+        }
+        if (item.IconSource() != view->ourIcon) {
+            item.IconSource(view->ourIcon);
+        }
+    } catch (...) {
+        LogHresult(L"the title of the tag list's tab");
+    }
+}
+
+// Gives the tab its own title and icon back, unless Explorer has already written a new title there (it navigated).
+void TagViewRestoreTitle(TagViewPanel* view) {
+    if (!view->titled) {
+        return;
+    }
+    view->titled = false;
+    try {
+        if (auto item = view->tabItem.get()) {
+            if (auto block = TagViewTabText(item)) {
+                if (std::wstring(block.Text()) == view->ourText) {
+                    block.Text(view->savedText);
+                }
+            }
+            if (view->ourIcon && item.IconSource() == view->ourIcon) {
+                item.IconSource(view->savedIcon);
+            }
+        }
+    } catch (...) {
+        LogHresult(L"giving the tab its title back");
+    }
+    view->ourIcon = nullptr;
+    view->savedIcon = nullptr;
+    view->ourColour = -1;
+    view->tabItem = winrt::weak_ref<muxc::TabViewItem>();
+}
+
+std::wstring TagViewDate(FILETIME const& time) {
+    if (time.dwHighDateTime == 0 && time.dwLowDateTime == 0) {
+        return std::wstring();
+    }
+    FILETIME local;
+    SYSTEMTIME at;
+    if (!FileTimeToLocalFileTime(&time, &local) || !FileTimeToSystemTime(&local, &at)) {
+        return std::wstring();
+    }
+    wchar_t date[64] = L"";
+    wchar_t clock[32] = L"";
+    GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &at, nullptr, date, ARRAYSIZE(date), nullptr);
+    GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, &at, nullptr, clock, ARRAYSIZE(clock));
+    return std::wstring(date) + L" " + clock;
+}
+
+std::wstring TagViewFormat(const wchar_t* pattern, unsigned long long number) {
+    wchar_t text[300];
+    swprintf_s(text, pattern, (unsigned)number);
+    return text;
+}
+
+void TagViewRealize(WindowState* state, TagViewPanel* view);
+void TagViewApply(WindowState* state, TagViewPanel* view);
+
+void TagViewSetSelectedLook(TagViewPanel* view, size_t index) {
+    auto found = view->realized.find(index);
+    if (found != view->realized.end() && found->second.back) {
+        found->second.back.Opacity(view->selected.count(index) ? 1.0 : 0.0);
+    }
+}
+
+void TagViewSelect(TagViewPanel* view, size_t index, bool ctrl, bool shift) {
+    std::set<size_t> before = view->selected;
+    if (shift && !view->selected.empty()) {
+        size_t from = std::min(view->anchor, index), to = std::max(view->anchor, index);
+        view->selected.clear();
+        for (size_t i = from; i <= to; i++) {
+            view->selected.insert(i);
+        }
+    } else if (ctrl) {
+        if (!view->selected.erase(index)) {
+            view->selected.insert(index);
+        }
+        view->anchor = index;
+    } else {
+        view->selected.clear();
+        view->selected.insert(index);
+        view->anchor = index;
+    }
+    for (size_t i : before) {
+        TagViewSetSelectedLook(view, i);
+    }
+    for (size_t i : view->selected) {
+        TagViewSetSelectedLook(view, i);
+    }
+}
+
+std::vector<std::wstring> TagViewSelectedPaths(TagViewPanel* view) {
+    std::vector<std::wstring> paths;
+    if (view->tagsMode) {
+        return paths;
+    }
+    for (size_t i : view->selected) {
+        if (i < view->rows.size()) {
+            paths.push_back(view->rows[i].path);
+        }
+    }
+    return paths;
+}
+
+// ---- Opening things ----
+
+void TagViewOpenItem(WindowState* state, std::wstring const& path, bool isFolder) {
+    if (isFolder) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+            TagViewLeave(state);
+            SidebarNavigate(state, pidl);
+            CoTaskMemFree(pidl);
+        }
+        return;
+    }
+    SHELLEXECUTEINFOW info = {sizeof(info)};
+    info.fMask = SEE_MASK_NOASYNC;
+    info.hwnd = state->topLevel;
+    info.lpFile = path.c_str();
+    info.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&info)) {
+        Wh_Log(L"tag list: opening a file failed, error %lu", GetLastError());
+    }
+}
+
+void TagViewOpenFolder(WindowState* state, std::wstring const& folder) {
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (!folder.empty() && SUCCEEDED(SHParseDisplayName(folder.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        TagViewLeave(state);
+        SidebarNavigate(state, pidl);
+        CoTaskMemFree(pidl);
+    }
+}
+
+// ---- Rows ----
+
+mux::UIElement TagViewCell(std::wstring const& text, int column, bool muted, bool right = false) {
+    auto block = MakeText(text, 13, false, muted);
+    block.TextWrapping(mux::TextWrapping::NoWrap);
+    block.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    block.VerticalAlignment(mux::VerticalAlignment::Center);
+    block.Margin(mux::Thickness{8, 0, 8, 0});
+    if (right) {
+        block.HorizontalAlignment(mux::HorizontalAlignment::Right);
+    }
+    muxc::Grid::SetColumn(block, column);
+    return block;
+}
+
+void TagViewColumns(muxc::Grid const& grid, bool files, TagViewPanel* view) {
+    auto add = [&grid](double value, mux::GridUnitType kind) {
+        muxc::ColumnDefinition column;
+        column.Width(mux::GridLength{value, kind});
+        grid.ColumnDefinitions().Append(column);
+    };
+    if (files) {
+        add(1, mux::GridUnitType::Star);
+        for (double width : view->widths) {
+            add(width, mux::GridUnitType::Pixel);
+        }
+    } else {
+        add(1, mux::GridUnitType::Star);
+        add(110, mux::GridUnitType::Pixel);
+    }
+}
+
+void TagViewMakeRow(WindowState* state, TagViewPanel* view, size_t index) {
+    muxc::Grid grid;
+    grid.Height(kTagViewRow);
+    grid.Background(mux::Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
+    auto back = SidebarThemedBorder(L"SubtleFillColorSecondaryBrush");
+    back.CornerRadius(mux::CornerRadius{4, 4, 4, 4});
+    back.Margin(mux::Thickness{4, 0, 4, 0});
+    back.Opacity(view->selected.count(index) ? 1.0 : 0.0);
+    back.OpacityTransition(mux::ScalarTransition());
+    back.IsHitTestVisible(false);
+    grid.Children().Append(back);
+    muxc::Grid cells;
+    TagViewColumns(cells, !view->tagsMode, view);
+    cells.Margin(mux::Thickness{8, 0, 8, 0});
+    grid.Children().Append(cells);
+
+    // The first cell: the icon, then the name.
+    muxc::StackPanel first;
+    first.Orientation(muxc::Orientation::Horizontal);
+    first.VerticalAlignment(mux::VerticalAlignment::Center);
+    first.Margin(mux::Thickness{8, 0, 8, 0});
+    muxc::Grid iconHost;
+    iconHost.Width(16);
+    iconHost.Height(16);
+    first.Children().Append(iconHost);
+    std::wstring name;
+    if (view->tagsMode) {
+        auto const& line = view->tagLines[index];
+        iconHost.Children().Append(SidebarTagIcon(line.colour, LabelsDarkTheme()));
+        name = line.name;
+    } else {
+        auto const& row = view->rows[index];
+        name = row.name;
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(row.path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+            winrt::weak_ref<muxc::Grid> weak = iconHost;
+            SidebarLoadIcon(state, pidl, [weak](mux::Media::ImageSource const& source) {
+                if (auto host = weak.get()) {
+                    muxc::Image image;
+                    image.Source(source);
+                    image.Width(16);
+                    image.Height(16);
+                    host.Children().Append(image);
+                }
+            });
+            CoTaskMemFree(pidl);
+        }
+    }
+    auto label = MakeText(name, 13, false, false);
+    label.TextWrapping(mux::TextWrapping::NoWrap);
+    label.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    label.VerticalAlignment(mux::VerticalAlignment::Center);
+    label.Margin(mux::Thickness{10, 0, 0, 0});
+    first.Children().Append(label);
+    muxc::Grid::SetColumn(first, 0);
+    cells.Children().Append(first);
+
+    if (view->tagsMode) {
+        cells.Children().Append(TagViewCell(TagViewFormat(Str(L"tagview.files"), view->tagLines[index].count), 1, true, true));
+        Keep(grid, grid.PointerPressed(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+            TagViewPanel* v = state->tagView;
+            if (v && index < v->tagLines.size()) {
+                // Not from inside this row's own handler: opening a tag makes the rows again, this one included.
+                std::wstring name = v->tagLines[index].name;
+                TagViewLater(state, [state, name]() { TagResultsShow(state, name); });
+            }
+        }));
+    } else {
+        auto const& row = view->rows[index];
+        auto location = TagViewCell(row.folder, 1, true);
+        std::wstring folder = row.folder;
+        Keep(location, location.PointerPressed(winrt::auto_revoke, [state, folder](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+            args.Handled(true);
+            TagViewLater(state, [state, folder]() { TagViewOpenFolder(state, folder); });
+        }));
+        muxc::ToolTipService::SetToolTip(location, winrt::box_value(winrt::hstring{row.folder}));
+        cells.Children().Append(location);
+        cells.Children().Append(TagViewCell(TagViewDate(row.modified), 2, true));
+        wchar_t size[40] = L"";
+        if (!row.isFolder) {
+            StrFormatByteSizeW((LONGLONG)row.size, size, ARRAYSIZE(size));
+        }
+        cells.Children().Append(TagViewCell(size, 3, true, true));
+
+        Keep(grid, grid.PointerPressed(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+            TagViewPanel* v = state->tagView;
+            if (!v || index >= v->rows.size()) {
+                return;
+            }
+            v->root.Focus(mux::FocusState::Pointer);
+            auto props = args.GetCurrentPoint(v->root).Properties();
+            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (props.IsRightButtonPressed()) {
+                return;  // The menu is the RightTapped handler's.
+            } else {
+                TagViewSelect(v, index, ctrl, shift);
+            }
+        }));
+        Keep(grid, grid.RightTapped(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::RightTappedRoutedEventArgs const& args) {
+            TagViewPanel* v = state->tagView;
+            if (!v || index >= v->rows.size()) {
+                return;
+            }
+            args.Handled(true);
+            if (!v->selected.count(index)) {
+                TagViewSelect(v, index, false, false);
+            }
+            // The items of the clicked one's folder (the shell's menu is for items of one folder).
+            std::wstring folder = v->rows[index].folder;
+            MenuItemSet set;
+            for (size_t i : v->selected) {
+                if (i >= v->rows.size() || v->rows[i].folder != folder) {
+                    continue;
+                }
+                PIDLIST_ABSOLUTE absolute = nullptr;
+                if (SUCCEEDED(SHParseDisplayName(v->rows[i].path.c_str(), nullptr, &absolute, 0, nullptr)) && absolute) {
+                    MenuItemSetAdd(set, absolute, v->rows[i].path, v->rows[i].isFolder);
+                    CoTaskMemFree(absolute);
+                }
+            }
+            MenuItemSet::Extra location;
+            location.text = Str(L"tagview.openlocation");
+            location.glyph = L"\uE838";
+            location.action = [state, folder]() { TagViewLater(state, [state, folder]() { TagViewOpenFolder(state, folder); }); };
+            set.extras.push_back(std::move(location));
+            set.after = [state]() {
+                // A delete, a move: the list is read again.
+                TagViewLater(state, [state]() {
+                    if (state->tagView) {
+                        state->tagView->loading = false;
+                        TagViewLoadNow(state);
+                    }
+                });
+            };
+            auto grid = args.OriginalSource().try_as<mux::FrameworkElement>();
+            auto anchor = v->realized.count(index) ? v->realized[index].grid : muxc::Grid{nullptr};
+            if (!anchor) {
+                return;
+            }
+            set.anchor = anchor;
+            set.position = args.GetPosition(anchor);
+            set.rowBox = winrt::Windows::Foundation::Rect{0, 0, (float)anchor.ActualWidth(), (float)anchor.ActualHeight()};
+            set.hostWindow = (HWND)v->bridge.WindowId().Value;
+            set.hostScale = anchor.XamlRoot() ? anchor.XamlRoot().RasterizationScale() : 1.0;
+            ShowItemFlyoutFor(state, std::move(set));
+        }));
+        Keep(grid, grid.DoubleTapped(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::DoubleTappedRoutedEventArgs const&) {
+            TagViewPanel* v = state->tagView;
+            if (v && index < v->rows.size()) {
+                std::wstring path = v->rows[index].path;
+                bool isFolder = v->rows[index].isFolder;
+                TagViewLater(state, [state, path, isFolder]() { TagViewOpenItem(state, path, isFolder); });
+            }
+        }));
+    }
+    Keep(grid, grid.PointerEntered(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        TagViewPanel* v = state->tagView;
+        if (!v || v->selected.count(index)) {
+            return;
+        }
+        auto found = v->realized.find(index);
+        if (found != v->realized.end()) {
+            found->second.back.Opacity(0.55);
+        }
+    }));
+    Keep(grid, grid.PointerExited(winrt::auto_revoke, [state, index](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) {
+        TagViewPanel* v = state->tagView;
+        if (v) {
+            TagViewSetSelectedLook(v, index);
+        }
+    }));
+    muxc::Canvas::SetTop(grid, index * kTagViewRow);
+    view->canvas.Children().Append(grid);
+    TagViewPanel::Realized made;
+    made.grid = grid;
+    made.back = back;
+    made.cells = cells;
+    view->realized[index] = made;
+}
+
+// Makes the rows in view (and a few around them), and lets go of the others.
+void TagViewRealize(WindowState* state, TagViewPanel* view) {
+    if (!view->canvas || !view->scroller) {
+        return;
+    }
+    size_t count = TagViewCount(view);
+    double offset = view->scroller.VerticalOffset();
+    double viewport = view->scroller.ViewportHeight();
+    if (viewport <= 0) {
+        viewport = 600;
+    }
+    size_t first = (size_t)std::max(0.0, std::floor(offset / kTagViewRow) - 3);
+    size_t last = std::min(count, (size_t)(std::ceil((offset + viewport) / kTagViewRow) + 4));
+    double width = view->scroller.ViewportWidth();
+    for (auto it = view->realized.begin(); it != view->realized.end();) {
+        if (it->first < first || it->first >= last) {
+            uint32_t at = 0;
+            if (view->canvas.Children().IndexOf(it->second.grid, at)) {
+                view->canvas.Children().RemoveAt(at);
+            }
+            it = view->realized.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (size_t i = first; i < last; i++) {
+        if (!view->realized.count(i)) {
+            TagViewMakeRow(state, view, i);
+        }
+    }
+    if (width > 0) {
+        for (auto& entry : view->realized) {
+            entry.second.grid.Width(width);
+        }
+    }
+}
+
+// The list as the data says: the rows are made again, the title, the count and the message are set.
+void TagViewApply(WindowState* state, TagViewPanel* view) {
+    view->canvas.Children().Clear();
+    view->realized.clear();
+    size_t count = TagViewCount(view);
+    view->canvas.Height(count * kTagViewRow);
+    std::set<size_t> kept;
+    for (size_t i : view->selected) {
+        if (i < count) {
+            kept.insert(i);
+        }
+    }
+    view->selected = kept;
+    view->columnHeader.Visibility(view->tagsMode ? mux::Visibility::Collapsed : mux::Visibility::Visible);
+    view->count.Text(view->ready || view->tagsMode ? TagViewFormat(Str(L"tagview.count"), count) : std::wstring());
+    std::wstring message;
+    bool spin = false;
+    if (!view->ready) {
+        message = TagViewFormat(Str(L"tagview.indexing"), view->progress);
+        spin = true;
+    } else if (!view->loadedOnce) {
+        spin = true;  // Nothing to show yet (not in the cache): the spinner alone.
+    } else if (count == 0) {
+        message = Str(view->tagsMode ? L"tagview.notags" : L"tagview.empty");
+    }
+    view->message.Text(message);
+    view->message.Visibility(message.empty() ? mux::Visibility::Collapsed : mux::Visibility::Visible);
+    view->ring.IsActive(spin);
+    view->ring.Visibility(spin ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    view->messageHost.Visibility(spin || !message.empty() ? mux::Visibility::Visible : mux::Visibility::Collapsed);
+    TagViewRealize(state, view);
+    TagViewTitle(state, view);
+}
+
+// Reads the index on a mod thread and applies it on the window's.
+void TagViewLoadNow(WindowState* state) {
+    TagViewPanel* view = state->tagView;
+    if (!view || !view->active || view->loading || !state->queue) {
+        return;
+    }
+    view->loading = true;
+    unsigned generation = ++view->generation;
+    bool tagsMode = view->tagsMode;
+    std::wstring tag = view->tag;
+    mud::DispatcherQueue queue = state->queue;
+    bool started = StartModThread([state, view, queue, generation, tagsMode, tag]() {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        auto result = std::make_shared<std::tuple<bool, size_t, std::vector<IndexedFile>, std::vector<TagViewPanel::TagLine>>>();
+        bool ready = TagIndexReady();
+        std::get<0>(*result) = ready;
+        std::get<1>(*result) = TagIndexProgress();
+        if (ready) {
+            if (tagsMode) {
+                for (auto const& def : TagListSnapshot()) {
+                    TagViewPanel::TagLine line;
+                    line.name = def.name;
+                    line.colour = def.colour;
+                    line.count = TagIndexCount(def.name);
+                    std::get<3>(*result).push_back(std::move(line));
+                }
+            } else {
+                std::get<2>(*result) = TagIndexFiles(tag);
+            }
+        }
+        if (com) {
+            CoUninitialize();
+        }
+        if (g_unloading) {
+            return;
+        }
+        try {
+            queue.TryEnqueue([state, view, generation, result]() {
+                if (g_unloading || state->tagView != view || view->generation != generation) {
+                    return;
+                }
+                view->loading = false;
+                view->ready = std::get<0>(*result);
+                view->progress = std::get<1>(*result);
+                view->loadedOnce = true;
+                if (view->ready) {
+                    std::lock_guard<std::mutex> lock(g_tagViewCacheMutex);
+                    if (view->tagsMode) {
+                        view->tagLines = std::get<3>(*result);
+                        g_tagViewLinesCache = view->tagLines;
+                        g_tagViewLinesCached = true;
+                    } else {
+                        view->rows = TagResultsRows(std::get<2>(*result));
+                        g_tagViewRowsCache[TagViewCacheKey(view->tag)] = view->rows;
+                        TagResultsSort(view->rows, view->sort, view->ascending);
+                    }
+                }
+                TagViewApply(state, view);
+            });
+        } catch (...) {
+        }
+    });
+    if (!started) {
+        view->loading = false;
+    }
+}
+
+void TagViewLoadSoon(WindowState* state) {
+    TagViewLoadNow(state);
+}
+
+void TagViewUpdateSortGlyphs(TagViewPanel* view) {
+    // The arrow sits on the title of the column the list is sorted by.
+    int at = 0;
+    for (auto child : view->columnHeader.Children()) {
+        auto button = child.try_as<muxc::Button>();
+        if (!button) {
+            continue;
+        }
+        auto face = button.Content().try_as<muxc::StackPanel>();
+        if (face && face.Children().Size() > 1) {
+            auto arrow = face.Children().GetAt(1).try_as<muxc::FontIcon>();
+            if (arrow) {
+                bool mine = (int)view->sort == at;
+                arrow.Opacity(mine ? 1.0 : 0.0);
+                arrow.Glyph(view->ascending ? L"\uE70E" : L"\uE70D");
+            }
+        }
+        at++;
+    }
+}
+
+void TagViewSortBy(WindowState* state, TagViewPanel* view, TagResultSort by) {
+    if (view->sort == by) {
+        view->ascending = !view->ascending;
+    } else {
+        view->sort = by;
+        view->ascending = true;
+    }
+    view->selected.clear();
+    TagResultsSort(view->rows, view->sort, view->ascending);
+    TagViewUpdateSortGlyphs(view);
+    TagViewApply(state, view);
+}
+
+void TagViewKey(WindowState* state, TagViewPanel* view, mux::Input::KeyRoutedEventArgs const& args) {
+    using winrt::Windows::System::VirtualKey;
+    VirtualKey key = args.Key();
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    size_t count = TagViewCount(view);
+    if (key == VirtualKey::Back || key == VirtualKey::Escape || (alt && key == VirtualKey::Left)) {
+        args.Handled(true);
+        TagViewLeave(state);
+        return;
+    }
+    if (view->tagsMode || count == 0) {
+        return;
+    }
+    if (key == VirtualKey::Down || key == VirtualKey::Up) {
+        size_t at = view->selected.empty() ? (key == VirtualKey::Down ? SIZE_MAX : count) : (key == VirtualKey::Down ? *view->selected.rbegin() : *view->selected.begin());
+        size_t next = key == VirtualKey::Down ? (at == SIZE_MAX ? 0 : std::min(count - 1, at + 1)) : (at == 0 ? 0 : std::min(count - 1, at - 1));
+        TagViewSelect(view, next, false, shift);
+        double top = next * kTagViewRow;
+        double offset = view->scroller.VerticalOffset(), viewport = view->scroller.ViewportHeight();
+        if (top < offset) {
+            view->scroller.ChangeView(nullptr, top, nullptr, true);
+        } else if (top + kTagViewRow > offset + viewport) {
+            view->scroller.ChangeView(nullptr, top + kTagViewRow - viewport, nullptr, true);
+        }
+        args.Handled(true);
+    } else if (key == VirtualKey::Enter && !view->selected.empty()) {
+        size_t first = *view->selected.begin();
+        if (first < view->rows.size()) {
+            TagViewOpenItem(state, view->rows[first].path, view->rows[first].isFolder);
+        }
+        args.Handled(true);
+    } else if (ctrl && key == VirtualKey::A) {
+        view->selected.clear();
+        for (size_t i = 0; i < count; i++) {
+            view->selected.insert(i);
+        }
+        for (auto& entry : view->realized) {
+            TagViewSetSelectedLook(view, entry.first);
+        }
+        args.Handled(true);
+    }
+}
+
+void TagViewBuild(WindowState* state, TagViewPanel* view) {
+    muxc::Grid root = LoadXaml(std::wstring(L"<Grid ") + kXamlNs +
+                               L" Background='{ThemeResource SolidBackgroundFillColorBaseBrush}' IsTabStop='True' "
+                               L"AutomationProperties.AutomationId='TagView'/>").as<muxc::Grid>();
+    for (double height : {56.0, 32.0}) {
+        muxc::RowDefinition row;
+        row.Height(mux::GridLength{height, mux::GridUnitType::Pixel});
+        root.RowDefinitions().Append(row);
+    }
+    muxc::RowDefinition rest;
+    rest.Height(mux::GridLength{1, mux::GridUnitType::Star});
+    root.RowDefinitions().Append(rest);
+
+    // The title bar: the arrow back, the tag's icon, its name and how many files.
+    muxc::Grid bar;
+    bar.Margin(mux::Thickness{12, 0, 12, 0});
+    auto back = SidebarNewButtonWith(L"TagViewBack", 32, L"0", kSidebarSmallTemplate);
+    back.Width(32);
+    back.HorizontalAlignment(mux::HorizontalAlignment::Left);
+    back.VerticalAlignment(mux::VerticalAlignment::Center);
+    back.Content(SidebarGlyph(L"\uE72B", 14));
+    mux::Automation::AutomationProperties::SetName(back, Str(L"tagview.back"));
+    bar.Children().Append(back);
+    muxc::StackPanel titles;
+    titles.Orientation(muxc::Orientation::Horizontal);
+    titles.VerticalAlignment(mux::VerticalAlignment::Center);
+    titles.Margin(mux::Thickness{44, 0, 0, 0});
+    muxc::Grid iconHost;
+    iconHost.Width(16);
+    iconHost.Height(16);
+    iconHost.Margin(mux::Thickness{0, 0, 10, 0});
+    titles.Children().Append(iconHost);
+    auto title = MakeText(L"", 20, true, false);
+    title.VerticalAlignment(mux::VerticalAlignment::Center);
+    titles.Children().Append(title);
+    auto count = MakeText(L"", 13, false, true);
+    count.VerticalAlignment(mux::VerticalAlignment::Center);
+    count.Margin(mux::Thickness{12, 4, 0, 0});
+    titles.Children().Append(count);
+    bar.Children().Append(titles);
+    root.Children().Append(bar);
+
+    // The titles of the columns, each a button that sorts.
+    muxc::Grid header;
+    header.Margin(mux::Thickness{8, 0, 8, 0});  // As the rows' cells, so that the columns line up.
+    muxc::Grid::SetRow(header, 1);
+    for (int k = 0; k < 3; k++) {
+        double saved = (double)Wh_GetIntValue((L"sidebar.tagview.w" + std::to_wstring(k)).c_str(), 0);
+        if (saved >= 40 && saved <= 1000) {
+            view->widths[k] = saved;
+        }
+    }
+    TagViewColumns(header, true, view);
+    const wchar_t* ids[4] = {L"tagview.name", L"tagview.location", L"tagview.modified", L"tagview.size"};
+    TagResultSort sorts[4] = {TagResultSort::Name, TagResultSort::Location, TagResultSort::Modified, TagResultSort::Size};
+    for (int i = 0; i < 4; i++) {
+        auto button = SidebarNewButton((std::wstring(L"TagViewSort.") + std::to_wstring(i)).c_str(), 32, L"0");
+        muxc::StackPanel face;  // [title, arrow]: the arrow is the second child (TagViewUpdateSortGlyphs).
+        face.Orientation(muxc::Orientation::Horizontal);
+        face.Spacing(6);
+        face.HorizontalAlignment(i == 3 ? mux::HorizontalAlignment::Right : mux::HorizontalAlignment::Left);
+        face.VerticalAlignment(mux::VerticalAlignment::Center);
+        face.Margin(mux::Thickness{i == 0 ? 34.0 : 8.0, 0, 8, 0});  // The name's title starts where the names do (after the icon).
+        face.Children().Append(MakeText(Str(ids[i]), 12, false, true));
+        auto arrow = SidebarGlyph(L"\uE70E", 10);
+        arrow.Opacity(i == 0 ? 1.0 : 0.0);
+        arrow.VerticalAlignment(mux::VerticalAlignment::Center);
+        face.Children().Append(arrow);
+        button.Content(face);
+        muxc::Grid::SetColumn(button, i);
+        header.Children().Append(button);
+        TagResultSort by = sorts[i];
+        Keep(button, button.Click(winrt::auto_revoke, [state, by](Inspectable const&, mux::RoutedEventArgs const&) {
+            if (state->tagView) {
+                TagViewSortBy(state, state->tagView, by);
+            }
+        }));
+    }
+    // The grips: a handle on the right edge of the first three titles. Dragging the one after Name takes from (or gives to) Location,
+    // the others change their own column; a double click puts the widths back.
+    auto applyWidths = [state]() {
+        TagViewPanel* v = state->tagView;
+        if (!v) {
+            return;
+        }
+        for (int k = 0; k < 3; k++) {
+            auto width = mux::GridLength{v->widths[k], mux::GridUnitType::Pixel};
+            v->columnHeader.ColumnDefinitions().GetAt(k + 1).Width(width);
+            for (auto& entry : v->realized) {
+                if (entry.second.cells && entry.second.cells.ColumnDefinitions().Size() == 4) {
+                    entry.second.cells.ColumnDefinitions().GetAt(k + 1).Width(width);
+                }
+            }
+        }
+    };
+    for (int i = 0; i < 3; i++) {
+        muxc::Border grip;
+        grip.Width(12);
+        grip.HorizontalAlignment(mux::HorizontalAlignment::Right);
+        grip.Margin(mux::Thickness{0, 0, -6, 0});
+        grip.Background(Brush(0, 0, 0, 0));
+        muxc::Border line = SidebarThemedBorder(L"DividerStrokeColorDefaultBrush");
+        line.Width(1);
+        line.Margin(mux::Thickness{0, 8, 0, 8});
+        grip.Child(line);
+        muxc::Grid::SetColumn(grip, i);
+        try {
+            grip.as<mux::IUIElementProtected>().ProtectedCursor(winrt::Microsoft::UI::Input::InputSystemCursor::Create(
+                winrt::Microsoft::UI::Input::InputSystemCursorShape::SizeWestEast));
+        } catch (...) {
+            LogHresult(L"setting the resize cursor of a column");
+        }
+        // [dragging, pointer x at the press, widths at the press]
+        auto drag = std::make_shared<std::array<double, 5>>();
+        (*drag)[0] = 0;
+        winrt::weak_ref<muxc::Grid> weakHeader = header;
+        Keep(grip, grip.PointerPressed(winrt::auto_revoke, [drag, weakHeader, state](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+            auto h = weakHeader.get();
+            if (!h || !state->tagView) {
+                return;
+            }
+            (*drag)[0] = 1;
+            (*drag)[1] = args.GetCurrentPoint(h).Position().X;
+            for (int k = 0; k < 3; k++) {
+                (*drag)[2 + k] = state->tagView->widths[k];
+            }
+            sender.as<mux::UIElement>().CapturePointer(args.Pointer());
+            args.Handled(true);
+        }));
+        Keep(grip, grip.PointerMoved(winrt::auto_revoke, [drag, weakHeader, state, i, applyWidths](Inspectable const&, mux::Input::PointerRoutedEventArgs const& args) {
+            auto h = weakHeader.get();
+            if (!(*drag)[0] || !h || !state->tagView) {
+                return;
+            }
+            double delta = args.GetCurrentPoint(h).Position().X - (*drag)[1];
+            int k = i == 0 ? 0 : i - 1;  // Which of the three widths it changes.
+            double next = (*drag)[2 + k] + (i == 0 ? -delta : delta);
+            state->tagView->widths[k] = std::clamp(next, 60.0, 900.0);
+            applyWidths();
+        }));
+        auto finish = [drag, state](bool) {
+            if (!(*drag)[0]) {
+                return;
+            }
+            (*drag)[0] = 0;
+            if (state->tagView) {
+                for (int k = 0; k < 3; k++) {
+                    Wh_SetIntValue((L"sidebar.tagview.w" + std::to_wstring(k)).c_str(), (int)std::lround(state->tagView->widths[k]));
+                }
+            }
+        };
+        Keep(grip, grip.PointerReleased(winrt::auto_revoke, [finish](Inspectable const& sender, mux::Input::PointerRoutedEventArgs const& args) {
+            sender.as<mux::UIElement>().ReleasePointerCapture(args.Pointer());
+            finish(true);
+        }));
+        Keep(grip, grip.PointerCanceled(winrt::auto_revoke, [finish](Inspectable const&, mux::Input::PointerRoutedEventArgs const&) { finish(true); }));
+        Keep(grip, grip.DoubleTapped(winrt::auto_revoke, [state, applyWidths](Inspectable const&, mux::Input::DoubleTappedRoutedEventArgs const& args) {
+            if (state->tagView) {
+                const double defaults[3] = {260, 150, 90};
+                for (int k = 0; k < 3; k++) {
+                    state->tagView->widths[k] = defaults[k];
+                    Wh_SetIntValue((L"sidebar.tagview.w" + std::to_wstring(k)).c_str(), 0);
+                }
+                applyWidths();
+            }
+            args.Handled(true);
+        }));
+        header.Children().Append(grip);
+    }
+    root.Children().Append(header);
+
+    muxc::ScrollViewer scroller;
+    scroller.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
+    scroller.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Disabled);
+    muxc::Grid::SetRow(scroller, 2);
+    muxc::Canvas canvas;
+    canvas.VerticalAlignment(mux::VerticalAlignment::Top);  // With a height of its own it would sit in the middle of the viewer.
+    canvas.HorizontalAlignment(mux::HorizontalAlignment::Stretch);
+    scroller.Content(canvas);
+    root.Children().Append(scroller);
+    auto message = MakeText(L"", 14, false, true);
+    message.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    message.Visibility(mux::Visibility::Collapsed);
+    muxc::ProgressRing ring;
+    ring.Width(28);
+    ring.Height(28);
+    ring.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    ring.Visibility(mux::Visibility::Collapsed);
+    muxc::StackPanel messageHost;
+    messageHost.Spacing(12);
+    messageHost.HorizontalAlignment(mux::HorizontalAlignment::Center);
+    messageHost.VerticalAlignment(mux::VerticalAlignment::Top);
+    messageHost.Margin(mux::Thickness{0, 40, 0, 0});
+    messageHost.IsHitTestVisible(false);
+    messageHost.Visibility(mux::Visibility::Collapsed);
+    messageHost.Children().Append(ring);
+    messageHost.Children().Append(message);
+    muxc::Grid::SetRow(messageHost, 2);
+    root.Children().Append(messageHost);
+    view->messageHost = messageHost;
+    view->ring = ring;
+
+    view->root = root;
+    view->iconHost = iconHost;
+    view->title = title;
+    view->count = count;
+    view->columnHeader = header;
+    view->scroller = scroller;
+    view->canvas = canvas;
+    view->message = message;
+    Keep(back, back.Click(winrt::auto_revoke, [state](Inspectable const&, mux::RoutedEventArgs const&) { TagViewLeave(state); }));
+    Keep(scroller, scroller.ViewChanged(winrt::auto_revoke, [state](Inspectable const&, muxc::ScrollViewerViewChangedEventArgs const&) {
+        if (state->tagView && state->tagView->active) {
+            TagViewRealize(state, state->tagView);
+        }
+    }));
+    Keep(scroller, scroller.SizeChanged(winrt::auto_revoke, [state](Inspectable const&, mux::SizeChangedEventArgs const&) {
+        if (state->tagView && state->tagView->active) {
+            TagViewRealize(state, state->tagView);
+        }
+    }));
+    Keep(root, root.KeyDown(winrt::auto_revoke, [state](Inspectable const&, mux::Input::KeyRoutedEventArgs const& args) {
+        if (state->tagView && state->tagView->active) {
+            TagViewKey(state, state->tagView, args);
+        }
+    }));
+
+    mux::Hosting::DesktopWindowXamlSource source;
+    source.Initialize(winrt::Microsoft::UI::WindowId{(uint64_t)state->topLevel});
+    source.Content(root);
+    view->source = source;
+    view->bridge = source.SiteBridge();
+}
+
+bool TagViewViewRect(WindowState* state, RECT* rect) {
+    HWND view = FindVisibleChild(state->topLevel, L"SHELLDLL_DefView");
+    if (!view || !GetWindowRect(view, rect)) {
+        return false;
+    }
+    MapWindowPoints(nullptr, state->topLevel, (POINT*)rect, 2);
+    return rect->right > rect->left && rect->bottom > rect->top;
+}
+
+
+// Opens the panel on the file area for a tag (or for the list of tags).
+void TagViewOpen(WindowState* state, bool tagsMode, std::wstring const& tag) {
+    SidebarPanel* panel = state->sidebar;
+    if (!panel || !state->queue) {
+        return;
+    }
+    if (!state->tagView) {
+        state->tagView = new TagViewPanel();
+    }
+    TagViewPanel* view = state->tagView;
+    try {
+        // One list per window: opening one in another tab than the open list's closes that list (its tab gets its title back).
+        if (view->active && view->tab && FindVisibleChild(state->topLevel, L"ShellTabWindowClass") != view->tab) {
+            TagViewLeave(state);
+        }
+        if (!view->source) {
+            TagViewBuild(state, view);
+        }
+        view->tab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+        view->tabHidden = false;
+        if (!view->active) {
+            IShellBrowser* browser = BrowserOf(state->topLevel);
+            Pidl folder = browser ? CurrentFolder(browser) : Pidl();
+            view->folderAtOpen = folder ? LocationPidl(ILClone(folder.get())) : nullptr;
+        }
+        view->tagsMode = tagsMode;
+        view->tag = tag;
+        view->colour = 0;
+        for (auto const& def : TagListSnapshot()) {
+            if (!tagsMode && TagNamesEqual(def.name, tag)) {
+                view->colour = def.colour;
+            }
+        }
+        view->rows.clear();
+        view->tagLines.clear();
+        view->selected.clear();
+        view->ready = true;
+        view->progress = 0;
+        view->sort = TagResultSort::Name;
+        view->ascending = true;
+        view->loadedOnce = false;
+        {
+            // What the list showed last time is shown at once; the index is read again behind it.
+            std::lock_guard<std::mutex> lock(g_tagViewCacheMutex);
+            if (tagsMode && g_tagViewLinesCached) {
+                view->tagLines = g_tagViewLinesCache;
+                view->loadedOnce = true;
+            } else if (!tagsMode) {
+                auto cached = g_tagViewRowsCache.find(TagViewCacheKey(tag));
+                if (cached != g_tagViewRowsCache.end()) {
+                    view->rows = cached->second;
+                    TagResultsSort(view->rows, view->sort, view->ascending);
+                    view->loadedOnce = true;
+                }
+            }
+        }
+        TagViewUpdateSortGlyphs(view);
+        view->iconHost.Children().Clear();
+        if (!tagsMode) {
+            view->iconHost.Children().Append(SidebarTagIcon(view->colour, LabelsDarkTheme()));
+            view->iconHost.Visibility(mux::Visibility::Visible);
+            view->title.Text(tag);
+        } else {
+            view->iconHost.Visibility(mux::Visibility::Collapsed);
+            view->title.Text(Str(L"sidebar.tags"));
+        }
+        view->active = true;
+        view->ticks = 0;
+        view->generation++;
+        view->loading = false;
+        panel->viewKey = tagsMode ? std::wstring(L"tags") : L"tag." + tag;
+        panel->lastFolder.reset();
+        RECT rect{};
+        if (TagViewViewRect(state, &rect)) {
+            view->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top});
+            view->bridge.Show();
+            // The island's picture follows the window order only when that changes: a window that is already first in it (but
+            // whose picture is under the columns') is put last and first again.
+            HWND window = (HWND)view->bridge.WindowId().Value;
+            SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            view->rect = rect;
+            view->shown = true;
+        }
+        g_tagViewWindowLocal = (HWND)view->bridge.WindowId().Value;
+        TagViewApply(state, view);
+        TagViewLoadNow(state);
+        view->root.Focus(mux::FocusState::Programmatic);
+    } catch (...) {
+        LogHresult(L"opening the tag list");
+    }
+}
+
+}  // namespace
+
+HWND TagViewWindow() {
+    return g_tagViewWindowLocal;
+}
+
+void TagResultsShow(WindowState* state, std::wstring const& tag) {
+    TagViewOpen(state, false, tag);
+}
+
+void TagListShow(WindowState* state) {
+    TagViewOpen(state, true, std::wstring());
+}
+
+bool TagViewActive(WindowState* state) {
+    return state && state->tagView && state->tagView->active;
+}
+
+// Closes the list: the panel goes, the pill goes back to the folder's entry. Explorer's own folder was never changed.
+void TagViewLeave(WindowState* state) {
+    TagViewPanel* view = state ? state->tagView : nullptr;
+    if (!view || !view->active) {
+        return;
+    }
+    TagViewRestoreTitle(view);
+    view->active = false;
+    view->generation++;
+    view->loading = false;
+    g_tagViewWindowLocal = nullptr;
+    try {
+        if (view->bridge && view->shown) {
+            view->bridge.Hide();
+        }
+        view->shown = false;
+        view->canvas.Children().Clear();
+        view->realized.clear();
+        view->rows.clear();
+        view->tagLines.clear();
+    } catch (...) {
+        LogHresult(L"closing the tag list");
+    }
+    if (state->sidebar) {
+        state->sidebar->viewKey.clear();
+        state->sidebar->lastFolder.reset();  // The entry of the folder is worked out again at the next tick.
+    }
+}
+
+// The paths of the rows selected in the open list (for the details pane); false when no list shows or nothing is selected.
+bool TagViewSelectedPaths(WindowState* state, std::vector<std::wstring>* paths) {
+    TagViewPanel* view = state ? state->tagView : nullptr;
+    if (!view || !view->active || view->tabHidden || view->tagsMode || !view->shown) {
+        return false;
+    }
+    for (size_t i : view->selected) {
+        if (i < view->rows.size()) {
+            paths->push_back(view->rows[i].path);
+        }
+    }
+    return !paths->empty();
+}
+
+// A navigation from the sidebar closes the list of the tab it is made in; another tab's list stays.
+void TagViewLeaveHere(WindowState* state) {
+    TagViewPanel* view = state ? state->tagView : nullptr;
+    if (view && view->active && (!view->tab || FindVisibleChild(state->topLevel, L"ShellTabWindowClass") == view->tab)) {
+        TagViewLeave(state);
+    }
+}
+
+// Every tick of the sidebar: closes the list when Explorer went elsewhere, keeps it on the file area, reads the index again now
+// and then (and often while it is still being made).
+void TagViewTick(WindowState* state) {
+    TagViewPanel* view = state->tagView;
+    if (!view || !view->active) {
+        return;
+    }
+    view->ticks++;
+    // The list belongs to one tab: it goes out of sight while another tab shows, and the sidebar follows that tab's folder.
+    if (view->tab && !IsWindow(view->tab)) {
+        TagViewLeave(state);
+        return;
+    }
+    HWND shownTab = FindVisibleChild(state->topLevel, L"ShellTabWindowClass");
+    if (view->tab && shownTab != view->tab) {
+        if (view->shown) {
+            view->bridge.Hide();
+            view->shown = false;
+        }
+        if (!view->tabHidden) {
+            view->tabHidden = true;
+            g_tagViewWindowLocal = nullptr;
+            if (state->sidebar) {
+                view->hiddenKey = state->sidebar->viewKey;
+                state->sidebar->viewKey.clear();
+                state->sidebar->lastFolder.reset();
+            }
+        }
+        return;
+    }
+    if (view->tabHidden) {
+        view->tabHidden = false;
+        g_tagViewWindowLocal = (HWND)view->bridge.WindowId().Value;
+        if (state->sidebar) {
+            state->sidebar->viewKey = view->hiddenKey;
+        }
+        view->rect = RECT{};  // Placed again below.
+    }
+    IShellBrowser* browser = BrowserOf(state->topLevel);
+    if (browser && view->folderAtOpen) {
+        Pidl folder = CurrentFolder(browser);
+        if (folder && !ILIsEqual(folder.get(), view->folderAtOpen.get())) {
+            TagViewLeave(state);  // Before the title: Explorer has written the new folder's name on the tab, which stays.
+            return;
+        }
+    }
+    TagViewTitle(state, view);
+    try {
+        RECT rect{};
+        if (!TagViewViewRect(state, &rect)) {
+            if (view->shown) {
+                view->bridge.Hide();
+                view->shown = false;
+            }
+            return;
+        }
+        if (!view->shown || memcmp(&rect, &view->rect, sizeof(rect)) != 0) {
+            view->bridge.MoveAndResize(winrt::Windows::Graphics::RectInt32{rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top});
+            view->bridge.Show();
+            SetWindowPos((HWND)view->bridge.WindowId().Value, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            view->rect = rect;
+            view->shown = true;
+        }
+        HWND window = (HWND)view->bridge.WindowId().Value;
+        if (window && GetWindow(window, GW_HWNDPREV)) {
+            SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);  // A tab made later covers it.
+        }
+        unsigned every = view->ready ? 66 : 16;  // About every 4 seconds, and every second while the index is being made.
+        if (view->ticks % every == 0) {
+            TagViewLoadNow(state);
+        }
+    } catch (...) {
+        LogHresult(L"placing the tag list");
+    }
+}
+
+// The window goes (or the sidebar is switched off): the panel is let go.
+void ReleaseTagView(WindowState* state) {
+    TagViewPanel* view = state->tagView;
+    if (!view) {
+        return;
+    }
+    state->tagView = nullptr;
+    g_tagViewWindowLocal = nullptr;
+    view->generation++;
+    TagViewRestoreTitle(view);
+    try {
+        if (view->bridge) {
+            view->bridge.Hide();
+        }
+        view->canvas = nullptr;
+        view->realized.clear();
+        if (view->source) {
+            view->source.Content(nullptr);
+            view->source.Close();
+        }
+    } catch (...) {
+        LogHresult(L"releasing the tag list");
+    }
+    delete view;
+}
+
+// The window closed: nothing is released (the objects belong to a window that is gone).
+void AbandonTagView(WindowState* state) {
+    TagViewPanel* view = state->tagView;
+    if (!view) {
+        return;
+    }
+    state->tagView = nullptr;
+    g_tagViewWindowLocal = nullptr;
+    view->generation++;
+    (void)winrt::detach_abi(view->source);
+    (void)winrt::detach_abi(view->bridge);
+    (void)winrt::detach_abi(view->root);
+    (void)winrt::detach_abi(view->iconHost);
+    (void)winrt::detach_abi(view->title);
+    (void)winrt::detach_abi(view->count);
+    (void)winrt::detach_abi(view->columnHeader);
+    (void)winrt::detach_abi(view->scroller);
+    (void)winrt::detach_abi(view->canvas);
+    (void)winrt::detach_abi(view->message);
+    (void)winrt::detach_abi(view->messageHost);
+    (void)winrt::detach_abi(view->savedIcon);
+    (void)winrt::detach_abi(view->ourIcon);
+    (void)winrt::detach_abi(view->ring);
+    for (auto& entry : view->realized) {
+        (void)winrt::detach_abi(entry.second.grid);
+        (void)winrt::detach_abi(entry.second.back);
+    }
+    (void)view;  // Leaked on purpose, like the sidebar's.
+}
+// Sidebar, list of a tag's files: the self-test of its pure parts (debug build only): the rows made from what the index lists, and
+// how they sort. One log line: "TAG RESULTS SELFTEST pass" or "TAG RESULTS SELFTEST FAIL <what>".
 // ---- Window creation ----
 //
 // CommandBarControl_Wave1::OnApplyTemplate runs when a window is built, and
@@ -24827,6 +30925,7 @@ void ReleaseClosedWindow(WindowState* state) {
     HidePanel(state, L"window closed");
     RemoveMenuEntry(state);
     ReleaseDetails(state);
+    ReleaseSidebar(state);
     ReleaseEntry(state);
     // The templates and the timers of the restyled menu belong to this thread, which ends with the window.
     g_rowTemplate = nullptr;
@@ -24904,7 +31003,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels && !g_sidebar)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -24939,6 +31038,7 @@ void OnWindowCreated(Inspectable const& rootObject) {
     timer.Start();
     state->entryTimer = timer;
     StartDetails(state);
+    StartSidebar(state);
     Wh_Log(L"window created, window=%p, looking for the View flyout", top);
 }
 
@@ -24949,7 +31049,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels || g_sidebar)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);
@@ -25218,6 +31318,7 @@ void CloseEverything() {
                     HidePanel(state, L"mod unloading");
                     RemoveMenuEntry(state);
                     ReleaseDetails(state);
+                    ReleaseSidebar(state);
                     ReleaseEntry(state);
                     state->queue = nullptr;
                     delete state;
@@ -25377,6 +31478,21 @@ void LoadSettings() {
     g_follow = true;
     g_maxItems = SettingInt(L"maxItems");
     g_detailsPane = SettingBool(L"detailsPane");
+    g_sidebar = SettingBool(L"sidebarOn");
+    g_sidebarRecentTags = SettingInt(L"sidebarRecentTags");
+    g_sidebarHeaderHover = SettingBool(L"sidebarHeaderHover");
+    {
+        std::wstring sort = SettingText(L"sidebarTagsSort");
+        g_sidebarTagsSort = sort == L"manual" ? 1 : sort == L"name" ? 2 : 0;
+    }
+    g_columnNotice = SettingBool(L"columnNotice");
+    g_sidebarKeyboard = SettingBool(L"sidebarKeyboard");
+    g_sidebarTagCounts = SettingBool(L"sidebarTagCounts");
+    g_sidebarDriveSpace = SettingBool(L"sidebarDriveSpace");
+    g_sidebarDriveEject = SettingBool(L"sidebarDriveEject");
+    g_sidebarSettingsVersion++;
+    g_sidebarDrivesCollapsible = SettingBool(L"sidebarDrivesCollapsible");
+    g_sidebarDrivesFlat = SettingBool(L"sidebarDrivesFlat");
     g_previewRedirect = SettingBool(L"previewRedirect");
     g_paneAnim = SettingBool(L"paneAnimation");
     g_panePreview = SettingBool(L"livePreview");

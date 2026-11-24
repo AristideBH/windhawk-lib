@@ -26,6 +26,9 @@
     "toolbar": {
       "name": "Toolbar"
     },
+    "sidebar": {
+      "name": "Sidebar"
+    },
     "limits": {
       "name": "Limits"
     }
@@ -182,6 +185,16 @@
       "description": "The chevron of the folder you came from sits in a round accent badge, instead of a muted one.",
       "needs": "rebuild",
       "sub": "layout"
+    },
+    {
+      "id": "columnNotice",
+      "group": "columns",
+      "type": "bool",
+      "default": true,
+      "name": "Notice in an empty column, and while one loads",
+      "description": "A muted line in the column when the folder is empty, and a small spinner with Loading when a folder takes a moment to open.",
+      "needs": "now",
+      "sub": "content"
     },
     {
       "id": "oddRows",
@@ -485,6 +498,112 @@
       "needs": "now"
     },
     {
+      "id": "sidebarOn",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Replace the navigation pane",
+      "description": "Covers Explorer’s navigation pane with a sidebar of Favorites, Locations and Tags. Off leaves the navigation pane as it is.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarHeaderHover",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Highlight section headers on hover",
+      "description": "Gives the Favorites, Locations and Tags headers a background while the pointer is over them. The chevron and the … button have their own.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarDrivesCollapsible",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Let the Drives and devices group collapse",
+      "description": "Adds a chevron to the group so it can be closed. Off keeps it always open, and a click on its row opens This PC.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarDrivesFlat",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "List drives without a group",
+      "description": "Puts the drives, OneDrive and phones straight in Locations instead of under Drives and devices.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarKeyboard",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Keep the keyboard in the sidebar after a click",
+      "description": "When on, the arrows, Enter, Delete (unpin a favorite), F2 (rename a tag) and Ctrl+arrows (move a favorite or tag) work on the row you clicked. When off, the keyboard goes back to the file area, so the arrow keys keep moving through the columns.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarTagCounts",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Show how many files each tag has",
+      "description": "A muted number at the right of each tag row in the sidebar.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarDriveSpace",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Show free space under each drive",
+      "description": "A thin bar along the bottom of a drive's row that shows how full it is. It does not change the row's size.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarDriveEject",
+      "group": "sidebar",
+      "type": "bool",
+      "default": false,
+      "name": "Eject button on removable drives",
+      "description": "A small button at the right of a removable drive's row, shown while the pointer is over it.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarTagsSort",
+      "group": "sidebar",
+      "type": "enum",
+      "default": "recent",
+      "options": [
+        {
+          "value": "recent",
+          "label": "Most recently used"
+        },
+        {
+          "value": "manual",
+          "label": "My order (drag a tag to move it)"
+        },
+        {
+          "value": "name",
+          "label": "By name"
+        }
+      ],
+      "name": "Order of the tags in the sidebar",
+      "description": "Recent puts the tag you used last on top. My order keeps the order you give by dragging a tag row.",
+      "needs": "now"
+    },
+    {
+      "id": "sidebarRecentTags",
+      "group": "sidebar",
+      "type": "int",
+      "default": 4,
+      "min": -1,
+      "max": 50,
+      "name": "Tags shown in the sidebar",
+      "description": "The most recently used tags the sidebar lists, View all shows the others. -1 lists every tag.",
+      "needs": "now"
+    },
+    {
       "id": "maxItems",
       "group": "limits",
       "type": "int",
@@ -519,6 +638,49 @@
     }
   ],
   "strings": {
+    "sidebar.favorites": "Favorites",
+    "sidebar.locations": "Locations",
+    "sidebar.tags": "Tags",
+    "sidebar.hide": "Hide from sidebar",
+    "sidebar.unpin": "Unpin from sidebar",
+    "sidebar.newtab": "Open in new tab",
+    "sidebar.missing": "This folder no longer exists",
+    "sidebar.drives": "Drives and devices",
+    "sidebar.locations.edit": "Choose the locations shown",
+    "sidebar.tags.viewall": "View all",
+    "sidebar.tags.open": "Open",
+    "sidebar.eject": "Eject",
+    "columns.empty": "This folder is empty",
+    "columns.loading": "Loading…",
+    "sidebar.recent": "Recent",
+    "tagview.back": "Back",
+    "tagview.name": "Name",
+    "tagview.location": "Location",
+    "tagview.modified": "Date modified",
+    "tagview.size": "Size",
+    "tagview.count": "%u items",
+    "tagview.files": "%u files",
+    "tagview.empty": "No file has this tag",
+    "tagview.notags": "No tags yet",
+    "tagview.indexing": "Indexing, %u items so far…",
+    "tagview.openlocation": "Open file location",
+    "sidebar.drop.pin": "Pin to %1",
+    "sidebar.drop.tag": "Tag as %1",
+    "sidebar.tags.ok": "OK",
+    "sidebar.tags.cancel": "Cancel",
+    "sidebar.tags.invalid": "That name cannot be used",
+    "sidebar.tags.exists": "A tag with that name already exists",
+    "sidebar.tags.rename": "Rename…",
+    "sidebar.tags.colour": "Colour",
+    "sidebar.tags.hide": "Hide from sidebar",
+    "sidebar.tags.show": "Show in sidebar",
+    "sidebar.tags.delete": "Delete",
+    "sidebar.tags.new": "New tag…",
+    "sidebar.tags.hiddennote": "hidden",
+    "sidebar.tags.confirm": "Remove “%s” from %u items? This cannot be undone.",
+    "sidebar.tags.empty": "No tags yet. Make one from the … menu, or tag a file from its right-click menu.",
+    "sidebar.tags.manage": "Manage tags",
+    "sidebar.tags.stop": "Stop",
     "menu.columns": "Columns",
     "pane.open": "Open",
     "pane.copypath": "Copy path",
@@ -568,6 +730,49 @@
   },
   "fr": {
     "strings": {
+      "sidebar.favorites": "Favoris",
+      "sidebar.locations": "Emplacements",
+      "sidebar.tags": "Étiquettes",
+      "sidebar.hide": "Masquer de la barre latérale",
+      "sidebar.unpin": "Détacher de la barre latérale",
+      "sidebar.newtab": "Ouvrir dans un nouvel onglet",
+      "sidebar.missing": "Ce dossier n’existe plus",
+      "sidebar.drives": "Disques et périphériques",
+      "sidebar.locations.edit": "Choisir les emplacements affichés",
+      "sidebar.tags.viewall": "Tout afficher",
+      "sidebar.tags.open": "Ouvrir",
+      "sidebar.eject": "Éjecter",
+      "columns.empty": "Ce dossier est vide",
+      "columns.loading": "Chargement…",
+      "sidebar.recent": "Récents",
+      "tagview.back": "Retour",
+      "tagview.name": "Nom",
+      "tagview.location": "Emplacement",
+      "tagview.modified": "Modifié le",
+      "tagview.size": "Taille",
+      "tagview.count": "%u éléments",
+      "tagview.files": "%u fichiers",
+      "tagview.empty": "Aucun fichier n’a cette étiquette",
+      "tagview.notags": "Aucune étiquette",
+      "tagview.indexing": "Indexation… %u éléments parcourus",
+      "tagview.openlocation": "Ouvrir l’emplacement du fichier",
+      "sidebar.drop.pin": "Épingler à %1",
+      "sidebar.drop.tag": "Étiqueter avec %1",
+      "sidebar.tags.ok": "OK",
+      "sidebar.tags.cancel": "Annuler",
+      "sidebar.tags.invalid": "Ce nom ne peut pas être utilisé",
+      "sidebar.tags.exists": "Une étiquette porte déjà ce nom",
+      "sidebar.tags.rename": "Renommer…",
+      "sidebar.tags.colour": "Couleur",
+      "sidebar.tags.hide": "Masquer de la barre latérale",
+      "sidebar.tags.show": "Afficher dans la barre latérale",
+      "sidebar.tags.delete": "Supprimer",
+      "sidebar.tags.new": "Nouvelle étiquette…",
+      "sidebar.tags.hiddennote": "masquée",
+      "sidebar.tags.confirm": "Retirer « %s » de %u éléments ? Cette action est irréversible.",
+      "sidebar.tags.empty": "Aucune étiquette. Créez-en une avec le menu …, ou étiquetez un fichier depuis son menu contextuel.",
+      "sidebar.tags.manage": "Gérer les étiquettes",
+      "sidebar.tags.stop": "Arrêter",
       "menu.columns": "Colonnes",
       "pane.open": "Ouvrir",
       "pane.copypath": "Copier le chemin",

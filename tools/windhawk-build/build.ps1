@@ -49,6 +49,9 @@ param(
     # Registry/mod ID. Defaults to "local@<@id>", which is what the editor uses.
     [string]$ModId,
     [switch]$CompileOnly,
+    # Build (and deploy) only these architectures, e.g. -OnlyArch arm64 on a Windows on ARM test machine: half the compile time.
+    # The deployed mod then lists only them. For test builds, not for what is committed.
+    [string[]]$OnlyArch,
     # Compile without the cached precompiled header (slower; for comparison
     # or if the header ever causes trouble).
     [switch]$NoPch,
@@ -194,6 +197,10 @@ function Read-ModMetadata([string]$path) {
     if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64' -and
         $meta.architecture -contains 'x86-64' -and $meta.architecture -notcontains 'arm64') {
         $meta.architecture = @($meta.architecture) + 'arm64'
+    }
+    if ($OnlyArch) {
+        $meta.architecture = @($meta.architecture | Where-Object { $OnlyArch -contains $_ })
+        if ($meta.architecture.Count -eq 0) { throw "-OnlyArch $($OnlyArch -join ',') matches none of the mod's architectures" }
     }
     return $meta
 }
@@ -766,6 +773,9 @@ if ($ShowDefaults) {
 # Elevated re-entry: only deploy what the non-elevated run compiled.
 if ($DeployFrom) {
     try {
+        # The architectures that were compiled (a -OnlyArch build has fewer than the mod lists).
+        $archFile = Join-Path $DeployFrom 'arch.txt'
+        if (Test-Path $archFile) { $meta.architecture = @((Get-Content $archFile -Raw).Trim() -split '\|') }
         Invoke-Deploy $cfg $meta $Source $ModId $DeployFrom
     } catch {
         Say "Deploy failed: $_" Red
@@ -781,6 +791,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 Write-Host "Mod:      $ModId $($meta['version']) [$($meta.architecture -join ', ')]"
 Write-Host "Windhawk: $($cfg.Root)"
 Invoke-Compile $cfg $meta $Source $ModId $outDir
+Set-Content (Join-Path $outDir 'arch.txt') ($meta.architecture -join '|') -NoNewline
 
 if ($CompileOnly) { exit 0 }
 
