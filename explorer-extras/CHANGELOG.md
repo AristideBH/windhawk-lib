@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.1.1 (2026-11-24)
+
+### Fixed
+- **Columns missing from the View menu.** The tag index watcher could re-read the same tagged files thousands of times in a row, which kept Explorer busy so that the mod gave up looking for the View menu. A file is now read at most once a second.
+
 ## 1.1.0 (2026-11-24)
 
 ### Added
