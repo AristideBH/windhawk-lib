@@ -99,7 +99,6 @@ void ReleaseEntry(WindowState* state) {
 // Every 50 ms after the window is built: put the Columns entry into the View
 // menu, then, if Columns was the last layout chosen, turn it on once the file
 // list is visible.
-bool ToolbarTick(WindowState* state);  // 10i
 bool LabelsSortMenuTick(WindowState* state);  // 10i2
 
 void EntryTick() {
@@ -115,9 +114,6 @@ void EntryTick() {
         if (!state->topLevel || !IsWindow(state->topLevel)) {
             StopEntry(state);
             return;
-        }
-        if (!state->toolbarDone) {
-            state->toolbarDone = ToolbarTick(state);
         }
         if (!state->sortMenuDone && g_labels && g_labelsGroup) {
             state->sortMenuDone = LabelsSortMenuTick(state);
@@ -356,7 +352,7 @@ void WatchWindowClose(HWND top) {
 }
 
 void OnWindowCreated(Inspectable const& rootObject) {
-    if (g_unloading || (!g_enabled && !g_detailsPane && !g_toolbar && !g_labels && !g_sidebar)) {
+    if (g_unloading || (!g_enabled && !g_detailsPane && !g_labels && !g_sidebar)) {
         return;
     }
     auto xamlRoot = rootObject.try_as<mux::XamlRoot>();
@@ -402,7 +398,7 @@ void* WINAPI DpiChanged_Hook(void* pThis, void* ret, void* root, void* args) {
     // The reference is taken before the original, which moves the XamlRoot
     // out of the caller's slot.
     Inspectable hold{nullptr};
-    if (!g_unloading && (g_enabled || g_detailsPane || g_toolbar || g_labels || g_sidebar)) {
+    if (!g_unloading && (g_enabled || g_detailsPane || g_labels || g_sidebar)) {
         try {
             if (void* object = XamlRootFromArgument(root)) {
                 winrt::copy_from_abi(hold, object);
@@ -663,7 +659,6 @@ void CloseEverything() {
                     }
                     RevokeAllHandlers();  // First: no delegate of the mod stays on an element.
                     LabelsReleaseThreadObjects();
-                    ToolbarRestoreThread();
                     g_rowTemplate = nullptr;
                     g_quickTemplate = nullptr;
                     g_presenterStyle = nullptr;

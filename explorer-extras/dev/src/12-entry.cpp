@@ -61,14 +61,6 @@ void LoadSettings() {
     g_autoFolderSize = SettingBool(L"autoFolderSize");
     LabelsLoadSettings();
     g_labelsGroup = SettingBool(L"labelsGroup");
-    g_toolbar = SettingBool(L"toolbarOn");
-    g_navGap = SettingInt(L"navGap");
-    g_addressGap = SettingInt(L"addressGap");
-    g_cmdGap = SettingInt(L"commandGap");
-    g_addressRadius = SettingInt(L"addressRadius");
-    g_searchRadius = SettingInt(L"searchRadius");
-    g_searchResize = SettingBool(L"searchResize");
-    g_searchWidth = SettingInt(L"searchWidth");
     g_rememberSort = SettingBool(L"rememberSort");
     g_rememberWidth = SettingBool(L"rememberWidth");
     g_rememberLayout = SettingBool(L"rememberLayout");
@@ -148,7 +140,6 @@ BOOL Wh_ModInit() {
     LabelsRecentSelfTest();
     TagListSelfTest();
     TagIndexSelfTest();
-    ToolbarSelfTest();
     SidebarLocationsSelfTest();
     FavoritesSelfTest();
     TagsUiSelfTest();
@@ -188,13 +179,12 @@ BOOL Wh_ModInit() {
 void Wh_ModSettingsChanged() {
     LoadSettings();
     LabelsSettingsChanged();  // Show labels on or off, or a colour name changed.
-    ToolbarSettingsChanged();
     Wh_Log(L"settings changed: columns=%d details=%d width=%d..%d maxItems=%d",
         g_enabled ? 1 : 0, g_detailsPane ? 1 : 0, g_minWidth.load(), g_maxWidth.load(), g_maxItems.load());
     if (!g_enabled) {
-        // Off means gone: the Columns entry and the panel go from every window. The details pane, the labels and the toolbar
+        // Off means gone: the Columns entry and the panel go from every window. The details pane and the labels
         // stay: closing the windows' state would take their handlers with it.
-        if (g_detailsPane || g_labels || g_toolbar) {
+        if (g_detailsPane || g_labels) {
             ColumnsOffEverywhere();
         } else {
             CloseEverything();

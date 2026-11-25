@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version              1.1.2
+// @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags) on files and folders, and a sidebar of favorites, locations and tags.
+// @version              1.1.3
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -22,7 +22,7 @@
 
 A 40-second tour is at the top of the project page: https://github.com/AristideBH/windhawk-lib/tree/main/explorer-extras#readme
 
-Explorer Extras adds five independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
+Explorer Extras adds four independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
 
 ## Columns
 
@@ -60,15 +60,6 @@ A sidebar in place of Explorer's navigation pane, off until you turn on **Replac
 - **Favorites, Locations, Tags.** Pinned folders, Home, This PC with its drives and devices, and your labels as tags.
 - **Pin by drop, reorder by drag.** Drop a folder to pin it, drop files on a tag to label them, drag rows to reorder.
 - **Tag lists.** A tag opens every file that has it, across your local drives. Rename, recolour or delete a tag everywhere at once.
-
-## Toolbar
-
-Tidy the top of the window. Each part is a setting, and one switch gives Explorer's own look back.
-
-- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together, and the address bar sits closer to them.
-- **Command bar.** New, Cut, Copy, Paste and the rest sit closer together.
-- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings.
-- **Round corners.** A corner radius for the address bar and one for the search box, up to fully round.
 
 ## Good to know
 

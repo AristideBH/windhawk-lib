@@ -2,6 +2,13 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.1.3 (2026-11-25)
+
+### Removed
+- **The Toolbar part**, as in 1.0.22 of the catalog line: its spacing and corners are a Windows 11 File Explorer Styler config (`docs/toolbar-styler.md`), and the resizable search box is the Explorer Search Box Resize mod.
+
+The catalog line (1.0.21 and 1.0.22, below) and the sidebar's test builds (1.0.21 to 1.0.24 and 1.1.x) were numbered apart; this version brings them together.
+
 ## 1.1.2 (2026-11-25)
 
 ### Changed
@@ -31,6 +38,15 @@ Groundwork for the sidebar (design in `docs/superpowers/specs/2026-11-23-sidebar
 
 ### Fixed
 - `build.py` reads the parts with Windows line endings, as a git worktree checks them out.
+## 1.0.22 (2026-11-25)
+
+### Removed
+- **The Toolbar part**, as the catalog review asked for a smaller mod: its spacing and round corners are now a config for Windows 11 File Explorer Styler (`docs/toolbar-styler.md`), and the resizable search box is its own mod, Explorer Search Box Resize. Updating the mod puts Explorer's own toolbar back.
+
+## 1.0.21 (2026-11-25)
+
+### Changed
+- **Labels are off by default** (**Show labels**), as the catalog review asked: they are the one part of the mod that writes into files. Turning them on works as before.
 
 ## 1.0.20 (2026-11-23)
 

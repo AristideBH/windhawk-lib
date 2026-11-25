@@ -173,8 +173,6 @@ $tagsUiLine = $lines | Select-String 'TAGS UI SELFTEST' | Select-Object -Last 1
 Check 'sidebar tags self-test passed' ($tagsUiLine -and $tagsUiLine.Line -match 'TAGS UI SELFTEST pass') ($(if ($tagsUiLine) { $tagsUiLine.Line } else { 'no TAGS UI SELFTEST line in the log' }))
 $tagResultsLine = $lines | Select-String 'TAG RESULTS SELFTEST' | Select-Object -Last 1
 Check 'tag results self-test passed' ($tagResultsLine -and $tagResultsLine.Line -match 'TAG RESULTS SELFTEST pass') ($(if ($tagResultsLine) { $tagResultsLine.Line } else { 'no TAG RESULTS SELFTEST line in the log' }))
-$toolbarLine = $lines | Select-String 'TOOLBAR SELFTEST' | Select-Object -Last 1
-Check 'toolbar self-test passed' ($toolbarLine -and $toolbarLine.Line -match 'TOOLBAR SELFTEST pass') ($(if ($toolbarLine) { $toolbarLine.Line } else { 'no TOOLBAR SELFTEST line in the log' }))
 Check 'no error line in the log' ($errors.Count -eq 0) ($errors | Select-Object -First 2 | ForEach-Object { $_.Line })
 $dumps = @(Get-ChildItem $dumpDir -Filter 'explorer.exe.*.dmp' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $began })
 Check 'no new crash dump of explorer.exe' ($dumps.Count -eq 0) ($dumps | ForEach-Object { $_.Name })

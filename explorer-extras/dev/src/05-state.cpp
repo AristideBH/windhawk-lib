@@ -106,7 +106,6 @@ void RevokeAllHandlers() {
 // Every UI thread that kept a handler takes its handlers off, on its own thread: the ones with a window state were done
 // by their window's cleanup, the others (a window open before the mod loaded) are done here. Called at unload.
 void LabelsReleaseThreadObjects();  // 10g2: the fonts and flyouts of labels that a thread holds
-void ToolbarRestoreThread();        // 10i: Explorer's margins of the navigation buttons
 
 void RunOutsideModal(mud::DispatcherQueue const& queue, std::shared_ptr<std::function<void()>> const& work);  // 11
 
@@ -148,7 +147,6 @@ void RevokeKeptThreads() {
         if (thread.id == self) {
             RevokeAllHandlers();
             LabelsReleaseThreadObjects();
-            ToolbarRestoreThread();
             continue;
         }
         HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -161,7 +159,6 @@ void RevokeKeptThreads() {
             auto work = std::make_shared<std::function<void()>>([done]() {
                 RevokeAllHandlers();
                 LabelsReleaseThreadObjects();
-                ToolbarRestoreThread();
                 SetEvent(done);
             });
             mud::DispatcherQueue queue = thread.queue;
@@ -522,7 +519,6 @@ struct WindowState {
     mud::DispatcherQueueTimer fadeTimer{nullptr};
     LabelsFilter labelsFilter;  // The tag this window's list is filtered by (labels).
     bool sortMenuDone = false;  // The Sort and group menu has its handler (labels).
-    bool toolbarDone = false;   // The toolbar's buttons were found and handled.
     struct TagViewPanel* tagView = nullptr;  // The list of the files of a tag over the file area, 10j4.
     struct SidebarPanel* sidebar = nullptr;  // The sidebar over this window's navigation pane, 10j.
     struct DetailsPane* details = nullptr;  // The merged details pane of this window, 10d.  // The pause between a fade out and the removal of rows.

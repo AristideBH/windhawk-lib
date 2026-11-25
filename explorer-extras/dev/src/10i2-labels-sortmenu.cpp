@@ -106,6 +106,23 @@ void LabelsOnSortMenuOpening(Inspectable const& sender) {
 
 }  // namespace
 
+// The element with this x:Name under `node`, depth first.
+mux::FrameworkElement LabelsFindByName(mux::DependencyObject const& node, const wchar_t* name, int depth) {
+    if (!node || depth > 30) {
+        return nullptr;
+    }
+    if (auto element = node.try_as<mux::FrameworkElement>(); element && element.Name() == name) {
+        return element;
+    }
+    int count = mux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) {
+        if (auto found = LabelsFindByName(mux::Media::VisualTreeHelper::GetChild(node, i), name, depth + 1)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 // Called on the ticks of a new window until it returns true: the Sort and group menu gets its handler.
 bool LabelsSortMenuTick(WindowState* state) {
     auto content = state->xamlRoot ? state->xamlRoot.Content() : nullptr;
@@ -113,7 +130,7 @@ bool LabelsSortMenuTick(WindowState* state) {
     if (!root) {
         return false;
     }
-    auto button = ToolbarFindById(root, L"SortAndGroupButton", 0).try_as<muxc::AppBarButton>();
+    auto button = LabelsFindByName(root, L"SortAndGroupButton", 0).try_as<muxc::AppBarButton>();
     if (!button) {
         return false;
     }
