@@ -38,6 +38,7 @@ Groundwork for the sidebar (design in `docs/superpowers/specs/2026-11-23-sidebar
 
 ### Fixed
 - `build.py` reads the parts with Windows line endings, as a git worktree checks them out.
+
 ## 1.0.22 (2026-11-25)
 
 ### Removed
