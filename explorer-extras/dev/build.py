@@ -131,7 +131,8 @@ def cpp_table(schema):
 
 schema = load_schema()
 parts = sorted(glob.glob(os.path.join(here, 'src', '*.cpp')))
-joined = b''.join(open(path, 'rb').read() for path in parts)
+# A checkout with core.autocrlf=true holds the parts with CRLF; the generated file is LF either way.
+joined = b''.join(open(path, 'rb').read().replace(b'\r\n', b'\n') for path in parts)
 for marker, text in ((b'@@SETTINGS_BLOCK@@\n', windhawk_block(schema)), (b'@@SETTINGS_TABLE@@\n', cpp_table(schema))):
     if joined.count(marker) != 1:
         sys.exit('the parts must hold %s exactly once' % marker.decode().strip())

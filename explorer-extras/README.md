@@ -12,7 +12,7 @@ Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independ
 | --- | --- |
 | [**Columns**](#columns) | Miller columns in the View menu, with drag and drop, touch and per-folder memory. |
 | [**Details pane**](#details-pane) | One pane for details and real previews of PDF, text, Markdown, images, video and sound. |
-| [**Labels**](#labels) | Colour tags on files and folders, usable in Explorer's own Sort by and Group by. |
+| [**Labels**](#labels) | Colour tags on files and folders, usable in Explorer's own Sort by and Group by. Off by default. |
 | [**Toolbar**](#toolbar) | Tighter buttons, a search box you drag to resize, and round corners. |
 
 ## Columns
@@ -81,7 +81,7 @@ The mod's page in Windhawk has a group per feature, and the first setting of eac
 
 ## Good to know
 
-- **Labels stay in your files.** They are written into the files themselves (an NTFS stream), so they stay there after the mod is disabled or uninstalled, and also on a network share that supports named streams. To take them off, use **Clear tags** (in the pane or the right-click menu) while the mod is still running.
+- **Labels stay in your files.** Labels are off by default, because they are the one part of the mod that changes files: turn on **Show labels** to use them. They are written into the files themselves (an NTFS stream), so they stay there after the mod is disabled or uninstalled, and also on a network share that supports named streams. To take them off, use **Clear tags** (in the pane or the right-click menu) while the mod is still running.
 - **Removing the mod** leaves Explorer as it was, apart from those labels.
 - **Works with QuickLook.** Explorer's own view follows the active column, so [QuickLook](https://github.com/QL-Win/QuickLook) previews the selected item as it does anywhere else.
 - **Tested** daily on Windows 11 24H2 (build 26100) on ARM64, in French and English. x86-64 was tested up to version 0.55.

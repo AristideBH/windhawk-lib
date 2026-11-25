@@ -37,7 +37,7 @@ In a named stream of the file itself (`ExplorerExtras.Labels`), so a label follo
 
 ## Switching them off
 
-**Show labels** on the mod's page. Off, nothing is drawn and the entries are gone; the labels stay in the files (use **Clear tags** to remove them).
+Labels are off by default, since they are written into your files: turn on **Show labels** on the mod's page to use them. Off, nothing is drawn and the entries are gone; the labels stay in the files (use **Clear tags** to remove them).
 
 ## For developers
 

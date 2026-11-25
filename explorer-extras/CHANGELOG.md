@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.21 (2026-11-25)
+
+### Changed
+- **Labels are off by default** (**Show labels**), as the catalog review asked: they are the one part of the mod that writes into files. Turning them on works as before.
+
 ## 1.0.20 (2026-11-23)
 
 ### Fixed
