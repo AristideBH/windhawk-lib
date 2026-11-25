@@ -6,14 +6,13 @@
 
 *A 40-second tour. If the video does not play here, [watch it directly](https://github.com/AristideBH/windhawk-lib/raw/main/explorer-extras/assets/captures/hero.mp4).*
 
-Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds four independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
+Explorer Extras is a [Windhawk](https://windhawk.net) mod. It adds three independent features to File Explorer. Each has its own section and its own off switch on the mod's page in Windhawk: turn on what you like, and the rest stays out of the way.
 
 | Feature | In one line |
 | --- | --- |
 | [**Columns**](#columns) | Miller columns in the View menu, with drag and drop, touch and per-folder memory. |
 | [**Details pane**](#details-pane) | One pane for details and real previews of PDF, text, Markdown, images, video and sound. |
 | [**Labels**](#labels) | Colour tags on files and folders, usable in Explorer's own Sort by and Group by. Off by default. |
-| [**Toolbar**](#toolbar) | Tighter buttons, a search box you drag to resize, and round corners. |
 
 ## Columns
 
@@ -56,14 +55,9 @@ Colour labels, like the tags of macOS, on files and folders.
 - **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
 - **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
 
-## Toolbar
+## Toolbar tweaks, now elsewhere
 
-Tidy the top of the window. Each part is a setting, and one switch gives Explorer's own look back.
-
-- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together, and the address bar sits closer to them.
-- **Command bar.** New, Cut, Copy, Paste and the rest sit closer together.
-- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings.
-- **Round corners.** A corner radius for the address bar and one for the search box, up to fully round.
+Up to 1.0.21 the mod also tightened the toolbar. That part has moved out: the spacing and round corners are a ready-made config for [Windows 11 File Explorer Styler](docs/toolbar-styler.md), and resizing the search box by dragging is the [Explorer Search Box Resize](../explorer-search-box-resize/explorer-search-box-resize.wh.cpp) mod.
 
 ## Install
 

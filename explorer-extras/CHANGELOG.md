@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.0.22 (2026-11-25)
+
+### Removed
+- **The Toolbar part**, as the catalog review asked for a smaller mod: its spacing and round corners are now a config for Windows 11 File Explorer Styler (`docs/toolbar-styler.md`), and the resizable search box is its own mod, Explorer Search Box Resize. Updating the mod puts Explorer's own toolbar back.
+
 ## 1.0.21 (2026-11-25)
 
 ### Changed

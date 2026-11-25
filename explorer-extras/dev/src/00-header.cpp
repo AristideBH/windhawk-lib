@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              explorer-extras
 // @name            Explorer Extras
-// @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), colour labels (tags), and a toolbar with tighter gaps, a resizable search box and round corners.
-// @version         1.0.21
+// @description     Additions for File Explorer, one switch per feature: Columns (Miller columns), a details and preview pane (PDF, text, Markdown, images, video, sound), and colour labels (tags) on files and folders.
+// @version         1.0.22
 // @author          AristideBH
 // @github          https://github.com/AristideBH
 // @donateUrl       https://ko-fi.com/aristidebh
@@ -22,7 +22,7 @@
 
 A 40-second tour is at the top of the project page: https://github.com/AristideBH/windhawk-lib/tree/main/explorer-extras#readme
 
-Explorer Extras adds four independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
+Explorer Extras adds three independent features to File Explorer. Each has its own section and its own off switch on this page: turn on what you like, and the rest stays out of the way.
 
 ## Columns
 
@@ -52,15 +52,6 @@ Colour labels, like the tags of macOS, on files and folders.
 - **Easy to set.** In the **Tags** section of the details pane, or from the right-click menu: a **Tags** entry with the colours, **Add tag** and **Clear tags**. The last eight names you typed are listed, so you type each one once.
 - **Sort and group.** Explorer's own **Group by** and **Sort by** use them: choose **Tags** (**Étiquettes** in French; under **More** for Sort by) and each label becomes a group. An item with two labels is in both groups.
 - **They follow the file.** A label is stored in the file itself, so it survives copying or moving on NTFS drives, and the file's dates do not change. See "Good to know" below.
-
-## Toolbar
-
-Tidy the top of the window. Each part is a setting, and one switch gives Explorer's own look back.
-
-- **Navigation buttons.** Back, Forward, Up and Refresh sit closer together, and the address bar sits closer to them.
-- **Command bar.** New, Cut, Copy, Paste and the rest sit closer together.
-- **Search box.** Drag the edge between the address bar and the search box to resize it, with the mouse, a finger or a pen. A double click or double tap goes back to the width in the settings.
-- **Round corners.** A corner radius for the address bar and one for the search box, up to fully round.
 
 ## Good to know
 
