@@ -952,6 +952,8 @@ void SidebarTick() {
             }
             if (!g_labels) {
                 TagViewLeave(state);
+            } else {
+                TagIndexStart();  // Labels turned on while the sidebar is open (does nothing once started).
             }
         }
         TagViewTick(state);
@@ -988,7 +990,9 @@ void StartSidebar(WindowState* state) {
         panel->token = timer.Tick([](mud::DispatcherQueueTimer const&, Inspectable const&) { SidebarTick(); });
         timer.Start();
         panel->timer = timer;
-        TagIndexStart();
+        if (g_labels) {
+            TagIndexStart();  // Labels off: no tags to list, so no walk of the drives.
+        }
         FavoritesWatchStart();
         Wh_Log(L"sidebar: watching window %p", state->topLevel);
     } catch (...) {

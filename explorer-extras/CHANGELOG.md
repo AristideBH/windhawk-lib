@@ -2,6 +2,11 @@
 
 Versions are the `@version` of the mod. The newest is first. Dates are when the version was tested by the author.
 
+## 1.1.2 (2026-11-25)
+
+### Changed
+- **Labels are off by default** (**Show labels**), as the catalog review asked: they are the one part of the mod that writes into files. Turning them on works as before. With labels off, the sidebar does not start the tag index.
+
 ## 1.1.1 (2026-11-24)
 
 ### Fixed

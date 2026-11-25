@@ -319,9 +319,9 @@
       "id": "labelsOn",
       "group": "labels",
       "type": "bool",
-      "default": true,
+      "default": false,
       "name": "Show labels",
-      "description": "Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself and need an NTFS drive.",
+      "description": "Labels are coloured dots on files and folders, drawn in File Explorer and in Columns. They are kept in the file itself (they stay there if the mod is removed) and need an NTFS drive. Off by default.",
       "needs": "now"
     },
     {
